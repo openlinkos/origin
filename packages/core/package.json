@@ -1,0 +1,33 @@
+{
+  "name": "@openlinkos/origin-core",
+  "version": "0.1.0",
+  "description": "Origin core: append-only raw mirror, unified event store, search and timeline (no LLM calls).",
+  "license": "MIT",
+  "author": "OpenLinkOS",
+  "homepage": "https://github.com/openlinkos/origin#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openlinkos/origin.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/openlinkos/origin/issues"
+  },
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

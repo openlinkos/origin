@@ -1,0 +1,34 @@
+{
+  "name": "@openlinkos/origin",
+  "version": "0.1.0",
+  "description": "The `origin` command: sync, inspect, and search your AI agent sessions locally.",
+  "license": "MIT",
+  "author": "OpenLinkOS",
+  "homepage": "https://github.com/openlinkos/origin#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openlinkos/origin.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/openlinkos/origin/issues"
+  },
+  "type": "module",
+  "private": true,
+  "bin": {
+    "origin": "./dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@openlinkos/origin-adapters": "workspace:*",
+    "@openlinkos/origin-core": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

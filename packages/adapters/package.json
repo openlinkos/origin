@@ -1,0 +1,36 @@
+{
+  "name": "@openlinkos/origin-adapters",
+  "version": "0.1.0",
+  "description": "Origin source adapters: deterministic parsers for local AI agent session logs.",
+  "license": "MIT",
+  "author": "OpenLinkOS",
+  "homepage": "https://github.com/openlinkos/origin#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openlinkos/origin.git",
+    "directory": "packages/adapters"
+  },
+  "bugs": {
+    "url": "https://github.com/openlinkos/origin/issues"
+  },
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@openlinkos/origin-core": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

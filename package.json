@@ -1,0 +1,35 @@
+{
+  "name": "@openlinkos/origin-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Origin — a local-first, cross-agent personal memory for AI coding agents.",
+  "license": "MIT",
+  "author": "OpenLinkOS",
+  "homepage": "https://github.com/openlinkos/origin#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openlinkos/origin.git"
+  },
+  "bugs": {
+    "url": "https://github.com/openlinkos/origin/issues"
+  },
+  "type": "module",
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -b packages/core packages/adapters packages/mcp packages/cli",
+    "clean": "node -e \"for (const p of ['core','adapters','mcp','cli']) require('node:fs').rmSync('packages/'+p+'/dist',{recursive:true,force:true})\"",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "origin": "node packages/cli/dist/bin.js"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "24.19.2",
+    "typescript": "5.9.3",
+    "vitest": "5.0.5"
+  }
+}

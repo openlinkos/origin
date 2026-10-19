@@ -1,0 +1,12 @@
+.DS_Store
+Thumbs.db
+.env
+.env.*
+.claude/settings.local.json
+
+# node / build
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+.origin/

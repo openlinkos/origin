@@ -1,0 +1,36 @@
+{
+  "name": "@openlinkos/origin-mcp",
+  "version": "0.1.0",
+  "description": "Origin MCP server (stdio) exposing personal memory to any MCP-capable agent.",
+  "license": "MIT",
+  "author": "OpenLinkOS",
+  "homepage": "https://github.com/openlinkos/origin#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openlinkos/origin.git",
+    "directory": "packages/mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/openlinkos/origin/issues"
+  },
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@openlinkos/origin-core": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
