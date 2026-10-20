@@ -12,6 +12,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Types follow the oldest supported Node.js major (engines), not the newest.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     groups:
       dependencies:
         patterns: ['*']
