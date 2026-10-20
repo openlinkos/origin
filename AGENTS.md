@@ -32,7 +32,7 @@ When running the CLI, always point `ORIGIN_HOME` at a fresh temporary directory.
 - **Keep adapters deterministic and tolerant**: pure parsing, stable event ids, the agent version recorded, and parse errors counted rather than fatal.
 - **No migrations before the first release.** Edit the schema in `packages/core/src/schema.ts` in place; do not add schema versions or migration code.
 - **Respect dependency direction**: `core` depends on no workspace package; `adapters` and `mcp` depend only on `core`.
-- **Ask before adding runtime dependencies.** Pin dev dependencies to exact versions.
+- **Ask before adding runtime dependencies.** `core` and `adapters` use only Node built-ins; `mcp` uses the MCP SDK and zod. Pin all dependencies to exact versions.
 - **Keep design and code in step.** If a change alters the data model, an invariant, or a public interface, update `docs/architecture.md` in the same commit. If code and the design document disagree, raise it rather than silently picking one.
 - **Use English** for code, comments, docs, CLI output, and commit messages. Keep `README.zh-CN.md` in sync with `README.md`.
 - **Only product docs belong in the repo.** Do not add discussion transcripts, iteration logs, or personal notes.

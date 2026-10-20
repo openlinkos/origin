@@ -12,6 +12,8 @@ export function openDatabase(file: string): Database {
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA synchronous = NORMAL;');
+  // Several processes (CLI, one MCP server per agent session) may share the database.
+  db.exec('PRAGMA busy_timeout = 10000;');
   db.exec(SCHEMA);
   return db;
 }
@@ -24,9 +26,12 @@ export function openMemoryDatabase(): Database {
   return db;
 }
 
-/** Run inside a transaction; on error, roll back and rethrow. */
-export function transaction<T>(db: Database, fn: () => T): T {
-  db.exec('BEGIN');
+/**
+ * Run inside a transaction; on error, roll back and rethrow. `immediate` takes the write lock up
+ * front, so read-then-write sequences are serialized across processes.
+ */
+export function transaction<T>(db: Database, fn: () => T, opts: { immediate?: boolean } = {}): T {
+  db.exec(opts.immediate ? 'BEGIN IMMEDIATE' : 'BEGIN');
   try {
     const out = fn();
     db.exec('COMMIT');

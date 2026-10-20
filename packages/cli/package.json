@@ -1,7 +1,7 @@
 {
   "name": "@openlinkos/origin",
   "version": "0.1.0",
-  "description": "The `origin` command: sync, inspect, and search your AI agent sessions locally.",
+  "description": "The `origin` command: sync, search, and curate your AI agent memory locally, and serve it to agents over MCP.",
   "license": "MIT",
   "author": "OpenLinkOS",
   "homepage": "https://github.com/openlinkos/origin#readme",
@@ -26,7 +26,8 @@
   },
   "dependencies": {
     "@openlinkos/origin-adapters": "workspace:*",
-    "@openlinkos/origin-core": "workspace:*"
+    "@openlinkos/origin-core": "workspace:*",
+    "@openlinkos/origin-mcp": "workspace:*"
   },
   "engines": {
     "node": ">=22.13"

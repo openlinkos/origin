@@ -1,15 +1,10 @@
 /**
- * Origin MCP server (see docs/architecture.md).
- * Placeholder for now: exports the planned tool list; the server itself is not implemented yet.
+ * Origin MCP server (see docs/architecture.md): exposes the archive and entries to agents over
+ * stdio. Tools: search · timeline · get · sources · remember · correct · forget.
  */
-export const ORIGIN_MCP_TOOLS = [
-  'search',
-  'timeline',
-  'get',
-  'sources',
-  'remember',
-  'correct',
-  'forget',
-] as const;
-
-export type OriginMcpTool = (typeof ORIGIN_MCP_TOOLS)[number];
+export {
+  createOriginServer,
+  type OriginServer,
+  type OriginServerOptions,
+  serveStdio,
+} from './server.js';

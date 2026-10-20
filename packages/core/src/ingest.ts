@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { rawDir } from './paths.js';
-import type { EventInput, SourceAdapter, SyncResult } from './types.js';
+import type { EventInput, SourceAdapter, SourceFile, SyncResult } from './types.js';
 
 const TAIL_WINDOW = 4096;
 
@@ -50,112 +50,14 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
   const agentVersion = adapter.version();
 
   for (const file of files) {
-    let st: fs.Stats;
-    try {
-      st = fs.statSync(file.absPath);
-    } catch {
-      continue; // deleted between discovery and read
-    }
-    let raw = latestRawFile(ctx.db, adapter.id, file.absPath);
-    if (raw && (st.size < raw.bytes_ingested || !tailMatches(file.absPath, raw))) {
-      ctx.log?.(`rewrite detected, new generation: ${file.relPath}`);
-      raw = createRawFile(ctx, adapter.id, file, raw.generation + 1);
-      result.newGenerations++;
-    }
-    if (!raw) raw = createRawFile(ctx, adapter.id, file, 1);
-    if (st.size === raw.bytes_ingested) continue;
-
-    const delta = readRange(file.absPath, raw.bytes_ingested, st.size);
-    const lastNl = delta.lastIndexOf(0x0a);
-    if (lastNl < 0) continue; // no complete line yet
-    const chunk = delta.subarray(0, lastNl + 1);
-
-    const mirrorAbs = path.join(rawDir(ctx.home), raw.mirror);
-    fs.mkdirSync(path.dirname(mirrorAbs), { recursive: true });
-    fs.appendFileSync(mirrorAbs, chunk);
-
-    const lines = chunk.toString('utf8').split('\n');
-    lines.pop(); // trailing empty string
-    const rawId = raw.id;
-    const baseLine = raw.lines_ingested;
-    const fileMtimeMs = st.mtimeMs;
-    const touchedSessions = new Set<string>();
-
-    transaction(ctx.db, () => {
-      const insert = ctx.db.prepare(
-        `INSERT OR IGNORE INTO event
-           (id, source, session_id, parent_id, ts, project, cwd, git_branch, role, kind, text,
-            raw_file_id, raw_line, agent_version, meta)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      );
-      const setTitle = ctx.db.prepare(
-        `INSERT INTO session (source, session_id, title) VALUES (?, ?, ?)
-         ON CONFLICT (source, session_id) DO UPDATE SET title = excluded.title`,
-      );
-      for (let i = 0; i < lines.length; i++) {
-        const lineNo = baseLine + i + 1;
-        let line = lines[i] ?? '';
-        if (line.endsWith('\r')) line = line.slice(0, -1);
-        if (line.trim().length === 0) continue;
-        result.linesRead++;
-        let parsed: ReturnType<SourceAdapter['parseLine']>;
-        try {
-          parsed = adapter.parseLine(line, {
-            absPath: file.absPath,
-            relPath: file.relPath,
-            lineNo,
-            fileMtimeMs,
-          });
-        } catch (err) {
-          result.parseErrors++;
-          ctx.log?.(`parse error ${file.relPath}:${lineNo}: ${(err as Error).message}`);
-          continue;
-        }
-        if (!parsed) continue;
-        for (const ev of parsed.events) {
-          const info = insert.run(
-            `${adapter.id}:${ev.id}`,
-            adapter.id,
-            ev.sessionId,
-            ev.parentId ?? null,
-            ev.ts,
-            ev.project ?? null,
-            ev.cwd ?? null,
-            ev.gitBranch ?? null,
-            ev.role,
-            ev.kind,
-            ev.text,
-            rawId,
-            lineNo,
-            ev.agentVersion ?? agentVersion ?? null,
-            ev.meta ? JSON.stringify(ev.meta) : null,
-          );
-          if (info.changes > 0) {
-            result.eventsAdded++;
-            touchedSessions.add(ev.sessionId);
-          }
-        }
-        if (parsed.sessionTitle && parsed.sessionId) {
-          setTitle.run(adapter.id, parsed.sessionId, parsed.sessionTitle);
-          touchedSessions.add(parsed.sessionId);
-        }
-      }
-      for (const sessionId of touchedSessions) refreshSession(ctx.db, adapter.id, sessionId);
-      const newBytes = raw.bytes_ingested + chunk.length;
-      ctx.db
-        .prepare(
-          `UPDATE raw_file SET bytes_ingested = ?, lines_ingested = ?, tail_hash = ?, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(
-          newBytes,
-          baseLine + lines.length,
-          tailHash(file.absPath, newBytes),
-          Date.now(),
-          rawId,
-        );
-    });
-    result.filesChanged++;
+    // One write transaction per file: the cursor is re-read under the lock, so concurrent syncs
+    // (the CLI and one MCP server per agent session) never ingest the same bytes twice.
+    const changed = transaction(
+      ctx.db,
+      () => ingestFile(ctx, adapter, file, agentVersion, result),
+      { immediate: true },
+    );
+    if (changed) result.filesChanged++;
   }
 
   result.durationMs = Date.now() - startedAt;
@@ -179,25 +81,159 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
   return result;
 }
 
-/** Recompute a session's aggregate row (the session table is derived and can be rebuilt from event). */
+/** Ingest the newly appended complete lines of one file. Must run inside a write transaction. */
+function ingestFile(
+  ctx: IngestContext,
+  adapter: SourceAdapter,
+  file: SourceFile,
+  agentVersion: string | null,
+  result: SyncResult,
+): boolean {
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(file.absPath);
+  } catch {
+    return false; // deleted between discovery and read
+  }
+  let raw = latestRawFile(ctx.db, adapter.id, file.absPath);
+  if (raw && (st.size < raw.bytes_ingested || !tailMatches(file.absPath, raw))) {
+    ctx.log?.(`rewrite detected, new generation: ${file.relPath}`);
+    raw = createRawFile(ctx, adapter.id, file, raw.generation + 1);
+    result.newGenerations++;
+  }
+  if (!raw) raw = createRawFile(ctx, adapter.id, file, 1);
+  if (st.size === raw.bytes_ingested) return false;
+
+  const delta = readRange(file.absPath, raw.bytes_ingested, st.size);
+  const lastNl = delta.lastIndexOf(0x0a);
+  if (lastNl < 0) return false; // no complete line yet
+  const chunk = delta.subarray(0, lastNl + 1);
+
+  const mirrorAbs = path.join(rawDir(ctx.home), raw.mirror);
+  fs.mkdirSync(path.dirname(mirrorAbs), { recursive: true });
+  alignMirror(mirrorAbs, raw.bytes_ingested);
+  fs.appendFileSync(mirrorAbs, chunk);
+
+  const lines = chunk.toString('utf8').split('\n');
+  lines.pop(); // trailing empty string
+  const rawId = raw.id;
+  const baseLine = raw.lines_ingested;
+  const fileMtimeMs = st.mtimeMs;
+  const touchedSessions = new Set<string>();
+
+  const insert = ctx.db.prepare(
+    `INSERT OR IGNORE INTO event
+         (id, source, session_id, parent_id, ts, project, cwd, git_branch, role, kind, text,
+          raw_file_id, raw_line, agent_version, meta)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const setTitle = ctx.db.prepare(
+    `INSERT INTO session (source, session_id, title) VALUES (?, ?, ?)
+       ON CONFLICT (source, session_id) DO UPDATE SET title = excluded.title`,
+  );
+  for (let i = 0; i < lines.length; i++) {
+    const lineNo = baseLine + i + 1;
+    let line = lines[i] ?? '';
+    if (line.endsWith('\r')) line = line.slice(0, -1);
+    if (line.trim().length === 0) continue;
+    result.linesRead++;
+    let parsed: ReturnType<SourceAdapter['parseLine']>;
+    try {
+      parsed = adapter.parseLine(line, {
+        absPath: file.absPath,
+        relPath: file.relPath,
+        lineNo,
+        fileMtimeMs,
+      });
+    } catch (err) {
+      result.parseErrors++;
+      ctx.log?.(`parse error ${file.relPath}:${lineNo}: ${(err as Error).message}`);
+      continue;
+    }
+    if (!parsed) continue;
+    for (const ev of parsed.events) {
+      const info = insert.run(
+        `${adapter.id}:${ev.id}`,
+        adapter.id,
+        ev.sessionId,
+        ev.parentId ?? null,
+        ev.ts,
+        ev.project ?? null,
+        ev.cwd ?? null,
+        ev.gitBranch ?? null,
+        ev.role,
+        ev.kind,
+        ev.text,
+        rawId,
+        lineNo,
+        ev.agentVersion ?? agentVersion ?? null,
+        ev.meta ? JSON.stringify(ev.meta) : null,
+      );
+      if (info.changes > 0) {
+        result.eventsAdded++;
+        touchedSessions.add(ev.sessionId);
+      }
+    }
+    if (parsed.sessionTitle && parsed.sessionId) {
+      setTitle.run(adapter.id, parsed.sessionId, parsed.sessionTitle);
+      touchedSessions.add(parsed.sessionId);
+    }
+  }
+  for (const sessionId of touchedSessions) refreshSession(ctx.db, adapter.id, sessionId);
+  const newBytes = raw.bytes_ingested + chunk.length;
+  ctx.db
+    .prepare(
+      `UPDATE raw_file SET bytes_ingested = ?, lines_ingested = ?, tail_hash = ?, updated_at = ?
+         WHERE id = ?`,
+    )
+    .run(newBytes, baseLine + lines.length, tailHash(file.absPath, newBytes), Date.now(), rawId);
+  return true;
+}
+
+/**
+ * A mirror holds exactly the ingested bytes of its generation. Bytes past the cursor were appended
+ * by a sync that never committed, so they are dropped before appending again.
+ */
+function alignMirror(mirror: string, bytesIngested: number): void {
+  let size: number;
+  try {
+    size = fs.statSync(mirror).size;
+  } catch {
+    return;
+  }
+  if (size > bytesIngested) fs.truncateSync(mirror, bytesIngested);
+}
+
+/**
+ * Recompute a session's aggregate row from its visible (not forgotten) events. The session table is
+ * derived and can be rebuilt from event at any time.
+ */
 export function refreshSession(db: Database, source: string, sessionId: string): void {
+  const visible =
+    'source = ? AND session_id = ? AND NOT EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_id = e.id)';
+  const agg = db
+    .prepare(
+      `SELECT MIN(ts) AS started, MAX(ts) AS ended, COUNT(*) AS n FROM event e WHERE ${visible}`,
+    )
+    .get(source, sessionId) as { started: number | null; ended: number | null; n: number };
+  const first = (column: 'project' | 'cwd'): string | null => {
+    const row = db
+      .prepare(
+        `SELECT ${column} AS v FROM event e WHERE ${visible} AND ${column} IS NOT NULL ORDER BY ts LIMIT 1`,
+      )
+      .get(source, sessionId) as { v: string } | undefined;
+    return row?.v ?? null;
+  };
   db.prepare(
     `INSERT INTO session (source, session_id, project, cwd, started_at, ended_at, event_count)
-     SELECT source, session_id,
-            (SELECT project FROM event e2 WHERE e2.source = e.source AND e2.session_id = e.session_id
-               AND e2.project IS NOT NULL ORDER BY ts LIMIT 1),
-            (SELECT cwd FROM event e3 WHERE e3.source = e.source AND e3.session_id = e.session_id
-               AND e3.cwd IS NOT NULL ORDER BY ts LIMIT 1),
-            MIN(ts), MAX(ts), COUNT(*)
-     FROM event e WHERE source = ? AND session_id = ?
-     GROUP BY source, session_id
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (source, session_id) DO UPDATE SET
        project = COALESCE(excluded.project, session.project),
        cwd = COALESCE(excluded.cwd, session.cwd),
        started_at = excluded.started_at,
        ended_at = excluded.ended_at,
        event_count = excluded.event_count`,
-  ).run(source, sessionId);
+  ).run(source, sessionId, first('project'), first('cwd'), agg.started, agg.ended, agg.n);
 }
 
 function latestRawFile(db: Database, source: string, absPath: string): RawFileRow | null {

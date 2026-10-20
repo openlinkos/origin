@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes Origin's current design: the problem it targets, the data model, the invariants every change must preserve, and how ingestion and search work. It is the reference for contributors; if a change alters the data model, an invariant, or a public interface, update this document in the same commit.
+This document describes Origin's current design: the problem it targets, the data model, the invariants every change must preserve, and how ingestion, entries, search, and the MCP server work. It is the reference for contributors; if a change alters the data model, an invariant, or a public interface, update this document in the same commit.
 
 ## Contents
 
@@ -14,8 +14,10 @@ This document describes Origin's current design: the problem it targets, the dat
 - [Packages](#packages)
 - [Storage](#storage)
 - [Ingestion](#ingestion)
+- [Entries](#entries)
+- [Forgetting](#forgetting)
 - [Search and timeline](#search-and-timeline)
-- [MCP interface (planned)](#mcp-interface-planned)
+- [MCP server](#mcp-server)
 - [Open questions](#open-questions)
 - [Prior art](#prior-art)
 
@@ -45,7 +47,7 @@ Origin distinguishes three kinds of durable entries. Every entry carries its sou
 
 | Kind | Meaning | Example |
 |---|---|---|
-| `memory` | What happened (episodic) | "On Oct 19 we decided to ship in small runnable increments instead of milestones." |
+| `memory` | What happened (episodic) | "On Oct 20 we dropped schema versioning until the first release, to keep the code simple." |
 | `knowledge` | Stable facts and relations | "Project A depends on library B." |
 | `cognition` | A model of the person: preferences, methods, goals, boundaries | "Prefers commit messages without attribution trailers." |
 
@@ -56,8 +58,8 @@ Origin distinguishes three kinds of durable entries. Every entry carries its sou
 | **Source** | An adapter for one agent: `claude-code`, `codex`, `cursor`, `zcode`, `grok` | id, agent version, discovery root |
 | **Raw** | Append-only mirror of an original log file | source, original path, generation, byte/line cursor, tail hash |
 | **Event** | A normalized conversation event: user message, assistant message, tool call, tool result | id, source, session, timestamp, project, cwd, git branch, role, kind, text, raw locator |
-| **Entry** *(planned)* | A durable `memory` / `knowledge` / `cognition` item | id, kind, text, confidence, sources (event ids + quotes), author, created_at, valid_from / valid_to, status (`active` / `superseded` / `forgotten`), supersedes |
-| **Tombstone** *(planned)* | Record of a forget operation | entry id, excluded event ids, time; applies to all future writes |
+| **Entry** | A durable `memory` / `knowledge` / `cognition` statement | id (`ent_…`), kind, text, confidence, author, project, sources (event ids + quotes), supersedes, valid_from / valid_to, created_at; status (`active` / `superseded` / `forgotten`) is derived, never stored |
+| **Tombstone** | Record of a forget operation | target id, reason, time; the entries it forgot and the events it excluded |
 
 ## Data flow
 
@@ -65,10 +67,10 @@ Origin distinguishes three kinds of durable entries. Every entry carries its sou
 agent session logs on disk ──scan──▶ Raw (append-only mirror)
                                         │ deterministic adapter parsing (no LLM)
                                         ▼
-                                  Event store (SQLite + FTS5)
+                                  Event store (SQLite + FTS5) ◀── Entries · Tombstones
                                         │
- agents ◀── MCP (stdio): search · timeline · get · sources · remember · correct · forget  (planned)
- people ◀── CLI `origin`: sync · status · timeline · search · show · projects
+ agents ◀── MCP (stdio): search · timeline · get · sources · remember · correct · forget
+ people ◀── CLI `origin`: sync · status · timeline · search · show · entries · correct · forget
 ```
 
 ## Invariants
@@ -90,16 +92,16 @@ These are product guarantees. Each must be covered by tests, and code comments r
 
 ## Packages
 
-pnpm workspace, TypeScript (strict, ESM, NodeNext), Node.js ≥ 22.13. No runtime dependencies beyond Node built-ins so far.
+pnpm workspace, TypeScript (strict, ESM, NodeNext), Node.js ≥ 22.13. `core` and `adapters` use only Node built-ins; `mcp` depends on the official [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) and zod.
 
 | Package | Path | Responsibility | Depends on |
 |---|---|---|---|
-| `@openlinkos/origin-core` | `packages/core` | Storage, schema, ingestion, queries, invariants | — |
+| `@openlinkos/origin-core` | `packages/core` | Storage, schema, ingestion, entries, forgetting, queries | — |
 | `@openlinkos/origin-adapters` | `packages/adapters` | One deterministic parser per source | core |
-| `@openlinkos/origin-mcp` | `packages/mcp` | MCP server over stdio (placeholder) | core |
-| `@openlinkos/origin` | `packages/cli` | The `origin` command | core, adapters |
+| `@openlinkos/origin-mcp` | `packages/mcp` | MCP server over stdio | core |
+| `@openlinkos/origin` | `packages/cli` | The `origin` command, including `origin mcp` | core, adapters, mcp |
 
-`core` must not depend on any other package. Adapters implement the `SourceAdapter` interface from `core`:
+`core` must not depend on any other package, and `mcp` must not depend on `adapters`: the CLI injects ingestion into the server as a callback. Adapters implement the `SourceAdapter` interface from `core`:
 
 ```ts
 interface SourceAdapter {
@@ -115,21 +117,30 @@ interface SourceAdapter {
 
 ```
 ~/.origin/                 # or $ORIGIN_HOME
-├── origin.db              # SQLite (WAL): raw_file, event, session, event_fts, sync_log
+├── origin.db              # SQLite (WAL)
 └── raw/<source>/...       # append-only mirrors of the original log files
 ```
 
-- Storage uses Node's built-in `node:sqlite`, so there are no native modules to compile.
-- `session` is a derived table and can be rebuilt from `event`. `event_fts` is an external-content FTS5 index kept in sync by triggers; it can be dropped and rebuilt.
+| Table | Contents |
+|---|---|
+| `raw_file` | One row per mirrored file generation, with its ingestion cursor |
+| `event`, `event_fts` | Normalized events and their FTS5 trigram index |
+| `session` | Per-session aggregates over visible events (derived, rebuildable) |
+| `sync_log` | One row per sync run |
+| `entry`, `entry_source`, `entry_fts` | Entries, the events they cite (with quotes), and their FTS5 index |
+| `tombstone`, `forgotten_entry`, `excluded_event` | Forget operations and their effects |
+
+- Storage uses Node's built-in `node:sqlite`, so there are no native modules to compile. Several processes may share the database (the CLI and one MCP server per agent session); WAL mode and a busy timeout handle this.
+- `session` is derived and can be rebuilt from `event`. The FTS indexes are external-content tables kept in sync by triggers.
 - **No migrations before the first release.** The schema is one set of idempotent statements applied every time the database is opened, so added tables and indexes appear in existing databases automatically. Any other schema change is made in place and needs a fresh `ORIGIN_HOME`. Delete the whole directory, never just `origin.db`: mirror paths are deterministic, so re-syncing into an existing `raw/` would append duplicate content. Versioned migrations will arrive with the first release.
 
 ## Ingestion
 
-`origin sync` runs every adapter's `discover()` and, for each file:
+`origin sync` (and the MCP server, see below) runs every adapter's `discover()` and ingests each file in its own `BEGIN IMMEDIATE` transaction, so concurrent syncs from different processes are serialized and never ingest the same bytes twice:
 
-1. **Cursor.** Each `raw_file` row tracks `bytes_ingested`, `lines_ingested`, and `tail_hash` (SHA-256 of the last 4 KB ingested). Only bytes after the cursor are read.
+1. **Cursor.** Each `raw_file` row tracks `bytes_ingested`, `lines_ingested`, and `tail_hash` (SHA-256 of the last 4 KB ingested). The cursor is read under the write lock, and only bytes after it are read.
 2. **Rewrite detection.** If the file shrank or its tail no longer matches, it was rewritten rather than appended. Origin opens a new *generation* with a fresh mirror and keeps the old mirror intact (invariant 3).
-3. **Complete lines only.** Bytes up to the last newline are appended to the mirror; a trailing partial line waits for the next sync.
+3. **Complete lines only.** Bytes up to the last newline are appended to the mirror; a trailing partial line waits for the next sync. A mirror always equals the ingested bytes of its generation, so bytes left past the cursor by an interrupted sync are dropped before appending (invariant 1).
 4. **Parse and insert.** Each line goes through `parseLine`; failures are counted, not fatal. Events are inserted with `INSERT OR IGNORE` under the id `<source>:<native-id>[#<block-index>]`, which makes sync idempotent (invariant 3). Each event stores its mirror file and line number (invariant 1).
 5. **Bookkeeping.** Affected sessions are re-aggregated, the cursor advances in the same transaction, and a `sync_log` row records the run.
 
@@ -142,31 +153,53 @@ interface SourceAdapter {
 
 See [sources.md](sources.md) for the on-disk formats of all target agents.
 
+## Entries
+
+- **Remember.** An entry is one self-contained statement with a kind, a confidence between 0 and 1, an author (the MCP client's name, or `user` for CLI corrections), an optional project and validity range, and at least one source (invariant 1). A source is an event id, an exact quote, or both:
+  - With an id, the event must exist and be visible; a quote, if given, must occur in it (whitespace and case are ignored).
+  - With only a quote, Origin cites the most recent visible `message` event containing it, falling back to `tool_result` events. Tool calls are never matched, because the agent's own `remember` call, which contains the quote, is itself logged as a tool call.
+- **Correct.** Correcting an active entry inserts a new entry that `supersedes` it (invariant 3). Sources carry over and new ones can be added. History is linear: an entry can be superseded at most once, and only the newest version is active.
+- **Status** is derived: `forgotten` if a tombstone covers the entry, `superseded` if a newer version exists, otherwise `active`. Queries return active entries unless history is requested; forgotten entries are never returned.
+
+## Forgetting
+
+`forget` takes an entry id or an event id and records a tombstone (invariant 2):
+
+1. **Forgetting an entry** forgets every version of it and excludes all events those versions cite.
+2. **Forgetting an event** excludes it and forgets every entry that cites it, as in rule 1.
+3. **An active entry left with no visible source** has lost its provenance and is forgotten as well. This excludes no further events, so the cascade stops here.
+
+Excluded events disappear from search, timelines, session counts, `get`, and `sources`, and can never be cited again. Re-syncing, even a rewritten source file, does not bring them back, because event ids are stable and exclusion is keyed by id. Forgetting hides; it does not erase. The raw mirror files stay on disk (invariant 3) but are never shown. Physical purging may come later as an explicit option. The CLI shows what will be forgotten and requires `--yes`, because forgetting cannot be undone.
+
 ## Search and timeline
 
 - Full-text search uses FTS5 with the `trigram` tokenizer, so case-insensitive substring search works for CJK as well as Latin text. Each whitespace-separated term becomes a quoted phrase, and terms are combined with AND. A trigram index cannot serve terms shorter than three characters, so those queries fall back to `LIKE`.
-- Results are ordered newest first and can be filtered by time range, source, and project.
-- The timeline lists sessions by time, or the events of one session in order (tool events are hidden unless `--all` is given).
+- Results are ranked by BM25 relevance by default, or by time on request (`--recent`); `LIKE` fallbacks are always ordered by time. Event search covers `message` events unless tool events are requested (`--all` / `include_tools`). Entry search covers active entries.
+- The timeline lists sessions by time, or the events of one session in order (tool events are hidden unless requested).
 
-## MCP interface (planned)
+## MCP server
 
-The MCP server will expose these tools over stdio:
+`origin mcp` serves these tools over stdio. Results are JSON text with local ISO 8601 timestamps.
 
 | Tool | Purpose |
 |---|---|
-| `search` | Full-text search over events and entries |
-| `timeline` | Sessions and events in a time range, optionally filtered by project or source |
-| `get` | Fetch an event or entry by id |
-| `sources` | Expand an entry or event to its original raw text |
-| `remember` | Write an entry (`memory` / `knowledge` / `cognition`) with sources and confidence |
+| `search` | Full-text search over entries and events; without a query, lists recent entries. Filters: scope, kind, time range, source, project, tool events |
+| `timeline` | Sessions in a time range (default 7 days), or the events of one session |
+| `get` | An entry with its sources and version history, or an event with its full text |
+| `sources` | Original log lines for an entry or event: file, mirror, line number, raw text |
+| `remember` | Write an entry with kind, text, confidence, and sources |
 | `correct` | Supersede an entry with a corrected version |
-| `forget` | Forget an entry and tombstone its sources |
+| `forget` | Forget an entry or event, per the rules above; only on the user's explicit request |
+
+- **Freshness.** The server syncs all sources when it starts, before read tools (at most every 10 seconds), and always before `remember` and `correct`, so an agent can cite lines from the conversation it is in.
+- **Guidance.** The server's MCP `instructions` tell agents when to search, when to remember (decisions with reasons, stable facts, preferences), and that `forget` needs an explicit request.
+- **Errors.** Invalid input, unknown ids, and forgotten ids come back as tool errors with a readable message.
 
 ## Open questions
 
 - **Cognition at low cost.** How do we build and maintain a model of the person without a dedicated extraction pipeline? For now, agents write cognition entries themselves when they notice something. Whether that is enough is still an open question.
 - **Native memory interop.** Claude Code, ZCode, and Grok Build all keep a `MEMORY.md` index plus one Markdown file per memory. Two-way import/export with that layout is planned but not yet designed.
-- **Change notification.** File watching is unreliable on some platforms. For now ingestion runs on an explicit `origin sync`; a watcher backed by a periodic full scan is planned.
+- **Change notification.** File watching is unreliable on some platforms. The MCP server syncs on demand, and the CLI on `origin sync`; a background watcher backed by a periodic full scan may still be needed.
 
 ## Prior art
 

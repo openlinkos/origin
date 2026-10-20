@@ -10,51 +10,11 @@ import {
   openDatabase,
   rawLocator,
   readRawLine,
-  type SourceAdapter,
   searchEvents,
   stats,
   syncSource,
 } from '../src/index.js';
-
-/** Minimal fake source: one {"id","session","ts","role","text"} object per line. */
-function fakeAdapter(root: string): SourceAdapter {
-  return {
-    id: 'fake',
-    displayName: 'Fake',
-    version: () => '0.0.1',
-    async discover() {
-      return fs
-        .readdirSync(root)
-        .filter((f) => f.endsWith('.jsonl'))
-        .map((f) => ({ absPath: path.join(root, f), relPath: f }));
-    },
-    parseLine(line) {
-      const o = JSON.parse(line) as {
-        id: string;
-        session: string;
-        ts: number;
-        role: 'user' | 'assistant';
-        text: string;
-        title?: string;
-        project?: string;
-      };
-      if (o.title) return { events: [], sessionTitle: o.title, sessionId: o.session };
-      return {
-        events: [
-          {
-            id: o.id,
-            sessionId: o.session,
-            ts: o.ts,
-            role: o.role,
-            kind: 'message',
-            text: o.text,
-            project: o.project ?? 'demo',
-          },
-        ],
-      };
-    },
-  };
-}
+import { fakeAdapter, line } from './helpers.js';
 
 let home: string;
 let src: string;
@@ -71,9 +31,6 @@ afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
   fs.rmSync(src, { recursive: true, force: true });
 });
-
-const line = (id: string, session: string, ts: number, role: 'user' | 'assistant', text: string) =>
-  `${JSON.stringify({ id, session, ts, role, text })}\n`;
 
 describe('syncSource', () => {
   it('ingests, is idempotent, and follows appends without re-reading', async () => {
@@ -158,6 +115,23 @@ describe('syncSource', () => {
     expect(r.eventsAdded).toBe(2);
   });
 
+  it('drops mirror bytes left by an interrupted sync before appending (invariant 1)', async () => {
+    const file = path.join(src, 'm.jsonl');
+    fs.writeFileSync(file, line('1', 's7', 1000, 'user', 'first'));
+    await syncSource({ db, home }, fakeAdapter(src));
+    const first = getEvent(db, 'fake:1');
+    const mirror = rawLocator(db, home, first!)!.mirrorPath;
+    fs.appendFileSync(mirror, line('x', 's7', 1500, 'user', 'uncommitted'));
+
+    fs.appendFileSync(file, line('2', 's7', 2000, 'user', 'second'));
+    await syncSource({ db, home }, fakeAdapter(src));
+    const second = getEvent(db, 'fake:2')!;
+    expect(readRawLine(rawLocator(db, home, second)!)).toBe(
+      line('2', 's7', 2000, 'user', 'second').trim(),
+    );
+    expect(fs.readFileSync(mirror, 'utf8')).toBe(fs.readFileSync(file, 'utf8'));
+  });
+
   it('applies session titles and exposes stats', async () => {
     fs.writeFileSync(
       path.join(src, 'e.jsonl'),
@@ -184,5 +158,25 @@ describe('searchEvents', () => {
     expect(searchEvents(db, 'pnpm', { since: 2500 })).toHaveLength(0);
     // short queries fall back to LIKE
     expect(searchEvents(db, 'AI').map((h) => h.id)).toEqual(['fake:1']);
+  });
+
+  it('ranks by relevance by default and by time on request', async () => {
+    fs.writeFileSync(
+      path.join(src, 'g.jsonl'),
+      line('old', 's8', 1000, 'user', 'sqlite migration plan for sqlite') +
+        line(
+          'new',
+          's8',
+          2000,
+          'user',
+          'a long recap of the week covering deployment, hiring, budgets, and briefly sqlite',
+        ),
+    );
+    await syncSource({ db, home }, fakeAdapter(src));
+    expect(searchEvents(db, 'sqlite').map((h) => h.id)).toEqual(['fake:old', 'fake:new']);
+    expect(searchEvents(db, 'sqlite', { order: 'recent' }).map((h) => h.id)).toEqual([
+      'fake:new',
+      'fake:old',
+    ]);
   });
 });

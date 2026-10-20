@@ -50,3 +50,8 @@ function padEnd(s: string, width: number): string {
   const gap = width - displayWidth(s);
   return gap > 0 ? s + ' '.repeat(gap) : s;
 }
+
+/** `1 entry`, `2 entries`. */
+export function count(n: number, singular: string, plural = `${singular}s`): string {
+  return `${n} ${n === 1 ? singular : plural}`;
+}

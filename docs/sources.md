@@ -59,14 +59,34 @@ Checked against 1.0.4x (September–October 2026). Source: [xai-org/grok-build](
 - **Native memory:** experimental and off by default (`GROK_MEMORY=1`). Markdown under `~/.grok/memory/` (global `MEMORY.md` plus per-workspace directories keyed by a git-remote hash) or `~/.grok/memory-v2/`.
 - **Interop:** Grok merges MCP servers from `~/.claude.json` and `.mcp.json`, so registering Origin for Claude Code also exposes it to Grok.
 
-## Connecting agents to Origin's MCP server
+## Connecting agents to Origin
 
-Once the MCP server ships, each agent registers it through its own configuration:
+Every agent launches the same stdio server, `node <repo>/packages/cli/dist/bin.js mcp`. Replace `/path/to/origin` below with the absolute path of your checkout. Register Origin globally, not per project, so that all projects share one memory. The Claude Code setup has been verified end to end; the other configurations follow each agent's documentation.
 
-| Agent | MCP configuration |
-|---|---|
-| Claude Code | `claude mcp add` / `~/.claude.json` / project `.mcp.json` |
-| Codex CLI | `~/.codex/config.toml` (`[mcp_servers.<name>]`) |
-| Cursor | `~/.cursor/mcp.json` or project `.cursor/mcp.json` |
-| ZCode | `~/.zcode/cli/config.json` (`mcp.servers`); can import from Claude Code and Codex settings |
-| Grok Build | `~/.grok/config.toml` (`[mcp_servers.<name>]`); also reads Claude Code and Cursor MCP configs |
+**Claude Code**
+
+```bash
+claude mcp add --scope user origin -- node /path/to/origin/packages/cli/dist/bin.js mcp
+```
+
+**Codex CLI** — `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.origin]
+command = "node"
+args = ["/path/to/origin/packages/cli/dist/bin.js", "mcp"]
+```
+
+**Cursor** — `~/.cursor/mcp.json` (shared by the editor and the CLI):
+
+```json
+{
+  "mcpServers": {
+    "origin": { "command": "node", "args": ["/path/to/origin/packages/cli/dist/bin.js", "mcp"] }
+  }
+}
+```
+
+**ZCode** — add the server under `mcp.servers` in `~/.zcode/cli/config.json`, or use ZCode's import of Claude Code or Codex MCP settings.
+
+**Grok Build** — reads `~/.claude.json`, so the Claude Code registration above is picked up automatically. Otherwise add `[mcp_servers.origin]` to `~/.grok/config.toml` as for Codex.

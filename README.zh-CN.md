@@ -7,9 +7,9 @@
 
 [English](README.md) | 简体中文
 
-各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：目前支持 Claude Code，Codex、Cursor、ZCode、Grok Build 将陆续接入。归档后可以检索、按时间线回看，任何结果都能追溯到原始文件的具体一行。下一步，Origin 会通过同一个 [MCP](https://modelcontextprotocol.io) server 把这份记忆开放给所有 Agent：无论打开哪个工具，它都知道你上周决定了什么、为什么。
+各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：目前支持 Claude Code，Codex、Cursor、ZCode、Grok Build 将陆续接入。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。
 
-> **状态：早期开发。** Claude Code 的采集、检索、时间线与溯源已可用；MCP server 与其余适配器正在开发（见[路线图](#路线图)）。各包尚未发布到 npm，请从源码安装。
+> **状态：早期开发。** Claude Code 会话的采集、MCP server 与 CLI 已经端到端可用；其余 Agent 的适配器正在开发（见[路线图](#路线图)）。各包尚未发布到 npm，请从源码安装。
 
 ## 为什么
 
@@ -17,31 +17,31 @@
 
 Origin 以**人**而不是工具为中心：
 
-- **一份跨 Agent 的归档**：各 Agent 的会话规范化为同一套事件。
-- **默认可溯源**：每个事件都指向原始文件与行号，随时可以查看原文。
+- **跨 Agent 的同一份记忆**：各 Agent 的会话规范化为同一套事件，任何支持 MCP 的 Agent 都能查询。
+- **默认可溯源**：每个事件都指向原始文件与行号，每个条目都引用它的来源事件。
 - **不怕清理**：原始记录只追加地镜像保存，比 Agent 自身的保留期更长久。
+- **可纠正、可遗忘**：条目可以纠正；遗忘后的条目或事件不会再出现，也不能再被引用。
 - **本地、私密**：数据全部留在本机；Origin 不联网，也不调用任何 LLM API。
-- **可纠正、可遗忘**（规划中）：沉淀下来的条目可以纠正或遗忘，遗忘后不会复活。
 
 ## 功能
 
-- `origin sync`：增量、幂等的采集。只读新增字节；源文件被改写时自动识别，作为新代次保存。
-- 全部会话的全文检索，支持中文子串检索（SQLite FTS5 trigram）。
-- 时间线：按天列出会话，或按顺序列出单个会话内的事件。
-- `origin show <event-id>`：显示规范化后的事件、原始定位和原文行。
-- 零运行时依赖：只用 Node.js 内置模块（包括 `node:sqlite`）。
+- **MCP server**（`origin mcp`），七个工具：`search`、`timeline`、`get`、`sources`、`remember`、`correct`、`forget`。它会自动同步，Agent 看到的总是最新会话。
+- **条目**分三类：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。每条都带来源、置信度和版本历史。
+- **按相关度排序的全文检索**：覆盖会话和条目，支持中文子串检索（SQLite FTS5 trigram）。
+- **增量、幂等的采集**：只读新增字节；源文件被改写时作为新代次保存；多个进程同时同步也安全。
+- **CLI**：浏览时间线，查看任意条目或事件直到原文行，纠正条目，以及遗忘。
 
 ## 支持的 Agent
 
-| Agent | 状态 |
-|---|---|
-| Claude Code | ✅ 已支持 |
-| Codex CLI | 规划中 |
-| Cursor | 规划中 |
-| ZCode | 规划中 |
-| Grok Build | 规划中 |
+| Agent | 会话归档 | 通过 MCP 使用 Origin |
+|---|---|---|
+| Claude Code | ✅ | ✅ |
+| Codex CLI | 规划中 | ✅ |
+| Cursor | 规划中 | ✅ |
+| ZCode | 规划中 | ✅ |
+| Grok Build | 规划中 | ✅ |
 
-各 Agent 的会话存储位置与格式见 [docs/sources.md](docs/sources.md)（英文）。
+任何支持 MCP 的 Agent 现在都能查询归档和条目；归档某个 Agent 自己的会话则需要它的适配器。各 Agent 的会话存储位置以及如何注册 Origin，见 [docs/sources.md](docs/sources.md)（英文）。
 
 ## 快速开始
 
@@ -59,19 +59,36 @@ pnpm origin status      # 查看已采集的内容
 
 `pnpm origin <命令>` 等价于 `node packages/cli/dist/bin.js <命令>`，可以把后者设为 `origin` 别名。
 
+### 接入 Claude Code
+
+在用户级注册一次，所有项目共享同一份记忆：
+
+```bash
+claude mcp add --scope user origin -- node /absolute/path/to/origin/packages/cli/dist/bin.js mcp
+claude mcp list         # origin: … ✔ Connected
+```
+
+之后在任意会话里直接问，例如：*「上周在 origin 项目里，关于 schema 迁移我是怎么决定的？为什么？请给出来源。」* Agent 会检索 Origin 并附上事件 id 作答，你可以用 `origin show <id>` 打开原文。遇到值得保留的内容，它会用 `remember` 存成条目。
+
+Codex、Cursor、ZCode、Grok Build 的接入方式见 [docs/sources.md](docs/sources.md#connecting-agents-to-origin)。
+
 ## 命令参考
 
 ```text
 origin sync      [--source <id>] [--verbose]          采集本机 Agent 会话（幂等，可随时重跑）
-origin status                                          各来源的会话/事件统计与上次采集时间
+origin status                                          各来源统计、条目数与上次采集时间
 origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
 origin timeline  --session <id> [--all]                单个会话的事件（默认不含工具事件）
-origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--limit 20]
-origin show      <event-id>                            显示事件、原始定位与原文行
+origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
+origin show      <id>                                  显示条目或事件，以及它的原始来源
+origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
+origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
+origin forget    <id> [--reason <text>] [--yes]        永久遗忘条目或事件（需加 --yes 确认）
 origin projects                                        已知的项目名
+origin mcp                                             以 stdio 运行 MCP server（供 Agent 使用）
 ```
 
-时间参数可以是相对时长（`30m`、`24h`、`7d`、`2w`），也可以是日期（`YYYY-MM-DD`、ISO 8601）。CLI 输出为英文。
+时间参数可以是相对时长（`30m`、`24h`、`7d`、`2w`），也可以是日期（`YYYY-MM-DD`、ISO 8601）。条目类型为 `memory`、`knowledge`、`cognition`。CLI 输出为英文。
 
 ## 配置
 
@@ -85,12 +102,13 @@ origin projects                                        已知的项目名
 
 ```
 Agent 会话记录 ──扫描──▶ 只追加的原始镜像 ──确定性解析──▶ 事件库（SQLite + FTS5）
-                                                                │
-                        各 Agent ◀── MCP server（规划中）──────┤
+                                                                │      ▲
+                                                                │   条目 · 遗忘墓碑
+                        各 Agent ◀── MCP server（origin mcp）──┤
                         你       ◀── origin CLI ───────────────┘
 ```
 
-Origin 围绕五条不变量构建：**溯源**、**遗忘粘性**、**只追加**、**本地优先**、**单一入口**（Agent 走 MCP，人走 CLI）。内核从不调用模型：提问的 Agent 自己负责推理，Origin 提供事实与来源。数据模型、采集算法与规划中的 MCP 工具见 [docs/architecture.md](docs/architecture.md)（英文）。
+Origin 围绕五条不变量构建：**溯源**、**遗忘粘性**、**只追加**、**本地优先**、**单一入口**（Agent 走 MCP，人走 CLI）。内核从不调用模型：提问的 Agent 自己负责推理，Origin 提供事实与来源。数据模型、采集算法、遗忘规则与 MCP 工具见 [docs/architecture.md](docs/architecture.md)（英文）。
 
 ## 隐私
 
@@ -98,6 +116,7 @@ Agent 会话记录里常有源代码、文件内容、命令输出，以及你�
 
 - Origin 不发起任何网络连接，不向任何地方发送数据。
 - 请像保护原始记录一样保护 `~/.origin`。该目录没有加密。
+- `origin forget <event-id>` 可以永久隐藏一条消息，例如你粘贴过密钥的那条提示词。原始镜像文件里仍保留该行。
 - 删除 `~/.origin`（或你设置的 `ORIGIN_HOME`）即可清除 Origin 保存的全部数据。
 
 ## 路线图
@@ -105,7 +124,7 @@ Agent 会话记录里常有源代码、文件内容、命令输出，以及你�
 以小步、可运行的增量交付，每一步都能单独使用：
 
 1. ✅ 核心存储、Claude Code 适配器与 CLI（`sync`、`status`、`timeline`、`search`、`show`、`projects`）
-2. MCP server 与条目、遗忘墓碑（`search`、`timeline`、`get`、`sources`、`remember`、`correct`、`forget`），接入 Claude Code
+2. ✅ MCP server、条目、纠正与遗忘粘性，已接入 Claude Code
 3. Codex 适配器
 4. Cursor 适配器
 5. ZCode 适配器
@@ -114,21 +133,21 @@ Agent 会话记录里常有源代码、文件内容、命令输出，以及你�
 **当前已知限制：**
 
 - 很多会话没有标题，因为 Claude Code 只为部分会话写 `summary` 行。
-- 检索结果按时间排序而不是按相关度，工具事件可能挤占结果。
 - 项目名取自工作目录的最后一段，而不是由 git remote 推导。
-- 尚无文件监听，需要手动或定时运行 `origin sync`。
+- 遗忘只是隐藏，不会从原始镜像文件中物理删除。
+- 没有后台文件监听：MCP server 按需同步，其他时候需要运行 `origin sync`。
 
 ## 目录结构
 
 ```
 packages/
-├── core/       @openlinkos/origin-core      存储、schema、采集、查询
+├── core/       @openlinkos/origin-core      存储、采集、条目、遗忘、查询
 ├── adapters/   @openlinkos/origin-adapters  各 Agent 的会话解析器
-├── mcp/        @openlinkos/origin-mcp       MCP server（开发中）
+├── mcp/        @openlinkos/origin-mcp       MCP server（stdio）
 └── cli/        @openlinkos/origin           origin 命令
 docs/
 ├── architecture.md                          设计、数据模型、不变量
-└── sources.md                               各 Agent 的本地会话格式
+└── sources.md                               各 Agent 的会话格式与 MCP 接入
 ```
 
 ## 参与贡献

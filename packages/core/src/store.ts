@@ -16,12 +16,20 @@ export interface EventFilter {
   limit?: number;
 }
 
+export interface SearchOptions extends EventFilter {
+  /** `relevance` (BM25, default) or `recent` (newest first). Short queries are always `recent`. */
+  order?: 'relevance' | 'recent';
+}
+
 export interface SearchHit extends EventRow {
   snippet: string;
 }
 
 const EVENT_COLUMNS = `e.id, e.source, e.session_id, e.parent_id, e.ts, e.project, e.cwd, e.git_branch,
   e.role, e.kind, e.text, e.raw_file_id, e.raw_line, e.agent_version, e.meta`;
+
+/** Forgotten events are excluded from every query (invariant 2, sticky forgetting). */
+export const VISIBLE_EVENT = 'NOT EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_id = e.id)';
 
 interface RawEventRecord {
   id: string;
@@ -63,7 +71,7 @@ function toEventRow(r: RawEventRecord): EventRow {
 }
 
 function whereClause(f: EventFilter, params: unknown[]): string {
-  const parts: string[] = [];
+  const parts: string[] = [VISIBLE_EVENT];
   if (f.source) {
     parts.push('e.source = ?');
     params.push(f.source);
@@ -88,7 +96,7 @@ function whereClause(f: EventFilter, params: unknown[]): string {
     parts.push(`e.kind IN (${f.kinds.map(() => '?').join(',')})`);
     params.push(...f.kinds);
   }
-  return parts.length > 0 ? ` AND ${parts.join(' AND ')}` : '';
+  return ` AND ${parts.join(' AND ')}`;
 }
 
 /** Turn a user query into an FTS5 trigram query: each whitespace-separated term becomes a phrase, joined with AND. */
@@ -102,7 +110,7 @@ export function toFtsQuery(query: string): string | null {
 }
 
 /** Full-text search over events. Queries shorter than 3 characters fall back to LIKE. */
-export function searchEvents(db: Database, query: string, filter: EventFilter = {}): SearchHit[] {
+export function searchEvents(db: Database, query: string, filter: SearchOptions = {}): SearchHit[] {
   const limit = filter.limit ?? 20;
   const fts = toFtsQuery(query);
   const params: unknown[] = [];
@@ -115,7 +123,7 @@ export function searchEvents(db: Database, query: string, filter: EventFilter = 
         `SELECT ${EVENT_COLUMNS}, snippet(event_fts, 0, '[', ']', '…', 24) AS snippet
          FROM event_fts f JOIN event e ON e.rowid = f.rowid
          WHERE event_fts MATCH ?${where}
-         ORDER BY e.ts DESC LIMIT ?`,
+         ORDER BY ${filter.order === 'recent' ? 'e.ts DESC' : 'bm25(event_fts), e.ts DESC'} LIMIT ?`,
       )
       .all(...(params as never[])) as unknown as RawEventRecord[];
     return rows.map((r) => ({ ...toEventRow(r), snippet: r.snippet ?? '' }));
@@ -140,7 +148,7 @@ export function listSessions(
   filter: Pick<EventFilter, 'source' | 'project' | 'since' | 'until' | 'limit'> = {},
 ): SessionRow[] {
   const params: unknown[] = [];
-  const parts: string[] = [];
+  const parts: string[] = ['event_count > 0'];
   if (filter.source) {
     parts.push('source = ?');
     params.push(filter.source);
@@ -157,7 +165,7 @@ export function listSessions(
     parts.push('started_at <= ?');
     params.push(filter.until);
   }
-  const where = parts.length > 0 ? `WHERE ${parts.join(' AND ')}` : '';
+  const where = `WHERE ${parts.join(' AND ')}`;
   params.push(filter.limit ?? 50);
   const rows = db
     .prepare(
@@ -197,10 +205,11 @@ export function listEvents(db: Database, filter: EventFilter = {}): EventRow[] {
   return rows.map(toEventRow);
 }
 
+/** A visible event by id; forgotten events are reported as missing. */
 export function getEvent(db: Database, id: string): EventRow | null {
-  const row = db.prepare(`SELECT ${EVENT_COLUMNS} FROM event e WHERE e.id = ?`).get(id) as
-    | RawEventRecord
-    | undefined;
+  const row = db
+    .prepare(`SELECT ${EVENT_COLUMNS} FROM event e WHERE e.id = ? AND ${VISIBLE_EVENT}`)
+    .get(id) as RawEventRecord | undefined;
   return row ? toEventRow(row) : null;
 }
 
@@ -271,7 +280,7 @@ export function stats(db: Database): SourceStats[] {
               (SELECT COUNT(*) FROM raw_file r WHERE r.source = e.source) AS files,
               (SELECT finished_at FROM sync_log s WHERE s.source = e.source ORDER BY id DESC LIMIT 1) AS last_sync_at,
               (SELECT events_added FROM sync_log s WHERE s.source = e.source ORDER BY id DESC LIMIT 1) AS last_added
-       FROM event e GROUP BY e.source ORDER BY e.source`,
+       FROM event e WHERE ${VISIBLE_EVENT} GROUP BY e.source ORDER BY e.source`,
     )
     .all() as unknown as Array<{
     source: string;
@@ -295,6 +304,11 @@ export function stats(db: Database): SourceStats[] {
   }));
 }
 
+/** Whether an event exists but has been forgotten. */
+export function isEventForgotten(db: Database, id: string): boolean {
+  return db.prepare('SELECT 1 FROM excluded_event WHERE event_id = ?').get(id) !== undefined;
+}
+
 /** Known project names (by session and event count, descending; from the derived session table). */
 export function listProjects(
   db: Database,
@@ -303,7 +317,7 @@ export function listProjects(
   return db
     .prepare(
       `SELECT project, COUNT(*) AS sessions, SUM(event_count) AS events FROM session
-       WHERE project IS NOT NULL GROUP BY project ORDER BY sessions DESC, events DESC LIMIT ?`,
+       WHERE project IS NOT NULL AND event_count > 0 GROUP BY project ORDER BY sessions DESC, events DESC LIMIT ?`,
     )
     .all(limit) as unknown as Array<{ project: string; sessions: number; events: number }>;
 }

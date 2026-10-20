@@ -41,10 +41,10 @@ ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtur
 
 | Package | Responsibility |
 |---|---|
-| `packages/core` | Storage, schema, ingestion, queries. Depends on no other workspace package |
+| `packages/core` | Storage, ingestion, entries, forgetting, queries. Depends on no other workspace package |
 | `packages/adapters` | One deterministic parser per agent. Depends only on `core` |
-| `packages/mcp` | MCP server over stdio. Depends only on `core` |
-| `packages/cli` | The `origin` command |
+| `packages/mcp` | MCP server over stdio. Depends only on `core` (ingestion is injected by the CLI) |
+| `packages/cli` | The `origin` command, including `origin mcp` |
 
 [docs/architecture.md](docs/architecture.md) explains the data model and the five invariants that every change must preserve.
 
@@ -52,7 +52,7 @@ ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtur
 
 - **TypeScript:** strict mode, ESM, `NodeNext` module resolution. Import relative files with the `.js` extension.
 - **Formatting:** Biome (2-space indent, single quotes, semicolons, trailing commas, 100-column lines). Run `pnpm lint:fix` before committing.
-- **Dependencies:** Origin currently has no runtime dependencies. Open an issue before adding one. Pin dev dependencies to exact versions, and reference workspace packages as `workspace:*`.
+- **Dependencies:** `core` and `adapters` use only Node built-ins; `mcp` depends on the MCP TypeScript SDK and zod. Open an issue before adding a runtime dependency. Pin all dependencies to exact versions, and reference workspace packages as `workspace:*`.
 - **No network, no LLM in the core.** `core` and `adapters` must not make network calls or call model APIs.
 - **Language:** code, comments, docs, and commit messages are in English. `README.zh-CN.md` is a translation of `README.md`; if you change one, update the other or mention it in your pull request so a maintainer can.
 - **Docs follow code:** if a change affects the data model, an invariant, or a public interface, update `docs/architecture.md` in the same pull request. Put user-visible changes in the README, and agent format findings in `docs/sources.md`.
@@ -60,7 +60,7 @@ ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtur
 ## Tests and fixtures
 
 - Tests live in `packages/<name>/test/*.test.ts` and run with Vitest.
-- Adapter parsing and the invariants (provenance, append-only, idempotent sync) must be covered by tests.
+- Adapter parsing and the invariants (provenance, sticky forgetting, append-only, idempotent sync) must be covered by tests. MCP tools are tested end to end with an in-memory MCP client (`packages/mcp/test`).
 - **Fixtures must be synthetic.** Never commit real session logs, even partial ones. Build fixtures by hand or scrub them thoroughly: replace names, paths, repository URLs, prompts, outputs, tokens, and any other identifying or secret content.
 
 ## Adding a source adapter
