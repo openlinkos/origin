@@ -65,6 +65,13 @@ Grok reads `~/.claude.json`, so the Claude Code registration above is picked up 
 
 The server tells agents how to use these tools, so you can simply ask questions in plain language. It syncs new session lines before answering, so an agent can even cite what you said a minute ago. The tools are specified in [Architecture](../architecture.md#mcp-server).
 
+## Using a personal hub
+
+If you use agents on several machines, or cloud agents, you can run a [personal hub](./hub.md):
+
+- On a device that is connected to the hub, the local `origin mcp` registrations above keep working. The server pushes new session lines and forwards each call to the hub.
+- Cloud agents, which have no local session logs, register the hub's `/mcp` URL directly with their own token. For example, in Claude Code: `claude mcp add --scope user --transport http origin https://hub.example.com/mcp --header "Authorization: Bearer ogn_…"`.
+
 ## After updating Origin
 
 Agents start the server from your checkout. After you pull and run `pnpm build`, restart running agent sessions so that they pick up the new version.

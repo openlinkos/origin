@@ -1,0 +1,409 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  type AppendResult,
+  appendRemote,
+  applyRemoteTombstone,
+  createToken,
+  type Database,
+  forget,
+  getEvent,
+  getSetting,
+  listDevices,
+  listEvents,
+  listSessions,
+  listTokens,
+  localRawFiles,
+  OriginError,
+  openDatabase,
+  type ParseContext,
+  type RemoteChunk,
+  rawLocator,
+  readRawLine,
+  remember,
+  remoteCursors,
+  revokeToken,
+  setSetting,
+  syncSource,
+  tombstonesAfter,
+  verifyToken,
+} from '../src/index.js';
+import { fakeAdapter, line } from './helpers.js';
+
+let dirs: string[];
+let home: string;
+let db: Database;
+
+const tmp = (prefix: string) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  dirs.push(dir);
+  return dir;
+};
+
+beforeEach(() => {
+  dirs = [];
+  home = tmp('origin-hub-');
+  db = openDatabase(path.join(home, 'origin.db'));
+});
+
+afterEach(() => {
+  db.close();
+  for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+/** The fake adapter, recording the parse context of every line. */
+function spyAdapter() {
+  const adapter = fakeAdapter(tmp('origin-src-'));
+  const seen: ParseContext[] = [];
+  return {
+    seen,
+    adapter: {
+      ...adapter,
+      parseLine: (l: string, ctx: ParseContext) => {
+        seen.push(ctx);
+        return adapter.parseLine(l, ctx);
+      },
+    },
+  };
+}
+
+const chunk = (over: Partial<RemoteChunk> & { text?: string }): RemoteChunk => {
+  const { text, ...rest } = over;
+  return {
+    device: 'laptop',
+    source: 'fake',
+    path: '/home/me/.fake/proj/s1.jsonl',
+    relPath: 'proj/s1.jsonl',
+    generation: 1,
+    offset: 0,
+    data: Buffer.from(text ?? ''),
+    ...rest,
+  };
+};
+
+const two =
+  line('e1', 's1', 1000, 'user', 'first message') +
+  line('e2', 's1', 2000, 'assistant', 'second message');
+
+describe('appendRemote', () => {
+  it("appends a device's chunk to its own mirror and parses it with the same adapter", () => {
+    const { adapter, seen } = spyAdapter();
+    const r = appendRemote(
+      { db, home },
+      adapter,
+      chunk({ text: two, mtimeMs: 42, agentVersion: '9.9.9' }),
+    );
+    expect(r).toEqual({
+      ok: true,
+      bytes: Buffer.byteLength(two),
+      linesRead: 2,
+      eventsAdded: 2,
+      parseErrors: 0,
+    });
+
+    const mirror = path.join(home, 'raw', 'devices', 'laptop', 'fake', 'proj', 's1.jsonl');
+    expect(fs.readFileSync(mirror, 'utf8')).toBe(two);
+    expect(seen.map((c) => [c.absPath, c.relPath, c.lineNo, c.fileMtimeMs])).toEqual([
+      [mirror, 'proj/s1.jsonl', 1, 42],
+      [mirror, 'proj/s1.jsonl', 2, 42],
+    ]);
+
+    const ev = getEvent(db, 'fake:e2')!;
+    expect(ev).toMatchObject({ sessionId: 's1', agentVersion: '9.9.9', rawLine: 2 });
+    const loc = rawLocator(db, home, ev)!;
+    expect(loc).toMatchObject({
+      device: 'laptop',
+      originalPath: '/home/me/.fake/proj/s1.jsonl',
+      mirrorPath: mirror,
+      line: 2,
+    });
+    expect(readRawLine(loc)).toBe(line('e2', 's1', 2000, 'assistant', 'second message').trim());
+    expect(listSessions(db)[0]).toMatchObject({ sessionId: 's1', eventCount: 2 });
+
+    const log = db.prepare('SELECT note, events_added FROM sync_log').all();
+    expect(log).toEqual([{ note: 'device laptop', events_added: 2 }]);
+  });
+
+  it('rejects chunks that do not start at the cursor, so the device can resume', () => {
+    const { adapter } = spyAdapter();
+    const first = line('e1', 's1', 1000, 'user', 'one');
+    const second = line('e2', 's1', 2000, 'user', 'two');
+    const n = Buffer.byteLength(first);
+
+    expect(appendRemote({ db, home }, adapter, chunk({ offset: 5, text: first }))).toEqual({
+      ok: false,
+      bytes: 0,
+    });
+    // An empty chunk for an unknown file is fine and creates nothing.
+    expect(appendRemote({ db, home }, adapter, chunk({}))).toMatchObject({ ok: true, bytes: 0 });
+    expect(remoteCursors(db, 'laptop')).toEqual([]);
+
+    expect(appendRemote({ db, home }, adapter, chunk({ text: first }))).toMatchObject({
+      ok: true,
+      bytes: n,
+    });
+    const stale: AppendResult = appendRemote({ db, home }, adapter, chunk({ text: first }));
+    expect(stale).toEqual({ ok: false, bytes: n });
+    expect(appendRemote({ db, home }, adapter, chunk({ offset: n + 3, text: second }))).toEqual({
+      ok: false,
+      bytes: n,
+    });
+    expect(appendRemote({ db, home }, adapter, chunk({ offset: n, text: second }))).toMatchObject({
+      ok: true,
+      bytes: n + Buffer.byteLength(second),
+      eventsAdded: 1,
+    });
+    expect(listEvents(db).map((e) => [e.id, e.rawLine])).toEqual([
+      ['fake:e1', 1],
+      ['fake:e2', 2],
+    ]);
+  });
+
+  it('opens a separate raw file and mirror for each generation', () => {
+    const { adapter } = spyAdapter();
+    appendRemote({ db, home }, adapter, chunk({ text: line('e1', 's1', 1000, 'user', 'one') }));
+    const r = appendRemote(
+      { db, home },
+      adapter,
+      chunk({ generation: 2, text: line('e3', 's1', 3000, 'user', 'three') }),
+    );
+    expect(r).toMatchObject({ ok: true, eventsAdded: 1 });
+    expect(
+      fs.existsSync(path.join(home, 'raw', 'devices', 'laptop', 'fake', 'proj', 's1.jsonl.g2')),
+    ).toBe(true);
+    expect(rawLocator(db, home, getEvent(db, 'fake:e3')!)).toMatchObject({
+      generation: 2,
+      line: 1,
+    });
+    expect(remoteCursors(db, 'laptop').map((c) => [c.path, c.generation])).toEqual([
+      ['/home/me/.fake/proj/s1.jsonl', 1],
+      ['/home/me/.fake/proj/s1.jsonl', 2],
+    ]);
+  });
+
+  it('refuses anything that could escape the mirror directory or break the mirror', () => {
+    const { adapter } = spyAdapter();
+    const text = line('e1', 's1', 1000, 'user', 'one');
+    const bad: Array<Partial<RemoteChunk> & { text?: string }> = [
+      { relPath: '../escape.jsonl' },
+      { relPath: 'a/../../escape.jsonl' },
+      { relPath: 'a\\..\\..\\escape.jsonl' },
+      { relPath: '/etc/escape.jsonl' },
+      { relPath: '\\escape.jsonl' },
+      { relPath: 'C:/escape.jsonl' },
+      { relPath: 'C:escape.jsonl' },
+      { relPath: 'a\0b.jsonl' },
+      { relPath: '' },
+      { device: 'Laptop' },
+      { device: '../laptop' },
+      { device: 'lap:top' },
+      { device: '' },
+      { source: 'other' },
+      { generation: 0 },
+      { generation: 1.5 },
+      { offset: -1 },
+      { path: '' },
+      { text: 'no trailing newline' },
+    ];
+    for (const over of bad) {
+      expect(() => appendRemote({ db, home }, adapter, chunk({ text, ...over }))).toThrow(
+        OriginError,
+      );
+    }
+    expect(fs.existsSync(path.join(home, 'raw'))).toBe(false);
+    expect(listEvents(db)).toEqual([]);
+  });
+
+  it('keeps events forgotten on the hub forgotten when a device pushes them again', () => {
+    const { adapter } = spyAdapter();
+    appendRemote({ db, home }, adapter, chunk({ text: two }));
+    forget(db, 'fake:e1');
+    // The device rewrote the file (new generation) and pushes the same lines again.
+    appendRemote({ db, home }, adapter, chunk({ generation: 2, text: two }));
+    expect(getEvent(db, 'fake:e1')).toBeNull();
+    expect(listEvents(db).map((e) => e.id)).toEqual(['fake:e2']);
+    expect(listSessions(db)[0]?.eventCount).toBe(1);
+  });
+
+  it('keeps cursors and device listings per device, apart from local files', async () => {
+    const { adapter } = spyAdapter();
+    appendRemote({ db, home }, adapter, chunk({ text: two }));
+    appendRemote(
+      { db, home },
+      adapter,
+      chunk({
+        device: 'desk',
+        path: 'D:\\fake\\s9.jsonl',
+        relPath: 's9.jsonl',
+        text: line('e9', 's9', 9000, 'user', 'nine'),
+      }),
+    );
+    const src = tmp('origin-local-');
+    fs.writeFileSync(path.join(src, 'local.jsonl'), line('l1', 'sl', 500, 'user', 'local'));
+    await syncSource({ db, home }, fakeAdapter(src));
+
+    expect(remoteCursors(db, 'laptop')).toEqual([
+      {
+        source: 'fake',
+        path: '/home/me/.fake/proj/s1.jsonl',
+        generation: 1,
+        bytes: Buffer.byteLength(two),
+      },
+    ]);
+    expect(remoteCursors(db, 'desk').map((c) => c.path)).toEqual(['D:\\fake\\s9.jsonl']);
+    expect(listDevices(db).map((d) => [d.device, d.files, d.bytes])).toEqual([
+      ['desk', 1, Buffer.byteLength(line('e9', 's9', 9000, 'user', 'nine'))],
+      ['laptop', 1, Buffer.byteLength(two)],
+    ]);
+    expect(localRawFiles(db, home).map((f) => f.path)).toEqual([path.join(src, 'local.jsonl')]);
+    expect(rawLocator(db, home, getEvent(db, 'fake:l1')!)?.device).toBeNull();
+    expect(rawLocator(db, home, getEvent(db, 'fake:e9')!)).toMatchObject({
+      device: 'desk',
+      originalPath: 'D:\\fake\\s9.jsonl',
+    });
+  });
+});
+
+describe('localRawFiles', () => {
+  it('derives each mirror relPath, across generations and path separators', async () => {
+    const src = tmp('origin-local-');
+    const file = path.join(src, 'a.jsonl');
+    const original = line('a1', 'sa', 1000, 'user', 'original');
+    const rewritten = line('a2', 'sa', 2000, 'user', 'rewritten');
+    fs.writeFileSync(file, original);
+    await syncSource({ db, home }, fakeAdapter(src));
+    fs.writeFileSync(file, rewritten);
+    await syncSource({ db, home }, fakeAdapter(src));
+    // A row written on Windows: backslashes in both the original path and the mirror.
+    db.prepare(
+      `INSERT INTO raw_file (source, path, generation, mirror, bytes_ingested, first_seen_at, updated_at)
+       VALUES ('fake', ?, 2, ?, 7, 1, 1)`,
+    ).run(['C:', 'x', 'b.jsonl'].join('\\'), ['fake', 'win', 'b.jsonl.g2'].join('\\'));
+
+    const files = localRawFiles(db, home)
+      .map((f) => [f.relPath, f.generation, f.bytes])
+      .sort((x, y) => String(x).localeCompare(String(y)));
+    expect(files).toEqual([
+      ['a.jsonl', 1, Buffer.byteLength(original)],
+      ['a.jsonl', 2, Buffer.byteLength(rewritten)],
+      ['win/b.jsonl', 2, 7],
+    ]);
+    const g2 = localRawFiles(db, home).find((f) => f.path === file && f.generation === 2);
+    expect(fs.readFileSync(g2!.mirrorPath, 'utf8')).toBe(rewritten);
+  });
+});
+
+describe('tokens', () => {
+  it('creates, verifies, lists, and revokes tokens', () => {
+    const token = createToken(db, 'laptop', 1000);
+    expect(token).toMatch(/^ogn_[A-Za-z0-9_-]{43}$/);
+    expect(JSON.stringify(db.prepare('SELECT * FROM api_token').all())).not.toContain(token);
+
+    expect(verifyToken(db, token, 2000)).toEqual({ name: 'laptop' });
+    expect(verifyToken(db, `${token}x`, 2000)).toBeNull();
+    expect(verifyToken(db, 'not-a-token', 2000)).toBeNull();
+    expect(listTokens(db)).toEqual([
+      { name: 'laptop', createdAt: 1000, lastUsedAt: 2000, revokedAt: null },
+    ]);
+
+    expect(() => createToken(db, 'laptop')).toThrow(/choose another name/);
+    expect(() => createToken(db, 'Bad Name')).toThrow(OriginError);
+    expect(() => createToken(db, '-dash')).toThrow(OriginError);
+    expect(() => createToken(db, 'a'.repeat(64))).toThrow(OriginError);
+
+    expect(revokeToken(db, 'laptop', 3000)).toBe(true);
+    expect(revokeToken(db, 'laptop', 3000)).toBe(false);
+    expect(revokeToken(db, 'nobody')).toBe(false);
+    expect(verifyToken(db, token)).toBeNull();
+    expect(() => createToken(db, 'laptop')).toThrow(/choose another name/);
+    expect(listTokens(db)[0]?.revokedAt).toBe(3000);
+  });
+
+  it('records use at most once a minute', () => {
+    const token = createToken(db, 'ci', 0);
+    verifyToken(db, token, 1_000);
+    verifyToken(db, token, 31_000);
+    expect(listTokens(db)[0]?.lastUsedAt).toBe(1_000);
+    verifyToken(db, token, 61_000);
+    expect(listTokens(db)[0]?.lastUsedAt).toBe(61_000);
+  });
+});
+
+describe('settings', () => {
+  it('stores small key-value state', () => {
+    expect(getSetting(db, 'hub.tombstones')).toBeNull();
+    setSetting(db, 'hub.tombstones', '3');
+    setSetting(db, 'hub.tombstones', '7');
+    expect(getSetting(db, 'hub.tombstones')).toBe('7');
+  });
+});
+
+describe('tombstones', () => {
+  let device: Database;
+  let deviceHome: string;
+
+  beforeEach(async () => {
+    deviceHome = tmp('origin-device-');
+    device = openDatabase(path.join(deviceHome, 'origin.db'));
+    const src = tmp('origin-src-');
+    fs.writeFileSync(
+      path.join(src, 's1.jsonl'),
+      line('e1', 's1', 1000, 'user', 'shared one') + line('e2', 's1', 2000, 'user', 'shared two'),
+    );
+    await syncSource({ db, home }, fakeAdapter(src));
+    await syncSource({ db: device, home: deviceHome }, fakeAdapter(src));
+    // An event only the hub knows (pushed by another device).
+    fs.writeFileSync(path.join(src, 's2.jsonl'), line('h1', 's2', 3000, 'user', 'hub only'));
+    await syncSource({ db, home }, fakeAdapter(src));
+  });
+
+  afterEach(() => device.close());
+
+  it('lists tombstones with what they forgot, oldest first', () => {
+    const e = remember(db, {
+      kind: 'memory',
+      text: 'x',
+      confidence: 1,
+      author: 'test',
+      sources: [{ eventId: 'fake:e1' }],
+    });
+    forget(db, e.id, 'test');
+    forget(db, 'fake:h1');
+    const all = tombstonesAfter(db, 0);
+    expect(all.map((t) => [t.target, t.reason, t.entries, t.events])).toEqual([
+      [e.id, 'test', [e.id], ['fake:e1']],
+      ['fake:h1', null, [], ['fake:h1']],
+    ]);
+    expect(tombstonesAfter(db, all[0]!.id).map((t) => t.target)).toEqual(['fake:h1']);
+    expect(tombstonesAfter(db, 0, 1)).toHaveLength(1);
+  });
+
+  it("applies a hub's tombstone to what the device knows, once", () => {
+    const e = remember(db, {
+      kind: 'memory',
+      text: 'x',
+      confidence: 1,
+      author: 'test',
+      sources: [{ eventId: 'fake:e1' }],
+    });
+    forget(db, e.id, 'secret');
+    forget(db, 'fake:h1');
+    const [first, second] = tombstonesAfter(db, 0);
+
+    expect(listSessions(device)[0]?.eventCount).toBe(2);
+    expect(applyRemoteTombstone(device, first!, 'hub', 5000)).toEqual({ entries: 0, events: 1 });
+    expect(getEvent(device, 'fake:e1')).toBeNull();
+    expect(listSessions(device)[0]?.eventCount).toBe(1);
+    const local = tombstonesAfter(device, 0);
+    expect(local.map((t) => [t.target, t.reason, t.createdAt, t.events])).toEqual([
+      [e.id, `hub#${first!.id}: secret`, 5000, ['fake:e1']],
+    ]);
+
+    // Re-applying, or applying a tombstone about events the device never had, writes nothing.
+    expect(applyRemoteTombstone(device, first!, 'hub')).toEqual({ entries: 0, events: 0 });
+    expect(applyRemoteTombstone(device, second!, 'hub')).toEqual({ entries: 0, events: 0 });
+    expect(tombstonesAfter(device, 0)).toHaveLength(1);
+  });
+});

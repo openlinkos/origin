@@ -65,6 +65,13 @@ Grok 会读取 `~/.claude.json`，所以完成上面的 Claude Code 注册后会
 
 server 会告诉 Agent 如何使用这些工具，你只需用自然语言提问。它在回答前会同步新的会话记录，所以 Agent 甚至能引用你一分钟前说的话。工具的完整说明见[架构（英文）](../../architecture.md#mcp-server)。
 
+## 使用个人中枢
+
+如果你在多台机器上使用 Agent，或者使用云端 Agent，可以运行一个[个人中枢](./hub.md)：
+
+- 已接入中枢的设备上，上面这些本地 `origin mcp` 注册照常可用：server 会先推送新的会话记录，再把每次调用转发给中枢。
+- 云端 Agent 没有本地会话记录，用各自的令牌直接注册中枢的 `/mcp` 地址。例如在 Claude Code 中：`claude mcp add --scope user --transport http origin https://hub.example.com/mcp --header "Authorization: Bearer ogn_…"`。
+
 ## 更新 Origin 之后
 
 Agent 从你的本地仓库启动 server。拉取新代码并运行 `pnpm build` 后，请重启正在运行的 Agent 会话，以加载新版本。

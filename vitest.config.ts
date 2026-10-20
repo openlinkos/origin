@@ -8,6 +8,7 @@ export default defineConfig({
     alias: {
       '@openlinkos/origin-core': here('./packages/core/src/index.ts'),
       '@openlinkos/origin-adapters': here('./packages/adapters/src/index.ts'),
+      '@openlinkos/origin-mcp': here('./packages/mcp/src/index.ts'),
     },
   },
   test: {

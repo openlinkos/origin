@@ -17,16 +17,16 @@ hero:
       link: /architecture
 
 features:
-  - title: One memory across agents
-    details: Archives Claude Code and Codex sessions today, with Cursor, ZCode, and Grok Build next. Any agent that supports MCP can query the archive.
+  - title: One memory across agents and machines
+    details: Archives Claude Code and Codex sessions today, with Cursor, ZCode, and Grok Build next. A self-hosted personal hub brings all your machines and cloud agents into one memory.
   - title: Provenance by default
     details: Every answer traces back to the exact line of the original session log.
   - title: Nothing lost to cleanup
     details: Session logs are mirrored append-only, so they outlive each agent's own retention period.
   - title: Correct and forget
     details: You can correct entries that are wrong. Forgotten entries and messages never come back and can never be cited again.
-  - title: Local and private
-    details: Everything stays on your machine. Origin makes no network calls and never calls an LLM API.
+  - title: Your data, your machines
+    details: Everything stays on machines you control, your devices and optionally your own hub. Origin never calls a third-party service or an LLM API.
   - title: Open source
     details: TypeScript under the MIT License, built on SQLite and the Model Context Protocol.
 ---

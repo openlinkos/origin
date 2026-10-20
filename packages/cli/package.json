@@ -31,5 +31,8 @@
   },
   "engines": {
     "node": ">=22.13"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1"
   }
 }

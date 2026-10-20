@@ -24,8 +24,19 @@ export {
   searchEntries,
 } from './entries.js';
 export { OriginError } from './errors.js';
-export { type IngestContext, refreshSession, syncSource } from './ingest.js';
-export { dbPath, originHome, rawDir } from './paths.js';
+export {
+  type AppendResult,
+  appendRemote,
+  type IngestContext,
+  listDevices,
+  localRawFiles,
+  type RemoteChunk,
+  refreshSession,
+  remoteCursors,
+  syncSource,
+} from './ingest.js';
+export { dbPath, originHome, parseRawPath, rawDir, remotePath } from './paths.js';
+export { getSetting, setSetting } from './settings.js';
 export {
   type EventFilter,
   getEvent,
@@ -44,6 +55,15 @@ export {
   toFtsQuery,
 } from './store.js';
 export { isoLocal, parseTime } from './time.js';
+export {
+  createToken,
+  listTokens,
+  NAME_RE,
+  revokeToken,
+  type TokenInfo,
+  verifyToken,
+} from './tokens.js';
+export { applyRemoteTombstone, type TombstoneRecord, tombstonesAfter } from './tombstones.js';
 export type {
   EventInput,
   EventKind,

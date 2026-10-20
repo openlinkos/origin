@@ -7,9 +7,9 @@
 
 [English](README.md) | 简体中文
 
-各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：目前支持 Claude Code 与 Codex，Cursor、ZCode、Grok Build 将陆续接入。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。
+各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：目前支持 Claude Code 与 Codex，Cursor、ZCode、Grok Build 将陆续接入。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。如果你在多台机器上工作，或者使用云端 Agent，可以用自托管的**个人中枢**把它们接入同一份记忆。
 
-> **状态：早期开发。** Claude Code 与 Codex 会话的采集、MCP server 与 CLI 已经端到端可用；其余 Agent 的适配器正在开发（见[路线图](#路线图)）。各包尚未发布到 npm，请从源码安装。
+> **状态：早期开发。** Claude Code 与 Codex 会话的采集、MCP server、CLI 与个人中枢已经端到端可用；其余 Agent 的适配器正在开发（见[路线图](#路线图)）。各包尚未发布到 npm，请从源码安装。
 
 ## 为什么
 
@@ -17,11 +17,11 @@
 
 Origin 以**人**而不是工具为中心：
 
-- **跨 Agent 的同一份记忆**：各 Agent 的会话规范化为同一套事件，任何支持 MCP 的 Agent 都能查询。
+- **跨 Agent、跨机器的同一份记忆**：各 Agent 的会话规范化为同一套事件，任何支持 MCP 的 Agent 都能查询；自托管的中枢把你所有的机器和云端 Agent 连在一起。
 - **默认可溯源**：每个事件都指向原始文件与行号，每个条目都引用它的来源事件。
 - **不怕清理**：原始记录只追加地镜像保存，比 Agent 自身的保留期更长久。
 - **可纠正、可遗忘**：条目可以纠正；遗忘后的条目或事件不会再出现，也不能再被引用。
-- **本地、私密**：数据全部留在本机；Origin 不联网，也不调用任何 LLM API。
+- **你的数据，留在你的机器上**：数据只存放在你控制的机器上：你的设备，以及可选的自建中枢。Origin 从不调用第三方服务，也不调用任何 LLM API。
 
 ## 功能
 
@@ -30,6 +30,7 @@ Origin 以**人**而不是工具为中心：
 - **按相关度排序的全文检索**：覆盖会话和条目，支持中文子串检索（SQLite FTS5 trigram）。
 - **增量、幂等的采集**：只读新增字节；源文件被改写时作为新代次保存；透明读取 zstd 压缩的记录；多个进程同时同步也安全。
 - **CLI**：浏览时间线，查看任意条目或事件直到原文行，纠正条目，以及遗忘。
+- **个人中枢**（`origin serve`，或镜像 `ghcr.io/openlinkos/origin`），由你自己托管：各设备用 `origin push` 推送会话，任何设备上的 Agent 通过本地 `origin mcp` 访问它，云端 Agent 则用令牌通过 HTTP 直接连接。
 
 ## 支持的 Agent
 
@@ -78,9 +79,10 @@ Codex、Cursor、ZCode、Grok Build 的接入方式见[接入 Agent](docs/zh/gui
 
 - [快速开始](docs/zh/guide/getting-started.md)：安装、归档会话、提出第一个问题
 - [接入 Agent](docs/zh/guide/connect-agents.md)：Claude Code、Codex、Cursor、ZCode、Grok Build，以及它们可用的 MCP 工具
+- [个人中枢](docs/zh/guide/hub.md)：自托管，让你所有的机器和云端 Agent 共享一份记忆
 - [命令参考](docs/zh/guide/cli.md)：全部命令与环境变量
 - [隐私与数据](docs/zh/guide/privacy.md)：Origin 保存了什么、遗忘如何生效、如何清除全部数据
-- [架构](docs/architecture.md)（英文）：数据模型、不变量、采集、条目与 MCP server
+- [架构](docs/architecture.md)（英文）：数据模型、不变量、采集、条目、MCP server 与中枢
 - [会话来源](docs/sources.md)（英文）：各 Agent 的本地会话格式
 
 ## 工作原理
@@ -93,11 +95,11 @@ Agent 会话记录 ──扫描──▶ 只追加的原始镜像 ──确定�
                         你       ◀── origin CLI ───────────────┘
 ```
 
-Origin 围绕五条不变量构建：**溯源**、**遗忘粘性**、**只追加**、**本地优先**、**单一入口**（Agent 走 MCP，人走 CLI）。内核从不调用模型：提问的 Agent 自己负责推理，Origin 提供事实与来源。数据模型、采集算法、遗忘规则与 MCP 工具见 [docs/architecture.md](docs/architecture.md)（英文）。
+Origin 围绕五条不变量构建：**溯源**、**遗忘粘性**、**只追加**、**你的数据，留在你的机器上**、**单一入口**（Agent 走 MCP，人走 CLI）。内核从不调用模型：提问的 Agent 自己负责推理，Origin 提供事实与来源。数据模型、采集算法、遗忘规则与 MCP 工具见 [docs/architecture.md](docs/architecture.md)（英文）。
 
 ## 隐私
 
-Agent 会话记录里常有源代码、命令输出，以及你在提示词里输入的任何内容，有时还包括密钥。Origin 会把它们复制到 `~/.origin`，让它们不受 Agent 自身清理的影响。Origin 不发起任何网络连接；该目录没有加密，请像保护原始记录一样保护它。`origin forget` 可以永久隐藏条目或消息，删除 `~/.origin` 即可清除全部数据。详见[隐私与数据](docs/zh/guide/privacy.md)。
+Agent 会话记录里常有源代码、命令输出，以及你在提示词里输入的任何内容，有时还包括密钥。Origin 会把它们复制到 `~/.origin`，让它们不受 Agent 自身清理的影响。没有中枢时，Origin 不发起任何网络连接；使用中枢时，数据只在你的设备和你自己的中枢之间传输，中枢应放在 TLS 之后。这些库都没有加密，请像保护原始记录一样保护它们。`origin forget` 可以永久隐藏条目或消息，删除 `~/.origin`（以及中枢的数据，如果有）即可清除全部数据。详见[隐私与数据](docs/zh/guide/privacy.md)。
 
 ## 路线图
 
@@ -106,16 +108,18 @@ Agent 会话记录里常有源代码、命令输出，以及你在提示词里�
 1. ✅ 核心存储、Claude Code 适配器与 CLI（`sync`、`status`、`timeline`、`search`、`show`、`projects`）
 2. ✅ MCP server、条目、纠正与遗忘粘性，已接入 Claude Code
 3. ✅ Codex 适配器，支持 zstd 压缩与归档的会话
-4. Cursor 适配器
-5. ZCode 适配器
-6. Grok Build 适配器
+4. ✅ 个人中枢：自托管、多设备、远程 MCP
+5. Cursor 适配器
+6. ZCode 适配器
+7. Grok Build 适配器
 
 **当前已知限制：**
 
 - 很多会话没有标题，因为 Claude Code 只为部分会话写 `summary` 行。
 - 项目名取自工作目录的最后一段，而不是由 git remote 推导。
 - 遗忘只是隐藏，不会从原始镜像文件中物理删除。
-- 没有后台文件监听：MCP server 按需同步，其他时候需要运行 `origin sync`。
+- 没有后台文件监听：MCP server 按需同步，其他时候需要运行 `origin sync`（使用中枢时运行 `origin push`）。
+- 管理命令作用于它们所运行的那个库；从设备远程管理中枢已在计划中。
 
 ## 目录结构
 
@@ -123,8 +127,8 @@ Agent 会话记录里常有源代码、命令输出，以及你在提示词里�
 packages/
 ├── core/       @openlinkos/origin-core      存储、采集、条目、遗忘、查询
 ├── adapters/   @openlinkos/origin-adapters  各 Agent 的会话解析器
-├── mcp/        @openlinkos/origin-mcp       MCP server（stdio）
-└── cli/        @openlinkos/origin           origin 命令
+├── mcp/        @openlinkos/origin-mcp       MCP 工具、stdio 与 HTTP server、转发代理
+└── cli/        @openlinkos/origin           origin 命令与中枢（`origin serve`）
 docs/                                        文档站点（VitePress）
 ├── guide/ · zh/guide/                       使用指南（英文 / 中文）
 ├── architecture.md                          设计、数据模型、不变量

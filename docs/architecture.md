@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes Origin's current design: the problem it targets, the data model, the invariants every change must preserve, and how ingestion, entries, search, and the MCP server work. It is the reference for contributors; if a change alters the data model, an invariant, or a public interface, update this document in the same commit.
+This document describes Origin's current design: the problem it targets, the data model, the invariants every change must preserve, and how ingestion, entries, search, the MCP server, and the personal hub work. It is the reference for contributors; if a change alters the data model, an invariant, or a public interface, update this document in the same commit.
 
 ## Contents
 
@@ -18,6 +18,7 @@ This document describes Origin's current design: the problem it targets, the dat
 - [Forgetting](#forgetting)
 - [Search and timeline](#search-and-timeline)
 - [MCP server](#mcp-server)
+- [Personal hub](#personal-hub)
 - [Open questions](#open-questions)
 - [Prior art](#prior-art)
 
@@ -36,10 +37,11 @@ The long-term direction is an AI that accompanies one person over time, where me
 - Archive local sessions from Claude Code, Codex, Cursor, ZCode, and Grok Build into one append-only store.
 - Let any agent search the archive, walk the timeline, expand any answer to its original source, and record durable entries (memory / knowledge / cognition) via MCP.
 - Let the person inspect, correct, and forget entries via the `origin` CLI; forgetting must stick.
+- One person often runs agents on several machines (laptops, servers, cloud agents). An optional, self-hosted **personal hub** gathers every device's sessions into one store and serves it to agents anywhere.
 
-The goal is reached when, from any connected agent, you can ask "what did I decide in project X last week, and why?" and get an answer with sources, and a forgotten entry never comes back.
+The goal is reached when, from any connected agent on any of your machines, you can ask "what did I decide in project X last week, and why?" and get an answer with sources, and a forgotten entry never comes back.
 
-**Explicit non-goals for now:** encryption and key management, multi-device sync, a web UI, screen/email/browser capture, knowledge graphs, vector search, proactive reminders, and any call to a model API.
+**Explicit non-goals for now:** multi-tenant hosting (Origin is for one person; everyone runs their own), a hosted service run by the project, end-to-end encryption, two-way sync between replicas, a web UI, screen/email/browser capture, knowledge graphs, vector search, proactive reminders, and any call to a model API.
 
 ## Memory, knowledge, and cognition
 
@@ -73,6 +75,15 @@ agent session logs on disk ──scan──▶ Raw (append-only mirror)
  people ◀── CLI `origin`: sync · status · timeline · search · show · entries · correct · forget
 ```
 
+With a personal hub, each device keeps ingesting locally and replicates its raw mirrors to the hub, which parses them with the same adapters. Agents reach the hub through their device's local `origin mcp` (which forwards to the hub) or, for cloud agents, through the hub's HTTP endpoint:
+
+```
+device A: logs ─▶ local store ──push raw mirrors──▶ ┐
+device B: logs ─▶ local store ──push raw mirrors──▶ ├─▶ hub store ◀── MCP over HTTP ── cloud agents
+                       ▲                            │       ▲
+                       └──── pull tombstones ───────┘       └── forwarded MCP ── local origin mcp ◀── agents on A, B
+```
+
 ## Invariants
 
 These are product guarantees. Each must be covered by tests, and code comments refer to them by number.
@@ -80,8 +91,8 @@ These are product guarantees. Each must be covered by tests, and code comments r
 1. **Provenance.** Every Entry cites at least one Event; every Event points to a Raw file and line. Any answer can be expanded down to the original text.
 2. **Sticky forgetting.** After `forget`, an entry leaves every query immediately, and its source events join an exclusion set that no later write can resurrect.
 3. **Append-only.** Raw mirrors and Events are never rewritten. Entries change by supersession (`supersedes`), never in place.
-4. **Local-first.** All data lives on the local machine under `~/.origin/` (SQLite plus files). The core makes no network calls.
-5. **Single entry point.** Agents read and write only through the MCP server; people use the CLI. Nothing else touches the store.
+4. **Your data, your machines.** All data lives on machines you control: your devices under `~/.origin/` and, optionally, your own hub. Origin never calls a third-party service; the only network traffic is between your devices and your hub.
+5. **Single entry point.** Agents read and write only through MCP (local stdio, or the hub's HTTP endpoint); people use the CLI. The hub's replication API carries raw mirrors and tombstones between your own stores and is not an agent entry point.
 
 ## Design principles
 
@@ -92,16 +103,16 @@ These are product guarantees. Each must be covered by tests, and code comments r
 
 ## Packages
 
-pnpm workspace, TypeScript (strict, ESM, NodeNext), Node.js ≥ 22.13. `core` and `adapters` use only Node built-ins; `mcp` depends on the official [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) and zod.
+pnpm workspace, TypeScript (strict, ESM, NodeNext), Node.js ≥ 22.13. `core` and `adapters` use only Node built-ins; `mcp` depends on the official [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) and zod. The hub uses Node's built-in `node:http`.
 
 | Package | Path | Responsibility | Depends on |
 |---|---|---|---|
-| `@openlinkos/origin-core` | `packages/core` | Storage, schema, ingestion, entries, forgetting, queries | — |
+| `@openlinkos/origin-core` | `packages/core` | Storage, schema, ingestion (local and remote), entries, forgetting, tokens, queries | — |
 | `@openlinkos/origin-adapters` | `packages/adapters` | One deterministic parser per source | core |
-| `@openlinkos/origin-mcp` | `packages/mcp` | MCP server over stdio | core |
-| `@openlinkos/origin` | `packages/cli` | The `origin` command, including `origin mcp` | core, adapters, mcp |
+| `@openlinkos/origin-mcp` | `packages/mcp` | MCP tools; servers over stdio and stateless HTTP; the forwarding proxy | core |
+| `@openlinkos/origin` | `packages/cli` | The `origin` command, including `origin mcp`, `origin serve` (the hub), and `origin push` | core, adapters, mcp |
 
-`core` must not depend on any other package, and `mcp` must not depend on `adapters`: the CLI injects ingestion into the server as a callback. Adapters implement the `SourceAdapter` interface from `core`:
+`core` must not depend on any other package, and `mcp` must not depend on `adapters`: the CLI injects ingestion into the servers as callbacks, and the hub's HTTP server lives in the CLI. Adapters implement the `SourceAdapter` interface from `core`:
 
 ```ts
 interface SourceAdapter {
@@ -129,6 +140,8 @@ interface SourceAdapter {
 | `sync_log` | One row per sync run |
 | `entry`, `entry_source`, `entry_fts` | Entries, the events they cite (with quotes), and their FTS5 index |
 | `tombstone`, `forgotten_entry`, `excluded_event` | Forget operations and their effects |
+| `api_token` | Hub access tokens: name and SHA-256 hash, never the token itself |
+| `setting` | Small key-value state, such as how far a device has applied the hub's tombstones |
 
 - Storage uses Node's built-in `node:sqlite`, so there are no native modules to compile. Several processes may share the database (the CLI and one MCP server per agent session); WAL mode and a busy timeout handle this.
 - `session` is derived and can be rebuilt from `event`. The FTS indexes are external-content tables kept in sync by triggers.
@@ -197,11 +210,53 @@ Excluded events disappear from search, timelines, session counts, `get`, and `so
 - **Guidance.** The server's MCP `instructions` tell agents when to search, when to remember (decisions with reasons, stable facts, preferences), and that `forget` needs an explicit request.
 - **Errors.** Invalid input, unknown ids, and forgotten ids come back as tool errors with a readable message.
 
+## Personal hub
+
+A hub is an ordinary Origin store that also runs `origin serve`. It is self-hosted and single-tenant: one person, their devices, their agents. Nothing in the hub is specific to any hosting provider; the published container image `ghcr.io/openlinkos/origin` runs it anywhere.
+
+### Roles
+
+- **Device**: any machine with agent session logs. It keeps ingesting locally (adapters, raw mirrors, cursors, rewrite generations, compression are unchanged) and runs `origin push` to replicate. Its local store is a staging copy.
+- **Hub**: `origin serve` exposes MCP over HTTP for agents and a small replication API for devices. The hub is the source of truth for agents: search, timeline, entries, and forgetting all happen there.
+
+### Replication: raw mirrors up, tombstones down
+
+- A device pushes **raw mirror bytes**, not parsed events. The hub stores them as its own append-only mirrors and parses them with the same adapters, so provenance (invariant 1) holds on the hub and parser fixes apply everywhere. Event ids are identical on every store.
+- Each remote file is keyed by `(source, "@<device>:<original path>", generation)`; local paths never start with `@`. Hub mirrors live under `raw/devices/<device>/<source>/<relPath>[.g<n>]`.
+- Pushing is resumable and idempotent: the device asks for the hub's cursors, then sends `[cursor, local size)` of each mirror in chunks of complete lines (at most 1 MiB, or one longer line). A chunk whose offset does not match the hub's cursor is rejected with the current cursor, and the device resumes from there.
+- After pushing, the device pulls the hub's tombstones it has not applied yet and applies them to its staging store, so forgetting reaches every replica (invariant 2). Events forgotten on the hub stay excluded when re-pushed, because exclusion is keyed by event id.
+
+### Access
+
+- Every request except `GET /healthz` needs `Authorization: Bearer <token>`. Tokens are created on the hub (`origin token create <name>`), shown once, stored only as SHA-256 hashes, and revocable. Each device or cloud agent gets its own token.
+- The hub speaks plain HTTP. Put it behind TLS (a reverse proxy or CDN) before exposing it beyond localhost.
+- Entries written through the hub record the agent and token as author, e.g. `claude-code@laptop`: the agent name comes from the MCP client (or the `X-Origin-Client` header set by a forwarding proxy), the suffix from the token name.
+
+### HTTP interface
+
+| Method and path | Purpose |
+|---|---|
+| `GET /healthz` | `{ "ok": true, "version": … }`, no auth |
+| `POST /mcp` | MCP Streamable HTTP, stateless, JSON responses; the same seven tools as the stdio server |
+| `GET /v1/cursors?device=<name>` | The hub's byte cursor for every file of that device |
+| `POST /v1/ingest` | Append one chunk: JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }` with `data` in base64; the body may be gzip-encoded. Returns `200 { bytes, eventsAdded, … }` or `409 { bytes }` on an offset mismatch |
+| `GET /v1/tombstones?after=<id>` | Tombstones with id greater than `after`, each with its forgotten entries and excluded events |
+
+The hub validates every field: device names match `[a-z0-9][a-z0-9._-]{0,62}`, the source must be a known adapter, and `relPath` must be relative with no `..` segment, so a device can never write outside its mirror directory.
+
+### Using a hub from a device
+
+- `origin hub connect <url> --token <token> [--device <name>]` stores the connection in `<ORIGIN_HOME>/hub.json` (the device name defaults to the host name). `ORIGIN_HUB_URL`, `ORIGIN_HUB_TOKEN`, and `ORIGIN_DEVICE` override it.
+- With a hub configured, `origin mcp` becomes a **forwarding proxy**: it exposes the same tools over stdio, syncs and pushes before each call (at most every 10 seconds for reads, always before `remember` and `correct`), and forwards the call to the hub. Agent registrations do not change, and an agent can still cite what was said a moment ago.
+- Cloud agents with no local logs register the hub's `/mcp` URL directly with a bearer token.
+- In this version, CLI curation commands (`entries`, `correct`, `forget`, …) act on the store they run against. Curate through your agents, or run the CLI on the hub.
+
 ## Open questions
 
 - **Cognition at low cost.** How do we build and maintain a model of the person without a dedicated extraction pipeline? For now, agents write cognition entries themselves when they notice something. Whether that is enough is still an open question.
 - **Native memory interop.** Claude Code, ZCode, and Grok Build all keep a `MEMORY.md` index plus one Markdown file per memory. Two-way import/export with that layout is planned but not yet designed.
-- **Change notification.** File watching is unreliable on some platforms. The MCP server syncs on demand, and the CLI on `origin sync`; a background watcher backed by a periodic full scan may still be needed.
+- **Change notification.** File watching is unreliable on some platforms. The MCP server syncs on demand, and the CLI on `origin sync`; a background watcher backed by a periodic full scan may still be needed, especially to push from devices whose agents are idle.
+- **Remote curation.** Running `entries`, `correct`, and `forget` from a device against its hub, with the same preview-and-confirm flow as locally.
 
 ## Prior art
 

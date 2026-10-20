@@ -187,4 +187,25 @@ describe('codex adapter', () => {
     expect(last).toMatchObject({ kind: 'tool_use', project: 'demo-app', agentVersion: '0.160.0' });
     db.close();
   });
+
+  it('detects compression by magic bytes, not by file name', () => {
+    // On a hub, the mirror of a `.jsonl.zst` rollout is plain JSONL under that name; a compressed
+    // file without the suffix must still be read.
+    const content = `${lines.join('\n')}\n`;
+    const plainZst = path.join(codexHome, `rollout-2026-10-20T09-00-00-${SESSION}.jsonl.zst`);
+    const realZst = path.join(codexHome, 'other', `rollout-2026-10-20T09-00-00-${SESSION}.jsonl`);
+    fs.writeFileSync(plainZst, content);
+    fs.mkdirSync(path.dirname(realZst));
+    fs.writeFileSync(realZst, zlib.zstdCompressSync(Buffer.from(content)));
+    for (const absPath of [plainZst, realZst]) {
+      // A fresh adapter has not seen the session_meta line, so it must read the file's head.
+      const parsed = createCodexAdapter({ home: codexHome }).parseLine(lines[5]!, {
+        absPath,
+        relPath: path.basename(absPath),
+        lineNo: 6,
+        fileMtimeMs: 0,
+      });
+      expect(parsed?.events[0]).toMatchObject({ project: 'demo-app', agentVersion: '0.160.0' });
+    }
+  });
 });

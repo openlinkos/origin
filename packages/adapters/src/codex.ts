@@ -138,32 +138,41 @@ function sessionInfoFrom(obj: CodexLine): CodexSessionInfo {
 /** Read the `session_meta` line of a rollout, for lines ingested in a later sync. */
 function readSessionInfo(absPath: string): CodexSessionInfo {
   try {
-    let head: Buffer;
-    if (absPath.endsWith('.zst')) {
-      head = zlib.zstdDecompressSync(fs.readFileSync(absPath));
-    } else {
-      const fd = fs.openSync(absPath, 'r');
-      try {
-        const chunks: Buffer[] = [];
-        let total = 0;
-        const buf = Buffer.alloc(64 * 1024);
-        while (total < HEAD_MAX) {
-          const n = fs.readSync(fd, buf, 0, buf.length, total);
-          if (n <= 0) break;
-          chunks.push(Buffer.from(buf.subarray(0, n)));
-          total += n;
-          if (buf.subarray(0, n).includes(0x0a)) break;
-        }
-        head = Buffer.concat(chunks);
-      } finally {
-        fs.closeSync(fd);
-      }
-    }
+    const head = readHead(absPath);
     const nl = head.indexOf(0x0a);
     const first = JSON.parse(head.subarray(0, nl < 0 ? head.length : nl).toString('utf8'));
     return first?.type === 'session_meta' ? sessionInfoFrom(first) : { cwd: null, version: null };
   } catch {
     return { cwd: null, version: null };
+  }
+}
+
+const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+
+/**
+ * The beginning of a rollout, up to its first newline. Compression is detected by magic bytes, not
+ * by the `.zst` name: on a hub, the mirror of a `.jsonl.zst` rollout is plain JSONL with that name.
+ */
+function readHead(absPath: string): Buffer {
+  const fd = fs.openSync(absPath, 'r');
+  try {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const buf = Buffer.alloc(64 * 1024);
+    while (total < HEAD_MAX) {
+      const n = fs.readSync(fd, buf, 0, buf.length, total);
+      if (n <= 0) break;
+      const piece = Buffer.from(buf.subarray(0, n));
+      if (total === 0 && piece.subarray(0, ZSTD_MAGIC.length).equals(ZSTD_MAGIC)) {
+        return zlib.zstdDecompressSync(fs.readFileSync(absPath));
+      }
+      chunks.push(piece);
+      total += n;
+      if (piece.includes(0x0a)) break;
+    }
+    return Buffer.concat(chunks);
+  } finally {
+    fs.closeSync(fd);
   }
 }
 

@@ -18,10 +18,11 @@ We will acknowledge your report, keep you updated on the fix, and credit you in 
 
 For example:
 
-- Origin making any network connection, or sending data anywhere.
+- Origin connecting anywhere other than the hub you configured, or sending data to any third party.
+- A hub accepting a request without a valid token, or a push writing files outside the hub's mirror directory.
 - Reading or writing files outside the agent session directories and `ORIGIN_HOME` (for example, path traversal through crafted log file names).
-- Forgotten data reappearing in query results (once `forget` ships).
-- Crafted session logs that cause code execution or corrupt the store.
+- Forgotten data reappearing in query results, on the hub or on any device.
+- Crafted session logs or replication requests that cause code execution or corrupt the store.
 
 ## Supported versions
 

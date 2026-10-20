@@ -1,6 +1,6 @@
 # 快速开始
 
-Origin 运行在你的机器上：读取各 AI Agent 本来就写在磁盘上的会话记录，归档到 `~/.origin`，再通过同一个 [MCP](https://modelcontextprotocol.io) server 提供给所有 Agent。
+Origin 运行在你的机器上：读取各 AI Agent 本来就写在磁盘上的会话记录，归档到 `~/.origin`，再通过同一个 [MCP](https://modelcontextprotocol.io) server 提供给所有 Agent。如果你在多台机器上使用 Agent，之后可以用自托管的[个人中枢](./hub.md)把它们连在一起。
 
 ::: warning 早期开发
 Origin 尚未发布到 npm，请按下面的方式从源码安装。

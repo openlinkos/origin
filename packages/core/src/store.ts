@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Database } from './db.js';
-import { rawDir } from './paths.js';
+import { parseRawPath, rawDir } from './paths.js';
 import type { EventKind, EventRow, Role, SessionRow } from './types.js';
 
 export interface EventFilter {
@@ -215,7 +215,9 @@ export function getEvent(db: Database, id: string): EventRow | null {
 
 export interface RawLocator {
   source: string;
-  /** Absolute path of the source agent's original file. */
+  /** Device the file was replicated from (on a hub); null for this store's own files. */
+  device: string | null;
+  /** Absolute path of the source agent's original file (on that device). */
   originalPath: string;
   generation: number;
   /** Absolute path of the mirror file (append-only copy). */
@@ -232,9 +234,11 @@ export function rawLocator(db: Database, home: string, event: EventRow): RawLoca
     | { source: string; path: string; generation: number; mirror: string }
     | undefined;
   if (!row) return null;
+  const { device, originalPath } = parseRawPath(row.path);
   return {
     source: row.source,
-    originalPath: row.path,
+    device,
+    originalPath,
     generation: row.generation,
     mirrorPath: path.join(rawDir(home), row.mirror),
     line: event.rawLine,

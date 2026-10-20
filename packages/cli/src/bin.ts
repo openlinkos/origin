@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import { adapterById, allAdapters, KNOWN_SOURCE_IDS } from '@openlinkos/origin-adapters';
 import {
   correct,
+  createToken,
   type Database,
   dbPath,
   ENTRY_KINDS,
@@ -18,10 +19,12 @@ import {
   isEntryForgotten,
   isEntryId,
   isEventForgotten,
+  listDevices,
   listEntries,
   listEvents,
   listProjects,
   listSessions,
+  listTokens,
   OriginError,
   openDatabase,
   originHome,
@@ -29,13 +32,24 @@ import {
   planForget,
   rawLocator,
   readRawLine,
+  revokeToken,
   searchEntries,
   searchEvents,
   stats,
   syncSource,
 } from '@openlinkos/origin-core';
-import { serveStdio } from '@openlinkos/origin-mcp';
+import { serveStdio, serveStdioProxy } from '@openlinkos/origin-mcp';
 import { count, oneLine, table } from './format.js';
+import {
+  checkDeviceName,
+  defaultDeviceName,
+  normalizeHubUrl,
+  readHubConfig,
+  removeHubConfig,
+  writeHubConfig,
+} from './hub/config.js';
+import { pushToHub } from './hub/push.js';
+import { createHubServer } from './hub/server.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
 
 const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
@@ -53,7 +67,13 @@ Usage:
   origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
   origin forget    <id> [--reason <text>] [--yes]        Forget an entry or event for good (needs --yes)
   origin projects                                        Known project names
-  origin mcp                                             Run the MCP server over stdio (for agents)
+  origin mcp                                             Run the MCP server over stdio (forwards to the hub when connected)
+
+Personal hub:
+  origin serve     [--host 127.0.0.1] [--port 7077]      Run this store as a personal hub (MCP over HTTP)
+  origin token     create <name> | list | revoke <name>  Manage the hub's access tokens (run on the hub)
+  origin hub       connect <url> --token <token> [--device <name>] | status | disconnect
+  origin push                                            Sync locally, push raw mirrors to the hub, pull tombstones
 
 Entry kinds: ${ENTRY_KINDS.join(' · ')}. Time values: 7d / 24h / 30m / 2w or YYYY-MM-DD.
 Data directory: $ORIGIN_HOME or ~/.origin
@@ -101,6 +121,14 @@ async function main(argv: string[]): Promise<number> {
         return cmdProjects(ctx);
       case 'mcp':
         return await cmdMcp(ctx);
+      case 'serve':
+        return await cmdServe(ctx, rest);
+      case 'token':
+        return cmdToken(ctx, rest);
+      case 'hub':
+        return await cmdHub(ctx, rest);
+      case 'push':
+        return await cmdPush(ctx);
       default:
         console.error(`Unknown command: ${command}\n`);
         console.log(USAGE);
@@ -194,6 +222,17 @@ function cmdStatus(ctx: Ctx): number {
     ),
   );
   console.log(`\n${entries}\nData directory: ${ctx.home}`);
+  const devices = listDevices(ctx.db);
+  if (devices.length > 0) {
+    console.log(
+      `\nDevices pushing to this hub:\n${table(
+        devices.map((d) => [d.device, String(d.files), fmtDateTime(d.lastUpdateAt)]),
+        ['device', 'files', 'last push'],
+      )}`,
+    );
+  }
+  const hub = readHubConfig(ctx.home);
+  if (hub) console.log(`\nConnected to hub ${hub.url} as ${hub.device}.`);
   return 0;
 }
 
@@ -475,14 +514,179 @@ function cmdProjects(ctx: Ctx): number {
 }
 
 async function cmdMcp(ctx: Ctx): Promise<number> {
-  await serveStdio({
+  const log = (m: string) => console.error(`origin: ${m}`);
+  const hub = readHubConfig(ctx.home);
+  if (hub) {
+    // Forwarding proxy: keep the hub current with this device, then let the hub answer.
+    await serveStdioProxy({
+      url: hub.url,
+      token: hub.token,
+      version: VERSION,
+      log,
+      refresh: async () => {
+        await syncAll(ctx);
+        await pushToHub({ db: ctx.db, home: ctx.home, hub });
+      },
+    });
+    return 0;
+  }
+  await serveStdio({ db: ctx.db, home: ctx.home, version: VERSION, sync: () => syncAll(ctx), log });
+  return 0;
+}
+
+async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      host: { type: 'string', default: '127.0.0.1' },
+      port: { type: 'string', default: '7077' },
+    },
+  });
+  const port = Number(values.port);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new OriginError(`Invalid port: ${values.port}`);
+  }
+  const server = createHubServer({
     db: ctx.db,
     home: ctx.home,
+    adapters: allAdapters(),
     version: VERSION,
-    sync: () => syncAll(ctx),
-    log: (m) => console.error(`origin: ${m}`),
+    log: (m) => console.error(m),
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, values.host, () => resolve());
+  });
+  console.log(`Origin hub listening on http://${values.host}:${port} (data: ${ctx.home})`);
+  if (listTokens(ctx.db).every((t) => t.revokedAt !== null)) {
+    console.log('No active tokens yet. Create one with: origin token create <name>');
+  }
+  await new Promise<void>((resolve) => {
+    const stop = () => server.close(() => resolve());
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
   });
   return 0;
+}
+
+function cmdToken(ctx: Ctx, args: string[]): number {
+  const [action, name] = args;
+  if (action === 'create' && name) {
+    const token = createToken(ctx.db, name);
+    console.log(`Token for ${name} (shown once, store it safely):\n\n  ${token}\n`);
+    return 0;
+  }
+  if (action === 'revoke' && name) {
+    if (!revokeToken(ctx.db, name)) {
+      console.error(`No active token named ${name}.`);
+      return 1;
+    }
+    console.log(`Revoked ${name}.`);
+    return 0;
+  }
+  if (action === 'list') {
+    const tokens = listTokens(ctx.db);
+    if (tokens.length === 0) {
+      console.log('No tokens yet. Create one with: origin token create <name>');
+      return 0;
+    }
+    console.log(
+      table(
+        tokens.map((t) => [
+          t.name,
+          fmtDateTime(t.createdAt),
+          fmtDateTime(t.lastUsedAt),
+          t.revokedAt === null ? 'active' : `revoked ${fmtDate(t.revokedAt)}`,
+        ]),
+        ['name', 'created', 'last used', 'status'],
+      ),
+    );
+    return 0;
+  }
+  console.error('Usage: origin token create <name> | list | revoke <name>');
+  return 2;
+}
+
+async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
+  const [action, ...rest] = args;
+  if (action === 'connect') {
+    const { values, positionals } = parseArgs({
+      args: rest,
+      allowPositionals: true,
+      options: { token: { type: 'string' }, device: { type: 'string' } },
+    });
+    const url = positionals[0];
+    if (!url || !values.token) {
+      console.error('Usage: origin hub connect <url> --token <token> [--device <name>]');
+      return 2;
+    }
+    const hub = {
+      url: normalizeHubUrl(url),
+      token: values.token,
+      device: checkDeviceName(values.device ?? defaultDeviceName()),
+    };
+    await checkHub(hub);
+    writeHubConfig(ctx.home, hub);
+    console.log(
+      `Connected to ${hub.url} as ${hub.device}. Run "origin push" to send this device's sessions.`,
+    );
+    return 0;
+  }
+  if (action === 'status') {
+    const hub = readHubConfig(ctx.home);
+    if (!hub) {
+      console.log('Not connected to a hub. Connect with: origin hub connect <url> --token <token>');
+      return 0;
+    }
+    console.log(`Hub     ${hub.url}\nDevice  ${hub.device}`);
+    await checkHub(hub);
+    console.log('Status  reachable, token accepted');
+    return 0;
+  }
+  if (action === 'disconnect') {
+    console.log(
+      removeHubConfig(ctx.home) ? 'Disconnected from the hub.' : 'Not connected to a hub.',
+    );
+    return 0;
+  }
+  console.error(
+    'Usage: origin hub connect <url> --token <token> [--device <name>] | status | disconnect',
+  );
+  return 2;
+}
+
+/** Fail with a readable error unless the hub answers and accepts the token. */
+async function checkHub(hub: { url: string; token: string; device: string }): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${hub.url}/v1/cursors?device=${encodeURIComponent(hub.device)}`, {
+      headers: { Authorization: `Bearer ${hub.token}` },
+    });
+  } catch (err) {
+    throw new OriginError(`Cannot reach the hub at ${hub.url}: ${(err as Error).message}`);
+  }
+  if (res.status === 401) throw new OriginError(`The hub at ${hub.url} rejected the token.`);
+  if (!res.ok) throw new OriginError(`The hub at ${hub.url} answered ${res.status}.`);
+}
+
+async function cmdPush(ctx: Ctx): Promise<number> {
+  const hub = readHubConfig(ctx.home);
+  if (!hub) {
+    console.error('Not connected to a hub. Connect with: origin hub connect <url> --token <token>');
+    return 1;
+  }
+  await syncAll(ctx);
+  const r = await pushToHub({ db: ctx.db, home: ctx.home, hub });
+  console.log(
+    `Pushed ${count(r.files, 'file')} (${fmtBytes(r.bytes)}, ${count(r.eventsAdded, 'new event')}) to ${hub.url} as ${hub.device}; applied ${count(r.tombstonesApplied, 'tombstone')} from the hub.`,
+  );
+  return 0;
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
 main(process.argv.slice(2)).then(

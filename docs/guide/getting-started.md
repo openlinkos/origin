@@ -1,6 +1,6 @@
 # Getting started
 
-Origin runs on your machine. It reads the session logs your AI agents already write to disk, archives them in `~/.origin`, and serves them to every agent through one [MCP](https://modelcontextprotocol.io) server.
+Origin runs on your machine. It reads the session logs your AI agents already write to disk, archives them in `~/.origin`, and serves them to every agent through one [MCP](https://modelcontextprotocol.io) server. If you use agents on several machines, a self-hosted [personal hub](./hub.md) can bring them together later.
 
 ::: warning Early development
 Origin is not yet published to npm. Install it from source as shown below.

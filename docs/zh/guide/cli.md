@@ -11,7 +11,12 @@ origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
 origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
 origin forget    <id> [--reason <text>] [--yes]        永久遗忘条目或事件（需加 --yes 确认）
 origin projects                                        已知的项目名
-origin mcp                                             以 stdio 运行 MCP server（供 Agent 使用）
+origin mcp                                             以 stdio 运行 MCP server（接入中枢后转发到中枢）
+
+origin serve     [--host 127.0.0.1] [--port 7077]      把本库作为个人中枢运行（MCP over HTTP）
+origin token     create <name> | list | revoke <name>  管理中枢的访问令牌（在中枢上运行）
+origin hub       connect <url> --token <token> [--device <name>] | status | disconnect
+origin push                                            本地同步、推送原始镜像到中枢、取回遗忘记录
 ```
 
 - **时间参数**：相对时长（`30m`、`24h`、`7d`、`2w`）或日期（`YYYY-MM-DD`、ISO 8601）。
@@ -32,6 +37,15 @@ origin mcp                                             以 stdio 运行 MCP serv
 
 `correct` 会为条目添加一个新版本，旧版本保留为历史。`forget` 会先列出影响范围，加 `--yes` 才真正执行。遗忘规则见[隐私与数据](./privacy.md#遗忘)。
 
+## 个人中枢
+
+这些命令用于运行[个人中枢](./hub.md)，以及把设备接入中枢。
+
+- 在中枢上，`origin serve` 提供 `POST /mcp` 和复制接口，`GET /healthz` 用于健康检查，不需要鉴权。`origin token create <name>` 会打印一个新令牌，只显示一次（以 `ogn_` 开头）；中枢只保存令牌的哈希。
+- 在设备上，`origin hub connect` 保存中枢地址、令牌和设备名（默认为主机名）。`origin push` 可以随时重跑，每次推送都会从上次停下的位置继续。
+- 设备接入后，`origin mcp` 会先推送新的会话记录，再把每次工具调用转发给中枢。
+- 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于它们所运行的那个库。在已接入的设备上，那就是本地暂存副本。
+
 ## 环境变量
 
 | 变量 | 默认值 | 作用 |
@@ -40,3 +54,6 @@ origin mcp                                             以 stdio 运行 MCP serv
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code 配置目录（会话从 `<dir>/projects` 读取） |
 | `ORIGIN_CLAUDE_PROJECTS` | — | 直接指定 Claude Code 的 projects 目录 |
 | `CODEX_HOME` | `~/.codex` | Codex 的主目录（从 `sessions/` 与 `archived_sessions/` 读取会话） |
+| `ORIGIN_HUB_URL` | — | 中枢地址，覆盖 `origin hub connect` 的配置 |
+| `ORIGIN_HUB_TOKEN` | — | 中枢令牌，覆盖 `origin hub connect` 的配置 |
+| `ORIGIN_DEVICE` | 主机名 | 本设备在中枢上的名称 |

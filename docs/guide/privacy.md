@@ -9,7 +9,7 @@ Everything lives in one directory, `~/.origin` (or `ORIGIN_HOME`):
 - `origin.db`: a SQLite database with the normalized events, their search index, your entries, and the record of everything you forgot.
 - `raw/`: append-only copies of the original session log files.
 
-Origin makes no network connections, sends nothing anywhere, and never calls an LLM API. The directory is not encrypted, so protect it the way you would protect the original logs.
+Your data lives only on machines you control: your devices and, if you run one, your own hub. Origin never calls a third-party service or an LLM API. Without a hub it makes no network connections at all; with a hub, the only traffic is between your devices and your hub. The directory is not encrypted, so protect it the way you would protect the original logs.
 
 ## Forgetting
 
@@ -23,9 +23,18 @@ Forgotten entries and events disappear from search, timelines, and every MCP too
 
 Forgetting **hides**; it does not erase. The raw mirror files under `~/.origin/raw/` still contain the original lines, because the archive is append-only.
 
+## With a personal hub
+
+A [personal hub](./hub.md) changes where your data lives:
+
+- **A server you control.** The hub holds a full copy of every connected device's sessions and all your entries. Run it only on a machine you control, and protect its data directory like `~/.origin`.
+- **TLS and tokens.** The hub speaks plain HTTP, so put it behind TLS before exposing it. Every request except `/healthz` needs a token. The hub stores only hashes of tokens, and you can revoke a token when a device is lost or retired.
+- **Forgetting reaches every device.** Forget on the hub, through an agent or the CLI on the hub, and each device applies the same tombstones on its next push. Forgotten events stay hidden even if a device pushes them again.
+- **Staging copies.** Each device keeps a local staging copy of its own sessions. Forgetting hides data there too, but as everywhere, the raw mirror files still contain the original lines.
+
 ## Removing everything
 
-Delete `~/.origin` (or your `ORIGIN_HOME`). Origin keeps nothing anywhere else. Also remove the MCP registration from your agents (for Claude Code: `claude mcp remove --scope user origin`).
+Delete `~/.origin` (or your `ORIGIN_HOME`). Without a hub, Origin keeps nothing anywhere else; with a hub, also delete the hub's data directory (`/data` in the container) and revoke the device's token. Also remove the MCP registration from your agents (for Claude Code: `claude mcp remove --scope user origin`).
 
 ## Reporting a problem
 

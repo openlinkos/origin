@@ -17,16 +17,16 @@ hero:
       link: /architecture
 
 features:
-  - title: 跨 Agent 的同一份记忆
-    details: 目前归档 Claude Code 与 Codex 的会话，Cursor、ZCode、Grok Build 即将接入；任何支持 MCP 的 Agent 都能查询这份归档。
+  - title: 跨 Agent、跨机器的同一份记忆
+    details: 目前归档 Claude Code 与 Codex 的会话，Cursor、ZCode、Grok Build 即将接入。自托管的个人中枢把你所有的机器和云端 Agent 接入同一份记忆。
   - title: 默认可溯源
     details: 每个回答都能追溯到原始会话记录中的具体一行。
   - title: 不怕清理
     details: 会话记录只追加地镜像保存，比各 Agent 自己的保留期更长久。
   - title: 可纠正、可遗忘
     details: 错误的条目可以纠正；遗忘后的条目和消息不会再出现，也不能再被引用。
-  - title: 本地、私密
-    details: 数据全部留在本机。Origin 不联网，也不调用任何 LLM API。
+  - title: 你的数据，留在你的机器上
+    details: 数据只存放在你控制的机器上：你的设备，以及可选的自建中枢。Origin 从不调用第三方服务，也不调用任何 LLM API。
   - title: 开源
     details: 采用 MIT 许可证的 TypeScript 项目，基于 SQLite 与 Model Context Protocol。
 ---

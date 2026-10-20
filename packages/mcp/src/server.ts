@@ -4,7 +4,6 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   correct,
   type Database,
-  ENTRY_KINDS,
   type Entry,
   type EventRow,
   entryHistory,
@@ -26,7 +25,14 @@ import {
   searchEntries,
   searchEvents,
 } from '@openlinkos/origin-core';
-import { z } from 'zod';
+import {
+  INSTRUCTIONS,
+  refreshGate,
+  registerOriginTools,
+  type ToolHandlers,
+  toolError,
+  toolResult,
+} from './tools.js';
 
 export interface OriginServerOptions {
   db: Database;
@@ -38,6 +44,8 @@ export interface OriginServerOptions {
   version?: string;
   /** Diagnostics. Never write to stdout: it carries the protocol. */
   log?: (message: string) => void;
+  /** Author recorded on entries; defaults to the name of the connected MCP client. */
+  author?: () => string;
 }
 
 export interface OriginServer {
@@ -45,28 +53,6 @@ export interface OriginServer {
   /** Bring the archive up to date; `force` ignores the minimum interval. */
   refresh(force?: boolean): Promise<void>;
 }
-
-const INSTRUCTIONS = `Origin is the user's local, cross-agent memory: an append-only archive of their sessions with AI coding agents, plus durable entries — memory (what happened), knowledge (stable facts), and cognition (the user's preferences, methods, goals, and boundaries).
-
-- To answer questions about past work, decisions, or reasons, use \`search\` and \`timeline\`, then \`get\` or \`sources\` to read the original text. Cite entry and event ids.
-- When you learn something that will matter in future sessions — a decision and its reason, a stable fact, a preference of the user — save it with \`remember\`, citing the events it comes from: event ids from search/timeline, or an exact quote from this conversation.
-- If an entry is wrong or outdated, use \`correct\`. Use \`forget\` only when the user explicitly asks; it cannot be undone.
-- Time arguments accept relative values (30m, 24h, 7d, 2w) or dates (YYYY-MM-DD).`;
-
-const time = z
-  .string()
-  .optional()
-  .describe('Relative (30m, 24h, 7d, 2w) or absolute (YYYY-MM-DD, ISO 8601) time');
-
-const sourceInput = z
-  .object({
-    event_id: z.string().optional().describe('Id of the event to cite'),
-    quote: z
-      .string()
-      .optional()
-      .describe('Exact text from the event; alone, it finds the most recent message containing it'),
-  })
-  .describe('An event id, an exact quote, or both');
 
 function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…[+${text.length - max} chars]` : text;
@@ -102,42 +88,18 @@ function entryView(e: Entry) {
   };
 }
 
-function ok(value: unknown): CallToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
-}
-
-function fail(message: string): CallToolResult {
-  return { content: [{ type: 'text', text: message }], isError: true };
-}
+const ok = toolResult;
+const fail = toolError;
 
 const optionalTime = (v: string | undefined) => (v === undefined ? undefined : parseTime(v));
 
-export function createOriginServer(opts: OriginServerOptions): OriginServer {
-  const { db, home } = opts;
-  const interval = opts.syncIntervalMs ?? 10_000;
-  let lastSync = 0;
-  let inflight: Promise<void> | null = null;
-
-  const refresh = async (force = false): Promise<void> => {
-    if (!opts.sync) return;
-    if (inflight) return inflight;
-    if (!force && Date.now() - lastSync < interval) return;
-    inflight = opts
-      .sync()
-      .catch((err: unknown) => opts.log?.(`sync failed: ${(err as Error).message}`))
-      .finally(() => {
-        lastSync = Date.now();
-        inflight = null;
-      });
-    return inflight;
-  };
-
-  const mcp = new McpServer(
-    { name: 'origin', version: opts.version ?? '0.0.0' },
-    { instructions: INSTRUCTIONS },
-  );
-  const author = () => mcp.server.getClientVersion()?.name ?? 'mcp';
-
+/** Tool implementations against a local store. */
+function localHandlers(
+  db: Database,
+  home: string,
+  refresh: (force?: boolean) => Promise<void>,
+  author: () => string,
+): ToolHandlers {
   /** Run a tool body; caller errors (bad ids, bad input) come back as tool errors, not crashes. */
   const run = async (
     body: () => CallToolResult | Promise<CallToolResult>,
@@ -154,29 +116,8 @@ export function createOriginServer(opts: OriginServerOptions): OriginServer {
       ? fail(`${id} has been forgotten.`)
       : fail(`Unknown entry or event ${id}.`);
 
-  mcp.registerTool(
-    'search',
-    {
-      title: 'Search memory',
-      description:
-        'Full-text search over entries and archived session events, best match first. Without a query, lists the most recent entries.',
-      inputSchema: {
-        query: z.string().optional().describe('Words or phrases to find (any language)'),
-        scope: z.enum(['all', 'entries', 'events']).default('all'),
-        kind: z.enum(ENTRY_KINDS).optional().describe('Only entries of this kind'),
-        since: time,
-        until: time,
-        source: z.string().optional().describe('Agent id, e.g. claude-code'),
-        project: z.string().optional(),
-        include_tools: z
-          .boolean()
-          .default(false)
-          .describe('Also match tool calls and tool results'),
-        limit: z.number().int().min(1).max(100).default(20),
-      },
-      annotations: { readOnlyHint: true, openWorldHint: false },
-    },
-    (args) =>
+  return {
+    search: (args) =>
       run(async () => {
         await refresh();
         const since = optionalTime(args.since);
@@ -211,26 +152,8 @@ export function createOriginServer(opts: OriginServerOptions): OriginServer {
           events: events.map((h) => ({ ...eventView(h, 400), snippet: h.snippet })),
         });
       }),
-  );
 
-  mcp.registerTool(
-    'timeline',
-    {
-      title: 'Timeline',
-      description:
-        'Sessions in a time range (newest first), or the events of one session in order when `session` is given.',
-      inputSchema: {
-        since: time.describe('Start of the range (default 7d)'),
-        until: time,
-        source: z.string().optional(),
-        project: z.string().optional(),
-        session: z.string().optional().describe('Session id: list its events instead'),
-        include_tools: z.boolean().default(false),
-        limit: z.number().int().min(1).max(500).default(50),
-      },
-      annotations: { readOnlyHint: true, openWorldHint: false },
-    },
-    (args) =>
+    timeline: (args) =>
       run(async () => {
         await refresh();
         if (args.session) {
@@ -261,18 +184,8 @@ export function createOriginServer(opts: OriginServerOptions): OriginServer {
           })),
         });
       }),
-  );
 
-  mcp.registerTool(
-    'get',
-    {
-      title: 'Get entry or event',
-      description:
-        'Fetch an entry (with its sources and version history) or an event (full text) by id.',
-      inputSchema: { id: z.string().describe('Entry id (ent_…) or event id (source:…)') },
-      annotations: { readOnlyHint: true, openWorldHint: false },
-    },
-    (args) =>
+    get: (args) =>
       run(() => {
         if (isEntryId(args.id)) {
           const entry = getEntry(db, args.id);
@@ -295,18 +208,8 @@ export function createOriginServer(opts: OriginServerOptions): OriginServer {
           agent_version: event.agentVersion,
         });
       }),
-  );
 
-  mcp.registerTool(
-    'sources',
-    {
-      title: 'Original sources',
-      description:
-        'Expand an entry or event to the original log lines it comes from, with file paths and line numbers.',
-      inputSchema: { id: z.string().describe('Entry id (ent_…) or event id (source:…)') },
-      annotations: { readOnlyHint: true, openWorldHint: false },
-    },
-    (args) =>
+    sources: (args) =>
       run(() => {
         let cited: Array<{ quote: string | null; event: EventRow }>;
         if (isEntryId(args.id)) {
@@ -333,26 +236,8 @@ export function createOriginServer(opts: OriginServerOptions): OriginServer {
           }),
         );
       }),
-  );
 
-  mcp.registerTool(
-    'remember',
-    {
-      title: 'Remember',
-      description:
-        'Save a durable entry that cites the events it comes from. memory = what happened (a decision and why); knowledge = a stable fact; cognition = the user’s preferences, methods, goals, or boundaries.',
-      inputSchema: {
-        kind: z.enum(ENTRY_KINDS),
-        text: z.string().min(1).describe('One self-contained statement'),
-        sources: z.array(sourceInput).min(1),
-        confidence: z.number().min(0).max(1).describe('How sure you are, 0–1'),
-        project: z.string().optional().describe('Project the entry belongs to, if any'),
-        valid_from: time,
-        valid_to: time,
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    },
-    (args) =>
+    remember: (args) =>
       run(async () => {
         await refresh(true); // the cited lines may have just been written
         const entry = remember(db, {
@@ -367,26 +252,8 @@ export function createOriginServer(opts: OriginServerOptions): OriginServer {
         });
         return ok({ entry: entryView(entry) });
       }),
-  );
 
-  mcp.registerTool(
-    'correct',
-    {
-      title: 'Correct an entry',
-      description:
-        'Replace an entry with a corrected version. The old version is kept as history and no longer returned; its sources carry over.',
-      inputSchema: {
-        id: z.string().describe('Entry id (ent_…)'),
-        text: z.string().min(1),
-        kind: z.enum(ENTRY_KINDS).optional(),
-        confidence: z.number().min(0).max(1).optional(),
-        sources: z.array(sourceInput).optional().describe('Additional sources'),
-        valid_from: time,
-        valid_to: time,
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    },
-    (args) =>
+    correct: (args) =>
       run(async () => {
         await refresh(true);
         const entry = correct(db, args.id, {
@@ -400,27 +267,23 @@ export function createOriginServer(opts: OriginServerOptions): OriginServer {
         });
         return ok({ entry: entryView(entry) });
       }),
-  );
 
-  mcp.registerTool(
-    'forget',
-    {
-      title: 'Forget',
-      description:
-        'Permanently forget an entry (every version, and the events it cites) or an event (and every entry that cites it). Only on the user’s explicit request; cannot be undone.',
-      inputSchema: {
-        id: z.string().describe('Entry id (ent_…) or event id (source:…)'),
-        reason: z.string().optional(),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
-    },
-    (args) =>
+    forget: (args) =>
       run(() => {
         const r = forget(db, args.id, args.reason);
         return ok({ forgotten_entries: r.entries, excluded_events: r.events.length });
       }),
-  );
+  };
+}
 
+export function createOriginServer(opts: OriginServerOptions): OriginServer {
+  const refresh = refreshGate(opts.sync, opts.syncIntervalMs ?? 10_000, opts.log);
+  const mcp = new McpServer(
+    { name: 'origin', version: opts.version ?? '0.0.0' },
+    { instructions: INSTRUCTIONS },
+  );
+  const author = opts.author ?? (() => mcp.server.getClientVersion()?.name ?? 'mcp');
+  registerOriginTools(mcp, localHandlers(opts.db, opts.home, refresh, author));
   return { mcp, refresh };
 }
 

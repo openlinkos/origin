@@ -4,7 +4,7 @@ Instructions for AI coding agents working in this repository. `CLAUDE.md` is a s
 
 ## Project
 
-Origin is a local-first, cross-agent personal memory for AI coding agents. It archives local agent session logs into an append-only SQLite store, provides search, a timeline, and provenance through the `origin` CLI, and will expose the store to agents through an MCP server.
+Origin is a local-first, cross-agent personal memory for AI coding agents. It archives agent session logs into an append-only SQLite store and serves search, timelines, provenance, and durable entries to agents over MCP and to people through the `origin` CLI. An optional self-hosted personal hub (`origin serve`) gathers several devices into one store; it is single-tenant by design.
 
 Read these before making non-trivial changes:
 

@@ -45,8 +45,8 @@ ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtur
 |---|---|
 | `packages/core` | Storage, ingestion, entries, forgetting, queries. Depends on no other workspace package |
 | `packages/adapters` | One deterministic parser per agent. Depends only on `core` |
-| `packages/mcp` | MCP server over stdio. Depends only on `core` (ingestion is injected by the CLI) |
-| `packages/cli` | The `origin` command, including `origin mcp` |
+| `packages/mcp` | MCP tools, servers over stdio and stateless HTTP, and the forwarding proxy. Depends only on `core` (ingestion is injected by the CLI) |
+| `packages/cli` | The `origin` command, including `origin mcp`, the personal hub (`origin serve`), and `origin push` |
 
 [docs/architecture.md](docs/architecture.md) explains the data model and the five invariants that every change must preserve.
 
@@ -63,7 +63,7 @@ ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtur
 ## Tests and fixtures
 
 - Tests live in `packages/<name>/test/*.test.ts` and run with Vitest.
-- Adapter parsing and the invariants (provenance, sticky forgetting, append-only, idempotent sync) must be covered by tests. MCP tools are tested end to end with an in-memory MCP client (`packages/mcp/test`).
+- Adapter parsing and the invariants (provenance, sticky forgetting, append-only, idempotent sync) must be covered by tests. MCP tools are tested end to end with in-memory and HTTP MCP clients (`packages/mcp/test`), and the hub with a real device-to-hub round trip (`packages/cli/test`). Always use temporary `ORIGIN_HOME` directories in tests.
 - **Fixtures must be synthetic.** Never commit real session logs, even partial ones. Build fixtures by hand or scrub them thoroughly: replace names, paths, repository URLs, prompts, outputs, tokens, and any other identifying or secret content.
 
 ## Adding a source adapter

@@ -34,6 +34,7 @@ export default defineConfig({
             items: [
               { text: 'Getting started', link: '/guide/getting-started' },
               { text: 'Connect your agents', link: '/guide/connect-agents' },
+              { text: 'Personal hub', link: '/guide/hub' },
               { text: 'CLI reference', link: '/guide/cli' },
               { text: 'Privacy and your data', link: '/guide/privacy' },
             ],
@@ -64,6 +65,7 @@ export default defineConfig({
             items: [
               { text: '快速开始', link: '/zh/guide/getting-started' },
               { text: '接入 Agent', link: '/zh/guide/connect-agents' },
+              { text: '个人中枢', link: '/zh/guide/hub' },
               { text: '命令参考', link: '/zh/guide/cli' },
               { text: '隐私与数据', link: '/zh/guide/privacy' },
             ],

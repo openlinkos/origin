@@ -11,7 +11,12 @@ origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
 origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
 origin forget    <id> [--reason <text>] [--yes]        Forget an entry or event for good (needs --yes)
 origin projects                                        Known project names
-origin mcp                                             Run the MCP server over stdio (for agents)
+origin mcp                                             Run the MCP server over stdio (forwards to the hub when connected)
+
+origin serve     [--host 127.0.0.1] [--port 7077]      Run this store as a personal hub (MCP over HTTP)
+origin token     create <name> | list | revoke <name>  Manage the hub's access tokens (run on the hub)
+origin hub       connect <url> --token <token> [--device <name>] | status | disconnect
+origin push                                            Sync locally, push raw mirrors to the hub, pull tombstones
 ```
 
 - **Time values** are relative durations (`30m`, `24h`, `7d`, `2w`) or dates (`YYYY-MM-DD`, ISO 8601).
@@ -70,6 +75,15 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 
 The rules are described in [Privacy and your data](./privacy.md#forgetting).
 
+## Personal hub
+
+These commands run a [personal hub](./hub.md) and connect devices to it.
+
+- On the hub, `origin serve` exposes `POST /mcp` and the replication API, and `GET /healthz` reports health without authentication. `origin token create <name>` prints a new token once (prefix `ogn_`); the hub stores only its hash.
+- On a device, `origin hub connect` saves the hub's URL, a token, and the device name (by default the host name). `origin push` can be re-run at any time, and each push resumes where the previous one stopped.
+- Once a device is connected, `origin mcp` forwards every tool call to the hub, after pushing new session lines.
+- Curation commands (`entries`, `show`, `correct`, `forget`, …) act on the store they run against. On a connected device, that is the local staging copy.
+
 ## Environment variables
 
 | Variable | Default | Purpose |
@@ -78,3 +92,6 @@ The rules are described in [Privacy and your data](./privacy.md#forgetting).
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's config directory (sessions are read from `<dir>/projects`) |
 | `ORIGIN_CLAUDE_PROJECTS` | — | Override the Claude Code projects directory directly |
 | `CODEX_HOME` | `~/.codex` | Codex's home directory (rollouts are read from `sessions/` and `archived_sessions/`) |
+| `ORIGIN_HUB_URL` | — | Hub URL; overrides `origin hub connect` |
+| `ORIGIN_HUB_TOKEN` | — | Hub token; overrides `origin hub connect` |
+| `ORIGIN_DEVICE` | host name | This device's name on the hub |

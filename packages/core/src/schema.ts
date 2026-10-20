@@ -9,6 +9,8 @@
  *   changes only by being superseded. Status is derived, never stored.
  * - entry_fts: FTS5 trigram index over entries.
  * - tombstone / forgotten_entry / excluded_event: forget operations and their effects (Tombstone).
+ * - api_token: hub access tokens (name and SHA-256 hash; the token itself is never stored).
+ * - setting: small key-value state, e.g. how far a device has applied its hub's tombstones.
  *
  * Pre-release: there are no migrations. Every statement is idempotent and runs on each open, so
  * new tables and indexes appear in existing databases; any other change requires a fresh
@@ -139,5 +141,18 @@ CREATE TABLE IF NOT EXISTS forgotten_entry (
 CREATE TABLE IF NOT EXISTS excluded_event (
   event_id     TEXT    PRIMARY KEY REFERENCES event(id),
   tombstone_id INTEGER NOT NULL REFERENCES tombstone(id)
+);
+
+CREATE TABLE IF NOT EXISTS api_token (
+  name         TEXT    PRIMARY KEY,
+  hash         TEXT    NOT NULL UNIQUE,
+  created_at   INTEGER NOT NULL,
+  last_used_at INTEGER,
+  revoked_at   INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS setting (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );
 `;
