@@ -54,6 +54,8 @@ export interface SourceFile {
   absPath: string;
   /** Path relative to the adapter root, `/`-separated; used to name the mirror. */
   relPath: string;
+  /** Set for compressed files: Origin ingests and mirrors the decompressed content. */
+  compression?: 'zstd';
 }
 
 export interface ParseContext {

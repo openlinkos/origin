@@ -108,8 +108,8 @@ interface SourceAdapter {
   id: string; // 'claude-code' | 'codex' | 'cursor' | 'zcode' | 'grok'
   displayName: string;
   version(): string | null; // agent version, if known
-  discover(): Promise<SourceFile[]>;
-  parseLine(line: string, ctx: ParseContext): ParsedLine | null; // pure; throws on malformed input
+  discover(): Promise<SourceFile[]>; // { absPath, relPath, compression?: 'zstd' }
+  parseLine(line: string, ctx: ParseContext): ParsedLine | null; // deterministic; throws on malformed input
 }
 ```
 
@@ -144,6 +144,8 @@ interface SourceAdapter {
 4. **Parse and insert.** Each line goes through `parseLine`; failures are counted, not fatal. Events are inserted with `INSERT OR IGNORE` under the id `<source>:<native-id>[#<block-index>]`, which makes sync idempotent (invariant 3). Each event stores its mirror file and line number (invariant 1).
 5. **Bookkeeping.** Affected sessions are re-aggregated, the cursor advances in the same transaction, and a `sync_log` row records the run.
 
+**Compressed sources.** An adapter can mark a file as `compression: 'zstd'`. Origin then ingests and mirrors the decompressed content, using Node's built-in zstd, so cursors, line numbers, and raw lines work as for plain files. Compressed files are written once, so they are skipped when unchanged since their last ingestion.
+
 ### Claude Code mapping
 
 - Files: `<projects>/<cwd-slug>/<session-id>.jsonl`, plus sub-agent logs under `<session-id>/subagents/`. The `memory/` and `tool-results/` directories are skipped.
@@ -151,7 +153,7 @@ interface SourceAdapter {
 - `summary` lines set the session title.
 - The project name is the last segment of `cwd`.
 
-See [sources.md](sources.md) for the on-disk formats of all target agents.
+The other adapters' mappings are documented next to their formats in [sources.md](sources.md) (Codex: [Codex CLI](sources.md#codex-cli)).
 
 ## Entries
 

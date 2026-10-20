@@ -71,6 +71,7 @@ ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtur
    - `parseLine()` is a pure, deterministic function from one raw line to events. It throws on malformed input; the ingester counts the failure and moves on.
    - Event ids must be stable across runs (use the agent's own message ids) so that re-syncing stays idempotent.
    - Report the agent version so that format changes can be traced.
+   - If the agent compresses its logs, mark those files with `compression: 'zstd'` in `discover()`; Origin ingests the decompressed content.
 3. Register the adapter in `allAdapters()` in `packages/adapters/src/index.ts`.
 4. Add a synthetic fixture under `packages/adapters/test/fixtures/<id>/` and tests under `packages/adapters/test/`.
 5. Update the supported-agents table in both READMEs.

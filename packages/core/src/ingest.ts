@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { rawDir } from './paths.js';
@@ -17,6 +18,7 @@ interface RawFileRow {
   bytes_ingested: number;
   lines_ingested: number;
   tail_hash: string;
+  updated_at: number;
 }
 
 export interface IngestContext {
@@ -89,22 +91,18 @@ function ingestFile(
   agentVersion: string | null,
   result: SyncResult,
 ): boolean {
-  let st: fs.Stats;
-  try {
-    st = fs.statSync(file.absPath);
-  } catch {
-    return false; // deleted between discovery and read
-  }
   let raw = latestRawFile(ctx.db, adapter.id, file.absPath);
-  if (raw && (st.size < raw.bytes_ingested || !tailMatches(file.absPath, raw))) {
+  const content = openContent(ctx, file, raw);
+  if (!content) return false;
+  if (raw && (content.size < raw.bytes_ingested || !tailMatches(content, raw))) {
     ctx.log?.(`rewrite detected, new generation: ${file.relPath}`);
     raw = createRawFile(ctx, adapter.id, file, raw.generation + 1);
     result.newGenerations++;
   }
   if (!raw) raw = createRawFile(ctx, adapter.id, file, 1);
-  if (st.size === raw.bytes_ingested) return false;
+  if (content.size === raw.bytes_ingested) return false;
 
-  const delta = readRange(file.absPath, raw.bytes_ingested, st.size);
+  const delta = content.read(raw.bytes_ingested, content.size);
   const lastNl = delta.lastIndexOf(0x0a);
   if (lastNl < 0) return false; // no complete line yet
   const chunk = delta.subarray(0, lastNl + 1);
@@ -118,7 +116,7 @@ function ingestFile(
   lines.pop(); // trailing empty string
   const rawId = raw.id;
   const baseLine = raw.lines_ingested;
-  const fileMtimeMs = st.mtimeMs;
+  const fileMtimeMs = content.mtimeMs;
   const touchedSessions = new Set<string>();
 
   const insert = ctx.db.prepare(
@@ -186,8 +184,35 @@ function ingestFile(
       `UPDATE raw_file SET bytes_ingested = ?, lines_ingested = ?, tail_hash = ?, updated_at = ?
          WHERE id = ?`,
     )
-    .run(newBytes, baseLine + lines.length, tailHash(file.absPath, newBytes), Date.now(), rawId);
+    .run(newBytes, baseLine + lines.length, tailHash(content, newBytes), Date.now(), rawId);
   return true;
+}
+
+/** The bytes of a source file as Origin ingests and mirrors them: decompressed when needed. */
+interface Content {
+  size: number;
+  mtimeMs: number;
+  read(start: number, end: number): Buffer;
+}
+
+function openContent(ctx: IngestContext, file: SourceFile, raw: RawFileRow | null): Content | null {
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(file.absPath);
+  } catch {
+    return null; // deleted between discovery and read
+  }
+  if (!file.compression) {
+    return { size: st.size, mtimeMs: st.mtimeMs, read: (a, b) => readRange(file.absPath, a, b) };
+  }
+  // Compressed files are written once; skip them if unchanged since they were last ingested.
+  if (raw && st.mtimeMs <= raw.updated_at) return null;
+  if (typeof zlib.zstdDecompressSync !== 'function') {
+    ctx.log?.(`skipped ${file.relPath}: this Node.js version cannot read zstd`);
+    return null;
+  }
+  const data = zlib.zstdDecompressSync(fs.readFileSync(file.absPath));
+  return { size: data.length, mtimeMs: st.mtimeMs, read: (a, b) => data.subarray(a, b) };
 }
 
 /**
@@ -239,7 +264,7 @@ export function refreshSession(db: Database, source: string, sessionId: string):
 function latestRawFile(db: Database, source: string, absPath: string): RawFileRow | null {
   const row = db
     .prepare(
-      `SELECT id, source, path, generation, mirror, bytes_ingested, lines_ingested, tail_hash
+      `SELECT id, source, path, generation, mirror, bytes_ingested, lines_ingested, tail_hash, updated_at
        FROM raw_file WHERE source = ? AND path = ? ORDER BY generation DESC LIMIT 1`,
     )
     .get(source, absPath) as RawFileRow | undefined;
@@ -270,6 +295,7 @@ function createRawFile(
     bytes_ingested: 0,
     lines_ingested: 0,
     tail_hash: '',
+    updated_at: now,
   };
 }
 
@@ -289,17 +315,17 @@ function readRange(file: string, start: number, end: number): Buffer {
   }
 }
 
-function tailHash(file: string, bytesIngested: number): string {
+function tailHash(content: Content, bytesIngested: number): string {
   if (bytesIngested <= 0) return '';
   const len = Math.min(TAIL_WINDOW, bytesIngested);
-  const buf = readRange(file, bytesIngested - len, bytesIngested);
+  const buf = content.read(bytesIngested - len, bytesIngested);
   return createHash('sha256').update(buf).digest('hex');
 }
 
-function tailMatches(file: string, raw: RawFileRow): boolean {
+function tailMatches(content: Content, raw: RawFileRow): boolean {
   if (raw.bytes_ingested === 0) return true;
   try {
-    return tailHash(file, raw.bytes_ingested) === raw.tail_hash;
+    return tailHash(content, raw.bytes_ingested) === raw.tail_hash;
   } catch {
     return false;
   }

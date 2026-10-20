@@ -7,9 +7,9 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Origin archives the sessions your AI agents already write to disk into a single local store. Claude Code is supported today; Codex, Cursor, ZCode, and Grok Build are next. Through one [MCP](https://modelcontextprotocol.io) server, it gives every agent the same memory. Whichever tool you open can look up what you decided last week and why, trace it to the exact original line, and save what it learns for next time.
+Origin archives the sessions your AI agents already write to disk into a single local store. Claude Code and Codex are supported today; Cursor, ZCode, and Grok Build are next. Through one [MCP](https://modelcontextprotocol.io) server, it gives every agent the same memory. Whichever tool you open can look up what you decided last week and why, trace it to the exact original line, and save what it learns for next time.
 
-> **Status: early development.** Ingestion of Claude Code sessions, the MCP server, and the CLI work end to end. The other agents' adapters are in progress (see [Roadmap](#roadmap)). Packages are not yet published to npm; install from source.
+> **Status: early development.** Ingestion of Claude Code and Codex sessions, the MCP server, and the CLI work end to end. The other agents' adapters are in progress (see [Roadmap](#roadmap)). Packages are not yet published to npm; install from source.
 
 ## Why
 
@@ -28,7 +28,7 @@ Origin puts **you** at the center instead of the tool:
 - **MCP server** (`origin mcp`) with seven tools: `search`, `timeline`, `get`, `sources`, `remember`, `correct`, `forget`. It syncs automatically, so agents always see the latest sessions.
 - **Entries** in three kinds: `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries). Each carries its sources, a confidence, and a version history.
 - **Relevance-ranked full-text search** across sessions and entries, including CJK substring search (SQLite FTS5 trigram).
-- **Incremental, idempotent ingestion.** Only new bytes are read, rewritten files are kept as a new generation, and concurrent syncs are safe.
+- **Incremental, idempotent ingestion.** Only new bytes are read, rewritten files are kept as a new generation, compressed logs (zstd) are read transparently, and concurrent syncs are safe.
 - **A CLI** to browse the timeline, inspect any entry or event down to its original line, correct entries, and forget.
 
 ## Supported agents
@@ -36,7 +36,7 @@ Origin puts **you** at the center instead of the tool:
 | Agent | Sessions archived | Can use Origin over MCP |
 |---|---|---|
 | Claude Code | ✅ | ✅ |
-| Codex CLI | Planned | ✅ |
+| Codex CLI | ✅ | ✅ |
 | Cursor | Planned | ✅ |
 | ZCode | Planned | ✅ |
 | Grok Build | Planned | ✅ |
@@ -132,6 +132,7 @@ Time values accept relative durations (`30m`, `24h`, `7d`, `2w`) or dates (`YYYY
 | `ORIGIN_HOME` | `~/.origin` | Where Origin stores its database and raw mirrors |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's config directory (sessions are read from `<dir>/projects`) |
 | `ORIGIN_CLAUDE_PROJECTS` | — | Override the Claude Code projects directory directly |
+| `CODEX_HOME` | `~/.codex` | Codex's home directory (rollouts are read from `sessions/` and `archived_sessions/`) |
 
 ## How it works
 
@@ -160,7 +161,7 @@ Delivered as small, runnable increments, each usable on its own:
 
 1. ✅ Core store, Claude Code adapter, and CLI (`sync`, `status`, `timeline`, `search`, `show`, `projects`)
 2. ✅ MCP server, entries, correction, and sticky forgetting; connected to Claude Code
-3. Codex adapter
+3. ✅ Codex adapter, including zstd-compressed and archived rollouts
 4. Cursor adapter
 5. ZCode adapter
 6. Grok Build adapter

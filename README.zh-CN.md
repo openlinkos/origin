@@ -7,9 +7,9 @@
 
 [English](README.md) | 简体中文
 
-各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：目前支持 Claude Code，Codex、Cursor、ZCode、Grok Build 将陆续接入。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。
+各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：目前支持 Claude Code 与 Codex，Cursor、ZCode、Grok Build 将陆续接入。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。
 
-> **状态：早期开发。** Claude Code 会话的采集、MCP server 与 CLI 已经端到端可用；其余 Agent 的适配器正在开发（见[路线图](#路线图)）。各包尚未发布到 npm，请从源码安装。
+> **状态：早期开发。** Claude Code 与 Codex 会话的采集、MCP server 与 CLI 已经端到端可用；其余 Agent 的适配器正在开发（见[路线图](#路线图)）。各包尚未发布到 npm，请从源码安装。
 
 ## 为什么
 
@@ -28,7 +28,7 @@ Origin 以**人**而不是工具为中心：
 - **MCP server**（`origin mcp`），七个工具：`search`、`timeline`、`get`、`sources`、`remember`、`correct`、`forget`。它会自动同步，Agent 看到的总是最新会话。
 - **条目**分三类：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。每条都带来源、置信度和版本历史。
 - **按相关度排序的全文检索**：覆盖会话和条目，支持中文子串检索（SQLite FTS5 trigram）。
-- **增量、幂等的采集**：只读新增字节；源文件被改写时作为新代次保存；多个进程同时同步也安全。
+- **增量、幂等的采集**：只读新增字节；源文件被改写时作为新代次保存；透明读取 zstd 压缩的记录；多个进程同时同步也安全。
 - **CLI**：浏览时间线，查看任意条目或事件直到原文行，纠正条目，以及遗忘。
 
 ## 支持的 Agent
@@ -36,7 +36,7 @@ Origin 以**人**而不是工具为中心：
 | Agent | 会话归档 | 通过 MCP 使用 Origin |
 |---|---|---|
 | Claude Code | ✅ | ✅ |
-| Codex CLI | 规划中 | ✅ |
+| Codex CLI | ✅ | ✅ |
 | Cursor | 规划中 | ✅ |
 | ZCode | 规划中 | ✅ |
 | Grok Build | 规划中 | ✅ |
@@ -97,6 +97,7 @@ origin mcp                                             以 stdio 运行 MCP serv
 | `ORIGIN_HOME` | `~/.origin` | Origin 的数据库与原始镜像目录 |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code 配置目录（会话从 `<dir>/projects` 读取） |
 | `ORIGIN_CLAUDE_PROJECTS` | — | 直接指定 Claude Code 的 projects 目录 |
+| `CODEX_HOME` | `~/.codex` | Codex 的主目录（从 `sessions/` 与 `archived_sessions/` 读取会话） |
 
 ## 工作原理
 
@@ -125,7 +126,7 @@ Agent 会话记录里常有源代码、文件内容、命令输出，以及你�
 
 1. ✅ 核心存储、Claude Code 适配器与 CLI（`sync`、`status`、`timeline`、`search`、`show`、`projects`）
 2. ✅ MCP server、条目、纠正与遗忘粘性，已接入 Claude Code
-3. Codex 适配器
+3. ✅ Codex 适配器，支持 zstd 压缩与归档的会话
 4. Cursor 适配器
 5. ZCode 适配器
 6. Grok Build 适配器
