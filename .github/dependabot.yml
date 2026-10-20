@@ -13,7 +13,7 @@ updates:
     schedule:
       interval: weekly
     ignore:
-      # Types follow the oldest supported Node.js major (engines), not the newest.
+      # Types track the Node.js major we build and test on (24), not the newest release.
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']
     groups:
