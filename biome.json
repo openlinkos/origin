@@ -5,7 +5,14 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["packages/**", "*.ts", "*.json", "!**/dist", "!**/fixtures"]
+    "includes": [
+      "packages/**",
+      "docs/.vitepress/config.ts",
+      "*.ts",
+      "*.json",
+      "!**/dist",
+      "!**/fixtures"
+    ]
   },
   "formatter": {
     "enabled": true,

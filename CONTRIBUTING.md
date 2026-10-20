@@ -29,6 +29,8 @@ pnpm test
 | `pnpm lint` | Lint and format-check with Biome |
 | `pnpm lint:fix` | Apply Biome fixes and formatting |
 | `pnpm clean` | Remove build output |
+| `pnpm docs:dev` | Serve the documentation site locally with live reload |
+| `pnpm docs:build` | Build the documentation site; fails on dead links |
 | `pnpm origin <cmd>` | Run the built CLI |
 
 Always test against a fresh, temporary data directory, never your real `~/.origin`. Before the first release the database schema is edited in place without migrations, so an old data directory may not match the current code:
@@ -55,7 +57,8 @@ ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtur
 - **Dependencies:** `core` and `adapters` use only Node built-ins; `mcp` depends on the MCP TypeScript SDK and zod. Open an issue before adding a runtime dependency. Pin all dependencies to exact versions, and reference workspace packages as `workspace:*`.
 - **No network, no LLM in the core.** `core` and `adapters` must not make network calls or call model APIs.
 - **Language:** code, comments, docs, and commit messages are in English. `README.zh-CN.md` is a translation of `README.md`; if you change one, update the other or mention it in your pull request so a maintainer can.
-- **Docs follow code:** if a change affects the data model, an invariant, or a public interface, update `docs/architecture.md` in the same pull request. Put user-visible changes in the README, and agent format findings in `docs/sources.md`.
+- **Docs follow code:** if a change affects the data model, an invariant, or a public interface, update `docs/architecture.md` in the same pull request. Document user-visible changes in the guides (`docs/guide/` and their Chinese versions in `docs/zh/guide/`) and, if they change the quick start, in both READMEs. Record agent format findings in `docs/sources.md`.
+- **Documentation site:** `docs/` is the [origin.openlinkos.com](https://origin.openlinkos.com) site (VitePress). Links between pages are relative `.md` links; link to repository files outside `docs/` with full GitHub URLs.
 
 ## Tests and fixtures
 
@@ -94,7 +97,7 @@ Do not add tool-generated attribution trailers (such as `Co-Authored-By` lines f
 
 1. Fork the repository and branch off `master` (`feat/codex-adapter`, `fix/tail-hash`, …).
 2. Keep each pull request focused on one change.
-3. Make sure `pnpm lint`, `pnpm build`, and `pnpm test` pass. CI runs them on Linux and Windows.
+3. Make sure `pnpm lint`, `pnpm build`, `pnpm test`, and `pnpm docs:build` pass. CI runs them on Linux and Windows.
 4. Describe what changed and why, and link the related issue.
 
 Maintainers may commit directly to `master` after running the same checks.

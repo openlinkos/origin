@@ -41,7 +41,7 @@ Origin 以**人**而不是工具为中心：
 | ZCode | 规划中 | ✅ |
 | Grok Build | 规划中 | ✅ |
 
-任何支持 MCP 的 Agent 现在都能查询归档和条目；归档某个 Agent 自己的会话则需要它的适配器。各 Agent 的会话存储位置以及如何注册 Origin，见 [docs/sources.md](docs/sources.md)（英文）。
+任何支持 MCP 的 Agent 现在都能查询归档和条目；归档某个 Agent 自己的会话则需要它的适配器。如何为各 Agent 注册 Origin，见[接入 Agent](docs/zh/guide/connect-agents.md)；各 Agent 的会话存储格式见 [docs/sources.md](docs/sources.md)（英文）。
 
 ## 快速开始
 
@@ -70,34 +70,18 @@ claude mcp list         # origin: … ✔ Connected
 
 之后在任意会话里直接问，例如：*「上周在 origin 项目里，关于 schema 迁移我是怎么决定的？为什么？请给出来源。」* Agent 会检索 Origin 并附上事件 id 作答，你可以用 `origin show <id>` 打开原文。遇到值得保留的内容，它会用 `remember` 存成条目。
 
-Codex、Cursor、ZCode、Grok Build 的接入方式见 [docs/sources.md](docs/sources.md#connecting-agents-to-origin)。
+Codex、Cursor、ZCode、Grok Build 的接入方式见[接入 Agent](docs/zh/guide/connect-agents.md)。
 
-## 命令参考
+## 文档
 
-```text
-origin sync      [--source <id>] [--verbose]          采集本机 Agent 会话（幂等，可随时重跑）
-origin status                                          各来源统计、条目数与上次采集时间
-origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
-origin timeline  --session <id> [--all]                单个会话的事件（默认不含工具事件）
-origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
-origin show      <id>                                  显示条目或事件，以及它的原始来源
-origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
-origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
-origin forget    <id> [--reason <text>] [--yes]        永久遗忘条目或事件（需加 --yes 确认）
-origin projects                                        已知的项目名
-origin mcp                                             以 stdio 运行 MCP server（供 Agent 使用）
-```
+完整文档在 [`docs/`](docs/) 目录中，并发布在 [origin.openlinkos.com](https://origin.openlinkos.com/zh/)：
 
-时间参数可以是相对时长（`30m`、`24h`、`7d`、`2w`），也可以是日期（`YYYY-MM-DD`、ISO 8601）。条目类型为 `memory`、`knowledge`、`cognition`。CLI 输出为英文。
-
-## 配置
-
-| 环境变量 | 默认值 | 作用 |
-|---|---|---|
-| `ORIGIN_HOME` | `~/.origin` | Origin 的数据库与原始镜像目录 |
-| `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code 配置目录（会话从 `<dir>/projects` 读取） |
-| `ORIGIN_CLAUDE_PROJECTS` | — | 直接指定 Claude Code 的 projects 目录 |
-| `CODEX_HOME` | `~/.codex` | Codex 的主目录（从 `sessions/` 与 `archived_sessions/` 读取会话） |
+- [快速开始](docs/zh/guide/getting-started.md)：安装、归档会话、提出第一个问题
+- [接入 Agent](docs/zh/guide/connect-agents.md)：Claude Code、Codex、Cursor、ZCode、Grok Build，以及它们可用的 MCP 工具
+- [命令参考](docs/zh/guide/cli.md)：全部命令与环境变量
+- [隐私与数据](docs/zh/guide/privacy.md)：Origin 保存了什么、遗忘如何生效、如何清除全部数据
+- [架构](docs/architecture.md)（英文）：数据模型、不变量、采集、条目与 MCP server
+- [会话来源](docs/sources.md)（英文）：各 Agent 的本地会话格式
 
 ## 工作原理
 
@@ -113,12 +97,7 @@ Origin 围绕五条不变量构建：**溯源**、**遗忘粘性**、**只追加
 
 ## 隐私
 
-Agent 会话记录里常有源代码、文件内容、命令输出，以及你在提示词里输入的任何内容，有时还包括密钥。Origin 会把这些记录复制到 `~/.origin`，让它们不受 Agent 自身清理的影响。请注意：
-
-- Origin 不发起任何网络连接，不向任何地方发送数据。
-- 请像保护原始记录一样保护 `~/.origin`。该目录没有加密。
-- `origin forget <event-id>` 可以永久隐藏一条消息，例如你粘贴过密钥的那条提示词。原始镜像文件里仍保留该行。
-- 删除 `~/.origin`（或你设置的 `ORIGIN_HOME`）即可清除 Origin 保存的全部数据。
+Agent 会话记录里常有源代码、命令输出，以及你在提示词里输入的任何内容，有时还包括密钥。Origin 会把它们复制到 `~/.origin`，让它们不受 Agent 自身清理的影响。Origin 不发起任何网络连接；该目录没有加密，请像保护原始记录一样保护它。`origin forget` 可以永久隐藏条目或消息，删除 `~/.origin` 即可清除全部数据。详见[隐私与数据](docs/zh/guide/privacy.md)。
 
 ## 路线图
 
@@ -146,9 +125,10 @@ packages/
 ├── adapters/   @openlinkos/origin-adapters  各 Agent 的会话解析器
 ├── mcp/        @openlinkos/origin-mcp       MCP server（stdio）
 └── cli/        @openlinkos/origin           origin 命令
-docs/
+docs/                                        文档站点（VitePress）
+├── guide/ · zh/guide/                       使用指南（英文 / 中文）
 ├── architecture.md                          设计、数据模型、不变量
-└── sources.md                               各 Agent 的会话格式与 MCP 接入
+└── sources.md                               各 Agent 的会话格式
 ```
 
 ## 参与贡献

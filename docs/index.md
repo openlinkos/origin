@@ -1,0 +1,32 @@
+---
+layout: home
+
+hero:
+  name: Origin
+  text: One memory for all your AI agents
+  tagline: Local-first, cross-agent personal memory. Origin archives your agent sessions, lets you search them, and lets every agent recall what you decided, and why, with sources.
+  image:
+    src: /logo.svg
+    alt: Origin
+  actions:
+    - theme: brand
+      text: Get started
+      link: /guide/getting-started
+    - theme: alt
+      text: How it works
+      link: /architecture
+
+features:
+  - title: One memory across agents
+    details: Archives Claude Code and Codex sessions today, with Cursor, ZCode, and Grok Build next. Any agent that supports MCP can query the archive.
+  - title: Provenance by default
+    details: Every answer traces back to the exact line of the original session log.
+  - title: Nothing lost to cleanup
+    details: Session logs are mirrored append-only, so they outlive each agent's own retention period.
+  - title: Correct and forget
+    details: You can correct entries that are wrong. Forgotten entries and messages never come back and can never be cited again.
+  - title: Local and private
+    details: Everything stays on your machine. Origin makes no network calls and never calls an LLM API.
+  - title: Open source
+    details: TypeScript under the MIT License, built on SQLite and the Model Context Protocol.
+---

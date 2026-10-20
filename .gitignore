@@ -10,3 +10,7 @@ dist/
 *.tsbuildinfo
 coverage/
 .origin/
+
+# docs site
+docs/.vitepress/cache/
+docs/.vitepress/dist/

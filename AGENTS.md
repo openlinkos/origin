@@ -21,6 +21,8 @@ pnpm build        # tsc -b across all packages
 pnpm test         # vitest
 pnpm lint         # biome check
 pnpm lint:fix     # biome check --write
+pnpm docs:dev     # documentation site (VitePress) with live reload
+pnpm docs:build   # build the site; fails on dead links
 ```
 
 When running the CLI, always point `ORIGIN_HOME` at a fresh temporary directory.
@@ -36,6 +38,7 @@ When running the CLI, always point `ORIGIN_HOME` at a fresh temporary directory.
 - **Keep design and code in step.** If a change alters the data model, an invariant, or a public interface, update `docs/architecture.md` in the same commit. If code and the design document disagree, raise it rather than silently picking one.
 - **Use English** for code, comments, docs, CLI output, and commit messages. Keep `README.zh-CN.md` in sync with `README.md`.
 - **Only product docs belong in the repo.** Do not add discussion transcripts, iteration logs, or personal notes.
+- **`docs/` is the website** (origin.openlinkos.com). Keep the Chinese guides in `docs/zh/guide/` in step with `docs/guide/`. The site image is built and published to GHCR by `.github/workflows/site.yml`; server and deployment configuration does not belong in this repo.
 
 ## Privacy
 
@@ -45,6 +48,6 @@ When running the CLI, always point `ORIGIN_HOME` at a fresh temporary directory.
 ## Git
 
 - Maintainers commit directly to `master`. External contributions come in through pull requests.
-- Run `pnpm lint` and `pnpm test` before every commit, then commit and push once a change is complete and verified.
+- Run `pnpm lint` and `pnpm test` (and `pnpm docs:build` when `docs/` changes) before every commit, then commit and push once a change is complete and verified.
 - Use Conventional Commits in English: `<type>(<scope>): <summary>`, where type is one of `feat | fix | docs | refactor | test | perf | build | ci | chore` and scope is a package name.
 - Do not add attribution trailers such as `Co-Authored-By`. The project's `.claude/settings.json` blanks Claude Code's commit and PR attribution to enforce this.

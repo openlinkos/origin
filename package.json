@@ -24,12 +24,16 @@
     "test": "vitest run",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "origin": "node packages/cli/dist/bin.js"
+    "origin": "node packages/cli/dist/bin.js",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "@types/node": "24.19.2",
     "typescript": "5.9.3",
+    "vitepress": "1.6.4",
     "vitest": "5.0.5"
   }
 }

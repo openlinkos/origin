@@ -41,7 +41,7 @@ Origin puts **you** at the center instead of the tool:
 | ZCode | Planned | ✅ |
 | Grok Build | Planned | ✅ |
 
-Any MCP-capable agent can already query the archive and entries. Archiving an agent's own sessions needs its adapter. Where each agent stores its sessions, and how to register Origin with it, is documented in [docs/sources.md](docs/sources.md).
+Any MCP-capable agent can already query the archive and entries. Archiving an agent's own sessions needs its adapter. To register Origin with each agent, see [Connect your agents](docs/guide/connect-agents.md). Where each agent stores its sessions is documented in [docs/sources.md](docs/sources.md).
 
 ## Getting started
 
@@ -70,69 +70,18 @@ claude mcp list         # origin: … ✔ Connected
 
 Then ask in any session, for example: *"What did I decide about schema migrations in the origin project last week, and why? Cite your sources."* The agent searches Origin and answers with event ids, which you can open with `origin show <id>`. When it learns something worth keeping, it saves an entry with `remember`.
 
-For Codex, Cursor, ZCode, and Grok Build, see [docs/sources.md](docs/sources.md#connecting-agents-to-origin).
+For Codex, Cursor, ZCode, and Grok Build, see [Connect your agents](docs/guide/connect-agents.md).
 
-### Example
+## Documentation
 
-```console
-$ origin search "schema migrations"
-Entries:
-[2026-10-20 10:42] memory, conf 0.9, origin
-    No schema versioning or migrations before the first release; test against a fresh ORIGIN_HOME.
-    ↳ ent_5f0c2a9e41b7
+The full documentation lives in [`docs/`](docs/) and is published at [origin.openlinkos.com](https://origin.openlinkos.com):
 
-Events:
-[2026-10-20 10:01] claude-code origin user/message
-    Let's not add [migrations] yet — we're early. Just test in a fresh temp folder.
-    ↳ claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
-
-1 entry, 1 event. Details: origin show <id>
-
-$ origin show ent_5f0c2a9e41b7
-Entry       ent_5f0c2a9e41b7  memory, active
-Created     2026-10-20 10:42 by claude-code  confidence 0.9  project origin
-
-No schema versioning or migrations before the first release; test against a fresh ORIGIN_HOME.
-
-Sources:
-  [2026-10-20 10:01] claude-code origin user/message
-      “not add migrations yet”
-      ↳ claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
-
-$ origin forget ent_5f0c2a9e41b7
-This will forget 1 entry and 1 event:
-  ent_5f0c2a9e41b7
-  claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
-
-Forgetting cannot be undone. Re-run with --yes to confirm.
-```
-
-## CLI reference
-
-```text
-origin sync      [--source <id>] [--verbose]          Ingest local agent sessions (idempotent, safe to re-run)
-origin status                                          Per-source counts, entries, and last sync
-origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
-origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
-origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
-origin show      <id>                                  Show an entry or an event, with its original source
-origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
-origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
-origin forget    <id> [--reason <text>] [--yes]        Forget an entry or event for good (needs --yes)
-origin projects                                        Known project names
-origin mcp                                             Run the MCP server over stdio (for agents)
-```
-
-Time values accept relative durations (`30m`, `24h`, `7d`, `2w`) or dates (`YYYY-MM-DD`, ISO 8601). Entry kinds are `memory`, `knowledge`, and `cognition`.
-
-## Configuration
-
-| Environment variable | Default | Purpose |
-|---|---|---|
-| `ORIGIN_HOME` | `~/.origin` | Where Origin stores its database and raw mirrors |
-| `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's config directory (sessions are read from `<dir>/projects`) |
-| `ORIGIN_CLAUDE_PROJECTS` | — | Override the Claude Code projects directory directly |
-| `CODEX_HOME` | `~/.codex` | Codex's home directory (rollouts are read from `sessions/` and `archived_sessions/`) |
+- [Getting started](docs/guide/getting-started.md): install, archive your sessions, ask your first question
+- [Connect your agents](docs/guide/connect-agents.md): Claude Code, Codex, Cursor, ZCode, Grok Build, and the MCP tools they get
+- [CLI reference](docs/guide/cli.md): every command, with examples and environment variables
+- [Privacy and your data](docs/guide/privacy.md): what Origin stores, how forgetting works, how to remove everything
+- [Architecture](docs/architecture.md): data model, invariants, ingestion, entries, and the MCP server
+- [Session sources](docs/sources.md): the on-disk formats of each agent
 
 ## How it works
 
@@ -148,12 +97,7 @@ Origin is built around five invariants: **provenance**, **sticky forgetting**, *
 
 ## Privacy
 
-Agent session logs often contain source code, file contents, command output, and anything you typed into a prompt — sometimes including secrets. Origin copies these logs into `~/.origin` so that they survive the agents' own cleanup. Keep in mind:
-
-- Origin makes no network connections and sends nothing anywhere.
-- Protect `~/.origin` the way you would protect the original logs. It is not encrypted.
-- `origin forget <event-id>` hides a message for good. For example, use it on a prompt where you pasted a secret. The raw mirror file still holds the line on disk.
-- To remove everything Origin has stored, delete `~/.origin` (or your `ORIGIN_HOME`).
+Agent session logs often contain source code, command output, and anything you typed into a prompt — sometimes including secrets. Origin copies them into `~/.origin` so that they survive the agents' own cleanup. It makes no network connections, and the directory is not encrypted, so protect it like the original logs. `origin forget` hides an entry or a message for good; deleting `~/.origin` removes everything. Details: [Privacy and your data](docs/guide/privacy.md).
 
 ## Roadmap
 
@@ -181,9 +125,10 @@ packages/
 ├── adapters/   @openlinkos/origin-adapters  per-agent session parsers
 ├── mcp/        @openlinkos/origin-mcp       MCP server (stdio)
 └── cli/        @openlinkos/origin           the `origin` command
-docs/
+docs/                                        documentation site (VitePress)
+├── guide/                                   user guides (English; Chinese under docs/zh/)
 ├── architecture.md                          design, data model, invariants
-└── sources.md                               agent session formats and MCP setup
+└── sources.md                               agent session formats
 ```
 
 ## Contributing
