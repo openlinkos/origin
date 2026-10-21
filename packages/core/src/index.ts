@@ -1,3 +1,35 @@
+export {
+  ADMIN_FRESH_MS,
+  ADMIN_KEY_PREFIX,
+  ADMIN_SESSION_IDLE_MS,
+  ADMIN_SESSION_MAX_MS,
+  type AdminKeyInfo,
+  type AdminKeyOptions,
+  type AdminSession,
+  type AdminSessionInfo,
+  createAdminKey,
+  createAdminSession,
+  ENV_KEY_PREFIX,
+  endAdminSession,
+  endAdminSessions,
+  envAdminKeyName,
+  getAdminSession,
+  isAdminSessionFresh,
+  listAdminKeys,
+  listAdminSessions,
+  markAdminSessionFresh,
+  parseAdminKeyHashes,
+  revokeAdminKey,
+  verifyAdminKey,
+} from './admin.js';
+export {
+  type AuditChannel,
+  type AuditDetail,
+  type AuditInput,
+  type AuditRecord,
+  listAudit,
+  recordAudit,
+} from './audit.js';
 export { type Database, openDatabase, openMemoryDatabase, transaction } from './db.js';
 export {
   type CorrectInput,
@@ -8,6 +40,7 @@ export {
   type EntryKind,
   type EntrySource,
   type EntryStatus,
+  entriesCiting,
   entryCounts,
   entryHistory,
   entrySources,
@@ -35,11 +68,20 @@ export {
   remoteCursors,
   syncSource,
 } from './ingest.js';
+export {
+  type DeviceFile,
+  deviceFiles,
+  type IngestHealth,
+  ingestHealth,
+  type StoreUsage,
+  storeUsage,
+} from './overview.js';
 export { dbPath, originHome, parseRawPath, rawDir, remotePath } from './paths.js';
 export { getSetting, setSetting } from './settings.js';
 export {
   type EventFilter,
   getEvent,
+  getSession,
   isEventForgotten,
   listEvents,
   listProjects,
@@ -60,10 +102,18 @@ export {
   listTokens,
   NAME_RE,
   revokeToken,
+  TOKEN_PREFIX,
   type TokenInfo,
   verifyToken,
 } from './tokens.js';
-export { applyRemoteTombstone, type TombstoneRecord, tombstonesAfter } from './tombstones.js';
+export {
+  applyRemoteTombstone,
+  listTombstones,
+  type TombstoneRecord,
+  type TombstoneSummary,
+  tombstoneCount,
+  tombstonesAfter,
+} from './tombstones.js';
 export type {
   EventInput,
   EventKind,

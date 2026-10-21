@@ -142,6 +142,9 @@ interface SourceAdapter {
 | `tombstone`, `forgotten_entry`, `excluded_event` | Forget operations and their effects |
 | `api_token` | Hub access tokens: name and SHA-256 hash, never the token itself |
 | `setting` | Small key-value state, such as how far a device has applied the hub's tombstones |
+| `admin_key` | Admin UI sign-in keys: name and SHA-256 hash, never the key itself |
+| `admin_session` | Admin UI sessions: a hash of the session id, its CSRF token, and its timestamps |
+| `audit_log` | Append-only record of administrative actions, with ids and counts but never content; triggers reject updates and deletes |
 
 - Storage uses Node's built-in `node:sqlite`, so there are no native modules to compile. Several processes may share the database (the CLI and one MCP server per agent session); WAL mode and a busy timeout handle this.
 - `session` is derived and can be rebuilt from `event`. The FTS indexes are external-content tables kept in sync by triggers.

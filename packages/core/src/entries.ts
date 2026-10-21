@@ -69,6 +69,8 @@ export interface EntryFilter {
   /** Include superseded versions (forgotten entries are never returned). */
   includeSuperseded?: boolean;
   limit?: number;
+  /** Rows to skip, for paging. */
+  offset?: number;
 }
 
 export interface ForgetResult {
@@ -172,10 +174,22 @@ function entryWhere(f: EntryFilter, params: unknown[]): string {
 export function listEntries(db: Database, filter: EntryFilter = {}): Entry[] {
   const params: unknown[] = [];
   const where = entryWhere(filter, params);
-  params.push(filter.limit ?? 50);
+  params.push(filter.limit ?? 50, filter.offset ?? 0);
   const rows = db
-    .prepare(`${ENTRY_SELECT} WHERE ${where} ORDER BY en.created_at DESC LIMIT ?`)
+    .prepare(`${ENTRY_SELECT} WHERE ${where} ORDER BY en.created_at DESC LIMIT ? OFFSET ?`)
     .all(...(params as never[])) as unknown as EntryRecord[];
+  return rows.map(toEntry);
+}
+
+/** Entries that cite an event (active and superseded versions; never forgotten ones), newest first. */
+export function entriesCiting(db: Database, eventId: string): Entry[] {
+  const rows = db
+    .prepare(
+      `${ENTRY_SELECT} WHERE fe.entry_id IS NULL
+         AND en.id IN (SELECT entry_id FROM entry_source WHERE event_id = ?)
+       ORDER BY en.created_at DESC`,
+    )
+    .all(eventId) as unknown as EntryRecord[];
   return rows.map(toEntry);
 }
 
@@ -188,15 +202,15 @@ export function searchEntries(db: Database, query: string, filter: EntryFilter =
     params.push(fts);
     sql = `${ENTRY_SELECT} JOIN entry_fts f ON f.rowid = en.rowid
            WHERE entry_fts MATCH ? AND ${entryWhere(filter, params)}
-           ORDER BY bm25(entry_fts), en.created_at DESC LIMIT ?`;
+           ORDER BY bm25(entry_fts), en.created_at DESC LIMIT ? OFFSET ?`;
   } else {
     const q = query.trim();
     if (q.length === 0) return [];
     params.push(`%${q}%`);
     sql = `${ENTRY_SELECT} WHERE en.text LIKE ? AND ${entryWhere(filter, params)}
-           ORDER BY en.created_at DESC LIMIT ?`;
+           ORDER BY en.created_at DESC LIMIT ? OFFSET ?`;
   }
-  params.push(filter.limit ?? 20);
+  params.push(filter.limit ?? 20, filter.offset ?? 0);
   return (db.prepare(sql).all(...(params as never[])) as unknown as EntryRecord[]).map(toEntry);
 }
 

@@ -94,3 +94,57 @@ export function applyRemoteTombstone(
     { immediate: true },
   );
 }
+
+/** A forget operation as listed for the owner: ids and counts, never the forgotten text. */
+export interface TombstoneSummary {
+  id: number;
+  target: string;
+  reason: string | null;
+  createdAt: number;
+  /** Entries this tombstone forgot. */
+  entries: number;
+  /** Events this tombstone excluded. */
+  events: number;
+}
+
+/** Tombstones, newest first. `beforeId` pages backwards. */
+export function listTombstones(
+  db: Database,
+  opts: { limit?: number; beforeId?: number } = {},
+): TombstoneSummary[] {
+  const params: number[] = [];
+  let where = '';
+  if (opts.beforeId !== undefined) {
+    where = 'WHERE t.id < ?';
+    params.push(opts.beforeId);
+  }
+  params.push(opts.limit ?? 50);
+  const rows = db
+    .prepare(
+      `SELECT t.id, t.target, t.reason, t.created_at,
+              (SELECT COUNT(*) FROM forgotten_entry f WHERE f.tombstone_id = t.id) AS entries,
+              (SELECT COUNT(*) FROM excluded_event x WHERE x.tombstone_id = t.id) AS events
+       FROM tombstone t ${where} ORDER BY t.id DESC LIMIT ?`,
+    )
+    .all(...params) as unknown as Array<{
+    id: number;
+    target: string;
+    reason: string | null;
+    created_at: number;
+    entries: number;
+    events: number;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    target: r.target,
+    reason: r.reason,
+    createdAt: r.created_at,
+    entries: r.entries,
+    events: r.events,
+  }));
+}
+
+/** Number of tombstones in the store. */
+export function tombstoneCount(db: Database): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM tombstone').get() as { n: number }).n;
+}

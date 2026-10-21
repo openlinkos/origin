@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-7a4ceb85
+sourceHash: sha256-e7d3dc1b
 ---
 
 # 架构
@@ -146,6 +146,9 @@ interface SourceAdapter {
 | `tombstone`, `forgotten_entry`, `excluded_event` | 遗忘操作及其影响 |
 | `api_token` | 中枢访问令牌：名称和 SHA-256 哈希，从不保存令牌本身 |
 | `setting` | 少量键值状态，例如某台设备已经应用到中枢的哪一条遗忘记录 |
+| `admin_key` | 管理界面的登录密钥：名称和 SHA-256 哈希，从不保存密钥本身 |
+| `admin_session` | 管理界面的会话：会话 id 的哈希、它的 CSRF 令牌和各个时间戳 |
+| `audit_log` | 管理操作的只追加记录，只含 id 和数量，从不包含内容；触发器拒绝任何更新和删除 |
 
 - 存储使用 Node 内置的 `node:sqlite`，因此没有需要编译的原生模块。多个进程可以共享同一个数据库（CLI，以及每个 Agent 会话各一个 MCP server）；WAL 模式和 busy timeout 负责处理这种情况。
 - `session` 是派生数据，可以从 `event` 重建。FTS 索引是外部内容（external-content）表，由触发器保持同步。

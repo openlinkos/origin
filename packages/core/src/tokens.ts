@@ -5,7 +5,8 @@ import { OriginError } from './errors.js';
 /** Token and device names: lowercase ASCII, digits, `.`, `_`, `-`; at most 63 characters. */
 export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/;
 
-const TOKEN_PREFIX = 'ogn_';
+/** Hub access tokens (devices and agents). Admin UI keys use `oga_`, so neither is accepted as the other. */
+export const TOKEN_PREFIX = 'ogn_';
 const LAST_USED_RESOLUTION = 60_000;
 
 export interface TokenInfo {
@@ -15,24 +16,35 @@ export interface TokenInfo {
   revokedAt: number | null;
 }
 
-function hashToken(token: string): string {
-  return createHash('sha256').update(token).digest('hex');
+/** SHA-256 (hex) of a secret: the only form in which tokens, keys, and session ids are stored. */
+export function secretHash(secret: string): string {
+  return createHash('sha256').update(secret).digest('hex');
+}
+
+/** A new secret: `prefix` plus 32 random bytes in base64url. */
+export function newSecret(prefix: string): string {
+  return `${prefix}${randomBytes(32).toString('base64url')}`;
+}
+
+/** Throw unless `name` is a valid token, key, or device name. */
+export function checkName(name: string, what: string): void {
+  if (!NAME_RE.test(name)) {
+    throw new OriginError(
+      `Invalid ${what} name "${name}": use lowercase letters, digits, ".", "_" or "-" (at most 63 characters).`,
+    );
+  }
 }
 
 /** Create a hub access token. The token is returned once; only its SHA-256 hash is stored. */
 export function createToken(db: Database, name: string, now = Date.now()): string {
-  if (!NAME_RE.test(name)) {
-    throw new OriginError(
-      `Invalid token name "${name}": use lowercase letters, digits, ".", "_" or "-" (at most 63 characters).`,
-    );
-  }
+  checkName(name, 'token');
   if (db.prepare('SELECT 1 FROM api_token WHERE name = ?').get(name)) {
     throw new OriginError(`A token named "${name}" exists or was revoked; choose another name.`);
   }
-  const token = `${TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
+  const token = newSecret(TOKEN_PREFIX);
   db.prepare('INSERT INTO api_token (name, hash, created_at) VALUES (?, ?, ?)').run(
     name,
-    hashToken(token),
+    secretHash(token),
     now,
   );
   return token;
@@ -47,7 +59,7 @@ export function verifyToken(
   if (typeof token !== 'string' || !token.startsWith(TOKEN_PREFIX)) return null;
   const row = db
     .prepare('SELECT name, last_used_at FROM api_token WHERE hash = ? AND revoked_at IS NULL')
-    .get(hashToken(token)) as { name: string; last_used_at: number | null } | undefined;
+    .get(secretHash(token)) as { name: string; last_used_at: number | null } | undefined;
   if (!row) return null;
   if (row.last_used_at === null || now - row.last_used_at >= LAST_USED_RESOLUTION) {
     db.prepare('UPDATE api_token SET last_used_at = ? WHERE name = ?').run(now, row.name);

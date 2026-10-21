@@ -14,6 +14,8 @@ export interface EventFilter {
   until?: number;
   kinds?: EventKind[];
   limit?: number;
+  /** Rows to skip, for paging. */
+  offset?: number;
 }
 
 export interface SearchOptions extends EventFilter {
@@ -117,13 +119,13 @@ export function searchEvents(db: Database, query: string, filter: SearchOptions 
   if (fts) {
     params.push(fts);
     const where = whereClause(filter, params);
-    params.push(limit);
+    params.push(limit, filter.offset ?? 0);
     const rows = db
       .prepare(
         `SELECT ${EVENT_COLUMNS}, snippet(event_fts, 0, '[', ']', '…', 24) AS snippet
          FROM event_fts f JOIN event e ON e.rowid = f.rowid
          WHERE event_fts MATCH ?${where}
-         ORDER BY ${filter.order === 'recent' ? 'e.ts DESC' : 'bm25(event_fts), e.ts DESC'} LIMIT ?`,
+         ORDER BY ${filter.order === 'recent' ? 'e.ts DESC' : 'bm25(event_fts), e.ts DESC'} LIMIT ? OFFSET ?`,
       )
       .all(...(params as never[])) as unknown as RawEventRecord[];
     return rows.map((r) => ({ ...toEventRow(r), snippet: r.snippet ?? '' }));
@@ -132,11 +134,11 @@ export function searchEvents(db: Database, query: string, filter: SearchOptions 
   if (q.length === 0) return [];
   params.push(`%${q}%`);
   const where = whereClause(filter, params);
-  params.push(limit);
+  params.push(limit, filter.offset ?? 0);
   const rows = db
     .prepare(
       `SELECT ${EVENT_COLUMNS}, substr(e.text, 1, 160) AS snippet
-       FROM event e WHERE e.text LIKE ?${where} ORDER BY e.ts DESC LIMIT ?`,
+       FROM event e WHERE e.text LIKE ?${where} ORDER BY e.ts DESC LIMIT ? OFFSET ?`,
     )
     .all(...(params as never[])) as unknown as RawEventRecord[];
   return rows.map((r) => ({ ...toEventRow(r), snippet: r.snippet ?? '' }));
@@ -145,7 +147,7 @@ export function searchEvents(db: Database, query: string, filter: SearchOptions 
 /** Session timeline (most recent first). */
 export function listSessions(
   db: Database,
-  filter: Pick<EventFilter, 'source' | 'project' | 'since' | 'until' | 'limit'> = {},
+  filter: Pick<EventFilter, 'source' | 'project' | 'since' | 'until' | 'limit' | 'offset'> = {},
 ): SessionRow[] {
   const params: unknown[] = [];
   const parts: string[] = ['event_count > 0'];
@@ -166,23 +168,32 @@ export function listSessions(
     params.push(filter.until);
   }
   const where = `WHERE ${parts.join(' AND ')}`;
-  params.push(filter.limit ?? 50);
+  params.push(filter.limit ?? 50, filter.offset ?? 0);
   const rows = db
     .prepare(
-      `SELECT source, session_id, project, cwd, title, started_at, ended_at, event_count
-       FROM session ${where} ORDER BY COALESCE(ended_at, 0) DESC LIMIT ?`,
+      `SELECT ${SESSION_COLUMNS} FROM session ${where}
+       ORDER BY COALESCE(ended_at, 0) DESC LIMIT ? OFFSET ?`,
     )
-    .all(...(params as never[])) as unknown as Array<{
-    source: string;
-    session_id: string;
-    project: string | null;
-    cwd: string | null;
-    title: string | null;
-    started_at: number | null;
-    ended_at: number | null;
-    event_count: number;
-  }>;
-  return rows.map((r) => ({
+    .all(...(params as never[])) as unknown as SessionRecord[];
+  return rows.map(toSessionRow);
+}
+
+const SESSION_COLUMNS =
+  'source, session_id, project, cwd, title, started_at, ended_at, event_count';
+
+interface SessionRecord {
+  source: string;
+  session_id: string;
+  project: string | null;
+  cwd: string | null;
+  title: string | null;
+  started_at: number | null;
+  ended_at: number | null;
+  event_count: number;
+}
+
+function toSessionRow(r: SessionRecord): SessionRow {
+  return {
     source: r.source,
     sessionId: r.session_id,
     project: r.project,
@@ -191,16 +202,30 @@ export function listSessions(
     startedAt: r.started_at,
     endedAt: r.ended_at,
     eventCount: r.event_count,
-  }));
+  };
+}
+
+/** One session with visible events, or null (a session whose events were all forgotten is hidden). */
+export function getSession(db: Database, source: string, sessionId: string): SessionRow | null {
+  const row = db
+    .prepare(
+      `SELECT ${SESSION_COLUMNS} FROM session
+       WHERE source = ? AND session_id = ? AND event_count > 0`,
+    )
+    .get(source, sessionId) as SessionRecord | undefined;
+  return row ? toSessionRow(row) : null;
 }
 
 /** List events in chronological order. */
 export function listEvents(db: Database, filter: EventFilter = {}): EventRow[] {
   const params: unknown[] = [];
   const where = whereClause(filter, params);
-  params.push(filter.limit ?? 200);
+  params.push(filter.limit ?? 200, filter.offset ?? 0);
   const rows = db
-    .prepare(`SELECT ${EVENT_COLUMNS} FROM event e WHERE 1 = 1${where} ORDER BY e.ts ASC LIMIT ?`)
+    .prepare(
+      `SELECT ${EVENT_COLUMNS} FROM event e WHERE 1 = 1${where} ORDER BY e.ts ASC, e.rowid ASC
+       LIMIT ? OFFSET ?`,
+    )
     .all(...(params as never[])) as unknown as RawEventRecord[];
   return rows.map(toEventRow);
 }

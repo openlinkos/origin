@@ -11,6 +11,10 @@
  * - tombstone / forgotten_entry / excluded_event: forget operations and their effects (Tombstone).
  * - api_token: hub access tokens (name and SHA-256 hash; the token itself is never stored).
  * - setting: small key-value state, e.g. how far a device has applied its hub's tombstones.
+ * - admin_key: admin UI sign-in keys (name and SHA-256 hash; the key itself is never stored).
+ * - admin_session: server-side admin UI sessions (only a hash of the session id is stored).
+ * - audit_log: append-only record of administrative actions with ids and counts only, never
+ *   content; triggers reject every UPDATE and DELETE.
  *
  * Pre-release: there are no migrations. Every statement is idempotent and runs on each open, so
  * new tables and indexes appear in existing databases; any other change requires a fresh
@@ -93,6 +97,7 @@ CREATE TABLE IF NOT EXISTS sync_log (
   parse_errors  INTEGER NOT NULL,
   note          TEXT
 );
+CREATE INDEX IF NOT EXISTS sync_log_finished ON sync_log (finished_at);
 
 CREATE TABLE IF NOT EXISTS entry (
   id         TEXT    PRIMARY KEY,
@@ -155,4 +160,42 @@ CREATE TABLE IF NOT EXISTS setting (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS admin_key (
+  name         TEXT    PRIMARY KEY,
+  hash         TEXT    NOT NULL UNIQUE,
+  created_at   INTEGER NOT NULL,
+  last_used_at INTEGER,
+  revoked_at   INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS admin_session (
+  id_hash      TEXT    PRIMARY KEY,
+  key_name     TEXT    NOT NULL,
+  csrf         TEXT    NOT NULL,
+  created_at   INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  fresh_at     INTEGER NOT NULL,
+  ended_at     INTEGER,
+  ip           TEXT,
+  user_agent   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id         INTEGER PRIMARY KEY,
+  at         INTEGER NOT NULL,
+  actor      TEXT    NOT NULL,
+  channel    TEXT    NOT NULL CHECK (channel IN ('ui', 'cli')),
+  action     TEXT    NOT NULL,
+  target     TEXT,
+  detail     TEXT,
+  ip         TEXT,
+  user_agent TEXT
+);
+CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log BEGIN
+  SELECT RAISE(ABORT, 'audit_log is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log BEGIN
+  SELECT RAISE(ABORT, 'audit_log is append-only');
+END;
 `;
