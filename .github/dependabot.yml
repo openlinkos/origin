@@ -17,5 +17,9 @@ updates:
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']
     groups:
+      # The shared site theme is released on its own schedule; review its updates separately.
+      openlinkos:
+        patterns: ['@openlinkos/*']
       dependencies:
         patterns: ['*']
+        exclude-patterns: ['@openlinkos/*']
