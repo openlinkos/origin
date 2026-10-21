@@ -20,6 +20,7 @@ import {
   PLAIN_SESSION_COOKIE,
   parseBody,
   parseCookies,
+  type RequestOrigins,
   readBody,
   redirect,
   rejectCrossSite,
@@ -632,9 +633,15 @@ export const ADMIN_ROUTES: ReadonlyArray<{
 // ---------------------------------------------------------------------------------------------
 // Dispatch
 
-function sessionFrom(req: IncomingMessage, s: State, now: number) {
+function sessionFrom(req: IncomingMessage, s: State, origins: RequestOrigins, now: number) {
   const cookies = parseCookies(req.headers.cookie);
-  for (const name of [SECURE_SESSION_COOKIE, PLAIN_SESSION_COOKIE]) {
+  // Behind an https public URL, the plain cookie counts only on a loopback tunnel: a sibling
+  // subdomain can plant an ordinary cookie for this host (session fixation), but not a __Host- one.
+  const names =
+    origins.publicSecure && origins.local === null
+      ? [SECURE_SESSION_COOKIE]
+      : [SECURE_SESSION_COOKIE, PLAIN_SESSION_COOKIE];
+  for (const name of names) {
     const value = cookies.get(name);
     if (!value) continue;
     const session = getAdminSession(s.db, value, { envHashes: s.envKeyHashes, now });
@@ -734,7 +741,7 @@ async function dispatch(
     rejectCrossSite(req);
   }
 
-  ctx.session = sessionFrom(req, s, now);
+  ctx.session = sessionFrom(req, s, origins, now);
   if (route.auth !== 'none') {
     if (!ctx.session) {
       if (isApi) throw new HttpError(401, 'Sign in first.');

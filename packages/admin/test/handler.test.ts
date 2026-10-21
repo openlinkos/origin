@@ -211,6 +211,22 @@ describe('sessions', () => {
     expect(res.json()).toMatchObject({ signedIn: true, key: 'owner', fresh: true });
   });
 
+  it('accept only the __Host- cookie behind an https public URL', async () => {
+    const base = await serve({ publicUrl: new URL('https://hub.example.com') });
+    const headers = { Host: 'hub.example.com' };
+    const b = new Browser(base, 'https://hub.example.com');
+    await b.api('POST', 'login', { key }, headers);
+    const id = b.jar.get('__Host-origin-admin') ?? '';
+    expect(id).not.toBe('');
+    const as = async (cookie: string) =>
+      (
+        await request(`${base}/admin/api/session`, { headers: { ...headers, Cookie: cookie } })
+      ).json();
+    expect(await as(`__Host-origin-admin=${id}`)).toMatchObject({ signedIn: true });
+    // A plain cookie could have been planted from a sibling subdomain: it does not count here.
+    expect(await as(`origin-admin=${id}`)).toMatchObject({ signedIn: false });
+  });
+
   it('require a fresh key entry for sensitive actions', async () => {
     const base = await serve();
     const b = new Browser(base);
