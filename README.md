@@ -1,4 +1,9 @@
-# Origin
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://openlinkos.com/brand/origin/github/readme-dark.svg">
+    <img alt="Origin" src="https://openlinkos.com/brand/origin/github/readme-light.svg" height="48">
+  </picture>
+</h1>
 
 **Local-first, cross-agent personal memory for AI coding agents.**
 
