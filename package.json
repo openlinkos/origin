@@ -33,7 +33,7 @@
     "@biomejs/biome": "2.5.15",
     "@openlinkos/vitepress-theme": "0.1.0",
     "@types/node": "24.19.2",
-    "typescript": "5.9.3",
+    "typescript": "7.0.2",
     "vitepress": "1.6.4",
     "vitest": "5.0.5"
   }
