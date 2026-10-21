@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/openlinkos/origin/security/advisories/new
+    about: Please report security issues privately, not as public issues.
+  - name: Documentation
+    url: https://origin.openlinkos.com
+    about: Guides and reference in English and Simplified Chinese.

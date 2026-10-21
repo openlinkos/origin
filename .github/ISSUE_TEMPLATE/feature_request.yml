@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest an improvement, a new agent adapter, or a change to the design.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What you would like Origin to do. For a new agent, link its session log format if you know it.
+    validations:
+      required: true
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Design notes
+      description: Optional. Does the proposal touch an invariant in docs/architecture.md (provenance, sticky forgetting, append-only storage, local-first data, a single entry point)?

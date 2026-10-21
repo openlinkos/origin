@@ -1,10 +1,10 @@
 # Contributing to Origin
 
-Thanks for your interest in Origin! This guide covers the development setup, the project's conventions, and how to add support for a new agent.
+Thanks for your interest in Origin! This guide covers the development setup, the project's conventions, and how to add support for a new agent. Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Ways to contribute
 
-- **Report a bug or request a feature** by [opening an issue](https://github.com/openlinkos/origin/issues). Include your OS, Node.js version, the agent and agent version involved, and the exact command you ran.
+- **Report a bug or request a feature** by [opening an issue](https://github.com/openlinkos/origin/issues/new/choose); the forms ask for your OS, Node.js version, the agent and agent version involved, and the exact command you ran. Use synthetic data only.
 - **Add a source adapter** for an agent that is not supported yet (see [below](#adding-a-source-adapter)).
 - **Improve the documentation**, especially [docs/sources.md](docs/sources.md) when an agent changes its on-disk format.
 

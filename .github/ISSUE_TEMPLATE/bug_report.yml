@@ -1,0 +1,38 @@
+name: Bug report
+description: Something in Origin does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Do not paste real session logs, secrets or personal data**: Origin stores agent sessions, so describe the problem with synthetic data only. Security issues go through [private vulnerability reporting](https://github.com/openlinkos/origin/security/advisories/new), not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Commands you ran (with a fresh, temporary `ORIGIN_HOME` if possible) and their output.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Origin version or commit
+      placeholder: e.g. 0.1.0 or a1b2c3d
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node.js version, and the agent involved (Claude Code, Codex, …) with its version.
+      placeholder: e.g. Windows 11, Node.js 24.21, Claude Code 2.1
+    validations:
+      required: true

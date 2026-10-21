@@ -142,7 +142,7 @@ docs/                                        文档站点（VitePress）
 
 ## 参与贡献
 
-欢迎贡献，尤其是新的来源适配器。开发环境、约定以及如何新增适配器见 [CONTRIBUTING.md](CONTRIBUTING.md)。安全或隐私问题请按 [SECURITY.md](SECURITY.md) 报告。
+欢迎贡献，尤其是新的来源适配器。开发环境、约定以及如何新增适配器见 [CONTRIBUTING.md](CONTRIBUTING.md)。安全或隐私问题请按 [SECURITY.md](SECURITY.md) 报告。所有参与者都应遵守[行为准则](CODE_OF_CONDUCT.md)。
 
 ## 许可证
 
