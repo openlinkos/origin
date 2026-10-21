@@ -2,14 +2,17 @@
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { adapterById, allAdapters, KNOWN_SOURCE_IDS } from '@openlinkos/origin-adapters';
+import { parseListen, parsePublicUrl } from '@openlinkos/origin-admin';
 import {
   correct,
+  createAdminKey,
   createToken,
   type Database,
   dbPath,
   ENTRY_KINDS,
   type Entry,
   type EntryKind,
+  endAdminSessions,
   entryCounts,
   entryHistory,
   entrySources,
@@ -19,6 +22,9 @@ import {
   isEntryForgotten,
   isEntryId,
   isEventForgotten,
+  listAdminKeys,
+  listAdminSessions,
+  listAudit,
   listDevices,
   listEntries,
   listEvents,
@@ -28,10 +34,13 @@ import {
   OriginError,
   openDatabase,
   originHome,
+  parseAdminKeyHashes,
   parseTime,
   planForget,
   rawLocator,
   readRawLine,
+  recordAudit,
+  revokeAdminKey,
   revokeToken,
   searchEntries,
   searchEvents,
@@ -49,7 +58,7 @@ import {
   writeHubConfig,
 } from './hub/config.js';
 import { pushToHub } from './hub/push.js';
-import { createHubServer } from './hub/server.js';
+import { type HubAdminOptions, startHub } from './hub/serve.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
 
 const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
@@ -71,7 +80,10 @@ Usage:
 
 Personal hub:
   origin serve     [--host 127.0.0.1] [--port 7077]      Run this store as a personal hub (MCP over HTTP)
+                   [--admin | --admin-listen <host:port>] [--public-url <url>]   Also serve the admin UI
   origin token     create <name> | list | revoke <name>  Manage the hub's access tokens (run on the hub)
+  origin admin     key create <name> | key list | key revoke <name>   Manage admin UI sign-in keys (run on the hub)
+  origin admin     sessions [--revoke-all] | audit [--limit 50]       Admin UI sessions and the audit log
   origin hub       connect <url> --token <token> [--device <name>] | status | disconnect
   origin push                                            Sync locally, push raw mirrors to the hub, pull tombstones
 
@@ -125,6 +137,8 @@ async function main(argv: string[]): Promise<number> {
         return await cmdServe(ctx, rest);
       case 'token':
         return cmdToken(ctx, rest);
+      case 'admin':
+        return cmdAdmin(ctx, rest);
       case 'hub':
         return await cmdHub(ctx, rest);
       case 'push':
@@ -534,45 +548,102 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
   return 0;
 }
 
+/** `on` / `off` (and the usual spellings) from an environment variable. */
+function envSwitch(name: string): boolean {
+  const value = (process.env[name] ?? '').trim().toLowerCase();
+  if (['', '0', 'off', 'false', 'no'].includes(value)) return false;
+  if (['1', 'on', 'true', 'yes'].includes(value)) return true;
+  throw new OriginError(`${name} must be "on" or "off", not "${process.env[name]}".`);
+}
+
+/**
+ * How to serve the admin UI: flags first, then the environment (ORIGIN_ADMIN, ORIGIN_ADMIN_LISTEN,
+ * ORIGIN_PUBLIC_URL, ORIGIN_CLIENT_IP_HEADER, ORIGIN_ADMIN_KEY_SHA256). Null when it is off.
+ */
+function adminOptions(values: {
+  admin?: boolean;
+  'admin-listen'?: string;
+  'public-url'?: string;
+}): HubAdminOptions | null {
+  const fromFlags = values.admin === true || values['admin-listen'] !== undefined;
+  const mounted = fromFlags ? values.admin === true : envSwitch('ORIGIN_ADMIN');
+  const listen = fromFlags ? values['admin-listen'] : process.env.ORIGIN_ADMIN_LISTEN || undefined;
+  if (mounted && listen) {
+    throw new OriginError(
+      'Serve the admin UI either at /admin on the hub (--admin, ORIGIN_ADMIN=on) or on its own listener (--admin-listen, ORIGIN_ADMIN_LISTEN), not both.',
+    );
+  }
+  if (!mounted && !listen) return null;
+  return {
+    publicUrl: parsePublicUrl(values['public-url'] ?? process.env.ORIGIN_PUBLIC_URL),
+    clientIpHeader: process.env.ORIGIN_CLIENT_IP_HEADER?.trim() || null,
+    envKeyHashes: parseAdminKeyHashes(process.env.ORIGIN_ADMIN_KEY_SHA256),
+    listen: listen ? parseListen(listen) : null,
+  };
+}
+
 async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
   const { values } = parseArgs({
     args,
     options: {
       host: { type: 'string', default: '127.0.0.1' },
       port: { type: 'string', default: '7077' },
+      admin: { type: 'boolean' },
+      'admin-listen': { type: 'string' },
+      'public-url': { type: 'string' },
     },
   });
   const port = Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new OriginError(`Invalid port: ${values.port}`);
   }
-  const server = createHubServer({
+  const admin = adminOptions(values);
+  const hub = await startHub({
     db: ctx.db,
     home: ctx.home,
+    host: values.host,
+    port,
     adapters: allAdapters(),
     version: VERSION,
     log: (m) => console.error(m),
+    admin,
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, values.host, () => resolve());
-  });
-  console.log(`Origin hub listening on http://${values.host}:${port} (data: ${ctx.home})`);
+  console.log(`Origin hub listening on ${hub.url} (data: ${ctx.home})`);
   if (listTokens(ctx.db).every((t) => t.revokedAt !== null)) {
     console.log('No active tokens yet. Create one with: origin token create <name>');
   }
+  if (hub.adminUrl) {
+    const where =
+      admin?.publicUrl && !admin.listen ? `${admin.publicUrl.origin}/admin/` : hub.adminUrl;
+    console.log(`Admin UI at ${where}`);
+    const keys = listAdminKeys(ctx.db).filter((k) => k.revokedAt === null);
+    if (keys.length === 0 && (admin?.envKeyHashes ?? []).length === 0) {
+      console.log('No admin keys yet. Create one with: origin admin key create <name>');
+    }
+  }
   await new Promise<void>((resolve) => {
-    const stop = () => server.close(() => resolve());
+    const stop = () => void hub.close().then(resolve);
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
   });
   return 0;
 }
 
+/** Record an administrative action taken from the command line (ids and counts only). */
+function auditCli(
+  ctx: Ctx,
+  action: string,
+  target: string | null,
+  detail?: Record<string, number>,
+) {
+  recordAudit(ctx.db, { actor: 'cli', channel: 'cli', action, target, detail: detail ?? null });
+}
+
 function cmdToken(ctx: Ctx, args: string[]): number {
   const [action, name] = args;
   if (action === 'create' && name) {
     const token = createToken(ctx.db, name);
+    auditCli(ctx, 'token.create', name);
     console.log(`Token for ${name} (shown once, store it safely):\n\n  ${token}\n`);
     return 0;
   }
@@ -581,6 +652,7 @@ function cmdToken(ctx: Ctx, args: string[]): number {
       console.error(`No active token named ${name}.`);
       return 1;
     }
+    auditCli(ctx, 'token.revoke', name);
     console.log(`Revoked ${name}.`);
     return 0;
   }
@@ -604,6 +676,118 @@ function cmdToken(ctx: Ctx, args: string[]): number {
     return 0;
   }
   console.error('Usage: origin token create <name> | list | revoke <name>');
+  return 2;
+}
+
+const ADMIN_USAGE = `Usage:
+  origin admin key create <name>      Create an admin UI sign-in key (shown once)
+  origin admin key list
+  origin admin key revoke <name>      Disable a key and end its sessions
+  origin admin sessions [--revoke-all]
+  origin admin audit [--limit 50]`;
+
+function cmdAdmin(ctx: Ctx, args: string[]): number {
+  const [area, ...rest] = args;
+  const envHashes = parseAdminKeyHashes(process.env.ORIGIN_ADMIN_KEY_SHA256);
+  if (area === 'key') {
+    const [action, name] = rest;
+    if (action === 'create' && name) {
+      const key = createAdminKey(ctx.db, name);
+      auditCli(ctx, 'admin.key.create', name);
+      console.log(
+        `Admin key ${name} (shown once, store it safely, for example in a password manager):\n\n  ${key}\n\nSign in at <hub>/admin/ with it. Revoke it with: origin admin key revoke ${name}`,
+      );
+      return 0;
+    }
+    if (action === 'revoke' && name) {
+      if (!revokeAdminKey(ctx.db, name)) {
+        console.error(`No active admin key named ${name}.`);
+        return 1;
+      }
+      auditCli(ctx, 'admin.key.revoke', name);
+      console.log(`Revoked admin key ${name} and ended its sessions.`);
+      return 0;
+    }
+    if (action === 'list') {
+      const keys = listAdminKeys(ctx.db);
+      if (keys.length === 0 && envHashes.length === 0) {
+        console.log('No admin keys yet. Create one with: origin admin key create <name>');
+        return 0;
+      }
+      const rows = keys.map((k) => [
+        k.name,
+        fmtDateTime(k.createdAt),
+        fmtDateTime(k.lastUsedAt),
+        k.revokedAt === null ? 'active' : `revoked ${fmtDate(k.revokedAt)}`,
+      ]);
+      for (const h of envHashes)
+        rows.push([`env:${h.slice(0, 8)}`, '—', '—', 'ORIGIN_ADMIN_KEY_SHA256']);
+      console.log(table(rows, ['name', 'created', 'last used', 'status']));
+      return 0;
+    }
+  }
+  if (area === 'sessions') {
+    const { values } = parseArgs({
+      args: rest,
+      options: { 'revoke-all': { type: 'boolean', default: false } },
+    });
+    if (values['revoke-all']) {
+      const n = endAdminSessions(ctx.db);
+      auditCli(ctx, 'sessions.revoke', 'all', { count: n });
+      console.log(`Ended ${count(n, 'admin session')}.`);
+      return 0;
+    }
+    const sessions = listAdminSessions(ctx.db, { envHashes });
+    if (sessions.length === 0) {
+      console.log('No open admin sessions.');
+      return 0;
+    }
+    console.log(
+      table(
+        sessions.map((s) => [
+          s.keyName,
+          fmtDateTime(s.createdAt),
+          fmtDateTime(s.lastSeenAt),
+          s.ip ?? '—',
+          oneLine(s.userAgent ?? '—', 40),
+        ]),
+        ['key', 'signed in', 'last active', 'client', 'user agent'],
+      ),
+    );
+    return 0;
+  }
+  if (area === 'audit') {
+    const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });
+    const limit = values.limit === undefined ? 50 : Number(values.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 10_000) {
+      throw new OriginError(`Invalid limit: ${values.limit}`);
+    }
+    const records = listAudit(ctx.db, { limit });
+    if (records.length === 0) {
+      console.log('The audit log is empty.');
+      return 0;
+    }
+    console.log(
+      table(
+        records.map((r) => [
+          fmtDateTime(r.at),
+          r.actor,
+          r.channel,
+          r.action,
+          r.target ?? '',
+          r.detail
+            ? Object.entries(r.detail)
+                .map(([k, v]) => `${k}=${String(v)}`)
+                .join(' ')
+            : '',
+          r.ip ?? '',
+        ]),
+        ['time', 'actor', 'channel', 'action', 'target', 'detail', 'client'],
+      ),
+    );
+    return 0;
+  }
+  console.error(ADMIN_USAGE);
   return 2;
 }
 

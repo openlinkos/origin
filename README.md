@@ -14,7 +14,7 @@ English | [简体中文](README.zh-CN.md)
 
 Origin archives the sessions your AI agents already write to disk into a single local store. Claude Code and Codex are supported today; Cursor, ZCode, and Grok Build are next. Through one [MCP](https://modelcontextprotocol.io) server, it gives every agent the same memory. Whichever tool you open can look up what you decided last week and why, trace it to the exact original line, and save what it learns for next time. If you work on several machines or with cloud agents, a self-hosted **personal hub** brings them all into the same memory.
 
-> **Status: early development.** Ingestion of Claude Code and Codex sessions, the MCP server, the CLI, and the personal hub work end to end. The other agents' adapters are in progress (see [Roadmap](#roadmap)). Packages are not yet published to npm; install from source.
+> **Status: early development.** Ingestion of Claude Code and Codex sessions, the MCP server, the CLI, and the personal hub with its admin UI work end to end. The other agents' adapters are in progress (see [Roadmap](#roadmap)). Packages are not yet published to npm; install from source.
 
 ## Why
 
@@ -36,6 +36,7 @@ Origin puts **you** at the center instead of the tool:
 - **Incremental, idempotent ingestion.** Only new bytes are read, rewritten files are kept as a new generation, compressed logs (zstd) are read transparently, and concurrent syncs are safe.
 - **A CLI** to browse the timeline, inspect any entry or event down to its original line, correct entries, and forget.
 - **A personal hub** (`origin serve`, or the `ghcr.io/openlinkos/origin` image) that you host yourself. Devices push their sessions with `origin push`, agents on any device reach it through their local `origin mcp`, and cloud agents connect over HTTP with a token.
+- **An admin UI for your hub** (`origin serve --admin`), off by default: an overview of devices and storage, your sessions and entries, search, correcting, and forgetting with a preview, tokens with ready-made connection commands, and an audit log. Pages are rendered on the hub, and you sign in with a key issued on the hub.
 
 ## Supported agents
 
@@ -85,6 +86,7 @@ The full documentation lives in [`docs/`](docs/) and is published at [origin.ope
 - [Getting started](docs/guide/getting-started.md): install, archive your sessions, ask your first question
 - [Connect your agents](docs/guide/connect-agents.md): Claude Code, Codex, Cursor, ZCode, Grok Build, and the MCP tools they get
 - [Personal hub](docs/guide/hub.md): one memory across your machines and cloud agents, self-hosted
+- [Admin UI](docs/guide/admin.md): manage your hub in a browser: enable it, sign in, put it behind TLS, or keep it private
 - [CLI reference](docs/guide/cli.md): every command, with examples and environment variables
 - [Privacy and your data](docs/guide/privacy.md): what Origin stores, how forgetting works, how to remove everything
 - [Architecture](docs/architecture.md): data model, invariants, ingestion, entries, the MCP server, and the hub
@@ -97,10 +99,11 @@ agent session logs ──scan──▶ append-only raw mirror ──deterministi
                                                                                    │      ▲
                                                                                    │   entries · tombstones
                                  agents ◀── MCP server (origin mcp) ───────────────┤
-                                 you    ◀── origin CLI ────────────────────────────┘
+                                 you    ◀── origin CLI ────────────────────────────┤
+                                 you    ◀── admin UI on your hub ──────────────────┘
 ```
 
-Origin is built around five invariants: **provenance**, **sticky forgetting**, **append-only** storage, **your data on your machines**, and a **single entry point** (agents use MCP, people use the CLI). The core never calls a model. The agent that asks a question does the reasoning, and Origin supplies the facts and their sources. Read [docs/architecture.md](docs/architecture.md) for the data model, the ingestion algorithm, the forgetting rules, and the MCP tools.
+Origin is built around five invariants: **provenance**, **sticky forgetting**, **append-only** storage, **your data on your machines**, and a **single entry point** (agents use MCP; people use the CLI or the admin UI of their hub). The core never calls a model. The agent that asks a question does the reasoning, and Origin supplies the facts and their sources. Read [docs/architecture.md](docs/architecture.md) for the data model, the ingestion algorithm, the forgetting rules, and the MCP tools.
 
 ## Privacy
 
@@ -113,7 +116,7 @@ Delivered as small, runnable increments, each usable on its own:
 1. ✅ Core store, Claude Code adapter, and CLI (`sync`, `status`, `timeline`, `search`, `show`, `projects`)
 2. ✅ MCP server, entries, correction, and sticky forgetting; connected to Claude Code
 3. ✅ Codex adapter, including zstd-compressed and archived rollouts
-4. ✅ Personal hub: self-hosted, multi-device, remote MCP
+4. ✅ Personal hub: self-hosted, multi-device, remote MCP, with an admin UI
 5. Cursor adapter
 6. ZCode adapter
 7. Grok Build adapter
@@ -124,7 +127,7 @@ Delivered as small, runnable increments, each usable on its own:
 - The project name is the last segment of the working directory, not derived from the git remote.
 - Forgetting hides data but does not erase it from the raw mirror files.
 - There is no background file watching. The MCP server syncs on demand; otherwise run `origin sync` (or `origin push` with a hub).
-- Curation commands act on the store they run on; remote curation from a device is planned.
+- CLI curation commands act on the store they run on. On a hub, the admin UI curates in a browser; curation from a device's CLI is planned.
 
 ## Project layout
 
@@ -133,6 +136,7 @@ packages/
 ├── core/       @openlinkos/origin-core      storage, ingestion, entries, forgetting, queries
 ├── adapters/   @openlinkos/origin-adapters  per-agent session parsers
 ├── mcp/        @openlinkos/origin-mcp       MCP tools, stdio and HTTP servers, forwarding proxy
+├── admin/      @openlinkos/origin-admin     the hub's admin UI: server-rendered pages and a JSON API
 └── cli/        @openlinkos/origin           the `origin` command and the hub (`origin serve`)
 docs/                                        documentation site (VitePress)
 ├── guide/                                   user guides (English; Chinese under docs/zh/)

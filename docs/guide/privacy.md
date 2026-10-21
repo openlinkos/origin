@@ -31,6 +31,9 @@ A [personal hub](./hub.md) changes where your data lives:
 - **TLS and tokens.** The hub speaks plain HTTP, so put it behind TLS before exposing it. Every request except `/healthz` needs a token. The hub stores only hashes of tokens, and you can revoke a token when a device is lost or retired.
 - **Forgetting reaches every device.** Forget on the hub, through an agent or the CLI on the hub, and each device applies the same tombstones on its next push. Forgotten events stay hidden even if a device pushes them again.
 - **Staging copies.** Each device keeps a local staging copy of its own sessions. Forgetting hides data there too, but as everywhere, the raw mirror files still contain the original lines.
+- **The admin UI shows your sessions.** If you enable the hub's [admin UI](./admin.md), anyone signed in with an admin key can read your archived sessions and entries in a browser. Guard admin keys like the hub itself. The UI never shows the text of forgotten entries or events.
+- **The audit log records clients.** Sign-ins and administrative actions are logged on the hub with the client's address and the browser's user agent, but never with entry or event text.
+- **A CDN sees decrypted traffic.** A CDN or proxy that terminates TLS sees everything that passes through it: what devices push, what agents read, and what the admin UI shows you. Prefer [private access](./admin.md#private-access) to the admin UI if that matters to you.
 
 ## Removing everything
 

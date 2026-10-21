@@ -34,7 +34,7 @@ From source, on any machine with Origin installed:
 origin serve --host 127.0.0.1 --port 7077
 ```
 
-`GET /healthz` reports health without authentication, and `POST /mcp` is the MCP endpoint.
+`GET /healthz` reports health without authentication, and `POST /mcp` is the MCP endpoint. Add `--admin` to also serve the [admin UI](./admin.md) at `/admin`.
 
 ## Put it behind TLS
 
@@ -43,6 +43,7 @@ The hub speaks plain HTTP. Before you expose it beyond localhost, put it behind 
 - Forward `/healthz`, `/mcp`, and `/v1/*` to the hub.
 - Allow request bodies of at least 16 MiB on `/v1/ingest`, which devices use to push session data.
 - Do not cache `/mcp` or `/v1/*`.
+- If you enable the admin UI at `/admin`, also follow [Behind TLS and a CDN](./admin.md#behind-tls-and-a-cdn).
 
 ## Create tokens
 
@@ -54,7 +55,7 @@ origin token list
 origin token revoke laptop
 ```
 
-With Docker, run the same commands through `docker exec`, for example `docker exec origin-hub origin token create laptop`.
+With Docker, run the same commands through `docker exec`, for example `docker exec origin-hub origin token create laptop`. If you enable the [admin UI](./admin.md), you can also create and revoke tokens there, with the connection commands for each new token ready to copy.
 
 The hub stores only a hash of each token, so copy the token when it is printed. If a token is lost or a device is retired, revoke the token. Entries an agent saves through the hub record the agent and the token name as author, for example `claude-code@laptop`.
 
@@ -92,8 +93,12 @@ codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var OR
 
 Forgetting through the hub works as on one machine (see [Privacy and your data](./privacy.md#forgetting)), and it reaches every device. Each device applies the hub's tombstones on its next push, so its local staging copy hides the same entries and events. Forgotten events stay hidden even if a device pushes them again.
 
+## Manage it in a browser
+
+The hub can serve an [admin UI](./admin.md) for you: an overview of your devices and storage, your sessions and entries, search, correcting and forgetting, tokens, and an audit log. It is off by default; enable it with `origin serve --admin` (or `ORIGIN_ADMIN=on`) and sign in with a key from `origin admin key create <name>`.
+
 ## Limitations
 
-- CLI curation commands (`entries`, `show`, `correct`, `forget`, …) act on the store they run against. On a connected device, that is the local staging copy. Curate through your agents, or run the CLI on the hub (`docker exec origin-hub origin …`). Remote curation from a device is planned.
+- CLI curation commands (`entries`, `show`, `correct`, `forget`, …) act on the store they run against. On a connected device, that is the local staging copy. Curate through your agents, in the hub's [admin UI](./admin.md), or by running the CLI on the hub (`docker exec origin-hub origin …`). Curation from a device's CLI is planned.
 - Entries saved on a device before it was connected to a hub stay in that device's local store; they are not migrated.
 - The hub is one store for one person. It does not support multiple users or two-way sync between hubs.

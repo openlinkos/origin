@@ -202,6 +202,9 @@ importers:
       '@openlinkos/origin-adapters':
         specifier: workspace:*
         version: link:../adapters
+      '@openlinkos/origin-admin':
+        specifier: workspace:*
+        version: link:../admin
       '@openlinkos/origin-core':
         specifier: workspace:*
         version: link:../core

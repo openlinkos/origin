@@ -1,5 +1,6 @@
 import http from 'node:http';
 import zlib from 'node:zlib';
+import type { AdminHandler } from '@openlinkos/origin-admin';
 import {
   appendRemote,
   type Database,
@@ -22,6 +23,11 @@ export interface HubOptions {
   adapters: SourceAdapter[];
   version: string;
   log?: (message: string) => void;
+  /**
+   * The admin UI, mounted at /admin when enabled (see docs/architecture.md#admin-ui). It has its own
+   * sign-in; bearer tokens are never checked there, and its sessions are never accepted elsewhere.
+   */
+  admin?: AdminHandler;
 }
 
 class HttpError extends Error {
@@ -33,7 +39,10 @@ class HttpError extends Error {
   }
 }
 
-/** The personal hub: MCP over HTTP for agents, replication for devices (see docs/architecture.md). */
+/**
+ * The personal hub: MCP over HTTP for agents, replication for devices, and optionally the admin UI
+ * for its owner (see docs/architecture.md).
+ */
 export function createHubServer(opts: HubOptions): http.Server {
   return http.createServer((req, res) => {
     handle(opts, req, res).catch((err: unknown) => {
@@ -57,6 +66,12 @@ async function handle(
   if (url.pathname === '/healthz') {
     requireMethod(req, 'GET', 'HEAD');
     sendJson(res, 200, { ok: true, version: opts.version });
+    return;
+  }
+  if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+    // Routed before bearer authentication: /admin accepts only its own session, never a token.
+    if (!opts.admin) throw new HttpError(404, 'Not found.');
+    await opts.admin(req, res, url);
     return;
   }
 

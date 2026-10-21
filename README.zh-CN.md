@@ -14,7 +14,7 @@
 
 各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：目前支持 Claude Code 与 Codex，Cursor、ZCode、Grok Build 将陆续接入。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。如果你在多台机器上工作，或者使用云端 Agent，可以用自托管的**个人中枢**把它们接入同一份记忆。
 
-> **状态：早期开发。** Claude Code 与 Codex 会话的采集、MCP server、CLI 与个人中枢已经端到端可用；其余 Agent 的适配器正在开发（见[路线图](#路线图)）。各包尚未发布到 npm，请从源码安装。
+> **状态：早期开发。** Claude Code 与 Codex 会话的采集、MCP server、CLI 与个人中枢（含管理界面）已经端到端可用；其余 Agent 的适配器正在开发（见[路线图](#路线图)）。各包尚未发布到 npm，请从源码安装。
 
 ## 为什么
 
@@ -36,6 +36,7 @@ Origin 以**人**而不是工具为中心：
 - **增量、幂等的采集**：只读新增字节；源文件被改写时作为新代次保存；透明读取 zstd 压缩的记录；多个进程同时同步也安全。
 - **CLI**：浏览时间线，查看任意条目或事件直到原文行，纠正条目，以及遗忘。
 - **个人中枢**（`origin serve`，或镜像 `ghcr.io/openlinkos/origin`），由你自己托管：各设备用 `origin push` 推送会话，任何设备上的 Agent 通过本地 `origin mcp` 访问它，云端 Agent 则用令牌通过 HTTP 直接连接。
+- **中枢的管理界面**（`origin serve --admin`），默认关闭：设备与存储概览、你的会话和条目、检索、纠正，以及先预览再执行的遗忘、附带现成接入命令的令牌管理，以及审计日志。页面由中枢渲染，用在中枢上签发的密钥登录。
 
 ## 支持的 Agent
 
@@ -85,6 +86,7 @@ Codex、Cursor、ZCode、Grok Build 的接入方式见[接入 Agent](https://ori
 - [快速开始](https://origin.openlinkos.com/zh/guide/getting-started)：安装、归档会话、提出第一个问题
 - [接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)：Claude Code、Codex、Cursor、ZCode、Grok Build，以及它们可用的 MCP 工具
 - [个人中枢](https://origin.openlinkos.com/zh/guide/hub)：自托管，让你所有的机器和云端 Agent 共享一份记忆
+- [管理界面](https://origin.openlinkos.com/zh/guide/admin)：在浏览器中管理中枢：启用、登录、放在 TLS 之后，或保持私有访问
 - [命令参考](https://origin.openlinkos.com/zh/guide/cli)：全部命令，附示例与环境变量
 - [隐私与数据](https://origin.openlinkos.com/zh/guide/privacy)：Origin 保存了什么、遗忘如何生效、如何清除全部数据
 - [架构](https://origin.openlinkos.com/zh/architecture)：数据模型、不变量、采集、条目、MCP server 与中枢
@@ -97,10 +99,11 @@ Agent 会话记录 ──扫描──▶ 只追加的原始镜像 ──确定�
                                                                 │      ▲
                                                                 │   条目 · 遗忘墓碑
                         各 Agent ◀── MCP server（origin mcp）──┤
-                        你       ◀── origin CLI ───────────────┘
+                        你       ◀── origin CLI ───────────────┤
+                        你       ◀── 中枢的管理界面 ───────────┘
 ```
 
-Origin 围绕五条不变量构建：**溯源**、**遗忘粘性**、**只追加**、**你的数据，留在你的机器上**、**单一入口**（Agent 走 MCP，人走 CLI）。内核从不调用模型：提问的 Agent 自己负责推理，Origin 提供事实与来源。数据模型、采集算法、遗忘规则与 MCP 工具见[架构文档](https://origin.openlinkos.com/zh/architecture)。
+Origin 围绕五条不变量构建：**溯源**、**遗忘粘性**、**只追加**、**你的数据，留在你的机器上**、**单一入口**（Agent 走 MCP；人走 CLI 或自己中枢的管理界面）。内核从不调用模型：提问的 Agent 自己负责推理，Origin 提供事实与来源。数据模型、采集算法、遗忘规则与 MCP 工具见[架构文档](https://origin.openlinkos.com/zh/architecture)。
 
 ## 隐私
 
@@ -113,7 +116,7 @@ Agent 会话记录里常有源代码、命令输出，以及你在提示词里�
 1. ✅ 核心存储、Claude Code 适配器与 CLI（`sync`、`status`、`timeline`、`search`、`show`、`projects`）
 2. ✅ MCP server、条目、纠正与遗忘粘性，已接入 Claude Code
 3. ✅ Codex 适配器，支持 zstd 压缩与归档的会话
-4. ✅ 个人中枢：自托管、多设备、远程 MCP
+4. ✅ 个人中枢：自托管、多设备、远程 MCP，附带管理界面
 5. Cursor 适配器
 6. ZCode 适配器
 7. Grok Build 适配器
@@ -124,7 +127,7 @@ Agent 会话记录里常有源代码、命令输出，以及你在提示词里�
 - 项目名取自工作目录的最后一段，而不是由 git remote 推导。
 - 遗忘只是隐藏，不会从原始镜像文件中物理删除。
 - 没有后台文件监听：MCP server 按需同步，其他时候需要运行 `origin sync`（使用中枢时运行 `origin push`）。
-- 管理命令作用于它们所运行的那个库；从设备远程管理中枢已在计划中。
+- CLI 管理命令作用于它们所运行的那个库。在中枢上，可以用管理界面在浏览器中管理；从设备的 CLI 管理中枢已在计划中。
 
 ## 目录结构
 
@@ -133,6 +136,7 @@ packages/
 ├── core/       @openlinkos/origin-core      存储、采集、条目、遗忘、查询
 ├── adapters/   @openlinkos/origin-adapters  各 Agent 的会话解析器
 ├── mcp/        @openlinkos/origin-mcp       MCP 工具、stdio 与 HTTP server、转发代理
+├── admin/      @openlinkos/origin-admin     中枢的管理界面：服务器端渲染的页面与 JSON API
 └── cli/        @openlinkos/origin           origin 命令与中枢（`origin serve`）
 docs/                                        文档站点（VitePress）
 ├── guide/                                   使用指南（英文；中文版在 docs/zh/ 下）

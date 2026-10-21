@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-1312f018
+sourceHash: sha256-f5651028
 ---
 
 # 个人中枢
@@ -38,7 +38,7 @@ curl http://localhost:7077/healthz
 origin serve --host 127.0.0.1 --port 7077
 ```
 
-`GET /healthz` 用于健康检查，不需要鉴权；`POST /mcp` 是 MCP 端点。
+`GET /healthz` 用于健康检查，不需要鉴权；`POST /mcp` 是 MCP 端点。加上 `--admin` 还会在 `/admin` 下提供[管理界面](./admin.md)。
 
 ## 放在 TLS 之后 {#put-it-behind-tls}
 
@@ -47,6 +47,7 @@ origin serve --host 127.0.0.1 --port 7077
 - 把 `/healthz`、`/mcp` 和 `/v1/*` 转发给中枢。
 - `/v1/ingest` 用于设备推送会话数据，请求体上限至少设为 16 MiB。
 - 不要缓存 `/mcp` 和 `/v1/*`。
+- 如果在 `/admin` 下启用了管理界面，还请按[放在 TLS 和 CDN 之后](./admin.md#behind-tls-and-a-cdn)配置。
 
 ## 创建令牌 {#create-tokens}
 
@@ -58,7 +59,7 @@ origin token list
 origin token revoke laptop
 ```
 
-使用 Docker 时，通过 `docker exec` 运行同样的命令，例如 `docker exec origin-hub origin token create laptop`。
+使用 Docker 时，通过 `docker exec` 运行同样的命令，例如 `docker exec origin-hub origin token create laptop`。如果启用了[管理界面](./admin.md)，也可以在那里创建和吊销令牌，每个新令牌的接入命令都已准备好，可以直接复制。
 
 中枢只保存令牌的哈希，所以请在令牌显示时复制下来。令牌丢失或设备退役时，请吊销对应的令牌。Agent 通过中枢保存的条目，会把 Agent 和令牌名一起记为作者，例如 `claude-code@laptop`。
 
@@ -96,8 +97,12 @@ codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var OR
 
 通过中枢遗忘，效果和单机时一样（见[隐私与数据](./privacy.md#forgetting)），而且会同步到每台设备：每台设备在下一次推送时应用中枢的遗忘记录，本地暂存副本会隐藏同样的条目和事件。即使某台设备再次推送，被遗忘的事件也保持隐藏。
 
+## 在浏览器中管理 {#manage-it-in-a-browser}
+
+中枢可以为你提供一个[管理界面](./admin.md)：设备和存储的概览、你的会话和条目、检索、纠正和遗忘、令牌，以及审计日志。它默认关闭；用 `origin serve --admin`（或 `ORIGIN_ADMIN=on`）启用，并用 `origin admin key create <name>` 生成的密钥登录。
+
 ## 限制 {#limitations}
 
-- 命令行的管理命令（`entries`、`show`、`correct`、`forget` 等）作用于它们所运行的那个库。在已接入的设备上，那就是本地暂存副本。请通过 Agent 管理记忆，或在中枢上运行 CLI（`docker exec origin-hub origin …`）。从设备远程管理中枢已在计划中。
+- 命令行的管理命令（`entries`、`show`、`correct`、`forget` 等）作用于它们所运行的那个库。在已接入的设备上，那就是本地暂存副本。请通过 Agent、在中枢的[管理界面](./admin.md)中，或在中枢上运行 CLI（`docker exec origin-hub origin …`）来管理记忆。从设备的 CLI 管理中枢已在计划中。
 - 设备接入中枢之前保存的条目，会留在该设备的本地库里，不会迁移到中枢。
 - 中枢只为一个人提供一个库，不支持多用户，也不支持多个中枢之间的双向同步。

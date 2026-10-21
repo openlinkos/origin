@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-0b963026
+sourceHash: sha256-ab6a3312
 ---
 
 # 命令参考
@@ -18,7 +18,10 @@ origin projects                                        已知的项目名
 origin mcp                                             以 stdio 运行 MCP server（接入中枢后转发到中枢）
 
 origin serve     [--host 127.0.0.1] [--port 7077]      把本库作为个人中枢运行（MCP over HTTP）
+                 [--admin | --admin-listen <host:port>] [--public-url <url>]   同时提供管理界面
 origin token     create <name> | list | revoke <name>  管理中枢的访问令牌（在中枢上运行）
+origin admin     key create <name> | key list | key revoke <name>   管理管理界面的登录密钥（在中枢上运行）
+origin admin     sessions [--revoke-all] | audit [--limit 50]       管理界面的会话与审计日志
 origin hub       connect <url> --token <token> [--device <name>] | status | disconnect
 origin push                                            本地同步、推送原始镜像到中枢、取回遗忘记录
 ```
@@ -88,6 +91,8 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 - 在设备上，`origin hub connect` 保存中枢地址、令牌和设备名（默认为主机名）。`origin push` 可以随时重跑，每次推送都会从上次停下的位置继续。
 - 设备接入后，`origin mcp` 会先推送新的会话记录，再把每次工具调用转发给中枢。
 - 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于它们所运行的那个库。在已接入的设备上，那就是本地暂存副本。
+- `origin serve --admin` 会同时在 `/admin` 下提供[管理界面](./admin.md)；`--admin-listen <host:port>` 则改为在单独的监听地址上提供。在 TLS 之后时，用 `--public-url` 传入中枢的 https 地址；中枢拒绝在回环地址之外通过明文 HTTP 提供管理界面。
+- `origin admin key create <name>` 只打印一次管理密钥（前缀 `oga_`），用它登录管理界面。`origin admin sessions --revoke-all` 让所有会话退出登录，`origin admin audit` 打印审计日志。用 CLI 进行的令牌和管理密钥变更也会记录在其中。
 
 ## 环境变量 {#environment-variables}
 
@@ -100,3 +105,8 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 | `ORIGIN_HUB_URL` | — | 中枢地址，覆盖 `origin hub connect` 的配置 |
 | `ORIGIN_HUB_TOKEN` | — | 中枢令牌，覆盖 `origin hub connect` 的配置 |
 | `ORIGIN_DEVICE` | 主机名 | 本设备在中枢上的名称 |
+| `ORIGIN_ADMIN` | `off` | 设为 `on` 时在 `/admin` 下提供管理界面（`origin serve --admin`） |
+| `ORIGIN_ADMIN_LISTEN` | — | 改为在这个 `host:port` 上提供管理界面（`--admin-listen`） |
+| `ORIGIN_PUBLIC_URL` | — | 中枢的公开 https URL（`--public-url`） |
+| `ORIGIN_CLIENT_IP_HEADER` | — | 由你的代理设置、携带客户端地址的请求头；只有设置了才会被信任 |
+| `ORIGIN_ADMIN_KEY_SHA256` | — | 保存在数据库之外的管理密钥的 SHA-256 哈希，以逗号分隔 |

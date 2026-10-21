@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@openlinkos/origin-adapters": "workspace:*",
+    "@openlinkos/origin-admin": "workspace:*",
     "@openlinkos/origin-core": "workspace:*",
     "@openlinkos/origin-mcp": "workspace:*"
   },
