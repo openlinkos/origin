@@ -19,8 +19,8 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "build": "tsc -b packages/core packages/adapters packages/mcp packages/cli",
-    "clean": "node -e \"for (const p of ['core','adapters','mcp','cli']) require('node:fs').rmSync('packages/'+p+'/dist',{recursive:true,force:true})\"",
+    "build": "tsc -b packages/core packages/adapters packages/mcp packages/admin packages/cli",
+    "clean": "node -e \"for (const p of ['core','adapters','mcp','admin','cli']) require('node:fs').rmSync('packages/'+p+'/dist',{recursive:true,force:true})\"",
     "test": "vitest run",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

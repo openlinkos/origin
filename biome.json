@@ -12,7 +12,8 @@
       "*.ts",
       "*.json",
       "!**/dist",
-      "!**/fixtures"
+      "!**/fixtures",
+      "!packages/admin/assets/*.svg"
     ]
   },
   "formatter": {

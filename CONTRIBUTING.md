@@ -46,7 +46,8 @@ ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtur
 | `packages/core` | Storage, ingestion, entries, forgetting, queries. Depends on no other workspace package |
 | `packages/adapters` | One deterministic parser per agent. Depends only on `core` |
 | `packages/mcp` | MCP tools, servers over stdio and stateless HTTP, and the forwarding proxy. Depends only on `core` (ingestion is injected by the CLI) |
-| `packages/cli` | The `origin` command, including `origin mcp`, the personal hub (`origin serve`), and `origin push` |
+| `packages/admin` | The hub's admin UI: server-rendered pages, a JSON API, a small browser script (`client/`), and static assets (`assets/`). Depends only on `core` |
+| `packages/cli` | The `origin` command, including `origin mcp`, the personal hub (`origin serve`) with its admin UI, and `origin push` |
 
 [docs/architecture.md](docs/architecture.md) explains the data model and the five invariants that every change must preserve.
 
@@ -54,7 +55,7 @@ ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtur
 
 - **TypeScript:** strict mode, ESM, `NodeNext` module resolution. Import relative files with the `.js` extension.
 - **Formatting:** Biome (2-space indent, single quotes, semicolons, trailing commas, 100-column lines). Run `pnpm lint:fix` before committing.
-- **Dependencies:** `core` and `adapters` use only Node built-ins; `mcp` depends on the MCP TypeScript SDK and zod. Open an issue before adding a runtime dependency. Pin all dependencies to exact versions, and reference workspace packages as `workspace:*`.
+- **Dependencies:** `core`, `adapters`, and `admin` use only Node built-ins; `mcp` depends on the MCP TypeScript SDK and zod. Open an issue before adding a runtime dependency. Pin all dependencies to exact versions, and reference workspace packages as `workspace:*`.
 - **No network, no LLM in the core.** `core` and `adapters` must not make network calls or call model APIs.
 - **Language:** code, comments, CLI output, and commit messages are in English. The documentation site is bilingual; see [Bilingual documentation](#bilingual-documentation). `README.zh-CN.md` is a translation of `README.md`; if you change one, update the other or mention it in your pull request so a maintainer can.
 - **Docs follow code:** if a change affects the data model, an invariant, or a public interface, update `docs/architecture.md` and `docs/zh/architecture.md` in the same pull request. Document user-visible changes in the guides (`docs/guide/` and their Chinese versions in `docs/zh/guide/`) and, if they change the quick start, in both READMEs. Record agent format findings in `docs/sources.md` and `docs/zh/sources.md`.
@@ -86,7 +87,7 @@ node -e "const c=require('fs').readFileSync(process.argv[1],'utf8').replace(/\r\
 ## Tests and fixtures
 
 - Tests live in `packages/<name>/test/*.test.ts` and run with Vitest.
-- Adapter parsing and the invariants (provenance, sticky forgetting, append-only, idempotent sync) must be covered by tests. MCP tools are tested end to end with in-memory and HTTP MCP clients (`packages/mcp/test`), and the hub with a real device-to-hub round trip (`packages/cli/test`). Always use temporary `ORIGIN_HOME` directories in tests.
+- Adapter parsing and the invariants (provenance, sticky forgetting, append-only, idempotent sync) must be covered by tests. MCP tools are tested end to end with in-memory and HTTP MCP clients (`packages/mcp/test`), the hub with a real device-to-hub round trip (`packages/cli/test`), and the admin UI through HTTP with its security checks (`packages/admin/test`, and end to end in `packages/cli/test/admin.test.ts`). Always use temporary `ORIGIN_HOME` directories in tests.
 - **Fixtures must be synthetic.** Never commit real session logs, even partial ones. Build fixtures by hand or scrub them thoroughly: replace names, paths, repository URLs, prompts, outputs, tokens, and any other identifying or secret content.
 
 ## Adding a source adapter
@@ -112,7 +113,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) in English:
 <type>(<optional scope>): <imperative summary>
 ```
 
-Types: `feat`, `fix`, `docs`, `refactor`, `test`, `perf`, `build`, `ci`, `chore`. Scopes are package names (`core`, `adapters`, `mcp`, `cli`). Examples: `feat(adapters): add Codex rollout parser`, `fix(core): detect truncated source files`.
+Types: `feat`, `fix`, `docs`, `refactor`, `test`, `perf`, `build`, `ci`, `chore`. Scopes are package names (`core`, `adapters`, `mcp`, `admin`, `cli`), or `docs` and `ci`. Examples: `feat(adapters): add Codex rollout parser`, `fix(core): detect truncated source files`.
 
 Do not add tool-generated attribution trailers (such as `Co-Authored-By` lines for AI assistants).
 

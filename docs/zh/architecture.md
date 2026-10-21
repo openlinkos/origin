@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-e7d3dc1b
+sourceHash: sha256-ddf9cd6e
 ---
 
 # 架构
@@ -40,12 +40,12 @@ sourceHash: sha256-e7d3dc1b
 
 - 把 Claude Code、Codex、Cursor、ZCode、Grok Build 的本地会话归档进同一个只追加的库。
 - 让任何 Agent 都能通过 MCP 检索归档、浏览时间线、把任何回答展开到它的原始来源，并记录持久的条目（记忆 / 知识 / 认知）。
-- 让人通过 `origin` CLI 查看、纠正和遗忘条目；遗忘必须持久生效。
+- 让人通过 `origin` CLI 或自己中枢的管理界面查看、纠正和遗忘条目；遗忘必须持久生效。
 - 一个人常常在多台机器上运行 Agent（笔记本、服务器、云端 Agent）。可选的自托管**个人中枢**把每台设备的会话汇集到一个库中，并为任何地方的 Agent 提供服务。
 
 达成目标的标志是：在你任何一台机器上，从任何一个已接入的 Agent 问“上周在项目 X 里我决定了什么，为什么？”，都能得到附带来源的回答，而且被遗忘的条目永远不会再回来。
 
-**目前明确不做：** 多租户托管（Origin 只服务一个人，每个人运行自己的一份）、由本项目运营的托管服务、端到端加密、副本之间的双向同步、Web 界面、屏幕 / 邮件 / 浏览器采集、知识图谱、向量检索、主动提醒，以及任何对模型 API 的调用。
+**目前明确不做：** 多租户托管（Origin 只服务一个人，每个人运行自己的一份）、由本项目运营的托管服务、端到端加密、副本之间的双向同步、自己中枢上供主人使用的管理界面之外的任何 Web 界面（没有公开页面、没有分享、没有多账户）、屏幕 / 邮件 / 浏览器采集、知识图谱、向量检索、主动提醒，以及任何对模型 API 的调用。
 
 ## 记忆、知识与认知 {#memory-knowledge-and-cognition}
 
@@ -77,6 +77,7 @@ agent session logs on disk ──scan──▶ Raw (append-only mirror)
                                         │
  agents ◀── MCP (stdio): search · timeline · get · sources · remember · correct · forget
  people ◀── CLI `origin`: sync · status · timeline · search · show · entries · correct · forget
+ people ◀── admin UI (hub, /admin): overview · timeline · search · entries · remember · correct · forget · tokens
 ```
 
 使用个人中枢时，每台设备照常在本地采集，并把原始镜像复制到中枢，由中枢用同样的适配器解析。Agent 通过所在设备上的本地 `origin mcp`（它会转发给中枢）访问中枢；云端 Agent 则通过中枢的 HTTP 端点访问：
@@ -96,27 +97,29 @@ device B: logs ─▶ local store ──push raw mirrors──▶ ├─▶ hub 
 2. **遗忘粘性。** 执行 `forget` 之后，条目立即从所有查询中消失，它的来源事件加入一个排除集，此后任何写入都无法让它们复活。
 3. **只追加。** Raw 镜像和事件永远不会被改写。条目通过取代（`supersedes`）来变更，从不原地修改。
 4. **你的数据，留在你的机器上。** 所有数据都存放在你控制的机器上：你的各台设备上的 `~/.origin/`，以及可选的你自己的中枢。Origin 从不调用第三方服务；唯一的网络流量发生在你的设备和你的中枢之间。
-5. **单一入口。** Agent 只通过 MCP（本地 stdio，或中枢的 HTTP 端点）读写；人使用 CLI。中枢的复制 API 在你自己的各个库之间传输原始镜像和遗忘记录，它不是 Agent 的入口。
+5. **单一入口。** 无论来自哪个界面，每一次读写都经过同一组 core 操作：Agent 使用 MCP（本地 stdio，或中枢的 HTTP 端点）；人使用 CLI 或自己中枢的管理界面。中枢的复制 API 在你自己的各个库之间传输原始镜像和遗忘记录，它既不是 Agent 的入口，也不是人的入口。
 
 ## 设计原则 {#design-principles}
 
-- **内核不含 LLM。** Origin 从不调用模型 API。它只负责归档、规范化、建立索引和存储。分析发生在提问的那个 Agent 里——它本身就是一个能力很强的模型。Agent 通过 MCP `remember` 保存它学到的东西；人通过 CLI 纠正和遗忘。如果将来需要周期性的整合，它会作为无头的编码 Agent 任务运行（例如 `claude -p`），而不是直接集成模型 API。这是当前的立场；如果评估表明它力有不逮，尤其是在认知层，可以重新考虑。
+- **内核不含 LLM。** Origin 从不调用模型 API。它只负责归档、规范化、建立索引和存储。分析发生在提问的那个 Agent 里——它本身就是一个能力很强的模型。Agent 通过 MCP `remember` 保存它学到的东西；人通过 CLI 或管理界面纠正和遗忘。如果将来需要周期性的整合，它会作为无头的编码 Agent 任务运行（例如 `claude -p`），而不是直接集成模型 API。这是当前的立场；如果评估表明它力有不逮，尤其是在认知层，可以重新考虑。
 - **确定、容错的适配器。** 每个来源都有一个纯粹、确定性的解析器。Agent 的记录格式变化频繁，所以适配器会记录 Agent 版本，跳过无法解析的行并统计失败次数，绝不中止采集。
 - **以 MCP 作为互通点。** MCP 是所有目标 Agent 唯一共有的接口。其中几个 Agent 还会读取 Claude Code 的 MCP 配置，所以一次注册就能覆盖不止一个 Agent。
+- **小而保守的管理界面。** 中枢的管理界面只供它的主人使用。页面在服务器端由一个对每个值都做转义的模板渲染，外加一点可选的脚本；没有第三方资源，也没有打包工具。CLI 能做的它都能做，但不做任何会破坏不变量的事：不原地编辑，不撤销遗忘，不在屏幕上显示被遗忘的文本。
 - **小而可运行的增量。** 每个来源适配器都单独交付、单独可用；设计只深入到当前增量所需的程度。
 
 ## 包 {#packages}
 
-pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.13。`core` 和 `adapters` 只使用 Node 内置模块；`mcp` 依赖官方的 [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) 和 zod。中枢使用 Node 内置的 `node:http`。
+pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.13。`core`、`adapters` 和 `admin` 只使用 Node 内置模块；`mcp` 依赖官方的 [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) 和 zod。中枢及其管理界面使用 Node 内置的 `node:http`。
 
 | 包 | 路径 | 职责 | 依赖 |
 |---|---|---|---|
-| `@openlinkos/origin-core` | `packages/core` | 存储、schema、采集（本地与远程）、条目、遗忘、令牌、查询 | — |
+| `@openlinkos/origin-core` | `packages/core` | 存储、schema、采集（本地与远程）、条目、遗忘、令牌、管理密钥与会话、审计日志、查询 | — |
 | `@openlinkos/origin-adapters` | `packages/adapters` | 每个来源一个确定性解析器 | core |
 | `@openlinkos/origin-mcp` | `packages/mcp` | MCP 工具；基于 stdio 和无状态 HTTP 的 server；转发代理 | core |
-| `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢）和 `origin push` | core, adapters, mcp |
+| `@openlinkos/origin-admin` | `packages/admin` | 中枢的管理界面：服务器端渲染的页面、JSON API 及其静态资源 | core |
+| `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢）和 `origin push` | core, adapters, mcp, admin |
 
-`core` 不得依赖任何其他包，`mcp` 不得依赖 `adapters`：CLI 以回调的形式把采集注入各个 server，中枢的 HTTP server 位于 CLI 中。适配器实现 `core` 中的 `SourceAdapter` 接口：
+`core` 不得依赖任何其他包，`mcp` 和 `admin` 都不得依赖 `adapters`：CLI 以回调的形式把采集注入各个 server，中枢的 HTTP server 位于 CLI 中，并由它挂载管理界面的请求处理函数。适配器实现 `core` 中的 `SourceAdapter` 接口：
 
 ```ts
 interface SourceAdapter {
@@ -224,7 +227,7 @@ interface SourceAdapter {
 ### 角色 {#roles}
 
 - **设备**：任何有 Agent 会话记录的机器。它照常在本地采集（适配器、原始镜像、游标、改写代次、压缩都保持不变），并运行 `origin push` 进行复制。它的本地库是一个暂存副本。
-- **中枢**：`origin serve` 为 Agent 提供基于 HTTP 的 MCP，为设备提供一个小型复制 API。对 Agent 而言，中枢是唯一的事实来源：检索、时间线、条目和遗忘都在那里进行。
+- **中枢**：`origin serve` 为 Agent 提供基于 HTTP 的 MCP，为设备提供一个小型复制 API，启用后还为它的主人提供一个管理界面。对 Agent 而言，中枢是唯一的事实来源：检索、时间线、条目和遗忘都在那里进行。
 
 ### 复制：原始镜像上行，遗忘记录下行 {#replication-raw-mirrors-up-tombstones-down}
 
@@ -235,7 +238,7 @@ interface SourceAdapter {
 
 ### 访问 {#access}
 
-- 除 `GET /healthz` 外，每个请求都需要 `Authorization: Bearer <token>`。令牌在中枢上创建（`origin token create <name>`），只显示一次，只以 SHA-256 哈希的形式存储，并且可以吊销。每台设备或每个云端 Agent 各用自己的令牌。
+- 发往 `/mcp` 和 `/v1/*` 的每个请求都需要 `Authorization: Bearer <token>`；`/admin` 下的管理界面有自己的登录（见[管理界面](#admin-ui)）。令牌在中枢上创建（`origin token create <name>`），只显示一次，只以 SHA-256 哈希的形式存储，并且可以吊销。每台设备或每个云端 Agent 各用自己的令牌。
 - 中枢使用明文 HTTP。在 localhost 之外开放之前，请把它放在 TLS（反向代理或 CDN）之后。
 - 通过中枢写入的条目会把 Agent 和令牌记为作者，例如 `claude-code@laptop`：Agent 名称来自 MCP 客户端（或转发代理设置的 `X-Origin-Client` 请求头），后缀来自令牌名称。
 
@@ -248,6 +251,8 @@ interface SourceAdapter {
 | `GET /v1/cursors?device=<name>` | 该设备每个文件在中枢上的字节游标 |
 | `POST /v1/ingest` | 追加一个块：JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }`，其中 `data` 为 base64；请求体可以使用 gzip 编码。返回 `200 { bytes, eventsAdded, … }`，偏移量不匹配时返回 `409 { bytes }` |
 | `GET /v1/tombstones?after=<id>` | id 大于 `after` 的遗忘记录，每条都附带它遗忘的条目和排除的事件 |
+| `GET`, `POST /admin/…` | 启用时的管理界面：需要管理员登录的服务器端渲染页面。未启用时返回 404 |
+| `GET`, `POST /admin/api/…` | 管理界面的 JSON API：与页面相同的操作、会话和检查 |
 
 中枢会校验每个字段：设备名必须匹配 `[a-z0-9][a-z0-9._-]{0,62}`，来源必须是已知的适配器，`relPath` 必须是相对路径且不含 `..` 段，因此设备永远无法写到它的镜像目录之外。
 
@@ -256,14 +261,27 @@ interface SourceAdapter {
 - `origin hub connect <url> --token <token> [--device <name>]` 把连接信息保存在 `<ORIGIN_HOME>/hub.json` 中（设备名默认为主机名）。`ORIGIN_HUB_URL`、`ORIGIN_HUB_TOKEN` 和 `ORIGIN_DEVICE` 会覆盖其中的配置。
 - 配置了中枢之后，`origin mcp` 就成为一个**转发代理**：它通过 stdio 提供同样的工具，每次调用前先同步和推送（读取类调用最多每 10 秒一次，`remember` 和 `correct` 之前总会进行），再把调用转发给中枢。Agent 的注册无需改动，Agent 也仍然能引用刚刚说过的内容。
 - 没有本地记录的云端 Agent 直接用 bearer 令牌注册中枢的 `/mcp` URL。
-- 在当前版本中，CLI 管理命令（`entries`、`correct`、`forget` 等）作用于它们所运行的那个库。请通过 Agent 管理记忆，或在中枢上运行 CLI。
+- 在当前版本中，CLI 管理命令（`entries`、`correct`、`forget` 等）作用于它们所运行的那个库。请通过 Agent、中枢的管理界面，或在中枢上运行 CLI 来管理记忆。
+
+### 管理界面 {#admin-ui}
+
+中枢可以为它的主人提供一个 Web 界面。它默认关闭；它是同一个库的一个视图，而不是另一套系统：每个页面、每次 JSON 调用都经过 MCP 和 CLI 所用的同一组 core 操作（不变量 5）。`@openlinkos/origin-admin` 包提供一个请求处理函数，由中枢挂载。
+
+- **提供方式。** `origin serve --admin` 把界面挂载在中枢端口的 `/admin` 下；`origin serve --admin-listen 127.0.0.1:7078` 则改在一个单独的监听地址上提供，通过 SSH 隧道或 `kubectl port-forward` 访问。如果界面会在非回环地址上提供，除非 `--public-url`（`ORIGIN_PUBLIC_URL`）是 https URL，或者是回环主机上的 http URL（例如发布在 `127.0.0.1` 上的容器端口），否则中枢拒绝启动。没有公开 URL 时，界面只响应发往回环主机名的回环连接，这同时也能防御 DNS 重绑定。界面未启用时，`/admin` 返回 404。
+- **登录。** 管理密钥在中枢上用 `origin admin key create <name>` 创建，只显示一次（`oga_…`），以 SHA-256 哈希的形式保存在 `admin_key` 中；也可以通过 `ORIGIN_ADMIN_KEY_SHA256` 提供哈希，便于把配置放在 Git 里。没有首次访问时的设置向导，所以新建的中枢不会被第一个访问到它的人占用。管理密钥和中枢令牌互不接受：`/mcp` 和 `/v1/*` 只接受 bearer 令牌（`ogn_…`），`/admin` 只接受它自己的会话 cookie。
+- **会话。** 会话保存在服务器端的 `admin_session` 中，以会话 id 的哈希为键。会话在 30 分钟没有请求、登录满 12 小时，或者所用密钥被吊销时结束。在 https 公开 URL 之后，cookie 是 `__Host-origin-admin`（Secure、HttpOnly、SameSite=Lax）；在回环 http 上，cookie 是 `origin-admin`（HttpOnly、SameSite=Strict，路径 `/admin`）。创建或吊销令牌、遗忘、结束会话，要求最近 10 分钟内输入过密钥。
+- **请求。** 只有 GET 和 POST，所有写操作都是 POST。POST 需要会话的 CSRF 令牌（表单字段 `_csrf` 或请求头 `X-CSRF-Token`），以及与中枢源相同的 `Origin` 请求头；带有 `Sec-Fetch-Site: cross-site` 的请求会被拒绝。请求体上限为 64 KiB。密钥校验失败的次数受到限制：每个客户端每 10 分钟 10 次，总计每 10 分钟 100 次（返回 429 和 `Retry-After`）；只有设置了 `ORIGIN_CLIENT_IP_HEADER` 时才从该请求头取客户端地址，否则取连接的地址。
+- **响应。** 页面在服务器端由一个对每个插值都做转义的模板渲染；一小段脚本提供一些便利，例如就地加载原始行，但没有页面依赖它。每个响应都带有严格的 Content-Security-Policy（没有内联脚本或样式，启用 Trusted Types 且不允许任何策略）、`Cache-Control: no-store, private`、`Vary: Cookie`，以及防止嵌入、类型嗅探、引用来源泄露和被搜索引擎收录的请求头；在 https 之后还带有 HSTS。没有第三方资源，界面也从不发起外部请求。
+- **能做什么。** 概览（数量统计、设备及其最近推送、存储、解析错误）、令牌（创建：令牌只显示一次，旁边附有现成的接入命令；吊销）、设备、时间线、会话、带溯源链的事件（原始行按需加载，截断到 4,000 个字符；工具事件默认隐藏）、检索、条目及其历史、`correct`（未指定时置信度为 1）、从事件页面 `remember`（引用该事件，作者为 `user`），以及预览之后的 `forget`：请求带上所展示计划的摘要，并再次输入 id；如果计划在此期间发生了变化，就不会遗忘任何内容（409）。
+- **不能做什么。** 编辑或删除事件、原始镜像、条目或遗忘记录；撤销遗忘；显示被遗忘内容的任何文本（遗忘记录和审计日志只保存 id 和数量）；保存没有可见来源的条目；再次显示令牌；创建管理密钥或修改安全设置；执行任意查询，或读取可见事件的镜像行以外的任何文件。
+- **审计日志。** 来自界面的登录和失败尝试（每个客户端在每个时间窗口内合并为一条记录）、令牌变更、写入的条目、遗忘操作和被结束的会话，以及来自 CLI 的令牌和管理密钥变更，都会连同操作者、渠道、客户端地址和 user agent 一起追加到 `audit_log`。详情只含 id 和数量，从不包含文本，因此遗忘保持粘性；触发器拒绝任何更新和删除。
 
 ## 待解决的问题 {#open-questions}
 
 - **低成本的认知。** 如何在没有专门抽取流水线的情况下，构建并维护一个关于这个人的模型？目前由 Agent 在注意到某些东西时自行写入认知条目。这是否足够，仍是一个悬而未决的问题。
 - **与原生记忆互通。** Claude Code、ZCode 和 Grok Build 都维护一个 `MEMORY.md` 索引，外加每条记忆一个 Markdown 文件。与这种布局的双向导入 / 导出已在计划中，但尚未设计。
 - **变更通知。** 文件监听在某些平台上并不可靠。MCP server 按需同步，CLI 则在运行 `origin sync` 时同步；可能仍然需要一个由定期全量扫描兜底的后台监听器，尤其是为了从 Agent 闲置的设备上推送。
-- **远程管理。** 在设备上针对它的中枢运行 `entries`、`correct` 和 `forget`，并保持与本地相同的“预览—确认”流程。
+- **远程管理。** 管理界面已经可以在浏览器中管理中枢上的记忆。在设备的 CLI 上针对它的中枢运行 `entries`、`correct` 和 `forget`，并保持与本地相同的“预览—确认”流程，仍有待解决；设备上只监听回环地址的 `origin ui` 也是如此。
 
 ## 相关工作 {#prior-art}
 

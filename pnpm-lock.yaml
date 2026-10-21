@@ -191,6 +191,12 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/admin:
+    dependencies:
+      '@openlinkos/origin-core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/cli:
     dependencies:
       '@openlinkos/origin-adapters':
