@@ -42,7 +42,7 @@ Origin 以**人**而不是工具为中心：
 | ZCode | 规划中 | ✅ |
 | Grok Build | 规划中 | ✅ |
 
-任何支持 MCP 的 Agent 现在都能查询归档和条目；归档某个 Agent 自己的会话则需要它的适配器。如何为各 Agent 注册 Origin，见[接入 Agent](docs/zh/guide/connect-agents.md)；各 Agent 的会话存储格式见 [docs/sources.md](docs/sources.md)（英文）。
+任何支持 MCP 的 Agent 现在都能查询归档和条目；归档某个 Agent 自己的会话则需要它的适配器。如何为各 Agent 注册 Origin，见[接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)；各 Agent 把会话存放在哪里，见[会话来源](https://origin.openlinkos.com/zh/sources)。
 
 ## 快速开始
 
@@ -71,19 +71,19 @@ claude mcp list         # origin: … ✔ Connected
 
 之后在任意会话里直接问，例如：*「上周在 origin 项目里，关于 schema 迁移我是怎么决定的？为什么？请给出来源。」* Agent 会检索 Origin 并附上事件 id 作答，你可以用 `origin show <id>` 打开原文。遇到值得保留的内容，它会用 `remember` 存成条目。
 
-Codex、Cursor、ZCode、Grok Build 的接入方式见[接入 Agent](docs/zh/guide/connect-agents.md)。
+Codex、Cursor、ZCode、Grok Build 的接入方式见[接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)。
 
 ## 文档
 
 完整文档在 [`docs/`](docs/) 目录中，并发布在 [origin.openlinkos.com](https://origin.openlinkos.com/zh/)：
 
-- [快速开始](docs/zh/guide/getting-started.md)：安装、归档会话、提出第一个问题
-- [接入 Agent](docs/zh/guide/connect-agents.md)：Claude Code、Codex、Cursor、ZCode、Grok Build，以及它们可用的 MCP 工具
-- [个人中枢](docs/zh/guide/hub.md)：自托管，让你所有的机器和云端 Agent 共享一份记忆
-- [命令参考](docs/zh/guide/cli.md)：全部命令与环境变量
-- [隐私与数据](docs/zh/guide/privacy.md)：Origin 保存了什么、遗忘如何生效、如何清除全部数据
-- [架构](docs/architecture.md)（英文）：数据模型、不变量、采集、条目、MCP server 与中枢
-- [会话来源](docs/sources.md)（英文）：各 Agent 的本地会话格式
+- [快速开始](https://origin.openlinkos.com/zh/guide/getting-started)：安装、归档会话、提出第一个问题
+- [接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)：Claude Code、Codex、Cursor、ZCode、Grok Build，以及它们可用的 MCP 工具
+- [个人中枢](https://origin.openlinkos.com/zh/guide/hub)：自托管，让你所有的机器和云端 Agent 共享一份记忆
+- [命令参考](https://origin.openlinkos.com/zh/guide/cli)：全部命令，附示例与环境变量
+- [隐私与数据](https://origin.openlinkos.com/zh/guide/privacy)：Origin 保存了什么、遗忘如何生效、如何清除全部数据
+- [架构](https://origin.openlinkos.com/zh/architecture)：数据模型、不变量、采集、条目、MCP server 与中枢
+- [会话来源](https://origin.openlinkos.com/zh/sources)：各 Agent 的本地会话格式
 
 ## 工作原理
 
@@ -95,11 +95,11 @@ Agent 会话记录 ──扫描──▶ 只追加的原始镜像 ──确定�
                         你       ◀── origin CLI ───────────────┘
 ```
 
-Origin 围绕五条不变量构建：**溯源**、**遗忘粘性**、**只追加**、**你的数据，留在你的机器上**、**单一入口**（Agent 走 MCP，人走 CLI）。内核从不调用模型：提问的 Agent 自己负责推理，Origin 提供事实与来源。数据模型、采集算法、遗忘规则与 MCP 工具见 [docs/architecture.md](docs/architecture.md)（英文）。
+Origin 围绕五条不变量构建：**溯源**、**遗忘粘性**、**只追加**、**你的数据，留在你的机器上**、**单一入口**（Agent 走 MCP，人走 CLI）。内核从不调用模型：提问的 Agent 自己负责推理，Origin 提供事实与来源。数据模型、采集算法、遗忘规则与 MCP 工具见[架构文档](https://origin.openlinkos.com/zh/architecture)。
 
 ## 隐私
 
-Agent 会话记录里常有源代码、命令输出，以及你在提示词里输入的任何内容，有时还包括密钥。Origin 会把它们复制到 `~/.origin`，让它们不受 Agent 自身清理的影响。没有中枢时，Origin 不发起任何网络连接；使用中枢时，数据只在你的设备和你自己的中枢之间传输，中枢应放在 TLS 之后。这些库都没有加密，请像保护原始记录一样保护它们。`origin forget` 可以永久隐藏条目或消息，删除 `~/.origin`（以及中枢的数据，如果有）即可清除全部数据。详见[隐私与数据](docs/zh/guide/privacy.md)。
+Agent 会话记录里常有源代码、命令输出，以及你在提示词里输入的任何内容，有时还包括密钥。Origin 会把它们复制到 `~/.origin`，让它们不受 Agent 自身清理的影响。没有中枢时，Origin 不发起任何网络连接；使用中枢时，数据只在你的设备和你自己的中枢之间传输，中枢应放在 TLS 之后。这些库都没有加密，请像保护原始记录一样保护它们。`origin forget` 可以永久隐藏条目或消息，删除 `~/.origin`（以及中枢的数据，如果有）即可清除全部数据。详见[隐私与数据](https://origin.openlinkos.com/zh/guide/privacy)。
 
 ## 路线图
 
@@ -130,7 +130,7 @@ packages/
 ├── mcp/        @openlinkos/origin-mcp       MCP 工具、stdio 与 HTTP server、转发代理
 └── cli/        @openlinkos/origin           origin 命令与中枢（`origin serve`）
 docs/                                        文档站点（VitePress）
-├── guide/ · zh/guide/                       使用指南（英文 / 中文）
+├── guide/                                   使用指南（英文；中文版在 docs/zh/ 下）
 ├── architecture.md                          设计、数据模型、不变量
 └── sources.md                               各 Agent 的会话格式
 ```

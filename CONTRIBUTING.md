@@ -56,9 +56,32 @@ ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtur
 - **Formatting:** Biome (2-space indent, single quotes, semicolons, trailing commas, 100-column lines). Run `pnpm lint:fix` before committing.
 - **Dependencies:** `core` and `adapters` use only Node built-ins; `mcp` depends on the MCP TypeScript SDK and zod. Open an issue before adding a runtime dependency. Pin all dependencies to exact versions, and reference workspace packages as `workspace:*`.
 - **No network, no LLM in the core.** `core` and `adapters` must not make network calls or call model APIs.
-- **Language:** code, comments, docs, and commit messages are in English. `README.zh-CN.md` is a translation of `README.md`; if you change one, update the other or mention it in your pull request so a maintainer can.
-- **Docs follow code:** if a change affects the data model, an invariant, or a public interface, update `docs/architecture.md` in the same pull request. Document user-visible changes in the guides (`docs/guide/` and their Chinese versions in `docs/zh/guide/`) and, if they change the quick start, in both READMEs. Record agent format findings in `docs/sources.md`.
+- **Language:** code, comments, CLI output, and commit messages are in English. The documentation site is bilingual; see [Bilingual documentation](#bilingual-documentation). `README.zh-CN.md` is a translation of `README.md`; if you change one, update the other or mention it in your pull request so a maintainer can.
+- **Docs follow code:** if a change affects the data model, an invariant, or a public interface, update `docs/architecture.md` and `docs/zh/architecture.md` in the same pull request. Document user-visible changes in the guides (`docs/guide/` and their Chinese versions in `docs/zh/guide/`) and, if they change the quick start, in both READMEs. Record agent format findings in `docs/sources.md` and `docs/zh/sources.md`.
 - **Documentation site:** `docs/` is the [origin.openlinkos.com](https://origin.openlinkos.com) site (VitePress). Links between pages are relative `.md` links; link to repository files outside `docs/` with full GitHub URLs.
+
+## Bilingual documentation
+
+The site is published in English and Simplified Chinese, and the English pages are the source of truth. Every page in `docs/` has a Chinese counterpart at the same path under `docs/zh/` (for example `docs/guide/hub.md` and `docs/zh/guide/hub.md`). A Chinese page keeps:
+
+- **The same headings, in the same order.** Every `##` and `###` heading carries an explicit anchor equal to the id VitePress generates for the English heading, such as `## 环境要求 {#requirements}`, so anchors are identical in both languages. To find the English ids, run `pnpm docs:build` and look at the `id` attributes in `docs/.vitepress/dist/<page>.html`.
+- **The same code blocks.** Commands, identifiers, and CLI output stay as in English; only comments and descriptions may be translated.
+- **Links inside the Chinese site.** Relative `.md` links resolve to Chinese pages, and absolute site links start with `/zh/`. English pages never link into `/zh/`. External links and links to GitHub files stay as they are.
+- **A `sourceHash` frontmatter field** that records which version of the English page it translates: `sha256-` followed by the first 8 hex characters of the SHA-256 of the English file, with CRLF line endings normalized to LF.
+
+```yaml
+---
+sourceHash: sha256-1a2b3c4d
+---
+```
+
+Compute the hash from the repository root, passing the English file:
+
+```bash
+node -e "const c=require('fs').readFileSync(process.argv[1],'utf8').replace(/\r\n/g,'\n');console.log('sha256-'+require('crypto').createHash('sha256').update(c,'utf8').digest('hex').slice(0,8))" docs/guide/cli.md
+```
+
+Change the English page, the Chinese page, and its `sourceHash` in the same pull request. If you cannot write Chinese, change only the English page and say so in the pull request description; a maintainer will push the translation to your branch before merging, so keep "Allow edits by maintainers" enabled.
 
 ## Tests and fixtures
 
@@ -68,7 +91,7 @@ ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtur
 
 ## Adding a source adapter
 
-1. Read the agent's documentation and source (where available), and record the format in `docs/sources.md`, including the version you checked against.
+1. Read the agent's documentation and source (where available), and record the format in `docs/sources.md` and `docs/zh/sources.md`, including the version you checked against.
 2. Create `packages/adapters/src/<id>.ts` that implements `SourceAdapter` from `@openlinkos/origin-core`:
    - `discover()` lists the files to ingest; it must not fail if the agent is not installed.
    - `parseLine()` is a pure, deterministic function from one raw line to events. It throws on malformed input; the ingester counts the failure and moves on.

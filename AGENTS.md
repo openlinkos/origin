@@ -35,10 +35,11 @@ When running the CLI, always point `ORIGIN_HOME` at a fresh temporary directory.
 - **No migrations before the first release.** Edit the schema in `packages/core/src/schema.ts` in place; do not add schema versions or migration code.
 - **Respect dependency direction**: `core` depends on no workspace package; `adapters` and `mcp` depend only on `core`.
 - **Ask before adding runtime dependencies.** `core` and `adapters` use only Node built-ins; `mcp` uses the MCP SDK and zod. Pin all dependencies to exact versions.
-- **Keep design and code in step.** If a change alters the data model, an invariant, or a public interface, update `docs/architecture.md` in the same commit. If code and the design document disagree, raise it rather than silently picking one.
-- **Use English** for code, comments, docs, CLI output, and commit messages. Keep `README.zh-CN.md` in sync with `README.md`.
+- **Keep design and code in step.** If a change alters the data model, an invariant, or a public interface, update `docs/architecture.md` (and `docs/zh/architecture.md`) in the same commit. If code and the design document disagree, raise it rather than silently picking one.
+- **Use English** for code, comments, CLI output, and commit messages. Keep `README.zh-CN.md` in sync with `README.md`.
+- **The documentation site is bilingual; English is the source of truth.** Every page in `docs/` has a Simplified Chinese counterpart at the same path under `docs/zh/` with the same headings in the same order (each h2/h3 with an explicit `{#id}` anchor equal to the id of the English heading), the same code blocks, links that stay inside the Chinese site (relative `.md` links to `docs/zh/` pages, absolute links under `/zh/`), and a `sourceHash` frontmatter field: `sha256-` plus the first 8 hex characters of the SHA-256 of the English file, with CRLF normalized to LF (see CONTRIBUTING.md for a one-liner). Update the Chinese page and its `sourceHash` in the same commit as the English change. English pages never link into `/zh/`.
 - **Only product docs belong in the repo.** Do not add discussion transcripts, iteration logs, or personal notes.
-- **`docs/` is the website** (origin.openlinkos.com). Keep the Chinese guides in `docs/zh/guide/` in step with `docs/guide/`. The site image is built and published to GHCR by `.github/workflows/site.yml`; server and deployment configuration does not belong in this repo.
+- **`docs/` is the website** (origin.openlinkos.com). The site image is built and published to GHCR by `.github/workflows/site.yml`; server and deployment configuration does not belong in this repo.
 
 ## Privacy
 

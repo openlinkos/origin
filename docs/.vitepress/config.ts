@@ -56,7 +56,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: '指南', link: '/zh/guide/getting-started' },
-          { text: '架构（英文）', link: '/architecture' },
+          { text: '架构', link: '/zh/architecture' },
           { text: 'OpenLinkOS', link: 'https://openlinkos.com/zh/' },
         ],
         sidebar: [
@@ -71,10 +71,10 @@ export default defineConfig({
             ],
           },
           {
-            text: '参考（英文）',
+            text: '参考',
             items: [
-              { text: '架构', link: '/architecture' },
-              { text: '会话来源', link: '/sources' },
+              { text: '架构', link: '/zh/architecture' },
+              { text: '会话来源', link: '/zh/sources' },
             ],
           },
         ],

@@ -1,4 +1,5 @@
 ---
+sourceHash: sha256-04d703b6
 layout: home
 
 hero:
@@ -13,8 +14,8 @@ hero:
       text: 快速开始
       link: /zh/guide/getting-started
     - theme: alt
-      text: 工作原理（英文）
-      link: /architecture
+      text: 工作原理
+      link: /zh/architecture
 
 features:
   - title: 跨 Agent、跨机器的同一份记忆
