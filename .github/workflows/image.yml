@@ -43,6 +43,7 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha
+            type=raw,value={{date 'YYYYMMDDHHmmss' tz='UTC'}}-{{sha}}
 
       - name: Build for the smoke test
         uses: docker/build-push-action@v7

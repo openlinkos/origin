@@ -41,6 +41,7 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha
+            type=raw,value={{date 'YYYYMMDDHHmmss' tz='UTC'}}-{{sha}}
 
       - name: Build for the smoke test
         uses: docker/build-push-action@v7
@@ -54,7 +55,7 @@ jobs:
 
       - name: Smoke test
         run: |
-          docker run -d --name site -p 8080:80 site:test
+          docker run -d --name site -p 8080:8080 site:test
           for i in $(seq 1 20); do curl -fs -o /dev/null http://localhost:8080/ && break; sleep 0.5; done
           curl -fsS -o /dev/null http://localhost:8080/
           curl -fsS http://localhost:8080/zh/ | grep -q 'lang="zh-CN"'
