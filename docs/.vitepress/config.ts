@@ -8,9 +8,12 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: false,
   srcExclude: ['**/README.md'],
-  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }]],
+  head: [
+    ['link', { rel: 'icon', href: '/favicon.ico', sizes: '32x32' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
+  ],
   themeConfig: {
-    logo: '/logo.svg',
+    logo: { light: '/logo.svg', dark: '/logo-dark.svg' },
     socialLinks: [{ icon: 'github', link: repo }],
     search: { provider: 'local' },
     footer: {

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-04d703b6
+sourceHash: sha256-64908ec7
 layout: home
 
 hero:
@@ -7,7 +7,8 @@ hero:
   text: 所有 AI Agent 共享的一份记忆
   tagline: 本地优先、跨 Agent 的个人记忆。Origin 归档你的 Agent 会话并支持检索，让每个 Agent 都能回答你决定过什么、为什么，并给出来源。
   image:
-    src: /logo.svg
+    light: /logo.svg
+    dark: /logo-dark.svg
     alt: Origin
   actions:
     - theme: brand

@@ -6,7 +6,8 @@ hero:
   text: One memory for all your AI agents
   tagline: Local-first, cross-agent personal memory. Origin archives your agent sessions, lets you search them, and lets every agent recall what you decided, and why, with sources.
   image:
-    src: /logo.svg
+    light: /logo.svg
+    dark: /logo-dark.svg
     alt: Origin
   actions:
     - theme: brand
