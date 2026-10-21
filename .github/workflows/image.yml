@@ -56,7 +56,9 @@ jobs:
 
       - name: Smoke test
         run: |
-          docker run -d --name hub -p 7077:7077 origin:test
+          # The admin UI on loopback http: the port is published on localhost only.
+          docker run -d --name hub -p 127.0.0.1:7077:7077 \
+            -e ORIGIN_ADMIN=on -e ORIGIN_PUBLIC_URL=http://localhost:7077 origin:test
           for i in $(seq 1 30); do curl -fs http://localhost:7077/healthz && break; sleep 0.5; done
           curl -fsS http://localhost:7077/healthz | grep -q '"ok":true'
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:7077/mcp)" = 401
@@ -67,7 +69,26 @@ jobs:
             -H 'Accept: application/json, text/event-stream' \
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
             | grep -q '"name":"origin"'
+
+          # Admin UI: security headers, sign-in with a key from the CLI, the overview with the session.
+          KEY="$(docker exec hub origin admin key create ci | grep -o 'oga_[A-Za-z0-9_-]*')"
+          HEADERS="$(curl -fsS -D - -o /dev/null http://localhost:7077/admin/login)"
+          echo "$HEADERS" | grep -qi "^content-security-policy: default-src 'none'; script-src 'self'; style-src 'self';"
+          echo "$HEADERS" | grep -qi "trusted-types 'none'"
+          echo "$HEADERS" | grep -qi '^cache-control: no-store, private'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:7077/admin/api/overview)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" http://localhost:7077/admin/api/overview)" = 401
+          curl -fsS -c admin.jar -H 'Origin: http://localhost:7077' -H 'Content-Type: application/json' \
+            -d "{\"key\":\"$KEY\"}" http://localhost:7077/admin/api/login | grep -q '"signedIn":true'
+          curl -fsS -b admin.jar http://localhost:7077/admin/api/overview | grep -q '"activeTokens":1'
           docker rm -f hub
+
+          # Without ORIGIN_ADMIN there is no admin UI.
+          docker run -d --name plain -p 7078:7077 origin:test
+          for i in $(seq 1 30); do curl -fs http://localhost:7078/healthz && break; sleep 0.5; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:7078/admin/)" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:7078/admin/api/overview)" = 404
+          docker rm -f plain
 
       - id: push
         uses: docker/build-push-action@v7

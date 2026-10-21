@@ -1,6 +1,8 @@
 # Origin personal hub: `origin serve` in a container. Mount a volume at /data.
 #   docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data ghcr.io/openlinkos/origin
 #   docker exec origin-hub origin token create laptop
+# Admin UI (off by default): add -e ORIGIN_ADMIN=on -e ORIGIN_PUBLIC_URL=https://hub.example.com, then
+#   docker exec origin-hub origin admin key create me
 FROM node:24-alpine AS build
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /src
@@ -19,6 +21,9 @@ COPY --from=build /src/packages/adapters/package.json packages/adapters/package.
 COPY --from=build /src/packages/adapters/dist packages/adapters/dist
 COPY --from=build /src/packages/mcp/package.json packages/mcp/package.json
 COPY --from=build /src/packages/mcp/dist packages/mcp/dist
+COPY --from=build /src/packages/admin/package.json packages/admin/package.json
+COPY --from=build /src/packages/admin/dist packages/admin/dist
+COPY --from=build /src/packages/admin/assets packages/admin/assets
 COPY --from=build /src/packages/cli/package.json packages/cli/package.json
 COPY --from=build /src/packages/cli/dist packages/cli/dist
 RUN pnpm install --frozen-lockfile --prod --store-dir /tmp/pnpm-store \
