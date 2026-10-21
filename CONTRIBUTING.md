@@ -81,7 +81,7 @@ Compute the hash from the repository root, passing the English file:
 node -e "const c=require('fs').readFileSync(process.argv[1],'utf8').replace(/\r\n/g,'\n');console.log('sha256-'+require('crypto').createHash('sha256').update(c,'utf8').digest('hex').slice(0,8))" docs/guide/cli.md
 ```
 
-Change the English page, the Chinese page, and its `sourceHash` in the same pull request. If you cannot write Chinese, change only the English page and say so in the pull request description; a maintainer will push the translation to your branch before merging, so keep "Allow edits by maintainers" enabled.
+`pnpm docs:build` checks every rule above (the site uses the shared `@openlinkos/vitepress-theme`) and fails with the exact fix, including the `sourceHash` line to paste. Change the English page, the Chinese page, and its `sourceHash` in the same pull request. If you cannot write Chinese, change only the English page and say so in the pull request description; a maintainer will push the translation to your branch before merging, so keep "Allow edits by maintainers" enabled.
 
 ## Tests and fixtures
 

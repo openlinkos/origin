@@ -1,35 +1,24 @@
-import { defineConfig } from 'vitepress';
+import { defineOpenLinkOSConfig } from '@openlinkos/vitepress-theme/config';
 
 const repo = 'https://github.com/openlinkos/origin';
 
-export default defineConfig({
+export default defineOpenLinkOSConfig({
+  brand: 'origin',
+  hostname: 'https://origin.openlinkos.com',
   title: 'Origin',
-  description: 'Local-first, cross-agent personal memory for AI coding agents.',
-  cleanUrls: true,
   lastUpdated: false,
   srcExclude: ['**/README.md'],
-  head: [
-    ['link', { rel: 'icon', href: '/favicon.ico', sizes: '32x32' }],
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
-  ],
   themeConfig: {
-    logo: { light: '/logo.svg', dark: '/logo-dark.svg' },
     socialLinks: [{ icon: 'github', link: repo }],
-    search: { provider: 'local' },
-    footer: {
-      message: 'Released under the MIT License.',
-      copyright: '© 2026 OpenLinkOS',
-    },
   },
   locales: {
     root: {
-      label: 'English',
-      lang: 'en-US',
+      description: 'Local-first, cross-agent personal memory for AI coding agents.',
       themeConfig: {
+        footer: { message: 'Released under the MIT License.' },
         nav: [
           { text: 'Guide', link: '/guide/getting-started' },
           { text: 'Architecture', link: '/architecture' },
-          { text: 'OpenLinkOS', link: 'https://openlinkos.com' },
         ],
         sidebar: [
           {
@@ -53,14 +42,12 @@ export default defineConfig({
       },
     },
     zh: {
-      label: '简体中文',
-      lang: 'zh-CN',
       description: '本地优先、跨 Agent 的个人记忆，服务于 AI 编码 Agent。',
       themeConfig: {
+        footer: { message: '基于 MIT 许可证发布。' },
         nav: [
           { text: '指南', link: '/zh/guide/getting-started' },
           { text: '架构', link: '/zh/architecture' },
-          { text: 'OpenLinkOS', link: 'https://openlinkos.com/zh/' },
         ],
         sidebar: [
           {
@@ -81,12 +68,6 @@ export default defineConfig({
             ],
           },
         ],
-        outline: { label: '本页内容' },
-        docFooter: { prev: '上一页', next: '下一页' },
-        darkModeSwitchLabel: '外观',
-        sidebarMenuLabel: '菜单',
-        returnToTopLabel: '回到顶部',
-        langMenuLabel: '语言',
       },
     },
   },

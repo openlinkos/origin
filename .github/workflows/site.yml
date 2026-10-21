@@ -62,6 +62,15 @@ jobs:
           curl -fsS http://localhost:8080/guide/cli | grep -q 'CLI reference'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/no-such-page)" = 404
           curl -fsSI http://localhost:8080/ | grep -qi '^cache-control: no-cache'
+          # Brand assets, metadata and language detection from @openlinkos/vitepress-theme.
+          curl -fsS -o /dev/null http://localhost:8080/favicon.ico
+          curl -fsS http://localhost:8080/site.webmanifest | grep -q '"icons"'
+          curl -fsS http://localhost:8080/robots.txt | grep -q 'Sitemap: https://origin.openlinkos.com/sitemap.xml'
+          curl -fsS http://localhost:8080/sitemap.xml | grep -q 'hreflang="x-default"'
+          curl -fsS http://localhost:8080/ | grep -q 'hreflang="zh-CN"'
+          curl -fsS http://localhost:8080/ | grep -q 'id="openlinkos-lang"'
+          curl -fsS http://localhost:8080/zh/architecture | grep -q 'lang="zh-CN"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/zh/no-such-page)" = 404
           docker rm -f site
 
       - uses: docker/build-push-action@v7

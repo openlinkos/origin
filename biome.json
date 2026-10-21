@@ -8,6 +8,7 @@
     "includes": [
       "packages/**",
       "docs/.vitepress/config.ts",
+      "docs/.vitepress/theme/**",
       "*.ts",
       "*.json",
       "!**/dist",

@@ -169,6 +169,9 @@ importers:
       '@biomejs/biome':
         specifier: 2.5.15
         version: 2.5.15
+      '@openlinkos/vitepress-theme':
+        specifier: link:../design/packages/vitepress-theme
+        version: link:../design/packages/vitepress-theme
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2
