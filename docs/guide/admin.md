@@ -12,9 +12,9 @@ A [personal hub](./hub.md) can serve a web interface for you, its owner. From a 
 - **Search** across entries and events.
 - **Entries**: browse them with their sources and version history, **correct** an entry (a new version replaces it; the old one stays in the history), and **remember** a new entry from an event page, citing that event. Entries you write are recorded with the author `user`, as with `origin correct`.
 - **Forget** an entry or an event: the UI first shows exactly which entries and events will be forgotten, and you confirm by typing the id. Forgetting works as everywhere else (see [Privacy and your data](./privacy.md#forgetting)) and reaches every device on its next push.
-- **Tombstones**, the **audit log**, and your open **sign-ins**.
+- **Forgotten** (the tombstone each forget operation leaves), the **audit log**, and your open **sign-ins**.
 
-The admin UI is available in English and Simplified Chinese, following your browser's language, with a switch in the header. It follows your system's light or dark mode, also with a switch.
+The admin UI is available in English and Simplified Chinese, following your browser's language, and follows your system's light or dark mode. Both can be switched at the foot of the sidebar, or below the form on the sign-in page.
 
 ## Enable it
 

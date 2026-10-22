@@ -46,7 +46,7 @@ ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtur
 | `packages/core` | Storage, ingestion, entries, forgetting, queries. Depends on no other workspace package |
 | `packages/adapters` | One deterministic parser per agent. Depends only on `core` |
 | `packages/mcp` | MCP tools, servers over stdio and stateless HTTP, and the forwarding proxy. Depends only on `core` (ingestion is injected by the CLI) |
-| `packages/admin` | The hub's admin UI: server-rendered pages, a JSON API, a small browser script (`client/`), and static assets (`assets/`). Depends only on `core` |
+| `packages/admin` | The hub's admin UI: server-rendered pages, a JSON API, a small browser script (`client/`), and static assets (`assets/`). Styled with the OpenLinkOS design system (`@openlinkos/ui`, a dev dependency whose stylesheet, fonts, and icons the build copies into `dist/vendor`). Depends only on `core` |
 | `packages/cli` | The `origin` command, including `origin mcp`, the personal hub (`origin serve`) with its admin UI, and `origin push` |
 
 [docs/architecture.md](docs/architecture.md) explains the data model and the five invariants that every change must preserve.
