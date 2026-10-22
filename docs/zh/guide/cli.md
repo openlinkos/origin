@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-ab6a3312
+sourceHash: sha256-51c22e10
 ---
 
 # 命令参考
@@ -20,7 +20,7 @@ origin mcp                                             以 stdio 运行 MCP serv
 origin serve     [--host 127.0.0.1] [--port 7077]      把本库作为个人中枢运行（MCP over HTTP）
                  [--admin | --admin-listen <host:port>] [--public-url <url>]   同时提供管理界面
 origin token     create <name> | list | revoke <name>  管理中枢的访问令牌（在中枢上运行）
-origin admin     key create <name> | key list | key revoke <name>   管理管理界面的登录密钥（在中枢上运行）
+origin admin     password [--generate]                 设置管理界面的密码，并让所有会话退出登录（在中枢上运行）
 origin admin     sessions [--revoke-all] | audit [--limit 50]       管理界面的会话与审计日志
 origin hub       connect <url> --token <token> [--device <name>] | status | disconnect
 origin push                                            本地同步、推送原始镜像到中枢、取回遗忘记录
@@ -92,7 +92,7 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 - 设备接入后，`origin mcp` 会先推送新的会话记录，再把每次工具调用转发给中枢。
 - 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于它们所运行的那个库。在已接入的设备上，那就是本地暂存副本。
 - `origin serve --admin` 会同时在 `/admin` 下提供[管理界面](./admin.md)；`--admin-listen <host:port>` 则改为在单独的监听地址上提供。在 TLS 之后时，用 `--public-url` 传入中枢的 https 地址；中枢拒绝在回环地址之外通过明文 HTTP 提供管理界面。
-- `origin admin key create <name>` 只打印一次管理密钥（前缀 `oga_`），用它登录管理界面。`origin admin sessions --revoke-all` 让所有会话退出登录，`origin admin audit` 打印审计日志。用 CLI 进行的令牌和管理密钥变更也会记录在其中。
+- `origin admin password` 设置管理界面的密码：在终端中询问两次，不显示你输入的内容；没有终端时从标准输入读取一行。`--generate` 随机生成一个密码，只打印一次。密码至少需要 12 个字符，设置后所有管理会话都会退出登录。中枢第一次在启用管理界面的情况下启动时，会生成一个密码，并在日志中打印一次。`origin admin sessions --revoke-all` 让所有会话退出登录，`origin admin audit` 打印审计日志。用 CLI 进行的令牌和密码变更也会记录在其中。
 
 ## 环境变量 {#environment-variables}
 
@@ -108,5 +108,5 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 | `ORIGIN_ADMIN` | `off` | 设为 `on` 时在 `/admin` 下提供管理界面（`origin serve --admin`） |
 | `ORIGIN_ADMIN_LISTEN` | — | 改为在这个 `host:port` 上提供管理界面（`--admin-listen`） |
 | `ORIGIN_PUBLIC_URL` | — | 中枢的公开 https URL（`--public-url`） |
-| `ORIGIN_CLIENT_IP_HEADER` | — | 由你的代理设置、携带客户端地址的请求头；只有设置了才会被信任 |
-| `ORIGIN_ADMIN_KEY_SHA256` | — | 保存在数据库之外的管理密钥的 SHA-256 哈希，以逗号分隔 |
+| `ORIGIN_CLIENT_IP_HEADER` | — | 由你的代理设置、携带客户端地址的请求头；只有设置了才会被信任，在代理或 CDN 之后必须设置 |
+| `ORIGIN_ADMIN_PASSWORD` | — | 管理界面的密码（至少 12 个字符）；设置后取代用 `origin admin password` 设置的密码 |

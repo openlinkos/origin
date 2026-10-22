@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-3b30f691
+sourceHash: sha256-04f75586
 ---
 
 # 管理界面
@@ -47,38 +47,44 @@ docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data \
 | `ORIGIN_ADMIN` | 设为 `on` 时，在中枢端口的 `/admin` 下提供管理界面，等同于 `--admin` |
 | `ORIGIN_ADMIN_LISTEN` | 管理界面单独监听的 `host:port`，等同于 `--admin-listen` |
 | `ORIGIN_PUBLIC_URL` | 中枢的公开 URL，等同于 `--public-url`；界面里的命令把它当作中枢的地址 |
-| `ORIGIN_CLIENT_IP_HEADER` | 由你的代理设置、携带客户端地址的请求头，例如 `X-Real-IP`；只有设置了才会被信任 |
-| `ORIGIN_ADMIN_KEY_SHA256` | 管理密钥的 SHA-256 哈希，以逗号分隔，用于放在 Git 中的配置（见下文） |
+| `ORIGIN_CLIENT_IP_HEADER` | 由你的代理设置、携带客户端地址的请求头，例如 `X-Real-IP`；只有设置了才会被信任，在代理或 CDN 之后必须设置（见[下文](#behind-tls-and-a-cdn)） |
+| `ORIGIN_ADMIN_PASSWORD` | 管理密码，至少 12 个字符；设置后取代保存在中枢上的密码（见[登录](#sign-in)） |
 
 命令行参数优先于环境变量。在中枢的 `/admin` 下提供和单独监听，二者只能选一种。
 
 ## 登录 {#sign-in}
 
-管理界面没有初始设置页面：新建的中枢不会被第一个访问到它的人占用。请改为在中枢上创建一个管理密钥：
+每个中枢只有一个管理密码，没有用户名。管理界面没有初始设置页面，所以新建的中枢不会被第一个访问到它的人占用。取而代之的是：中枢第一次在启用管理界面的情况下启动时，会生成一个密码并打印到它的日志中，只打印这一次：
 
-```bash
-origin admin key create me          # 只打印一次密钥，以 oga_ 开头
-docker exec origin-hub origin admin key create me   # 使用 Docker 时的相同操作
+```text
+Generated an admin password for the admin UI (shown only this once):
+
+    abcde-fghjk-mnpqr-stvwx
+
+Sign in with it, then set your own with: origin admin password
 ```
 
-打开 `https://hub.example.com/admin/`，用这个密钥登录。请把它存进密码管理器：中枢只保存它的哈希，无法再次显示。管理密钥与设备和 Agent 的令牌是分开的：令牌（`ogn_…`）永远不能登录管理界面，管理密钥也永远不能用于 MCP 或推送。
+使用 Docker 时，用 `docker logs origin-hub` 查看。打开 `https://hub.example.com/admin/`，用它登录，然后在中枢上设置你自己的密码：
 
 ```bash
-origin admin key list
-origin admin key revoke me          # 同时结束所有用它登录的会话
-origin admin sessions               # 打开的会话：密钥、登录时间、客户端
+origin admin password                               # 询问两次，不显示你输入的内容
+docker exec -it origin-hub origin admin password    # 使用 Docker 时的相同操作
+origin admin password --generate                    # 或者随机生成一个，只打印一次
+```
+
+密码至少需要 12 个字符。新密码会立即取代旧密码，并让所有会话退出登录；不需要重启任何东西。忘记密码时，也运行同一个命令。没有终端时，这个命令从标准输入的第一行读取密码，方便脚本通过管道传入，例如 `docker exec -i origin-hub origin admin password < password.txt`。登录表单把它作为一个固定用户名的密码提交，所以浏览器自带的密码管理器可以保存它。
+
+如果想把密码放在部署配置里，例如 Docker Compose 文件或 Kubernetes Secret，请设置 `ORIGIN_ADMIN_PASSWORD`。设置后，它就是管理密码，保存在中枢上的密码会被忽略。它至少要有 12 个字符，否则中枢拒绝启动。要修改它，用新的值重启中枢：中枢会发现变化，并让所有会话退出登录。`origin admin password` 发现这个变量时会提醒你，因为只要这个变量存在，它保存的密码就不起作用。
+
+中枢只在自己的数据库里保存密码的 scrypt 哈希，也从不把它发送给设备。管理密码与设备和 Agent 的令牌是分开的：令牌（`ogn_…`）永远不能登录管理界面，管理密码也永远不能用于 MCP 或推送。
+
+```bash
+origin admin sessions               # 打开的会话：登录时间、最近活动、客户端
 origin admin sessions --revoke-all  # 在所有地方退出登录
 origin admin audit --limit 50       # 最近的管理操作
 ```
 
-如果不想让密钥进入中枢的数据库，例如中枢的配置放在 Git 中，可以自己生成一个密钥，只把它的 SHA-256 哈希交给中枢：
-
-```bash
-KEY="oga_$(node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))")"
-printf %s "$KEY" | sha256sum        # 把十六进制摘要填入 ORIGIN_ADMIN_KEY_SHA256
-```
-
-会话在 30 分钟无活动或登录满 12 小时后结束。创建或吊销令牌、遗忘、让其他会话退出登录时，如果你在最近 10 分钟内没有输入过密钥，界面会要求你再输入一次。
+会话在 30 分钟无活动或登录满 12 小时后结束。创建或吊销令牌、遗忘、让其他会话退出登录时，如果你在最近 10 分钟内没有输入过密码，界面会要求你再输入一次。
 
 ## 放在 TLS 和 CDN 之后 {#behind-tls-and-a-cdn}
 
@@ -88,7 +94,7 @@ printf %s "$KEY" | sha256sum        # 把十六进制摘要填入 ORIGIN_ADMIN_K
 - 对 `/admin` 和 `/admin/*` 跳过缓存。中枢的每个响应都标有 `Cache-Control: no-store, private`，但有些 CDN 会按规则无视它继续缓存。
 - 不要在 `/admin*` 上注入脚本、改写 HTML 或加入统计代码：界面的 Content-Security-Policy 会阻止它们。
 - 用 `--public-url` 传入你在浏览器中打开的地址。每一次表单提交都会对照它检查。
-- 如果代理会设置一个携带真实客户端地址的请求头，请在 `ORIGIN_CLIENT_IP_HEADER` 中写上它的名字，这样登录次数限制和审计日志看到的才是真实地址。只有当中枢除了经过这个代理之外无法被访问时才设置它，否则任何人都可以伪造这个请求头。
+- 把 `ORIGIN_CLIENT_IP_HEADER` 设为代理用来传递真实客户端地址的请求头，例如 `X-Real-IP`，这样登录次数限制和审计日志看到的才是真实地址。不设置时，所有请求看起来都来自代理，所有失败的登录共用同一个限额：任何人只要猜错 10 次，就能把你锁在外面 10 分钟。只有当中枢除了经过这个代理之外无法被访问时才设置它，否则任何人都可以伪造这个请求头。
 
 CDN 会终止 TLS，因此它能看到解密后的流量，包括管理界面展示给你的会话内容。如果你在意这一点，请优先使用私有访问。
 
@@ -118,9 +124,10 @@ docker run -d --name origin-hub -p 127.0.0.1:7077:7077 -v origin-data:/data \
 ## 安全 {#security}
 
 - **数据不外流。** 管理界面不从其他网站加载任何东西，除了访问中枢本身之外也不发起任何请求。它通过与 CLI 和 MCP 相同的操作读写数据，因此溯源和遗忘粘性依然成立。
-- **它永远不做的事。** 它不能编辑或删除事件、原始镜像、条目或遗忘记录，不能撤销遗忘，也从不显示任何被遗忘内容的文本：遗忘记录和审计日志只保留 id 和数量。它不能再次显示令牌，不能创建管理密钥，也不能修改自己的安全设置。这些都只能在中枢的命令行上进行。
-- **请求。** 每一次修改都是一次表单提交，必须带有会话的防伪令牌，并且来自中枢自己的地址；跨站请求会被拒绝。同一个客户端在 10 分钟内登录失败 10 次（所有客户端合计 100 次）后，登录会暂停，界面会告诉你何时可以重试。
+- **它永远不做的事。** 它不能编辑或删除事件、原始镜像、条目或遗忘记录，不能撤销遗忘，也从不显示任何被遗忘内容的文本：遗忘记录只保留目标 id、你填写的原因（如果有）和被移除内容的 id，审计日志只保留 id 和数量。它不能再次显示令牌，不能修改管理密码，也不能修改自己的安全设置。这些都只能在中枢的命令行上进行。
+- **密码。** 中枢只保存它的 scrypt 哈希（N = 2^15、r = 8、p = 3，带随机盐），每次只校验一个尝试，并以恒定时间比较。
+- **请求。** 每一次修改都是一次表单提交，必须带有会话的防伪令牌，并且来自中枢自己的地址；跨站请求会被拒绝。同一个客户端在 10 分钟内登录失败 10 次（所有客户端合计 100 次）后，登录会暂停，界面会告诉你何时可以重试。在代理或 CDN 之后，这需要设置 `ORIGIN_CLIENT_IP_HEADER`（见[放在 TLS 和 CDN 之后](#behind-tls-and-a-cdn)）。
 - **页面。** 显示的所有内容都经过转义，所以包含 HTML 或脚本的会话记录只会以文本形式显示。每个响应都禁止内联脚本、被嵌入、缓存和被搜索引擎收录。
-- **审计日志。** 登录、失败的尝试、令牌变更、写入的条目、遗忘操作和被结束的会话，都会连同时间、密钥名称、客户端地址和浏览器的 user agent 一起记录下来。用 CLI 进行的令牌和管理密钥变更也会被记录。这个日志只增不减；可以在界面中或用 `origin admin audit` 查看。
+- **审计日志。** 登录、失败的尝试、令牌变更、写入的条目、遗忘操作和被结束的会话，都会连同时间、客户端地址和浏览器的 user agent 一起记录下来。用 CLI 进行的令牌和密码变更，以及中枢启动时生成的密码或发现的密码变化，也会被记录，但从不记录密码本身。这个日志只增不减；可以在界面中或用 `origin admin audit` 查看。
 
 请按[安全策略](https://github.com/openlinkos/origin/blob/master/SECURITY.md)私下报告安全问题。

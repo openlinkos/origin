@@ -2,7 +2,10 @@
 #   docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data ghcr.io/openlinkos/origin
 #   docker exec origin-hub origin token create laptop
 # Admin UI (off by default): add -e ORIGIN_ADMIN=on -e ORIGIN_PUBLIC_URL=https://hub.example.com, then
-#   docker exec origin-hub origin admin key create me
+#   sign in with the password printed once by `docker logs origin-hub`, and change it with
+#   docker exec -it origin-hub origin admin password
+# (or set the password with -e ORIGIN_ADMIN_PASSWORD=...). Behind a proxy or CDN, also set
+# ORIGIN_CLIENT_IP_HEADER to its client-address header.
 FROM node:24-alpine AS build
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /src

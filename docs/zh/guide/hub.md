@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-f5651028
+sourceHash: sha256-a8efe1b9
 ---
 
 # 个人中枢
@@ -47,7 +47,7 @@ origin serve --host 127.0.0.1 --port 7077
 - 把 `/healthz`、`/mcp` 和 `/v1/*` 转发给中枢。
 - `/v1/ingest` 用于设备推送会话数据，请求体上限至少设为 16 MiB。
 - 不要缓存 `/mcp` 和 `/v1/*`。
-- 如果在 `/admin` 下启用了管理界面，还请按[放在 TLS 和 CDN 之后](./admin.md#behind-tls-and-a-cdn)配置。
+- 如果在 `/admin` 下启用了管理界面，还请按[放在 TLS 和 CDN 之后](./admin.md#behind-tls-and-a-cdn)配置；尤其要设置 `ORIGIN_CLIENT_IP_HEADER`，否则任何人的失败登录都会算在你头上。
 
 ## 创建令牌 {#create-tokens}
 
@@ -99,7 +99,7 @@ codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var OR
 
 ## 在浏览器中管理 {#manage-it-in-a-browser}
 
-中枢可以为你提供一个[管理界面](./admin.md)：设备和存储的概览、你的会话和条目、检索、纠正和遗忘、令牌，以及审计日志。它默认关闭；用 `origin serve --admin`（或 `ORIGIN_ADMIN=on`）启用，并用 `origin admin key create <name>` 生成的密钥登录。
+中枢可以为你提供一个[管理界面](./admin.md)：设备和存储的概览、你的会话和条目、检索、纠正和遗忘、令牌，以及审计日志。它默认关闭；用 `origin serve --admin`（或 `ORIGIN_ADMIN=on`）启用，并用中枢第一次启动时打印在日志里的密码登录，或者用你通过 `origin admin password` 或 `ORIGIN_ADMIN_PASSWORD` 设置的密码登录。
 
 ## 限制 {#limitations}
 

@@ -43,7 +43,7 @@ The hub speaks plain HTTP. Before you expose it beyond localhost, put it behind 
 - Forward `/healthz`, `/mcp`, and `/v1/*` to the hub.
 - Allow request bodies of at least 16 MiB on `/v1/ingest`, which devices use to push session data.
 - Do not cache `/mcp` or `/v1/*`.
-- If you enable the admin UI at `/admin`, also follow [Behind TLS and a CDN](./admin.md#behind-tls-and-a-cdn).
+- If you enable the admin UI at `/admin`, also follow [Behind TLS and a CDN](./admin.md#behind-tls-and-a-cdn); in particular, set `ORIGIN_CLIENT_IP_HEADER`, or failed sign-ins from anyone count against you.
 
 ## Create tokens
 
@@ -95,7 +95,7 @@ Forgetting through the hub works as on one machine (see [Privacy and your data](
 
 ## Manage it in a browser
 
-The hub can serve an [admin UI](./admin.md) for you: an overview of your devices and storage, your sessions and entries, search, correcting and forgetting, tokens, and an audit log. It is off by default; enable it with `origin serve --admin` (or `ORIGIN_ADMIN=on`) and sign in with a key from `origin admin key create <name>`.
+The hub can serve an [admin UI](./admin.md) for you: an overview of your devices and storage, your sessions and entries, search, correcting and forgetting, tokens, and an audit log. It is off by default; enable it with `origin serve --admin` (or `ORIGIN_ADMIN=on`) and sign in with the password the hub prints to its log on that first start, or one you set with `origin admin password` or `ORIGIN_ADMIN_PASSWORD`.
 
 ## Limitations
 
