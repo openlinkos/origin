@@ -14,7 +14,7 @@ import {
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ADMIN_ROUTES, type AdminOptions, createAdminHandler } from '../src/index.js';
-import { Browser, request } from './helpers.js';
+import { Browser, pageProblems, request } from './helpers.js';
 
 let tmp: string;
 let db: Database;
@@ -89,13 +89,19 @@ describe('guard headers', () => {
   it('serve hashed assets as immutable, and SVG with an inline-style-only policy', async () => {
     const base = await serve();
     const page = await request(`${base}/admin/login`);
+    const kit = /href="(\/admin\/assets\/ui\.[0-9a-f]{10}\.css)"/.exec(page.text)?.[1];
     const css = /href="(\/admin\/assets\/admin\.[0-9a-f]{10}\.css)"/.exec(page.text)?.[1];
     const icon = /href="(\/admin\/assets\/favicon\.[0-9a-f]{10}\.svg)"/.exec(page.text)?.[1];
-    expect(css && icon).toBeTruthy();
-    const cssRes = await request(`${base}${css}`);
-    expect(cssRes.status).toBe(200);
-    expect(cssRes.headers['content-type']).toBe('text/css; charset=utf-8');
-    expect(cssRes.headers['cache-control']).toBe('private, max-age=31536000, immutable');
+    expect(kit && css && icon).toBeTruthy();
+    // The design system's stylesheet comes first; the admin's few additions follow it.
+    expect(page.text.indexOf(kit ?? '')).toBeLessThan(page.text.indexOf(css ?? ''));
+    for (const file of [kit, css]) {
+      const cssRes = await request(`${base}${file}`);
+      expect(cssRes.status).toBe(200);
+      expect(cssRes.headers['content-type']).toBe('text/css; charset=utf-8');
+      expect(cssRes.headers['cache-control']).toBe('private, max-age=31536000, immutable');
+      expect(cssRes.headers['content-security-policy']).toBe(CSP);
+    }
     const svg = await request(`${base}${icon}`);
     expect(svg.headers['content-security-policy']).toBe(
       "default-src 'none'; style-src 'unsafe-inline'; sandbox",
@@ -367,6 +373,62 @@ describe('routes', () => {
   });
 });
 
+describe('pages', () => {
+  it('use the design system with no inline style or script, and inline only the icons they use', async () => {
+    const base = await serve();
+    const anonymous = [await request(`${base}/admin/login`), await request(`${base}/admin/nope`)];
+    const b = new Browser(base);
+    await b.login(PASSWORD);
+    const signedIn = [];
+    for (const p of [
+      '/admin/',
+      '/admin/tokens',
+      '/admin/tokens/new',
+      '/admin/signins',
+      '/admin/entry?id=ent_0000',
+    ]) {
+      signedIn.push(await b.get(p));
+    }
+    clock += 11 * 60_000;
+    signedIn.push(await b.get('/admin/reauth?next=%2Fadmin%2F'));
+    for (const page of [...anonymous, ...signedIn]) {
+      expect(page.text).toContain('</html>');
+      expect(pageProblems(page.text)).toEqual([]);
+    }
+    // One hidden sprite, before everything else in the body, with symbols from the design system.
+    const overview = signedIn[0]?.text ?? '';
+    expect(overview).toMatch(
+      /<body data-brand="origin">\s*<svg xmlns="http:\/\/www.w3.org\/2000\/svg" hidden aria-hidden="true"><symbol id="i-/,
+    );
+    expect(overview).toContain('<use href="#i-layout-dashboard"/>');
+    expect(overview).toMatch(/<symbol id="i-layout-dashboard" viewBox="0 0 24 24"><rect /);
+    // Signed in: the app shell with its navigation, error pages included; signed out (and on
+    // unknown paths, where the session is not read), the sign-in card and never the shell.
+    expect(overview).toContain('<a class="ol-nav-item" href="/admin/" aria-current="page">');
+    expect(signedIn[4]?.status).toBe(404);
+    expect(signedIn[4]?.text).toContain('class="ol-app"');
+    for (const page of anonymous) {
+      expect(page.text).toContain('class="ol-auth-card"');
+      expect(page.text).not.toContain('class="ol-app"');
+    }
+    expect(signedIn[5]?.text).toContain('class="ol-auth-card"');
+  });
+
+  it('switch the theme with POST buttons that show the current choice', async () => {
+    const base = await serve();
+    const auto = await request(`${base}/admin/login`);
+    expect(auto.text).toContain('<html lang="en">');
+    expect(auto.text).toMatch(/name="theme" value="auto" aria-pressed="true"/);
+    const b = new Browser(base);
+    const set = await b.post('/admin/prefs', { theme: 'dark', next: '/admin/login' });
+    expect(set.status).toBe(303);
+    const dark = await b.get('/admin/login');
+    expect(dark.text).toContain('<html lang="en" data-theme="dark">');
+    expect(dark.text).toMatch(/name="theme" value="dark" aria-pressed="true"/);
+    expect(dark.text).toMatch(/name="theme" value="auto" aria-pressed="false"/);
+  });
+});
+
 describe('the admin password', () => {
   it('signs in through a form that password managers recognize', async () => {
     const base = await serve();
@@ -375,12 +437,12 @@ describe('the admin password', () => {
       '<input type="text" name="username" value="origin-admin" autocomplete="username" hidden>',
     );
     expect(page.text).toMatch(
-      /<label>Admin password\s*<input type="password" name="password" required autocomplete="current-password"/,
+      /<label class="ol-label" for="password">Admin password<\/label>\s*<input class="ol-input ol-input-lg" id="password" type="password" name="password" required autocomplete="current-password"/,
     );
     expect(page.text).toContain('origin admin password');
     expect(page.text).not.toMatch(/oga_|admin key/i);
     const zh = await request(`${base}/admin/login`, { headers: { 'Accept-Language': 'zh-CN' } });
-    expect(zh.text).toContain('<label>管理密码');
+    expect(zh.text).toContain('<label class="ol-label" for="password">管理密码</label>');
     expect(zh.text).not.toContain('密钥');
   });
 
@@ -420,7 +482,7 @@ describe('language', () => {
       headers: { 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8' },
     });
     expect(zh.text).toContain('<html lang="zh-CN"');
-    expect(zh.text).toContain('登录 Origin');
+    expect(zh.text).toContain('<h1 class="ol-auth-title">登录</h1>');
     const en = await request(`${base}/admin/login`, {
       headers: { 'Accept-Language': 'zh-CN', Cookie: 'origin-admin-lang=en' },
     });

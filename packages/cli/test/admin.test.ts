@@ -18,7 +18,7 @@ import {
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Browser, request } from '../../admin/test/helpers.js';
+import { Browser, pageProblems, request } from '../../admin/test/helpers.js';
 import type { HubConfig } from '../src/hub/config.js';
 import { pushToHub } from '../src/hub/push.js';
 import { type RunningHub, startHub } from '../src/hub/serve.js';
@@ -158,6 +158,7 @@ describe('admin UI on the hub', () => {
       const res = await b.get(p);
       expect(res.status, p).toBe(200);
       expect(res.text, p).toContain('</html>');
+      expect(pageProblems(res.text), p).toEqual([]);
     }
     const event = await b.get(`/admin/event?id=${encodeURIComponent(USER_EVENT)}`);
     expect(event.text).toContain('帮我检查一下仓库的状态');
@@ -438,6 +439,7 @@ describe('admin UI on the hub', () => {
     ];
     for (const page of pages) {
       expect(page.status).toBe(200);
+      expect(pageProblems(page.text)).toEqual([]);
       expect(page.text).not.toContain('<script>alert');
       expect(page.text).not.toContain('<img src=x');
       expect(page.text).not.toContain('<b onmouseover');

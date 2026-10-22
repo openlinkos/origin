@@ -2,12 +2,29 @@ import { ENTRY_KINDS, type Entry, type EventRow, type ForgetResult } from '@open
 import type { Ctx } from '../context.js';
 import { clip, fmtNumber, time } from '../context.js';
 import { href, html, type SafeHtml } from '../html.js';
+import { icon } from '../icons.js';
 import type { EntryDetail, ForgetPlan } from '../service.js';
-import { eventTag } from './browse.js';
-import { alert, badge, csrfField, pager, renderPage } from './layout.js';
+import { eventCard } from './browse.js';
+import {
+  alert,
+  badge,
+  empty,
+  entryTable,
+  feedItem,
+  kindBadge,
+  linkButton,
+  pageHeader,
+  pager,
+  panel,
+  section,
+  statusBadge,
+  submitButton,
+  tableWrap,
+} from './components.js';
+import { csrfField, renderPage } from './layout.js';
 
-function kindSelect(ctx: Ctx, current: string, withAll: boolean): SafeHtml {
-  return html`<select name="kind">${withAll ? html`<option value="">${ctx.t('filter.all')}</option>` : ''}${ENTRY_KINDS.map(
+function kindSelect(ctx: Ctx, id: string, current: string, withAll: boolean): SafeHtml {
+  return html`<select class="ol-select" id="${id}" name="kind">${withAll ? html`<option value="">${ctx.t('filter.all')}</option>` : ''}${ENTRY_KINDS.map(
     (k) =>
       html`<option value="${k}"${k === current ? html` selected` : ''}>${ctx.t(`kind.${k}`)}</option>`,
   )}</select>`;
@@ -24,40 +41,43 @@ export function entriesPage(
   },
 ): void {
   const t = ctx.t;
+  const filtered = o.filter.kind !== '' || o.filter.project !== '' || o.filter.history;
   renderPage(ctx, 200, {
     title: t('nav.entries'),
     nav: 'entries',
-    body: html`<h1>${t('entries.title')}</h1>
-    <p class="muted">${t('entries.help')}</p>
-    <form method="get" action="/admin/entries" class="filters">
-      <label>${t('entries.kind')} ${kindSelect(ctx, o.filter.kind, true)}</label>
-      <label>${t('filter.project')}
-        <select name="project"><option value="">${t('filter.all')}</option>${o.projects.map(
+    body: html`${pageHeader(ctx, { title: t('entries.title'), description: t('entries.help') })}
+    <form method="get" action="/admin/entries" class="ol-toolbar">
+      <div class="ol-field">
+        <label class="ol-label" for="f-kind">${t('entries.kind')}</label>
+        ${kindSelect(ctx, 'f-kind', o.filter.kind, true)}
+      </div>
+      <div class="ol-field">
+        <label class="ol-label" for="f-project">${t('filter.project')}</label>
+        <select class="ol-select" id="f-project" name="project"><option value="">${t('filter.all')}</option>${o.projects.map(
           (p) =>
             html`<option value="${p}"${p === o.filter.project ? html` selected` : ''}>${p}</option>`,
         )}</select>
-      </label>
-      <label class="check"><input type="checkbox" name="history" value="1"${o.filter.history ? html` checked` : ''}> ${t('entries.history')}</label>
-      <button type="submit">${t('filter.apply')}</button>
+      </div>
+      <label class="ol-check admin-toolbar-check"><input class="ol-checkbox" type="checkbox" name="history" value="1"${o.filter.history ? html` checked` : ''}>${t('entries.history')}</label>
+      <button type="submit" class="ol-btn ol-btn-secondary">${icon(ctx, 'filter')}${t('filter.apply')}</button>
     </form>
-    <section class="card">
     ${
       o.entries.length === 0
-        ? html`<p class="muted">${t('entries.none')}</p>`
-        : html`<table>
-      <thead><tr><th>${t('tokens.created')}</th><th>${t('entries.kind')}</th><th>${t('entries.text')}</th><th class="num">${t('entries.confidence')}</th><th>${t('entries.author')}</th></tr></thead>
-      <tbody>${o.entries.map(
-        (e) => html`<tr>
-          <td>${time(e.createdAt)}</td>
-          <td>${badge(t(`kind.${e.kind}`), e.kind)} ${e.status === 'active' ? '' : badge(t(`status.${e.status}`))}</td>
-          <td><a href="${href('entry', { id: e.id })}">${clip(e.text, 140)}</a></td>
-          <td class="num">${e.confidence}</td>
-          <td>${e.author}</td>
-        </tr>`,
-      )}</tbody>
-    </table>`
+        ? empty(ctx, {
+            icon: 'book-marked',
+            title: filtered ? t('entries.none') : t('entries.noneYet'),
+            text: filtered ? t('sessions.noneFiltered') : t('entries.noneHelp'),
+            action: filtered
+              ? linkButton(ctx, { href: '/admin/entries', label: t('filter.clear'), size: 'sm' })
+              : linkButton(ctx, {
+                  href: '/admin/sessions',
+                  label: t('entries.browseTimeline'),
+                  icon: 'history',
+                  size: 'sm',
+                }),
+          })
+        : entryTable(ctx, o.entries)
     }
-    </section>
     ${pager(ctx, o.page, o.more)}`,
   });
 }
@@ -68,49 +88,68 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
   renderPage(ctx, 200, {
     title: e.id,
     nav: 'entries',
-    body: html`<p class="crumbs"><a href="/admin/entries">${t('nav.entries')}</a></p>
-    <h1 class="mono">${e.id}</h1>
-    <div class="actions">
-      ${e.status === 'active' ? html`<a class="button" href="${href('correct', { id: e.id })}">${t('entry.correct')}</a>` : ''}
-      <a class="button danger" href="${href('forget', { id: e.id })}">${t('entry.forget')}</a>
+    crumbs: [{ label: t('nav.entries'), href: '/admin/entries' }],
+    body: html`${pageHeader(ctx, {
+      title: html`<span class="ol-mono">${e.id}</span>`,
+      badges: html`${kindBadge(ctx, e.kind)}${statusBadge(ctx, e.status)}`,
+      actions: html`${e.status === 'active' ? linkButton(ctx, { href: href('correct', { id: e.id }), label: t('entry.correct'), icon: 'pencil' }) : ''}${linkButton(ctx, { href: href('forget', { id: e.id }), label: t('entry.forget'), icon: 'eraser', variant: 'danger-soft' })}`,
+    })}
+    ${e.status === 'superseded' && e.supersededBy ? html`<div class="admin-notices">${alert(ctx, 'info', html`${t('entry.supersededBy')} <a class="ol-mono" href="${href('entry', { id: e.supersededBy })}">${e.supersededBy}</a>`)}</div>` : ''}
+    <div class="ol-grid ol-grid-sidebar ol-section">
+      <section class="ol-panel">
+        <h2 class="ol-sr-only">${t('entries.text')}</h2>
+        <div class="ol-panel-body admin-text">${e.text}</div>
+      </section>
+      ${panel(ctx, {
+        tag: 'aside',
+        title: t('entry.details'),
+        icon: 'book-marked',
+        body: html`<dl class="ol-dl">
+          <dt>${t('entries.kind')}</dt><dd>${kindBadge(ctx, e.kind)}</dd>
+          <dt>${t('entry.status')}</dt><dd>${t(`status.${e.status}`)}</dd>
+          <dt>${t('entries.confidence')}</dt><dd>${e.confidence}</dd>
+          <dt>${t('entries.author')}</dt><dd>${e.author}</dd>
+          <dt>${t('filter.project')}</dt><dd>${e.project ?? '—'}</dd>
+          <dt>${t('tokens.created')}</dt><dd>${time(e.createdAt)}</dd>
+          ${e.validFrom !== null || e.validTo !== null ? html`<dt>${t('entry.valid')}</dt><dd>${time(e.validFrom)} – ${time(e.validTo)}</dd>` : ''}
+        </dl>`,
+      })}
     </div>
-    ${e.status === 'superseded' && e.supersededBy ? alert('info', html`${t('entry.supersededBy')} <a class="mono" href="${href('entry', { id: e.supersededBy })}">${e.supersededBy}</a>`) : ''}
-    <dl class="kv inline">
-      <dt>${t('entries.kind')}</dt><dd>${badge(t(`kind.${e.kind}`), e.kind)}</dd>
-      <dt>${t('entry.status')}</dt><dd>${t(`status.${e.status}`)}</dd>
-      <dt>${t('entries.confidence')}</dt><dd>${e.confidence}</dd>
-      <dt>${t('entries.author')}</dt><dd>${e.author}</dd>
-      <dt>${t('filter.project')}</dt><dd>${e.project ?? '—'}</dd>
-      <dt>${t('tokens.created')}</dt><dd>${time(e.createdAt)}</dd>
-      ${e.validFrom !== null || e.validTo !== null ? html`<dt>${t('entry.valid')}</dt><dd>${time(e.validFrom)} – ${time(e.validTo)}</dd>` : ''}
-    </dl>
-    <section class="card"><div class="text">${e.text}</div></section>
-    <section class="card">
-      <h2>${t('entry.sources', { n: d.sources.length })}</h2>
-      <ol class="events">${d.sources.map(
-        (s) => html`<li class="event ${s.event.role}">
-        <div class="event-head">${eventTag(s.event)} ${time(s.event.ts)} · ${s.event.source} · ${s.event.project ?? '—'}
-          <a class="mono small" href="${href('event', { id: s.eventId })}">${s.eventId}</a></div>
-        ${s.quote ? html`<blockquote>${s.quote}</blockquote>` : ''}
-        <div class="text">${clip(s.event.text, 600)}</div>
-      </li>`,
-      )}</ol>
-    </section>
+    ${section({
+      title: t('entry.sources', { n: d.sources.length }),
+      description: t('entry.sourcesHelp'),
+      body: html`<ol class="ol-feed">${d.sources.map((s) =>
+        feedItem(ctx, s.event, {
+          body: clip(s.event.text, 600),
+          meta: html`<span>${s.event.project ?? s.event.source}</span>`,
+          extra: s.quote ? html`<blockquote class="admin-quote">${s.quote}</blockquote>` : '',
+        }),
+      )}</ol>`,
+    })}
     ${
       d.history.length > 1
-        ? html`<section class="card">
-      <h2>${t('entry.historyTitle')}</h2>
-      <ol class="history">${d.history.map(
-        (
-          v,
-        ) => html`<li>${v.id === e.id ? html`<strong class="mono">${v.id}</strong>` : html`<a class="mono" href="${href('entry', { id: v.id })}">${v.id}</a>`}
-          · ${time(v.createdAt)} · ${v.author} · ${t(`status.${v.status}`)}
-          <div class="text small">${clip(v.text, 300)}</div></li>`,
-      )}</ol>
-    </section>`
+        ? section({
+            title: t('entry.historyTitle'),
+            body: tableWrap(
+              html`<th>${t('entries.text')}</th><th>${t('entries.author')}</th><th>${t('entry.status')}</th><th>${t('tokens.created')}</th>`,
+              d.history.map(
+                (v) => html`<tr${v.id === e.id ? html` aria-selected="true"` : ''}>
+            <td>${v.id === e.id ? html`<span class="ol-cell-title">${clip(v.text, 300)}</span>` : html`<a class="ol-cell-title" href="${href('entry', { id: v.id })}">${clip(v.text, 300)}</a>`}<span class="ol-cell-sub ol-mono">${v.id}</span></td>
+            <td>${v.author}</td>
+            <td>${v.status === 'active' ? badge(t('status.active'), 'success', { dot: true }) : statusBadge(ctx, v.status)}</td>
+            <td class="ol-nowrap">${time(v.createdAt)}</td>
+          </tr>`,
+              ),
+            ),
+          })
         : ''
     }`,
   });
+}
+
+/** The error of a form, next to its fields. */
+function formError(ctx: Ctx, error: string | undefined): SafeHtml {
+  return error ? alert(ctx, 'danger', error) : html``;
 }
 
 export function correctPage(
@@ -123,21 +162,43 @@ export function correctPage(
   renderPage(ctx, status, {
     title: t('correct.title'),
     nav: 'entries',
-    body: html`<p class="crumbs"><a href="${href('entry', { id: e.id })}">${e.id}</a></p>
-    <h1>${t('correct.title')}</h1>
-    <p class="muted">${t('correct.help')}</p>
-    <section class="card"><div class="text">${e.text}</div></section>
-    ${o.error ? alert('error', o.error) : ''}
-    <form method="post" action="/admin/correct" class="stack card">
-      ${csrfField(ctx)}
-      <input type="hidden" name="id" value="${e.id}">
-      <label>${t('entries.text')}<textarea name="text" rows="5" required maxlength="20000">${o.text ?? e.text}</textarea></label>
-      <div class="row">
-        <label>${t('entries.kind')} ${kindSelect(ctx, o.kind ?? e.kind, false)}</label>
-        <label>${t('entries.confidence')} <input type="number" name="confidence" min="0" max="1" step="0.05" value="${o.confidence ?? '1'}"></label>
-      </div>
-      <button type="submit" class="primary">${t('correct.submit')}</button>
-    </form>`,
+    crumbs: [
+      { label: t('nav.entries'), href: '/admin/entries' },
+      { label: e.id, href: href('entry', { id: e.id }) },
+    ],
+    body: html`${pageHeader(ctx, { title: t('correct.title'), description: t('correct.help') })}
+    <div class="ol-grid ol-grid-2">
+      <form method="post" action="/admin/correct" class="ol-form">
+        ${formError(ctx, o.error)}
+        ${csrfField(ctx)}
+        <input type="hidden" name="id" value="${e.id}">
+        <div class="ol-field">
+          <label class="ol-label" for="text">${t('entries.text')}</label>
+          <textarea class="ol-textarea" id="text" name="text" rows="5" required maxlength="20000">${o.text ?? e.text}</textarea>
+        </div>
+        <div class="ol-grid ol-grid-2">
+          <div class="ol-field">
+            <label class="ol-label" for="kind">${t('entries.kind')}</label>
+            ${kindSelect(ctx, 'kind', o.kind ?? e.kind, false)}
+          </div>
+          <div class="ol-field">
+            <label class="ol-label" for="confidence">${t('entries.confidence')}</label>
+            <input class="ol-input" type="number" id="confidence" name="confidence" min="0" max="1" step="0.05" value="${o.confidence ?? '1'}">
+          </div>
+        </div>
+        <div class="ol-form-actions">
+          ${submitButton(ctx, { label: t('correct.submit') })}
+          ${linkButton(ctx, { href: href('entry', { id: e.id }), label: t('action.cancel'), variant: 'ghost' })}
+        </div>
+      </form>
+      ${panel(ctx, {
+        tag: 'aside',
+        title: t('correct.current'),
+        icon: 'book-marked',
+        badge: kindBadge(ctx, e.kind),
+        body: html`<div class="admin-text">${e.text}</div>`,
+      })}
+    </div>`,
   });
 }
 
@@ -158,25 +219,44 @@ export function rememberPage(
   renderPage(ctx, status, {
     title: t('remember.title'),
     nav: 'entries',
-    body: html`<p class="crumbs"><a href="${href('event', { id: e.id })}">${e.id}</a></p>
-    <h1>${t('remember.title')}</h1>
-    <p class="muted">${t('remember.help')}</p>
-    <section class="card">
-      <div class="event-head">${eventTag(e)} ${time(e.ts)} · ${e.source} · ${e.project ?? '—'}</div>
-      <div class="text">${clip(e.text, 2000)}</div>
-    </section>
-    ${o.error ? alert('error', o.error) : ''}
-    <form method="post" action="/admin/remember" class="stack card">
-      ${csrfField(ctx)}
-      <input type="hidden" name="event" value="${e.id}">
-      <label>${t('entries.kind')} ${kindSelect(ctx, o.kind ?? 'memory', false)}</label>
-      <p class="muted small">${t('remember.kinds')}</p>
-      <label>${t('entries.text')}<textarea name="text" rows="4" required maxlength="20000" placeholder="${t('remember.textPlaceholder')}">${o.text ?? ''}</textarea></label>
-      <label>${t('remember.quote')}<input type="text" name="quote" value="${o.quote ?? ''}" maxlength="2000"></label>
-      <p class="muted small">${t('remember.quoteHelp')}</p>
-      <label>${t('entries.confidence')} <input type="number" name="confidence" min="0" max="1" step="0.05" value="${o.confidence ?? '1'}"></label>
-      <button type="submit" class="primary">${t('remember.submit')}</button>
-    </form>`,
+    crumbs: [
+      { label: t('nav.sessions'), href: '/admin/sessions' },
+      { label: e.id, href: href('event', { id: e.id }) },
+    ],
+    body: html`${pageHeader(ctx, { title: t('remember.title'), description: t('remember.help') })}
+    <div class="ol-grid ol-grid-2">
+      <form method="post" action="/admin/remember" class="ol-form">
+        ${formError(ctx, o.error)}
+        ${csrfField(ctx)}
+        <input type="hidden" name="event" value="${e.id}">
+        <div class="ol-field">
+          <label class="ol-label" for="kind">${t('entries.kind')}</label>
+          ${kindSelect(ctx, 'kind', o.kind ?? 'memory', false)}
+          <p class="ol-hint">${t('remember.kinds')}</p>
+        </div>
+        <div class="ol-field">
+          <label class="ol-label" for="text">${t('entries.text')}</label>
+          <textarea class="ol-textarea" id="text" name="text" rows="4" required maxlength="20000" placeholder="${t('remember.textPlaceholder')}">${o.text ?? ''}</textarea>
+        </div>
+        <div class="ol-field">
+          <label class="ol-label" for="quote">${t('remember.quote')}</label>
+          <input class="ol-input" type="text" id="quote" name="quote" value="${o.quote ?? ''}" maxlength="2000" aria-describedby="quote-hint">
+          <p class="ol-hint" id="quote-hint">${t('remember.quoteHelp')}</p>
+        </div>
+        <div class="ol-field">
+          <label class="ol-label" for="confidence">${t('entries.confidence')}</label>
+          <input class="ol-input admin-input-short" type="number" id="confidence" name="confidence" min="0" max="1" step="0.05" value="${o.confidence ?? '1'}">
+        </div>
+        <div class="ol-form-actions">
+          ${submitButton(ctx, { label: t('remember.submit'), icon: 'bookmark' })}
+          ${linkButton(ctx, { href: href('event', { id: e.id }), label: t('action.cancel'), variant: 'ghost' })}
+        </div>
+      </form>
+      <section>
+        <h2 class="ol-section-title admin-heading">${t('remember.source')}</h2>
+        ${eventCard(ctx, e)}
+      </section>
+    </div>`,
   });
 }
 
@@ -188,48 +268,53 @@ export function forgetPage(
   const t = ctx.t;
   const plan = o.plan?.plan;
   const nothing = plan !== undefined && plan.entries.length === 0 && plan.events.length === 0;
+  const idList = (ids: string[], path: 'entry' | 'event') =>
+    html`<ul class="admin-ids">${ids.map((id) => html`<li><a class="ol-mono" href="${href(path, { id })}">${id}</a></li>`)}</ul>`;
   renderPage(ctx, status, {
     title: t('forget.title'),
-    nav: 'entries',
-    body: html`<h1>${t('forget.title')}</h1>
-    ${o.error ? alert('error', o.error) : ''}
+    nav: 'tombstones',
+    body: html`${pageHeader(ctx, {
+      title: html`${t('forget.title')} <span class="ol-mono">${o.id}</span>`,
+      description: t('forget.rules'),
+    })}
+    ${o.error ? html`<div class="admin-notices">${alert(ctx, 'danger', o.error)}</div>` : ''}
     ${
       !plan
         ? ''
         : nothing
-          ? alert('info', t('forget.already', { id: o.id }))
-          : html`${alert('warn', t('forget.warning'))}
-    <section class="card">
-      <h2>${t('forget.summary', { entries: plan.entries.length, events: plan.events.length })}</h2>
-      <p class="muted">${t('forget.rules')}</p>
-      ${
-        plan.entries.length > 0
-          ? html`<h3>${t('forget.entries')}</h3><ul class="ids">${plan.entries.map(
-              (id) => html`<li><a class="mono" href="${href('entry', { id })}">${id}</a></li>`,
-            )}</ul>`
-          : ''
-      }
-      ${
-        plan.events.length > 0
-          ? html`<h3>${t('forget.events')}</h3><ul class="ids">${plan.events.map(
-              (id) => html`<li><a class="mono" href="${href('event', { id })}">${id}</a></li>`,
-            )}</ul>`
-          : ''
-      }
-    </section>
-    <form method="post" action="/admin/forget" class="stack card" data-confirm="${o.id}">
-      ${csrfField(ctx)}
-      <input type="hidden" name="id" value="${o.id}">
-      <input type="hidden" name="digest" value="${o.plan?.digest ?? ''}">
-      <label>${t('forget.reason')}<input type="text" name="reason" maxlength="500" value="${o.reason ?? ''}" autocomplete="off"></label>
-      <p class="muted small">${t('forget.reasonHelp')}</p>
-      <label>${t('forget.confirmLabel')} <code class="mono">${o.id}</code>
-        <input type="text" name="confirm" required autocomplete="off" spellcheck="false">
-      </label>
-      <button type="submit" class="danger">${t('forget.submit')}</button>
-    </form>`
-    }
-    <p><a href="/admin/">${t('action.cancel')}</a></p>`,
+          ? html`<div class="ol-stack">${alert(ctx, 'info', t('forget.already', { id: o.id }))}<div>${linkButton(ctx, { href: '/admin/', label: t('nav.backToOverview') })}</div></div>`
+          : panel(ctx, {
+              danger: true,
+              title: t('forget.summary', {
+                entries: plan.entries.length,
+                events: plan.events.length,
+              }),
+              icon: 'triangle-alert',
+              body: html`<div class="ol-stack">
+        <p>${t('forget.warning')}</p>
+        ${plan.entries.length > 0 ? html`<div><h3 class="ol-heading-sm">${t('forget.entries')}</h3>${idList(plan.entries, 'entry')}</div>` : ''}
+        ${plan.events.length > 0 ? html`<div><h3 class="ol-heading-sm">${t('forget.events')}</h3>${idList(plan.events, 'event')}</div>` : ''}
+        <form method="post" action="/admin/forget" class="ol-form" data-confirm="${o.id}">
+          ${csrfField(ctx)}
+          <input type="hidden" name="id" value="${o.id}">
+          <input type="hidden" name="digest" value="${o.plan?.digest ?? ''}">
+          <div class="ol-field">
+            <label class="ol-label" for="reason">${t('forget.reason')}</label>
+            <input class="ol-input" type="text" id="reason" name="reason" maxlength="500" value="${o.reason ?? ''}" autocomplete="off" aria-describedby="reason-hint">
+            <p class="ol-hint" id="reason-hint">${t('forget.reasonHelp')}</p>
+          </div>
+          <div class="ol-field">
+            <label class="ol-label" for="confirm">${t('forget.confirmLabel')} <code>${o.id}</code></label>
+            <input class="ol-input ol-input-mono" type="text" id="confirm" name="confirm" required autocomplete="off" spellcheck="false">
+          </div>
+          <div class="ol-form-actions">
+            ${submitButton(ctx, { label: t('forget.submit'), icon: 'eraser', variant: 'danger' })}
+            ${linkButton(ctx, { href: '/admin/', label: t('action.cancel'), variant: 'ghost' })}
+          </div>
+        </form>
+      </div>`,
+            })
+    }`,
   });
 }
 
@@ -238,9 +323,13 @@ export function forgottenPage(ctx: Ctx, r: ForgetResult): void {
   renderPage(ctx, 200, {
     title: t('forget.doneTitle'),
     nav: 'tombstones',
-    body: html`<h1>${t('forget.doneTitle')}</h1>
-    ${alert('ok', t('forget.done', { entries: fmtNumber(r.entries.length, ctx.lang), events: fmtNumber(r.events.length, ctx.lang), tombstone: r.tombstoneId ?? '—' }))}
-    <p>${t('forget.propagates')}</p>
-    <p><a href="/admin/tombstones">${t('nav.tombstones')}</a> · <a href="/admin/">${t('nav.backToOverview')}</a></p>`,
+    body: html`${pageHeader(ctx, { title: t('forget.doneTitle'), description: t('forget.propagates') })}
+    <div class="ol-stack">
+      ${alert(ctx, 'success', t('forget.done', { entries: fmtNumber(r.entries.length, ctx.lang), events: fmtNumber(r.events.length, ctx.lang), tombstone: r.tombstoneId ?? '—' }))}
+      <div class="ol-cluster">
+        ${linkButton(ctx, { href: '/admin/tombstones', label: t('nav.tombstones'), icon: 'eraser' })}
+        ${linkButton(ctx, { href: '/admin/', label: t('nav.backToOverview'), variant: 'ghost' })}
+      </div>
+    </div>`,
   });
 }

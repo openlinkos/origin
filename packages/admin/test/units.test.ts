@@ -1,14 +1,16 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { PACKAGE_ROOT } from '../src/assets.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { Assets, PACKAGE_ROOT, vendorFile } from '../src/assets.js';
 import { checkAdminExposure, parseListen, parsePublicUrl } from '../src/config.js';
 import { escapeHtml, href, html, raw } from '../src/html.js';
 import { safeNext } from '../src/http.js';
 import { en } from '../src/i18n/en.js';
 import { negotiateLang, translator } from '../src/i18n/index.js';
 import { zh } from '../src/i18n/zh.js';
+import { ICON_NAMES } from '../src/icons.js';
 import { LoginLimiter } from '../src/ratelimit.js';
 
 describe('html', () => {
@@ -81,13 +83,91 @@ describe('brand', () => {
         read(path.join(brand, file)),
       );
     }
-    const css = read(path.join(PACKAGE_ROOT, 'assets', 'admin.css'));
+    // The pages take their accent from the design system's Origin brand (data-brand="origin").
+    const kit = read(vendorFile('ui.css'));
+    const origin = /\[data-brand="origin"\]\s*\{([^}]*)\}/.exec(kit)?.[1] ?? '';
     const brands = JSON.parse(read(path.join(theme, 'dist', 'brand', 'brands.json'))) as Record<
       string,
       { colors: { mark: { light: string; dark: string } } }
     >;
-    expect(css).toContain(`--accent: ${brands.origin?.colors.mark.light}`);
-    expect(css).toContain(`--accent: ${brands.origin?.colors.mark.dark}`);
+    const mark = brands.origin?.colors.mark;
+    expect(origin).toContain(
+      `--ol-palette-accent-mark: light-dark(${mark?.light}, ${mark?.dark});`,
+    );
+  });
+
+  it('adds to the design system with its tokens only, never literal colours', () => {
+    const css = fs.readFileSync(path.join(PACKAGE_ROOT, 'assets', 'admin.css'), 'utf8');
+    const rules = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(rules).not.toMatch(/#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab|lab|lch)\(/i);
+    expect(rules).not.toMatch(/@import|url\(/i);
+    expect(rules).toContain('var(--ol-');
+  });
+});
+
+describe('assets', () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  /** A package root with the given design system files, next to the admin's own assets. */
+  function fakeRoot(vendor: Record<string, string>): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-admin-assets-'));
+    roots.push(root);
+    fs.cpSync(path.join(PACKAGE_ROOT, 'assets'), path.join(root, 'assets'), { recursive: true });
+    for (const [file, body] of Object.entries(vendor)) {
+      fs.mkdirSync(path.dirname(path.join(root, 'dist', 'vendor', file)), { recursive: true });
+      fs.writeFileSync(path.join(root, 'dist', 'vendor', file), body);
+    }
+    return root;
+  }
+
+  it('has every icon the pages use in the design system', () => {
+    const assets = new Assets();
+    expect(assets.iconViewBox).toBe('0 0 24 24');
+    for (const name of ICON_NAMES)
+      expect(assets.icon(name), name).toMatch(
+        /^<(path|circle|rect|line|polyline|polygon|ellipse) /,
+      );
+  });
+
+  it('refuses icons that are more than plain shapes', () => {
+    const icons = (body: string) =>
+      JSON.stringify({ lucide: '0', viewBox: '0 0 24 24', icons: { search: body } });
+    const ok = fakeRoot({ 'ui.css': '', 'icons.json': icons('<circle cx="11" r="8" />') });
+    expect(new Assets(ok).icon('search')).toBe('<circle cx="11" r="8" />');
+    for (const bad of [
+      '<script>alert(1)</script>',
+      '<path d="M0" onload="alert(1)" />',
+      '<image href="https://evil.example/x.png" />',
+      '<path d="M0" /><foreignObject></foreignObject>',
+      '<path style="fill:red" />',
+      '<path d="M0" ></path>',
+    ]) {
+      expect(() => new Assets(fakeRoot({ 'ui.css': '', 'icons.json': icons(bad) })), bad).toThrow(
+        /not plain shapes/,
+      );
+    }
+  });
+
+  it('serves the fonts of the stylesheet under hashed names next to it', () => {
+    const root = fakeRoot({
+      'ui.css': '@font-face{src:url(fonts/Geist-Variable.woff2)format("woff2")}',
+      'icons.json': JSON.stringify({ viewBox: '0 0 24 24', icons: {} }),
+      'fonts/Geist-Variable.woff2': 'wOF2 font bytes',
+    });
+    const assets = new Assets(root);
+    const cssUrl = assets.url('ui.css') ?? '';
+    const css = assets.find(cssUrl.slice('/admin/assets/'.length))?.body.toString('utf8') ?? '';
+    const font = /url\((fonts\/Geist-Variable\.[0-9a-f]{10}\.woff2)\)/.exec(css)?.[1] ?? '';
+    expect(font).not.toBe('');
+    // Relative to /admin/assets/ui.<hash>.css, the URL is /admin/assets/fonts/….
+    expect(assets.find(font)).toMatchObject({
+      type: 'font/woff2',
+      name: 'fonts/Geist-Variable.woff2',
+    });
+    expect(assets.find(font)?.body.toString()).toBe('wOF2 font bytes');
   });
 });
 

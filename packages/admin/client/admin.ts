@@ -16,21 +16,37 @@ function localTimes(): void {
   }
 }
 
-/** Copy buttons for command snippets and new tokens. */
+/**
+ * Copy buttons for command snippets and new tokens. After copying, a button shows its check mark
+ * and its "copied" label for a moment.
+ */
 function copyButtons(): void {
   if (!navigator.clipboard) return;
   for (const button of document.querySelectorAll<HTMLButtonElement>('button[data-copy]')) {
     const target = document.getElementById(button.dataset.copy ?? '');
     if (!target) continue;
-    const label = button.textContent ?? '';
+    const copyIcon = button.querySelector<HTMLElement>('[data-copy-icon]');
+    const copiedIcon = button.querySelector<HTMLElement>('[data-copied-icon]');
+    const label = button.querySelector<HTMLElement>('[data-copy-label]');
+    const copied = button.dataset.copied ?? '';
+    const before = { label: label?.textContent ?? '', aria: button.getAttribute('aria-label') };
+    const show = (done: boolean) => {
+      if (copyIcon) copyIcon.hidden = done;
+      if (copiedIcon) copiedIcon.hidden = !done;
+      if (label) label.textContent = done ? copied : before.label;
+      if (before.aria !== null) {
+        button.setAttribute('aria-label', done ? copied : before.aria);
+        button.title = done ? copied : before.aria;
+      }
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
     button.hidden = false;
     button.addEventListener('click', () => {
       navigator.clipboard.writeText(target.textContent ?? '').then(
         () => {
-          button.textContent = '✓';
-          setTimeout(() => {
-            button.textContent = label;
-          }, 1500);
+          show(true);
+          clearTimeout(timer);
+          timer = setTimeout(() => show(false), 1500);
         },
         () => {},
       );
@@ -54,7 +70,8 @@ function rawLines(): void {
         .then((data: { line: string | null; truncated: boolean }) => {
           out.textContent =
             data.line === null ? '—' : data.truncated ? `${data.line} …` : data.line;
-          out.hidden = false;
+          // The line sits in a hidden code frame; show the frame.
+          (out.closest<HTMLElement>('[hidden]') ?? out).hidden = false;
           form.hidden = true;
         })
         .catch(() => form.submit());

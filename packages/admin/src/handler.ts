@@ -39,6 +39,7 @@ import {
 import { negotiateLang, translator } from './i18n/index.js';
 import { errorPage, loginPage, reauthPage } from './pages/auth.js';
 import { eventPage, eventRawPage, searchPage, sessionPage, sessionsPage } from './pages/browse.js';
+import { beforeParam } from './pages/components.js';
 import {
   correctPage,
   entriesPage,
@@ -47,7 +48,7 @@ import {
   forgottenPage,
   rememberPage,
 } from './pages/entries.js';
-import { beforeParam, here } from './pages/layout.js';
+import { here } from './pages/layout.js';
 import { connectPage, devicePage, devicesPage, overviewPage } from './pages/overview.js';
 import { auditPage, signinsPage, tombstonesPage } from './pages/records.js';
 import { newTokenPage, revokeTokenPage, tokenCreatedPage, tokensPage } from './pages/tokens.js';
@@ -713,6 +714,7 @@ async function dispatch(
     secure: origins.publicSecure && origins.local === null,
     service: s.service,
     assets: s.assets,
+    icons: new Set(),
     version: s.version,
     ip: clientIpOf(req, s.clientIpHeader),
     userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,

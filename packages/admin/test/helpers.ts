@@ -134,3 +134,27 @@ export class Browser {
     return res;
   }
 }
+
+/**
+ * What a page would break under the admin CSP or the icon scheme: a `style` attribute or element,
+ * an inline script or event handler attribute, an icon used without its inlined symbol, or a
+ * symbol the page does not use. Store text is escaped, so it cannot form tags here.
+ */
+export function pageProblems(text: string): string[] {
+  const problems: string[] = [];
+  if (!text.includes('<body data-brand="origin">')) problems.push('no data-brand="origin" on body');
+  if (/<style[\s>]/i.test(text)) problems.push('style element');
+  for (const [tag] of text.matchAll(/<[a-zA-Z][^>]*>/g)) {
+    const attributes = tag.replace(/"[^"]*"/g, '""');
+    if (/\sstyle\s*=/i.test(attributes)) problems.push(`style attribute: ${tag}`);
+    if (/\son[a-z]+\s*=/i.test(attributes)) problems.push(`event handler: ${tag}`);
+    if (/^<script\b/i.test(tag) && !/\ssrc="\/admin\/assets\/[^"]+"/.test(tag)) {
+      problems.push(`inline script: ${tag}`);
+    }
+  }
+  const used = new Set([...text.matchAll(/<use href="#([^"]+)"/g)].map((m) => m[1]));
+  const symbols = new Set([...text.matchAll(/<symbol id="([^"]+)"/g)].map((m) => m[1]));
+  for (const id of used) if (!symbols.has(id)) problems.push(`no symbol for #${id}`);
+  for (const id of symbols) if (!used.has(id)) problems.push(`unused symbol #${id}`);
+  return problems;
+}

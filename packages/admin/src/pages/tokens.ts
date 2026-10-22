@@ -2,8 +2,20 @@ import type { TokenInfo } from '@openlinkos/origin-core';
 import type { Ctx } from '../context.js';
 import { time } from '../context.js';
 import { href, html } from '../html.js';
+import { icon } from '../icons.js';
 import type { Snippets } from '../service.js';
-import { alert, badge, csrfField, renderPage } from './layout.js';
+import {
+  alert,
+  badge,
+  copyButton,
+  empty,
+  linkButton,
+  pageHeader,
+  panel,
+  submitButton,
+  tableWrap,
+} from './components.js';
+import { csrfField, renderPage } from './layout.js';
 import { connectSnippetsBlock } from './overview.js';
 
 export function tokensPage(ctx: Ctx, tokens: TokenInfo[], notice?: string): void {
@@ -11,28 +23,43 @@ export function tokensPage(ctx: Ctx, tokens: TokenInfo[], notice?: string): void
   renderPage(ctx, 200, {
     title: t('nav.tokens'),
     nav: 'tokens',
-    body: html`<h1>${t('tokens.title')}</h1>
-    <p class="muted">${t('tokens.help')}</p>
-    ${notice ? alert('ok', notice) : ''}
-    <p><a class="button primary" href="/admin/tokens/new">${t('tokens.create')}</a></p>
-    <section class="card">
+    body: html`${pageHeader(ctx, {
+      title: t('tokens.title'),
+      description: t('tokens.help'),
+      actions: linkButton(ctx, {
+        href: '/admin/tokens/new',
+        label: t('tokens.create'),
+        icon: 'plus',
+        variant: 'primary',
+      }),
+    })}
+    ${notice ? html`<div class="admin-notices">${alert(ctx, 'success', notice)}</div>` : ''}
     ${
       tokens.length === 0
-        ? html`<p class="muted">${t('tokens.none')}</p>`
-        : html`<table>
-      <thead><tr><th>${t('tokens.name')}</th><th>${t('tokens.created')}</th><th>${t('tokens.lastUsed')}</th><th>${t('tokens.status')}</th><th></th></tr></thead>
-      <tbody>${tokens.map(
-        (tok) => html`<tr>
-          <td>${tok.name}</td>
-          <td>${time(tok.createdAt)}</td>
-          <td>${time(tok.lastUsedAt)}</td>
-          <td>${tok.revokedAt === null ? badge(t('tokens.active'), 'ok') : html`${badge(t('tokens.revoked'))} ${time(tok.revokedAt)}`}</td>
-          <td>${tok.revokedAt === null ? html`<a href="${href('tokens/revoke', { name: tok.name })}">${t('tokens.revoke')}</a>` : ''}</td>
+        ? empty(ctx, {
+            icon: 'key-round',
+            title: t('tokens.none'),
+            text: t('tokens.noneHelp'),
+            action: linkButton(ctx, {
+              href: '/admin/tokens/new',
+              label: t('tokens.create'),
+              icon: 'plus',
+              size: 'sm',
+            }),
+          })
+        : tableWrap(
+            html`<th>${t('tokens.name')}</th><th>${t('tokens.status')}</th><th>${t('tokens.created')}</th><th>${t('tokens.lastUsed')}</th><th class="ol-actions"><span class="ol-sr-only">${t('tokens.actions')}</span></th>`,
+            tokens.map(
+              (tok) => html`<tr>
+          <td><span class="ol-cell-title">${tok.name}</span></td>
+          <td>${tok.revokedAt === null ? badge(t('tokens.active'), 'success', { dot: true }) : html`${badge(t('tokens.revoked'))}<span class="ol-cell-sub">${time(tok.revokedAt)}</span>`}</td>
+          <td class="ol-nowrap">${time(tok.createdAt)}</td>
+          <td class="ol-nowrap">${time(tok.lastUsedAt)}</td>
+          <td class="ol-actions">${tok.revokedAt === null ? html`<a class="ol-btn ol-btn-danger-soft ol-btn-sm" href="${href('tokens/revoke', { name: tok.name })}">${icon(ctx, 'ban', 'sm')}${t('tokens.revoke')}</a>` : ''}</td>
         </tr>`,
-      )}</tbody>
-    </table>`
-    }
-    </section>`,
+            ),
+          )
+    }`,
   });
 }
 
@@ -41,20 +68,21 @@ export function newTokenPage(ctx: Ctx, status: number, o: { name?: string; error
   renderPage(ctx, status, {
     title: t('tokens.create'),
     nav: 'tokens',
-    body: html`<p class="crumbs"><a href="/admin/tokens">${t('nav.tokens')}</a></p>
-    <h1>${t('tokens.create')}</h1>
-    <section class="card narrow">
-      <p class="muted">${t('tokens.createHelp')}</p>
-      ${o.error ? alert('error', o.error) : ''}
-      <form method="post" action="/admin/tokens" class="stack">
-        ${csrfField(ctx)}
-        <label>${t('tokens.name')}
-          <input type="text" name="name" required pattern="[a-z0-9][a-z0-9._\\-]{0,62}" maxlength="63" value="${o.name ?? ''}" autocomplete="off" spellcheck="false" placeholder="laptop">
-        </label>
-        <p class="muted small">${t('tokens.nameHelp')}</p>
-        <button type="submit" class="primary">${t('tokens.createButton')}</button>
-      </form>
-    </section>`,
+    crumbs: [{ label: t('nav.tokens'), href: '/admin/tokens' }],
+    body: html`${pageHeader(ctx, { title: t('tokens.create'), description: t('tokens.createHelp') })}
+    <form method="post" action="/admin/tokens" class="ol-form">
+      ${csrfField(ctx)}
+      <div class="ol-field">
+        <label class="ol-label" for="name">${t('tokens.name')}</label>
+        <input class="ol-input ol-input-mono" type="text" id="name" name="name" required pattern="[a-z0-9][a-z0-9._\\-]{0,62}" maxlength="63" value="${o.name ?? ''}" autocomplete="off" spellcheck="false" placeholder="laptop" aria-describedby="name-hint${o.error ? ' name-error' : ''}"${o.error ? html` aria-invalid="true"` : ''}>
+        <p class="ol-hint" id="name-hint">${t('tokens.nameHelp')}</p>
+        ${o.error ? html`<p class="ol-field-error" id="name-error" role="alert">${icon(ctx, 'circle-alert', 'sm')}${o.error}</p>` : ''}
+      </div>
+      <div class="ol-form-actions">
+        ${submitButton(ctx, { label: t('tokens.createButton'), icon: 'plus' })}
+        ${linkButton(ctx, { href: '/admin/tokens', label: t('action.cancel'), variant: 'ghost' })}
+      </div>
+    </form>`,
   });
 }
 
@@ -66,18 +94,26 @@ export function tokenCreatedPage(
   renderPage(ctx, 200, {
     title: t('tokens.createdTitle'),
     nav: 'tokens',
-    body: html`<p class="crumbs"><a href="/admin/tokens">${t('nav.tokens')}</a></p>
-    <h1>${t('tokens.createdTitle')}</h1>
-    ${alert('warn', t('tokens.shownOnce', { name: o.name }))}
-    <section class="card">
-      <div class="snippet">
-        <div class="snippet-head"><span>${t('tokens.token')}</span><button type="button" class="copy" data-copy="token-value" hidden>${t('action.copy')}</button></div>
-        <pre id="token-value" class="secret"><code>${o.token}</code></pre>
+    crumbs: [{ label: t('nav.tokens'), href: '/admin/tokens' }],
+    body: html`${pageHeader(ctx, {
+      title: t('tokens.createdTitle'),
+      actions: linkButton(ctx, {
+        href: '/admin/tokens',
+        label: t('tokens.done'),
+        icon: 'check',
+        variant: 'primary',
+      }),
+    })}
+    <section class="ol-section ol-stack">
+      ${alert(ctx, 'warning', t('tokens.shownOnce', { name: o.name }))}
+      <div class="ol-field">
+        <span class="ol-label">${t('tokens.token')}</span>
+        <code class="ol-secret" id="token-value">${o.token}</code>
       </div>
+      <div>${copyButton(ctx, 'token-value', { labelled: true })}</div>
     </section>
-    ${o.snippets.known ? '' : alert('info', t('connect.noPublicUrl'))}
-    ${connectSnippetsBlock(ctx, o.snippets)}
-    <p><a href="/admin/tokens">${t('tokens.done')}</a></p>`,
+    ${o.snippets.known ? '' : html`<div class="ol-section">${alert(ctx, 'info', t('connect.noPublicUrl'))}</div>`}
+    ${connectSnippetsBlock(ctx, o.snippets)}`,
   });
 }
 
@@ -90,17 +126,22 @@ export function revokeTokenPage(
   renderPage(ctx, status, {
     title: t('tokens.revokeTitle'),
     nav: 'tokens',
-    body: html`<p class="crumbs"><a href="/admin/tokens">${t('nav.tokens')}</a></p>
-    <h1>${t('tokens.revokeTitle')}</h1>
-    <section class="card narrow">
-      ${o.error ? alert('error', o.error) : ''}
-      <p>${t('tokens.revokeHelp', { name: o.name })}</p>
-      <form method="post" action="/admin/tokens/revoke" class="stack">
-        ${csrfField(ctx)}
-        <input type="hidden" name="name" value="${o.name}">
-        <button type="submit" class="danger">${t('tokens.revokeButton', { name: o.name })}</button>
-      </form>
-      <p><a href="/admin/tokens">${t('action.cancel')}</a></p>
-    </section>`,
+    crumbs: [{ label: t('nav.tokens'), href: '/admin/tokens' }],
+    body: html`${pageHeader(ctx, { title: t('tokens.revokeTitle') })}
+    ${panel(ctx, {
+      danger: true,
+      title: t('tokens.revokeButton', { name: o.name }),
+      icon: 'triangle-alert',
+      body: html`<div class="ol-stack">
+        ${o.error ? alert(ctx, 'danger', o.error) : ''}
+        <p>${t('tokens.revokeHelp', { name: o.name })}</p>
+        <form method="post" action="/admin/tokens/revoke" class="ol-form-actions">
+          ${csrfField(ctx)}
+          <input type="hidden" name="name" value="${o.name}">
+          ${submitButton(ctx, { label: t('tokens.revokeButton', { name: o.name }), icon: 'ban', variant: 'danger' })}
+          ${linkButton(ctx, { href: '/admin/tokens', label: t('action.cancel'), variant: 'ghost' })}
+        </form>
+      </div>`,
+    })}`,
   });
 }

@@ -4,6 +4,7 @@ import type { Assets } from './assets.js';
 import { html, type SafeHtml } from './html.js';
 import type { RequestOrigins } from './http.js';
 import type { Lang, Translate } from './i18n/index.js';
+import type { IconName } from './icons.js';
 import type { Actor, AdminService } from './service.js';
 
 export type Theme = 'auto' | 'light' | 'dark';
@@ -26,6 +27,8 @@ export interface Ctx {
   secure: boolean;
   service: AdminService;
   assets: Assets;
+  /** Icons used by the page so far; the layout inlines their symbols. */
+  icons: Set<IconName>;
   version: string;
   ip: string | null;
   userAgent: string | null;
@@ -65,7 +68,7 @@ export function fmtDateTime(ts: number): string {
 }
 
 export function time(ts: number | null | undefined): SafeHtml {
-  if (ts === null || ts === undefined) return html`<span class="muted">—</span>`;
+  if (ts === null || ts === undefined) return html`<span class="ol-subtle">—</span>`;
   return html`<time datetime="${new Date(ts).toISOString()}">${fmtDateTime(ts)}</time>`;
 }
 
