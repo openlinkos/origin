@@ -56,9 +56,12 @@ jobs:
 
       - name: Smoke test
         run: |
-          # The admin UI on loopback http: the port is published on localhost only.
+          # The admin UI on loopback http (the port is published on localhost only), with its
+          # password from the environment. A test value, not a secret.
+          ADMIN_PASSWORD='ci-smoke-test-password'
           docker run -d --name hub -p 127.0.0.1:7077:7077 \
-            -e ORIGIN_ADMIN=on -e ORIGIN_PUBLIC_URL=http://localhost:7077 origin:test
+            -e ORIGIN_ADMIN=on -e ORIGIN_PUBLIC_URL=http://localhost:7077 \
+            -e ORIGIN_ADMIN_PASSWORD="$ADMIN_PASSWORD" origin:test
           for i in $(seq 1 30); do curl -fs http://localhost:7077/healthz && break; sleep 0.5; done
           curl -fsS http://localhost:7077/healthz | grep -q '"ok":true'
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:7077/mcp)" = 401
@@ -70,18 +73,51 @@ jobs:
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
             | grep -q '"name":"origin"'
 
-          # Admin UI: security headers, sign-in with a key from the CLI, the overview with the session.
-          KEY="$(docker exec hub origin admin key create ci | grep -o 'oga_[A-Za-z0-9_-]*')"
+          # Admin UI: security headers, sign-in with ORIGIN_ADMIN_PASSWORD, the overview with the session.
           HEADERS="$(curl -fsS -D - -o /dev/null http://localhost:7077/admin/login)"
           echo "$HEADERS" | grep -qi "^content-security-policy: default-src 'none'; script-src 'self'; style-src 'self';"
           echo "$HEADERS" | grep -qi "trusted-types 'none'"
           echo "$HEADERS" | grep -qi '^cache-control: no-store, private'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:7077/admin/api/overview)" = 401
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" http://localhost:7077/admin/api/overview)" = 401
-          curl -fsS -c admin.jar -H 'Origin: http://localhost:7077' -H 'Content-Type: application/json' \
-            -d "{\"key\":\"$KEY\"}" http://localhost:7077/admin/api/login | grep -q '"signedIn":true'
+          login() { # <port> <password> <cookie jar>
+            curl -s -o /dev/null -w '%{http_code}' -c "$3" -H "Origin: http://localhost:$1" \
+              -H 'Content-Type: application/json' -d "{\"password\":\"$2\"}" \
+              "http://localhost:$1/admin/api/login"
+          }
+          test "$(login 7077 "$TOKEN" none.jar)" = 401
+          test "$(login 7077 "$ADMIN_PASSWORD" admin.jar)" = 200
           curl -fsS -b admin.jar http://localhost:7077/admin/api/overview | grep -q '"activeTokens":1'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $ADMIN_PASSWORD" http://localhost:7077/mcp)" = 401
+          test "$(docker logs hub 2>&1 | grep -c 'Generated an admin password')" = 0
           docker rm -f hub
+
+          # Without a password, the first start generates one and logs it once; a restart does not.
+          docker run -d --name gen -p 127.0.0.1:7079:7077 -v origin-gen:/data \
+            -e ORIGIN_ADMIN=on -e ORIGIN_PUBLIC_URL=http://localhost:7079 origin:test
+          for i in $(seq 1 30); do curl -fs http://localhost:7079/healthz && break; sleep 0.5; done
+          for i in $(seq 1 20); do
+            GEN_LOGS="$(docker logs gen 2>&1)"
+            grep -q 'Generated an admin password' <<<"$GEN_LOGS" && break; sleep 0.5
+          done
+          grep -qx 'Generated an admin password for the admin UI (shown only this once):' <<<"$GEN_LOGS"
+          GENERATED="$(sed -n 's/^    \([0-9a-z]\{5\}\(-[0-9a-z]\{5\}\)\{3\}\)$/\1/p' <<<"$GEN_LOGS")"
+          test -n "$GENERATED"
+          echo "::add-mask::$GENERATED"
+          test "$(login 7079 "$GENERATED" gen.jar)" = 200
+          # A new password from the CLI takes effect at once and ends the session.
+          printf '%s\n' 'ci-changed-password' | docker exec -i gen origin admin password
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b gen.jar http://localhost:7079/admin/api/overview)" = 401
+          test "$(login 7079 "$GENERATED" none.jar)" = 401
+          test "$(login 7079 ci-changed-password gen.jar)" = 200
+          docker rm -f gen
+          docker run -d --name gen -p 127.0.0.1:7079:7077 -v origin-gen:/data \
+            -e ORIGIN_ADMIN=on -e ORIGIN_PUBLIC_URL=http://localhost:7079 origin:test
+          for i in $(seq 1 30); do curl -fs http://localhost:7079/healthz && break; sleep 0.5; done
+          test "$(docker logs gen 2>&1 | grep -c 'Generated an admin password')" = 0
+          test "$(login 7079 ci-changed-password gen.jar)" = 200
+          docker rm -f gen
+          docker volume rm origin-gen
 
           # Without ORIGIN_ADMIN there is no admin UI.
           docker run -d --name plain -p 7078:7077 origin:test
