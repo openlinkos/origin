@@ -6,6 +6,9 @@ import { SCHEMA } from './schema.js';
 
 export type Database = DatabaseSync;
 
+/** The size the write-ahead log is truncated to after a checkpoint. */
+export const JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024;
+
 /**
  * Functions the schema and the queries use, registered on every connection: `origin_cjk` fills the
  * CJK index from a trigger, and `origin_contains` checks a lowercased term against a text, ignoring
@@ -30,8 +33,11 @@ export function openDatabase(file: string): Database {
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA synchronous = NORMAL;');
-  // Several processes (CLI, one MCP server per agent session) may share the database.
+  // Several processes (CLI, one MCP server per agent session) may share the database. Writes are
+  // short (see TRANSACTION_BYTES), so waiting up to 10 s for the write lock is plenty.
   db.exec('PRAGMA busy_timeout = 10000;');
+  // A large import grows the write-ahead log; truncate it back to 64 MiB after each checkpoint.
+  db.exec(`PRAGMA journal_size_limit = ${JOURNAL_SIZE_LIMIT};`);
   db.exec(SCHEMA);
   return db;
 }

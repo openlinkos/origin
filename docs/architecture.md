@@ -160,7 +160,7 @@ interface SourceAdapter {
 
 ## Ingestion
 
-`origin sync` (and the MCP server, see below) runs every adapter's `discover()` and ingests each file in its own `BEGIN IMMEDIATE` transaction, so concurrent syncs from different processes are serialized and never ingest the same bytes twice:
+`origin sync` (and the MCP server, see below) runs every adapter's `discover()`. A file whose size and tail have not changed since its last ingestion is skipped without taking the write lock. The new lines of a changed file are ingested in `BEGIN IMMEDIATE` transactions of at most 1 MiB of lines each (a longer line takes a transaction of its own), so concurrent syncs from different processes are serialized and never ingest the same bytes twice, and no process holds the write lock for long, even while it imports a large backlog:
 
 1. **Cursor.** Each `raw_file` row tracks `bytes_ingested`, `lines_ingested`, and `tail_hash` (SHA-256 of the last 4 KB ingested). The cursor is read under the write lock, and only bytes after it are read.
 2. **Rewrite detection.** If the file shrank or its tail no longer matches, it was rewritten rather than appended. Origin opens a new *generation* with a fresh mirror and keeps the old mirror intact (invariant 3).
@@ -168,7 +168,9 @@ interface SourceAdapter {
 4. **Parse and insert.** Each line goes through `parseLine`; failures are counted, not fatal. Events are inserted with `INSERT OR IGNORE` under the id `<source>:<native-id>[#<block-index>]`, which makes sync idempotent (invariant 3). Each event stores its mirror file and line number (invariant 1).
 5. **Bookkeeping.** Affected sessions are re-aggregated, the cursor advances in the same transaction, and a `sync_log` row records the sync.
 
-**Compressed sources.** An adapter can mark a file as `compression: 'zstd'`. Origin then ingests and mirrors the decompressed content, using Node's built-in zstd, so cursors, line numbers, and raw lines work as for plain files. Compressed files are written once, so they are skipped when unchanged since their last ingestion.
+**Compressed sources.** An adapter can mark a file as `compression: 'zstd'`. Origin then ingests and mirrors the decompressed content, using Node's built-in zstd, so cursors, line numbers, and raw lines work as for plain files. Compressed files are written once, so they are skipped when unchanged since their last ingestion, and each is ingested in a single transaction.
+
+**Several processes.** The CLI and one MCP server per agent session may use the same store at once. Readers never wait for writers (WAL). A writer waits up to 10 seconds for the write lock (the busy timeout); since syncs take the lock only for changed files and only for one bounded transaction at a time, a sync or a `remember` waits at most about one such transaction, even while another process imports a large backlog. After each checkpoint, the write-ahead log is truncated to 64 MiB (`journal_size_limit`), so a large import does not leave a log of gigabytes behind.
 
 ### Claude Code mapping
 

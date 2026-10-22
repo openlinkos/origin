@@ -67,13 +67,20 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
   const agentVersion = adapter.version();
 
   for (const file of files) {
-    // One write transaction per file: the cursor is re-read under the lock, so concurrent syncs
-    // (the CLI and one MCP server per agent session) never ingest the same bytes twice.
-    const changed = transaction(
-      ctx.db,
-      () => ingestFile(ctx, adapter, file, agentVersion, result),
-      { immediate: true },
-    );
+    // Most files have not changed since the last sync; that needs no write lock.
+    if (isUnchanged(ctx, adapter.id, file)) continue;
+    // New lines go in write transactions of at most TRANSACTION_BYTES each, so that other processes
+    // (the CLI, one MCP server per agent session) never wait long for the lock, even during a large
+    // import. The cursor is re-read under the lock, so concurrent syncs never ingest the same bytes
+    // twice.
+    let changed = false;
+    for (;;) {
+      const step = transaction(ctx.db, () => ingestFile(ctx, adapter, file, agentVersion, result), {
+        immediate: true,
+      });
+      if (step !== 'none') changed = true;
+      if (step !== 'more') break;
+    }
     if (changed) result.filesChanged++;
   }
 
@@ -106,17 +113,46 @@ function oldestFirst(files: SourceFile[]): SourceFile[] {
   return [...files].sort((a, b) => (mtime.get(a) as number) - (mtime.get(b) as number));
 }
 
-/** Ingest the newly appended complete lines of one file. Must run inside a write transaction. */
+/**
+ * New complete lines of a file are ingested in transactions of at most this many bytes (or one
+ * longer line). Compressed files are ingested whole: they are written once, and are recognized as
+ * unchanged by their modification time only once they have been ingested completely.
+ */
+export const TRANSACTION_BYTES = 1024 * 1024;
+
+/**
+ * Whether a file is known and unchanged since its last ingestion, checked without the write lock:
+ * the same size and tail for a plain file, no newer modification for a compressed one. Anything
+ * else is looked at again under the lock.
+ */
+function isUnchanged(ctx: IngestContext, source: string, file: SourceFile): boolean {
+  const raw = latestRawFile(ctx.db, source, file.absPath);
+  if (!raw) return false;
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(file.absPath);
+  } catch {
+    return true; // deleted since discovery: nothing to ingest
+  }
+  if (file.compression) return st.mtimeMs <= raw.updated_at;
+  return st.size === raw.bytes_ingested && tailMatches(fileContent(file.absPath), raw);
+}
+
+/**
+ * Ingest the next newly appended complete lines of one file, at most TRANSACTION_BYTES of them:
+ * `none` if there were none, `more` if complete lines may remain, `done` otherwise. Must run inside
+ * a write transaction.
+ */
 function ingestFile(
   ctx: IngestContext,
   adapter: SourceAdapter,
   file: SourceFile,
   agentVersion: string | null,
   result: SyncResult,
-): boolean {
+): 'none' | 'more' | 'done' {
   let raw = latestRawFile(ctx.db, adapter.id, file.absPath);
   const content = openContent(ctx, file, raw);
-  if (!content) return false;
+  if (!content) return 'none';
   if (raw && (content.size < raw.bytes_ingested || !tailMatches(content, raw))) {
     ctx.log?.(`rewrite detected, new generation: ${file.relPath}`);
     const generation = raw.generation + 1;
@@ -138,12 +174,20 @@ function ingestFile(
       1,
     );
   }
-  if (content.size === raw.bytes_ingested) return false;
+  if (content.size === raw.bytes_ingested) return 'none';
 
-  const delta = content.read(raw.bytes_ingested, content.size);
-  const lastNl = delta.lastIndexOf(0x0a);
-  if (lastNl < 0) return false; // no complete line yet
-  const chunk = delta.subarray(0, lastNl + 1);
+  const start = raw.bytes_ingested;
+  let end = file.compression ? content.size : Math.min(content.size, start + TRANSACTION_BYTES);
+  let chunk = content.read(start, end);
+  let lastNl = chunk.lastIndexOf(0x0a);
+  while (lastNl < 0 && end < content.size) {
+    // A line longer than the bound: read on until it ends, and take it whole.
+    end = Math.min(content.size, start + (end - start) * 2);
+    chunk = content.read(start, end);
+    lastNl = chunk.lastIndexOf(0x0a);
+  }
+  if (lastNl < 0) return 'none'; // no complete line yet
+  chunk = chunk.subarray(0, lastNl + 1);
 
   appendLines(
     ctx,
@@ -154,7 +198,7 @@ function ingestFile(
     (bytes) => tailHash(content, bytes),
     result,
   );
-  return true;
+  return start + chunk.length < content.size ? 'more' : 'done';
 }
 
 /**

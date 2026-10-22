@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { JOURNAL_SIZE_LIMIT } from '../src/db.js';
 import {
   type Database,
   forget,
@@ -15,6 +16,7 @@ import {
   stats,
   syncSource,
 } from '../src/index.js';
+import { TRANSACTION_BYTES } from '../src/ingest.js';
 import { VISIBLE_EVENT } from '../src/store.js';
 import { fakeAdapter, line } from './helpers.js';
 
@@ -211,6 +213,71 @@ describe('searchEvents', () => {
       'fake:new',
       'fake:old',
     ]);
+  });
+});
+
+describe('write transactions', () => {
+  /** Count the write transactions a sync opens. */
+  async function syncCountingTransactions(): Promise<number> {
+    let count = 0;
+    const exec = db.exec.bind(db);
+    db.exec = (sql: string) => {
+      if (sql === 'BEGIN IMMEDIATE') count++;
+      return exec(sql);
+    };
+    try {
+      await syncSource({ db, home }, fakeAdapter(src));
+    } finally {
+      db.exec = exec;
+    }
+    return count;
+  }
+
+  it('ingests a large file in bounded transactions, as if in one', async () => {
+    const file = path.join(src, 'big.jsonl');
+    const pad = 'x'.repeat(2000);
+    let content = '';
+    for (let i = 0; i < 1500; i++) content += line(`b${i}`, 'big', 1000 + i, 'user', `${i} ${pad}`);
+    fs.writeFileSync(file, content);
+    expect(content.length).toBeGreaterThan(2.5 * TRANSACTION_BYTES);
+    expect(await syncCountingTransactions()).toBe(Math.ceil(content.length / TRANSACTION_BYTES));
+    const events = listEvents(db, { sessionId: 'big', limit: 2000 });
+    expect(events).toHaveLength(1500);
+    expect(events[1499]?.rawLine).toBe(1500);
+    expect(readRawLine(rawLocator(db, home, events[1499]!)!)).toBe(
+      line('b1499', 'big', 2499, 'user', `1499 ${pad}`).trim(),
+    );
+    const mirror = rawLocator(db, home, events[0]!)!.mirrorPath;
+    expect(fs.readFileSync(mirror, 'utf8')).toBe(content);
+    expect(listSessions(db)[0]?.eventCount).toBe(1500);
+  });
+
+  it('takes a line longer than the bound whole', async () => {
+    const long = 'y'.repeat(TRANSACTION_BYTES + 100);
+    fs.writeFileSync(
+      path.join(src, 'long.jsonl'),
+      line('l1', 'long', 1000, 'user', long) + line('l2', 'long', 2000, 'user', 'short'),
+    );
+    await syncSource({ db, home }, fakeAdapter(src));
+    expect(getEvent(db, 'fake:l1')?.text).toBe(long);
+    expect(getEvent(db, 'fake:l2')?.rawLine).toBe(2);
+  });
+
+  it('takes no write lock for files that have not changed', async () => {
+    for (let i = 0; i < 5; i++) {
+      fs.writeFileSync(path.join(src, `u${i}.jsonl`), line(`u${i}`, 'u', 1000 + i, 'user', 'same'));
+    }
+    expect(await syncCountingTransactions()).toBe(5);
+    expect(await syncCountingTransactions()).toBe(0);
+    fs.appendFileSync(path.join(src, 'u3.jsonl'), line('u3b', 'u', 2000, 'user', 'more'));
+    expect(await syncCountingTransactions()).toBe(1);
+    expect(getEvent(db, 'fake:u3b')).not.toBeNull();
+  });
+
+  it('limits the write-ahead log kept after a checkpoint', () => {
+    expect(db.prepare('PRAGMA journal_size_limit').get()).toEqual({
+      journal_size_limit: JOURNAL_SIZE_LIMIT,
+    });
   });
 });
 
