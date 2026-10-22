@@ -196,6 +196,10 @@ importers:
       '@openlinkos/origin-core':
         specifier: workspace:*
         version: link:../core
+    devDependencies:
+      '@openlinkos/ui':
+        specifier: link:../../../design/packages/ui
+        version: link:../../../design/packages/ui
 
   packages/cli:
     dependencies:

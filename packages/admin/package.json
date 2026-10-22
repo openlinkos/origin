@@ -26,10 +26,13 @@
     "assets"
   ],
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsc -b && node scripts/vendor.mjs"
   },
   "dependencies": {
     "@openlinkos/origin-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@openlinkos/ui": "link:../../../design/packages/ui"
   },
   "engines": {
     "node": ">=22.13"

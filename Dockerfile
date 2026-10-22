@@ -25,6 +25,7 @@ COPY --from=build /src/packages/adapters/dist packages/adapters/dist
 COPY --from=build /src/packages/mcp/package.json packages/mcp/package.json
 COPY --from=build /src/packages/mcp/dist packages/mcp/dist
 COPY --from=build /src/packages/admin/package.json packages/admin/package.json
+# dist/vendor holds the design system's stylesheet, fonts, and icons, copied there by the build.
 COPY --from=build /src/packages/admin/dist packages/admin/dist
 COPY --from=build /src/packages/admin/assets packages/admin/assets
 COPY --from=build /src/packages/cli/package.json packages/cli/package.json
