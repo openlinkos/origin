@@ -76,6 +76,22 @@ export {
   type StoreUsage,
   storeUsage,
 } from './overview.js';
+export {
+  ADMIN_PASSWORD_MAX_LENGTH,
+  ADMIN_PASSWORD_MIN_LENGTH,
+  ADMIN_SCRYPT_PARAMS,
+  type AdminCredential,
+  checkAdminPassword,
+  generateAdminPassword,
+  hashAdminPassword,
+  hasStoredAdminPassword,
+  type PreparedAdminCredential,
+  prepareAdminCredential,
+  type ScryptParams,
+  setAdminPassword,
+  verifyAdminPassword,
+  verifyAdminPasswordHash,
+} from './password.js';
 export { dbPath, originHome, parseRawPath, rawDir, remotePath } from './paths.js';
 export { getSetting, setSetting } from './settings.js';
 export {
