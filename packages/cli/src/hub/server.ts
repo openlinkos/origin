@@ -4,11 +4,14 @@ import type { AdminHandler } from '@openlinkos/origin-admin';
 import {
   appendRemote,
   type Database,
+  HUB_STORE_NAME,
+  initStoreName,
   NAME_RE,
   OriginError,
   remoteCursors,
   type SourceAdapter,
-  tombstonesAfter,
+  storeName,
+  tombstoneFeed,
   verifyToken,
 } from '@openlinkos/origin-core';
 import { handleMcpHttp } from '@openlinkos/origin-mcp';
@@ -44,6 +47,8 @@ class HttpError extends Error {
  * for its owner (see docs/architecture.md).
  */
 export function createHubServer(opts: HubOptions): http.Server {
+  // A store that starts serving without a name becomes `hub` (see docs/architecture.md#storage).
+  initStoreName(opts.db, HUB_STORE_NAME);
   return http.createServer((req, res) => {
     handle(opts, req, res).catch((err: unknown) => {
       const status = err instanceof HttpError ? err.status : err instanceof OriginError ? 400 : 500;
@@ -97,8 +102,7 @@ async function handle(
     }
     case '/v1/cursors': {
       requireMethod(req, 'GET');
-      const device = url.searchParams.get('device') ?? '';
-      if (!NAME_RE.test(device)) throw new HttpError(400, 'Invalid or missing device.');
+      const device = deviceName(opts, url.searchParams.get('device'));
       sendJson(res, 200, { cursors: remoteCursors(opts.db, device) });
       return;
     }
@@ -109,7 +113,7 @@ async function handle(
       if (!adapter) throw new HttpError(400, `Unknown source: ${String(body.source)}`);
       if (typeof body.data !== 'string') throw new HttpError(400, 'Missing data.');
       const result = appendRemote({ db: opts.db, home: opts.home, log: opts.log }, adapter, {
-        device: String(body.device ?? ''),
+        device: deviceName(opts, body.device),
         source: adapter.id,
         path: String(body.path ?? ''),
         relPath: String(body.relPath ?? ''),
@@ -125,14 +129,29 @@ async function handle(
     }
     case '/v1/tombstones': {
       requireMethod(req, 'GET');
+      const device = deviceName(opts, url.searchParams.get('device'));
       const after = Number(url.searchParams.get('after') ?? '0');
-      if (!Number.isInteger(after) || after < 0) throw new HttpError(400, 'Invalid "after".');
-      sendJson(res, 200, { tombstones: tombstonesAfter(opts.db, after) });
+      if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, 'Invalid "after".');
+      sendJson(res, 200, tombstoneFeed(opts.db, { after, device }));
       return;
     }
     default:
       throw new HttpError(404, 'Not found.');
   }
+}
+
+/**
+ * A device's name, as a device sends it. It may not be the hub's own name: the hub would take the
+ * device's records for its own, and the device would miss the hub's tombstones.
+ */
+function deviceName(opts: HubOptions, value: unknown): string {
+  if (typeof value !== 'string' || !NAME_RE.test(value)) {
+    throw new HttpError(400, 'Invalid or missing device.');
+  }
+  if (value === storeName(opts.db)) {
+    throw new HttpError(400, `"${value}" is this hub's own name; give the device another name.`);
+  }
+  return value;
 }
 
 /** `<agent>@<token>` when a forwarding proxy names the agent, else the token name. */

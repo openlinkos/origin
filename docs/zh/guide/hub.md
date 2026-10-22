@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-a8efe1b9
+sourceHash: sha256-4f5094bb
 ---
 
 # 个人中枢
@@ -73,8 +73,8 @@ origin hub status
 origin push
 ```
 
-- `--device` 默认为主机名。`origin hub disconnect` 用于断开连接。
-- 环境变量 `ORIGIN_HUB_URL`、`ORIGIN_HUB_TOKEN`、`ORIGIN_DEVICE` 会覆盖保存的连接配置。
+- 中枢以设备的库名称来识别设备：也就是库第一次使用时的 `ORIGIN_DEVICE` 或主机名。`--device` 可以给一个还没有保存过条目、也没有遗忘过任何内容的库改名；此后库会一直保持这个名称。`origin hub disconnect` 用于断开连接。
+- 环境变量 `ORIGIN_HUB_URL`、`ORIGIN_HUB_TOKEN` 会覆盖保存的连接配置。
 - `origin push` 会先同步本机会话，再推送原始镜像，最后取回中枢的遗忘记录。可以随时重跑：推送会从上次停下的位置继续。
 
 设备接入后，`origin mcp` 会转发到中枢，所以你已有的 Agent 注册都不用改。每次 Agent 调用前都会先推送新的会话记录：读取类调用最多每 10 秒推送一次，`remember` 和 `correct` 之前则总会推送。因此 Agent 仍能引用你刚刚说过的话。

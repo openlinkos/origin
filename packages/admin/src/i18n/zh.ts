@@ -285,8 +285,8 @@ export const zh: Messages = {
   'forget.submit': '永久遗忘',
   'forget.already': '{id} 已经被遗忘。',
   'forget.doneTitle': '已遗忘',
-  'forget.done': '已遗忘 {entries} 个条目和 {events} 个事件（遗忘记录 #{tombstone}）。',
-  'forget.propagates': '每台设备会在下一次推送时应用这次遗忘。',
+  'forget.done': '已遗忘 {entries} 个条目和 {events} 个事件（遗忘记录 {tombstone}）。',
+  'forget.propagates': '每台设备会在下一次同步时应用这次遗忘。',
 
   'pager.label': '分页',
   'pager.page': '第 {n} 页',
@@ -302,8 +302,10 @@ export const zh: Messages = {
   'tombstones.noneHelp':
     '遗忘一个条目或事件之后，它的遗忘记录会出现在这里。被遗忘的文本不会再显示。',
   'tombstones.howItWorks': '遗忘如何生效',
+  'tombstones.id': '遗忘记录',
   'tombstones.time': '时间',
   'tombstones.target': '目标',
+  'tombstones.origin': '遗忘于',
   'tombstones.entries': '条目',
   'tombstones.events': '事件',
   'tombstones.reason': '原因',

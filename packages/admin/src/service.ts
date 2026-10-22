@@ -531,8 +531,8 @@ export class AdminService {
     return entry;
   }
 
-  tombstones(beforeId?: number): { tombstones: TombstoneSummary[]; more: boolean } {
-    const rows = listTombstones(this.db, { limit: PAGE_SIZE + 1, beforeId });
+  tombstones(before?: string): { tombstones: TombstoneSummary[]; more: boolean } {
+    const rows = listTombstones(this.db, { limit: PAGE_SIZE + 1, before });
     return { tombstones: rows.slice(0, PAGE_SIZE), more: rows.length > PAGE_SIZE };
   }
 

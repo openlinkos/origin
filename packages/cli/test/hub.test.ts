@@ -176,6 +176,12 @@ describe('personal hub', () => {
     expect((await ingest({ relPath: 'C:/Windows/x.jsonl' })).status).toBe(400);
     expect((await ingest({ device: '../evil' })).status).toBe(400);
     expect((await ingest({ source: 'nope' })).status).toBe(400);
+    // A device may not take the hub's own name: it would never receive the hub's tombstones.
+    expect((await ingest({ device: 'hub' })).status).toBe(400);
+    const asHub = await fetch(`${hub.url}/v1/tombstones?after=0&device=hub`, {
+      headers: { Authorization: `Bearer ${hub.token}` },
+    });
+    expect(asHub.status).toBe(400);
     expect((await ingest({})).status).toBe(200);
 
     revokeToken(hubDb, 'laptop');

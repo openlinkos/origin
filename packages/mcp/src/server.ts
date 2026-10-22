@@ -85,6 +85,8 @@ function entryView(e: Entry) {
     valid_to: e.validTo === null ? null : isoLocal(e.validTo),
     supersedes: e.supersedes,
     superseded_by: e.supersededBy,
+    concurrent: e.concurrent,
+    root: e.root,
   };
 }
 
@@ -271,7 +273,11 @@ function localHandlers(
     forget: (args) =>
       run(() => {
         const r = forget(db, args.id, args.reason);
-        return ok({ forgotten_entries: r.entries, excluded_events: r.events.length });
+        return ok({
+          tombstone: r.tombstoneId,
+          forgotten_entries: r.entries,
+          excluded_events: r.events.length,
+        });
       }),
   };
 }

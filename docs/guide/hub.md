@@ -69,8 +69,8 @@ origin hub status
 origin push
 ```
 
-- `--device` defaults to the host name. `origin hub disconnect` removes the connection.
-- `ORIGIN_HUB_URL`, `ORIGIN_HUB_TOKEN`, and `ORIGIN_DEVICE` override the stored connection.
+- The hub knows the device by its store's name: `ORIGIN_DEVICE`, or the host name, when the store was first used. `--device` renames a store that has not saved an entry or forgotten anything yet; after that, the store keeps its name. `origin hub disconnect` removes the connection.
+- `ORIGIN_HUB_URL` and `ORIGIN_HUB_TOKEN` override the stored connection.
 - `origin push` syncs local sessions, pushes the raw mirrors, and pulls the hub's tombstones. It is safe to re-run: a push picks up where the previous one stopped.
 
 Once the device is connected, `origin mcp` forwards to the hub, so the agent registrations you already have stay the same. Each agent call first pushes new session lines: before reads at most every 10 seconds, and always before `remember` and `correct`. An agent can therefore still cite what you said a moment ago.

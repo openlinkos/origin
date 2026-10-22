@@ -8,6 +8,7 @@ import {
   createToken,
   type Database,
   dbPath,
+  defaultStoreName,
   ENTRY_KINDS,
   type Entry,
   type EntryKind,
@@ -19,6 +20,8 @@ import {
   generateAdminPassword,
   getEntry,
   getEvent,
+  HUB_STORE_NAME,
+  initStoreName,
   isEntryForgotten,
   isEntryId,
   isEventForgotten,
@@ -42,14 +45,15 @@ import {
   searchEntries,
   searchEvents,
   setAdminPassword,
+  setStoreName,
   stats,
+  storeName,
   syncSource,
 } from '@openlinkos/origin-core';
 import { serveStdio, serveStdioProxy } from '@openlinkos/origin-mcp';
 import { count, oneLine, table } from './format.js';
 import {
-  checkDeviceName,
-  defaultDeviceName,
+  type HubConfig,
   normalizeHubUrl,
   readHubConfig,
   removeHubConfig,
@@ -97,6 +101,26 @@ interface Ctx {
   home: string;
 }
 
+/** Commands that may write entries or tombstones, or talk to a hub, and so need the store named. */
+const NAMED_COMMANDS = new Set(['sync', 'push', 'mcp', 'correct', 'forget', 'hub']);
+
+/**
+ * Name the store the first time it is needed (see docs/architecture.md#storage): a hub's store is
+ * `hub`, any other takes ORIGIN_DEVICE or the host name. A named store keeps its name.
+ */
+function nameStore(db: Database, command: string): void {
+  if (command === 'serve') initStoreName(db, HUB_STORE_NAME);
+  else if (NAMED_COMMANDS.has(command)) {
+    initStoreName(db, process.env.ORIGIN_DEVICE || defaultStoreName());
+  }
+}
+
+/** The hub this device is connected to, under the store's name. */
+function hubOf(ctx: Ctx): HubConfig | null {
+  const saved = readHubConfig(ctx.home);
+  return saved ? { ...saved, device: storeName(ctx.db) } : null;
+}
+
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   if (!command || command === 'help' || command === '--help' || command === '-h') {
@@ -111,6 +135,7 @@ async function main(argv: string[]): Promise<number> {
   const db = openDatabase(dbPath(home));
   const ctx: Ctx = { db, home };
   try {
+    nameStore(db, command);
     switch (command) {
       case 'sync':
         return await cmdSync(ctx, rest);
@@ -244,7 +269,7 @@ function cmdStatus(ctx: Ctx): number {
       )}`,
     );
   }
-  const hub = readHubConfig(ctx.home);
+  const hub = hubOf(ctx);
   if (hub) console.log(`\nConnected to hub ${hub.url} as ${hub.device}.`);
   return 0;
 }
@@ -528,7 +553,7 @@ function cmdProjects(ctx: Ctx): number {
 
 async function cmdMcp(ctx: Ctx): Promise<number> {
   const log = (m: string) => console.error(`origin: ${m}`);
-  const hub = readHubConfig(ctx.home);
+  const hub = hubOf(ctx);
   if (hub) {
     // Forwarding proxy: keep the hub current with this device, then let the hub answer.
     await serveStdioProxy({
@@ -783,11 +808,10 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
       console.error('Usage: origin hub connect <url> --token <token> [--device <name>]');
       return 2;
     }
-    const hub = {
-      url: normalizeHubUrl(url),
-      token: values.token,
-      device: checkDeviceName(values.device ?? defaultDeviceName()),
-    };
+    // The device is known to its hub by the store's name; --device names a store that has not
+    // written anything yet.
+    if (values.device !== undefined) setStoreName(ctx.db, values.device);
+    const hub = { url: normalizeHubUrl(url), token: values.token, device: storeName(ctx.db) };
     await checkHub(hub);
     writeHubConfig(ctx.home, hub);
     console.log(
@@ -796,7 +820,7 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
     return 0;
   }
   if (action === 'status') {
-    const hub = readHubConfig(ctx.home);
+    const hub = hubOf(ctx);
     if (!hub) {
       console.log('Not connected to a hub. Connect with: origin hub connect <url> --token <token>');
       return 0;
@@ -833,7 +857,7 @@ async function checkHub(hub: { url: string; token: string; device: string }): Pr
 }
 
 async function cmdPush(ctx: Ctx): Promise<number> {
-  const hub = readHubConfig(ctx.home);
+  const hub = hubOf(ctx);
   if (!hub) {
     console.error('Not connected to a hub. Connect with: origin hub connect <url> --token <token>');
     return 1;

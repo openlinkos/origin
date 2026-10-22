@@ -29,12 +29,13 @@ export function tombstonesPage(
             }),
           })
         : tableWrap(
-            html`<th class="ol-num">#</th><th>${t('tombstones.time')}</th><th>${t('tombstones.target')}</th><th class="ol-num">${t('tombstones.entries')}</th><th class="ol-num">${t('tombstones.events')}</th><th>${t('tombstones.reason')}</th>`,
+            html`<th>${t('tombstones.id')}</th><th>${t('tombstones.time')}</th><th>${t('tombstones.target')}</th><th>${t('tombstones.origin')}</th><th class="ol-num">${t('tombstones.entries')}</th><th class="ol-num">${t('tombstones.events')}</th><th>${t('tombstones.reason')}</th>`,
             o.tombstones.map(
               (r) => html`<tr>
-          <td class="ol-num">${r.id}</td>
+          <td class="ol-mono ol-nowrap">${r.id}</td>
           <td class="ol-nowrap">${time(r.createdAt)}</td>
           <td class="ol-mono">${r.target}</td>
+          <td class="ol-nowrap">${r.origin}</td>
           <td class="ol-num">${fmtNumber(r.entries, ctx.lang)}</td>
           <td class="ol-num">${fmtNumber(r.events, ctx.lang)}</td>
           <td>${r.reason ? clip(r.reason, 200) : html`<span class="ol-subtle">—</span>`}</td>

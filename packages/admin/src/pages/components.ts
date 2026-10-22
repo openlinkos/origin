@@ -2,7 +2,12 @@
  * Building blocks of the admin pages, as markup of the OpenLinkOS design system (`ol-` classes of
  * `@openlinkos/ui`). Every value goes through the escaping `html` template.
  */
-import type { Entry, EntryKind, EventRow } from '@openlinkos/origin-core';
+import {
+  type Entry,
+  type EntryKind,
+  type EventRow,
+  TOMBSTONE_ID_RE,
+} from '@openlinkos/origin-core';
 import type { Ctx } from '../context.js';
 import { clip, query, time } from '../context.js';
 import { type HtmlValue, href, html, type SafeHtml } from '../html.js';
@@ -177,15 +182,21 @@ export function pager(ctx: Ctx, page: number, more: boolean): SafeHtml {
   return html`<nav class="ol-pager" aria-label="${t('pager.label')}"><span>${t('pager.page', { n: page + 1 })}</span><span class="ol-pager-links">${prev}${next}</span></nav>`;
 }
 
-/** `before` parameter for id-paged lists. */
+/** `before` parameter for lists paged by a numeric id (the audit log). */
 export function beforeParam(ctx: Ctx): number | undefined {
   const n = Number(query(ctx, 'before'));
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
+/** `before` parameter for the tombstone list, paged by tombstone id. */
+export function beforeTombstone(ctx: Ctx): string | undefined {
+  const id = query(ctx, 'before');
+  return TOMBSTONE_ID_RE.test(id) ? id : undefined;
+}
+
 /** Links for id-paged lists (tombstones, audit): back to the newest, and older. */
-export function olderLink(ctx: Ctx, lastId: number | undefined, more: boolean): SafeHtml {
-  const paged = beforeParam(ctx) !== undefined;
+export function olderLink(ctx: Ctx, lastId: number | string | undefined, more: boolean): SafeHtml {
+  const paged = query(ctx, 'before') !== '';
   const older = more && lastId !== undefined;
   if (!paged && !older) return html``;
   const t = ctx.t;

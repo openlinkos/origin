@@ -6,12 +6,17 @@
  * - event_fts: FTS5 trigram index; can be dropped and rebuilt.
  * - sync_log: per-sync statistics.
  * - entry / entry_source: durable entries and the events they cite (Entry), append-only; an entry
- *   changes only by being superseded. Status is derived, never stored.
+ *   changes only by being superseded. Several versions may supersede the same one (concurrent
+ *   corrections on different stores); `root` is the first version of the chain, fixed on insert.
+ *   Status is derived, never stored. `origin` is the store that wrote the version.
  * - entry_fts: FTS5 trigram index over entries.
- * - tombstone / forgotten_entry / excluded_event: forget operations and their effects (Tombstone).
+ * - tombstone / forgotten_entry / excluded_event: forget operations (Tombstone, with a global
+ *   `tmb_` id and the store it came from) and their effects on this store.
+ * - change_log: append-only sequence of the entries and tombstones this store has received or
+ *   written, filled by triggers; replication cursors point into it.
  * - api_token: hub access tokens (name and SHA-256 hash; the token itself is never stored).
- * - setting: small key-value state, local to this store and never replicated, e.g. how far a device
- *   has applied its hub's tombstones, or the scrypt hash of the hub's admin password.
+ * - setting: small key-value state, local to this store and never replicated: the store's name,
+ *   a device's replication cursors, or the scrypt hash of the hub's admin password.
  * - admin_session: server-side admin UI sessions (only a hash of the session id is stored). The
  *   key_name column predates the single admin password and now always holds `owner`.
  * - audit_log: append-only record of administrative actions with ids and counts only, never
@@ -107,12 +112,16 @@ CREATE TABLE IF NOT EXISTS entry (
   confidence REAL    NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
   author     TEXT    NOT NULL,
   project    TEXT,
-  supersedes TEXT    UNIQUE REFERENCES entry(id),
+  supersedes TEXT    REFERENCES entry(id),
+  root       TEXT    NOT NULL,
   valid_from INTEGER,
   valid_to   INTEGER,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  origin     TEXT    NOT NULL
 );
-CREATE INDEX IF NOT EXISTS entry_created ON entry (created_at);
+CREATE INDEX IF NOT EXISTS entry_created    ON entry (created_at);
+CREATE INDEX IF NOT EXISTS entry_supersedes ON entry (supersedes);
+CREATE INDEX IF NOT EXISTS entry_root       ON entry (root, created_at, id);
 
 CREATE TABLE IF NOT EXISTS entry_source (
   entry_id TEXT NOT NULL REFERENCES entry(id),
@@ -133,21 +142,48 @@ CREATE TRIGGER IF NOT EXISTS entry_ai AFTER INSERT ON entry BEGIN
 END;
 
 CREATE TABLE IF NOT EXISTS tombstone (
-  id         INTEGER PRIMARY KEY,
+  id         TEXT    PRIMARY KEY,
   target     TEXT    NOT NULL,
   reason     TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  origin     TEXT    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS forgotten_entry (
-  entry_id     TEXT    PRIMARY KEY REFERENCES entry(id),
-  tombstone_id INTEGER NOT NULL REFERENCES tombstone(id)
+  entry_id     TEXT PRIMARY KEY REFERENCES entry(id),
+  tombstone_id TEXT NOT NULL REFERENCES tombstone(id)
 );
+CREATE INDEX IF NOT EXISTS forgotten_entry_tombstone ON forgotten_entry (tombstone_id);
 
 CREATE TABLE IF NOT EXISTS excluded_event (
-  event_id     TEXT    PRIMARY KEY REFERENCES event(id),
-  tombstone_id INTEGER NOT NULL REFERENCES tombstone(id)
+  event_id     TEXT PRIMARY KEY REFERENCES event(id),
+  tombstone_id TEXT NOT NULL REFERENCES tombstone(id)
 );
+CREATE INDEX IF NOT EXISTS excluded_event_tombstone ON excluded_event (tombstone_id);
+
+CREATE TABLE IF NOT EXISTS change_log (
+  seq    INTEGER PRIMARY KEY,
+  kind   TEXT    NOT NULL CHECK (kind IN ('entry', 'tombstone')),
+  id     TEXT    NOT NULL,
+  origin TEXT    NOT NULL,
+  at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS change_log_kind ON change_log (kind, seq);
+CREATE INDEX IF NOT EXISTS change_log_id   ON change_log (id);
+CREATE TRIGGER IF NOT EXISTS entry_change AFTER INSERT ON entry BEGIN
+  INSERT INTO change_log (kind, id, origin, at)
+  VALUES ('entry', new.id, new.origin, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));
+END;
+CREATE TRIGGER IF NOT EXISTS tombstone_change AFTER INSERT ON tombstone BEGIN
+  INSERT INTO change_log (kind, id, origin, at)
+  VALUES ('tombstone', new.id, new.origin, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));
+END;
+CREATE TRIGGER IF NOT EXISTS change_log_no_update BEFORE UPDATE ON change_log BEGIN
+  SELECT RAISE(ABORT, 'change_log is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS change_log_no_delete BEFORE DELETE ON change_log BEGIN
+  SELECT RAISE(ABORT, 'change_log is append-only');
+END;
 
 CREATE TABLE IF NOT EXISTS api_token (
   name         TEXT    PRIMARY KEY,

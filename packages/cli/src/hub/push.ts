@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 import {
-  applyRemoteTombstone,
+  applyTombstone,
   type Database,
   getSetting,
   localRawFiles,
+  parseTombstoneRecord,
   setSetting,
-  type TombstoneRecord,
 } from '@openlinkos/origin-core';
 import type { HubConfig } from './config.js';
 
@@ -80,19 +80,29 @@ export async function pushToHub(opts: PushOptions): Promise<PushResult> {
     }
   }
 
-  const key = `hub.tombstones:${opts.hub.url}`;
+  // Pull the hub's tombstones after the last change applied here (the hub leaves out this device's).
+  const key = `hub.pulled:${opts.hub.url}`;
   let after = Number(getSetting(opts.db, key) ?? '0');
   for (;;) {
-    const { tombstones } = (await call('GET', `/v1/tombstones?after=${after}`)) as {
-      tombstones: TombstoneRecord[];
-    };
-    if (tombstones.length === 0) break;
-    for (const t of tombstones) {
-      const applied = applyRemoteTombstone(opts.db, t, 'hub');
-      if (applied.entries + applied.events > 0) result.tombstonesApplied++;
-      after = t.id;
+    const page = (await call(
+      'GET',
+      `/v1/tombstones?after=${after}&device=${encodeURIComponent(opts.hub.device)}`,
+    )) as { tombstones: unknown; next: unknown; more: unknown };
+    if (!Array.isArray(page.tombstones) || typeof page.next !== 'number') {
+      throw new Error('The hub sent an invalid list of tombstones.');
     }
-    setSetting(opts.db, key, String(after));
+    for (const value of page.tombstones) {
+      const applied = applyTombstone(opts.db, parseTombstoneRecord(value));
+      if (applied.entries + applied.events > 0) result.tombstonesApplied++;
+    }
+    if (!Number.isSafeInteger(page.next) || page.next < after) {
+      throw new Error('The hub sent an invalid tombstone cursor.');
+    }
+    if (page.next > after) {
+      after = page.next;
+      setSetting(opts.db, key, String(after));
+    }
+    if (!page.more) break;
   }
   return result;
 }

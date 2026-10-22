@@ -60,8 +60,8 @@ Origin distinguishes three kinds of durable entries. Every entry carries its sou
 | **Source** | An adapter for one agent: `claude-code`, `codex`, `cursor`, `zcode`, `grok` | id, agent version, discovery root |
 | **Raw** | Append-only mirror of an original log file | source, original path, generation, byte/line cursor, tail hash |
 | **Event** | A normalized conversation event: user message, assistant message, tool call, tool result | id, source, session, timestamp, project, cwd, git branch, role, kind, text, raw locator |
-| **Entry** | A durable `memory` / `knowledge` / `cognition` statement | id (`ent_…`), kind, text, confidence, author, project, sources (event ids + quotes), supersedes, valid_from / valid_to, created_at; status (`active` / `superseded` / `forgotten`) is derived, never stored |
-| **Tombstone** | Record of a forget operation | target id, reason, time; the entries it forgot and the events it excluded |
+| **Entry** | A durable `memory` / `knowledge` / `cognition` statement | id (`ent_…`), kind, text, confidence, author, project, sources (event ids + quotes), supersedes, root (its first version), valid_from / valid_to, created_at, origin (the store that wrote it); status (`active` / `superseded` / `forgotten`) is derived, never stored |
+| **Tombstone** | Record of a forget operation | id (`tmb_…`), target id, reason, time, origin (the store that created it); the entries it forgot and the events it excluded on each store |
 
 ## Data flow
 
@@ -141,15 +141,17 @@ interface SourceAdapter {
 | `event`, `event_fts` | Normalized events and their FTS5 trigram index |
 | `session` | Per-session aggregates over visible events (derived, rebuildable) |
 | `sync_log` | One row per sync run |
-| `entry`, `entry_source`, `entry_fts` | Entries, the events they cite (with quotes), and their FTS5 index |
-| `tombstone`, `forgotten_entry`, `excluded_event` | Forget operations and their effects |
+| `entry`, `entry_source`, `entry_fts` | Entries, the events they cite (with quotes), and their FTS5 index. Each version records its `root` (the first version, fixed when it is written) and its `origin` |
+| `tombstone`, `forgotten_entry`, `excluded_event` | Forget operations, each with a global id (`tmb_` and random hex, like `ent_` ids) and its `origin`, and their effects on this store |
+| `change_log` | Append-only sequence of the entries and tombstones this store has written or received (sequence number, kind, id, origin, time), filled by triggers; triggers reject updates and deletes. Replication cursors point into it |
 | `api_token` | Hub access tokens: name and SHA-256 hash, never the token itself |
-| `setting` | Small key-value state, local to each store and never replicated: how far a device has applied the hub's tombstones, and on a hub the scrypt hash of the admin password |
+| `setting` | Small key-value state, local to each store and never replicated: the store's name, a device's replication cursors, and on a hub the scrypt hash of the admin password |
 | `admin_session` | Admin UI sessions: a hash of the session id, its CSRF token, and its timestamps |
 | `audit_log` | Append-only record of administrative actions, with ids and counts but never content; triggers reject updates and deletes |
 
 - Storage uses Node's built-in `node:sqlite`, so there are no native modules to compile. Several processes may share the database (the CLI and one MCP server per agent session); WAL mode and a busy timeout handle this.
 - `session` is derived and can be rebuilt from `event`. The FTS indexes are external-content tables kept in sync by triggers.
+- **Store names.** Every store has a name, kept in `setting`: on a device it is the device's name, and a hub calls its store `hub`. Entries and tombstones record the name of the store that wrote them as their `origin`, and a device is known to its hub by its store's name. A store is named the first time it needs a name: `origin serve` names it `hub`; other commands use `ORIGIN_DEVICE` or the host name. Once a store has written an entry or a tombstone, it keeps its name.
 - **No migrations before the first release.** The schema is one set of idempotent statements applied every time the database is opened, so added tables and indexes appear in existing databases automatically. Any other schema change is made in place and needs a fresh `ORIGIN_HOME`. Delete the whole directory, never just `origin.db`: mirror paths are deterministic, so re-syncing into an existing `raw/` would append duplicate content. Versioned migrations will arrive with the first release.
 
 ## Ingestion
@@ -178,16 +180,21 @@ The other adapters' mappings are documented next to their formats in [sources.md
 - **Remember.** An entry is one self-contained statement with a kind, a confidence between 0 and 1, an author (the MCP client's name, or `user` for CLI corrections), an optional project and validity range, and at least one source (invariant 1). A source is an event id, an exact quote, or both:
   - With an id, the event must exist and be visible; a quote, if given, must occur in it (whitespace and case are ignored).
   - With only a quote, Origin cites the most recent visible `message` event containing it, falling back to `tool_result` events. Tool calls are never matched, because the agent's own `remember` call, which contains the quote, is itself logged as a tool call.
-- **Correct.** Correcting an active entry inserts a new entry that `supersedes` it (invariant 3). Sources carry over and new ones can be added. History is linear: an entry can be superseded at most once, and only the newest version is active.
-- **Status** is derived: `forgotten` if a tombstone covers the entry, `superseded` if a newer version exists, otherwise `active`. Queries return active entries unless history is requested; forgotten entries are never returned.
+- **Correct.** Correcting the current version of an entry inserts a new version that `supersedes` it (invariant 3). Sources carry over and new ones can be added. A correction is always dated after the version it corrects, even when the local clock is behind. All versions of an entry share its `root`, the first version; together they form its chain.
+- **Concurrent corrections.** Two stores may correct the same version before they hear of each other, so a version can be superseded by more than one. The chain then forks, and every store resolves it the same way: the version with the greatest `(created_at, id)` in the chain is the **current** version; every other version is superseded. A superseded version that nothing corrects lost to a concurrent correction and is marked as such (`concurrent`). Only the current version can be corrected.
+- **Status** is derived: `forgotten` if a tombstone covers the entry, `active` if it is the current version of its chain, otherwise `superseded` (with the current version as `superseded_by`). Queries return active entries unless history is requested; forgotten entries are never returned. History lists every version of the chain, forks included, oldest first.
 
 ## Forgetting
 
 `forget` takes an entry id or an event id and records a tombstone (invariant 2):
 
-1. **Forgetting an entry** forgets every version of it and excludes all events those versions cite.
+1. **Forgetting an entry** forgets every version of it (its whole chain, forks included) and excludes all events those versions cite.
 2. **Forgetting an event** excludes it and forgets every entry that cites it, as in rule 1.
-3. **An active entry left with no visible source** has lost its provenance and is forgotten as well. This excludes no further events, so the cascade stops here.
+3. **An entry whose current version is left with no visible source** has lost its provenance and is forgotten as well, every version of it. This excludes no further events, so the cascade stops here.
+
+A chain is forgotten as a whole or not at all, and nothing un-forgets. The tombstone keeps the target id and records its effects on the store: the entries it forgot and the events it excluded.
+
+**Tombstones from other stores.** Tombstone ids are global, so a tombstone created on one store keeps its id, origin, and reason on every store it reaches. A store applies it by the rules above to the data it holds, and also applies the effects the tombstone had on the store that sent it, as far as it knows those ids; a listed entry takes its whole chain with it. Each store therefore forgets at least what the sender forgot, and the stores converge on the union. Applying a tombstone twice changes nothing. A version that arrives later in a forgotten chain is forgotten on arrival, and so is an entry whose sources were excluded elsewhere (rules 2 and 3), so the order of arrival does not matter.
 
 Excluded events disappear from search, timelines, session counts, `get`, and `sources`, and can never be cited again. Re-syncing, even a rewritten source file, does not bring them back, because event ids are stable and exclusion is keyed by id. Forgetting hides; it does not erase. The raw mirror files stay on disk (invariant 3) but are never shown. Physical purging may come later as an explicit option. The CLI shows what will be forgotten and requires `--yes`, because forgetting cannot be undone.
 
@@ -229,7 +236,7 @@ A hub is an ordinary Origin store that also runs `origin serve`. It is self-host
 - A device pushes **raw mirror bytes**, not parsed events. The hub stores them as its own append-only mirrors and parses them with the same adapters, so provenance (invariant 1) holds on the hub and parser fixes apply everywhere. Event ids are identical on every store.
 - Each remote file is keyed by `(source, "@<device>:<original path>", generation)`; local paths never start with `@`. Hub mirrors live under `raw/devices/<device>/<source>/<relPath>[.g<n>]`.
 - Pushing is resumable and idempotent: the device asks for the hub's cursors, then sends `[cursor, local size)` of each mirror in chunks of complete lines (at most 1 MiB, or one longer line). A chunk whose offset does not match the hub's cursor is rejected with the current cursor, and the device resumes from there.
-- After pushing, the device pulls the hub's tombstones it has not applied yet and applies them to its staging store, so forgetting reaches every replica (invariant 2). Events forgotten on the hub stay excluded when re-pushed, because exclusion is keyed by event id.
+- After pushing, the device pulls the hub's tombstones it has not applied yet and applies them to its staging store, so forgetting reaches every replica (invariant 2). It asks for the tombstones after its cursor in the hub's `change_log`, and the hub leaves out the ones that device created. Events forgotten on the hub stay excluded when re-pushed, because exclusion is keyed by event id.
 
 ### Access
 
@@ -245,15 +252,15 @@ A hub is an ordinary Origin store that also runs `origin serve`. It is self-host
 | `POST /mcp` | MCP Streamable HTTP, stateless, JSON responses; the same seven tools as the stdio server |
 | `GET /v1/cursors?device=<name>` | The hub's byte cursor for every file of that device |
 | `POST /v1/ingest` | Append one chunk: JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }` with `data` in base64; the body may be gzip-encoded. Returns `200 { bytes, eventsAdded, … }` or `409 { bytes }` on an offset mismatch |
-| `GET /v1/tombstones?after=<id>` | Tombstones with id greater than `after`, each with its forgotten entries and excluded events |
+| `GET /v1/tombstones?after=<seq>&device=<name>` | `{ tombstones, next, more }`: the tombstones in the hub's change log after sequence number `after`, except those the device created, each with its id, target, reason, `createdAt`, origin, and its forgotten entries and excluded events on the hub. Continue with `after=<next>` while `more` is true |
 | `GET`, `POST /admin/…` | The admin UI when enabled: server-rendered pages behind an admin sign-in. 404 when disabled |
 | `GET`, `POST /admin/api/…` | The admin UI's JSON API: the same operations, session, and checks as its pages |
 
-The hub validates every field: device names match `[a-z0-9][a-z0-9._-]{0,62}`, the source must be a known adapter, and `relPath` must be relative with no `..` segment, so a device can never write outside its mirror directory.
+The hub validates every field: device names match `[a-z0-9][a-z0-9._-]{0,62}` and may not be the hub's own name, the source must be a known adapter, and `relPath` must be relative with no `..` segment, so a device can never write outside its mirror directory.
 
 ### Using a hub from a device
 
-- `origin hub connect <url> --token <token> [--device <name>]` stores the connection in `<ORIGIN_HOME>/hub.json` (the device name defaults to the host name). `ORIGIN_HUB_URL`, `ORIGIN_HUB_TOKEN`, and `ORIGIN_DEVICE` override it.
+- `origin hub connect <url> --token <token> [--device <name>]` stores the connection in `<ORIGIN_HOME>/hub.json`. The device's name is its store's name (see [Storage](#storage)); `--device` renames a store that has not written any entry or tombstone yet. `ORIGIN_HUB_URL` and `ORIGIN_HUB_TOKEN` override the stored connection.
 - With a hub configured, `origin mcp` becomes a **forwarding proxy**: it exposes the same tools over stdio, syncs and pushes before each call (at most every 10 seconds for reads, always before `remember` and `correct`), and forwards the call to the hub. Agent registrations do not change, and an agent can still cite what was said a moment ago.
 - Cloud agents with no local logs register the hub's `/mcp` URL directly with a bearer token.
 - In this version, CLI curation commands (`entries`, `correct`, `forget`, …) act on the store they run against. Curate through your agents, through the hub's admin UI, or by running the CLI on the hub.

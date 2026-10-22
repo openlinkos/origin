@@ -5,12 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type AppendResult,
   appendRemote,
-  applyRemoteTombstone,
+  applyTombstone,
   createToken,
   type Database,
   forget,
   getEvent,
   getSetting,
+  initStoreName,
   listDevices,
   listEvents,
   listSessions,
@@ -19,6 +20,7 @@ import {
   OriginError,
   openDatabase,
   type ParseContext,
+  parseTombstoneRecord,
   type RemoteChunk,
   rawLocator,
   readRawLine,
@@ -27,7 +29,8 @@ import {
   revokeToken,
   setSetting,
   syncSource,
-  tombstonesAfter,
+  tombstoneCount,
+  tombstoneFeed,
   verifyToken,
 } from '../src/index.js';
 import { fakeAdapter, line } from './helpers.js';
@@ -333,10 +336,10 @@ describe('tokens', () => {
 
 describe('settings', () => {
   it('stores small key-value state', () => {
-    expect(getSetting(db, 'hub.tombstones')).toBeNull();
-    setSetting(db, 'hub.tombstones', '3');
-    setSetting(db, 'hub.tombstones', '7');
-    expect(getSetting(db, 'hub.tombstones')).toBe('7');
+    expect(getSetting(db, 'hub.pulled')).toBeNull();
+    setSetting(db, 'hub.pulled', '3');
+    setSetting(db, 'hub.pulled', '7');
+    expect(getSetting(db, 'hub.pulled')).toBe('7');
   });
 });
 
@@ -345,8 +348,10 @@ describe('tombstones', () => {
   let deviceHome: string;
 
   beforeEach(async () => {
+    initStoreName(db, 'hub');
     deviceHome = tmp('origin-device-');
     device = openDatabase(path.join(deviceHome, 'origin.db'));
+    initStoreName(device, 'laptop');
     const src = tmp('origin-src-');
     fs.writeFileSync(
       path.join(src, 's1.jsonl'),
@@ -361,7 +366,7 @@ describe('tombstones', () => {
 
   afterEach(() => device.close());
 
-  it('lists tombstones with what they forgot, oldest first', () => {
+  it('feeds tombstones in change order, each with its effects, without the device own', () => {
     const e = remember(db, {
       kind: 'memory',
       text: 'x',
@@ -369,18 +374,49 @@ describe('tombstones', () => {
       author: 'test',
       sources: [{ eventId: 'fake:e1' }],
     });
-    forget(db, e.id, 'test');
-    forget(db, 'fake:h1');
-    const all = tombstonesAfter(db, 0);
-    expect(all.map((t) => [t.target, t.reason, t.entries, t.events])).toEqual([
-      [e.id, 'test', [e.id], ['fake:e1']],
-      ['fake:h1', null, [], ['fake:h1']],
+    const first = forget(db, e.id, 'test');
+    const second = forget(db, 'fake:h1');
+    // A tombstone a device pushed: it keeps its id and origin.
+    applyTombstone(
+      db,
+      {
+        id: 'tmb_0123456789ab',
+        target: 'fake:e2',
+        reason: null,
+        createdAt: 4000,
+        origin: 'laptop',
+        entries: [],
+        events: ['fake:e2'],
+      },
+      { keep: true },
+    );
+
+    const all = tombstoneFeed(db, { after: 0, device: 'desk' });
+    expect(
+      all.tombstones.map((t) => [t.id, t.target, t.reason, t.origin, t.entries, t.events]),
+    ).toEqual([
+      [first.tombstoneId, e.id, 'test', 'hub', [e.id], ['fake:e1']],
+      [second.tombstoneId, 'fake:h1', null, 'hub', [], ['fake:h1']],
+      ['tmb_0123456789ab', 'fake:e2', null, 'laptop', [], ['fake:e2']],
     ]);
-    expect(tombstonesAfter(db, all[0]!.id).map((t) => t.target)).toEqual(['fake:h1']);
-    expect(tombstonesAfter(db, 0, 1)).toHaveLength(1);
+    expect(all.more).toBe(false);
+    // The device that created a tombstone does not get it back.
+    const laptop = tombstoneFeed(db, { after: 0, device: 'laptop' });
+    expect(laptop.tombstones.map((t) => t.id)).toEqual([first.tombstoneId, second.tombstoneId]);
+
+    const page = tombstoneFeed(db, { after: 0, device: 'desk', limit: 1 });
+    expect(page.tombstones.map((t) => t.id)).toEqual([first.tombstoneId]);
+    expect(page.more).toBe(true);
+    const rest = tombstoneFeed(db, { after: page.next, device: 'desk' });
+    expect(rest.tombstones.map((t) => t.id)).toEqual([second.tombstoneId, 'tmb_0123456789ab']);
+    expect(tombstoneFeed(db, { after: rest.next, device: 'desk' })).toEqual({
+      tombstones: [],
+      next: rest.next,
+      more: false,
+    });
   });
 
-  it("applies a hub's tombstone to what the device knows, once", () => {
+  it("applies a hub's tombstone to what the device knows, once, under the same id", () => {
     const e = remember(db, {
       kind: 'memory',
       text: 'x',
@@ -390,20 +426,50 @@ describe('tombstones', () => {
     });
     forget(db, e.id, 'secret');
     forget(db, 'fake:h1');
-    const [first, second] = tombstonesAfter(db, 0);
+    const [first, second] = tombstoneFeed(db, { after: 0, device: 'laptop' }).tombstones;
 
     expect(listSessions(device)[0]?.eventCount).toBe(2);
-    expect(applyRemoteTombstone(device, first!, 'hub', 5000)).toEqual({ entries: 0, events: 1 });
+    expect(applyTombstone(device, first!)).toEqual({ entries: 0, events: 1 });
     expect(getEvent(device, 'fake:e1')).toBeNull();
     expect(listSessions(device)[0]?.eventCount).toBe(1);
-    const local = tombstonesAfter(device, 0);
-    expect(local.map((t) => [t.target, t.reason, t.createdAt, t.events])).toEqual([
-      [e.id, `hub#${first!.id}: secret`, 5000, ['fake:e1']],
+    expect(tombstoneFeed(device, { after: 0, device: 'other' }).tombstones).toEqual([
+      { ...first!, entries: [] },
     ]);
 
     // Re-applying, or applying a tombstone about events the device never had, writes nothing.
-    expect(applyRemoteTombstone(device, first!, 'hub')).toEqual({ entries: 0, events: 0 });
-    expect(applyRemoteTombstone(device, second!, 'hub')).toEqual({ entries: 0, events: 0 });
-    expect(tombstonesAfter(device, 0)).toHaveLength(1);
+    expect(applyTombstone(device, first!)).toEqual({ entries: 0, events: 0 });
+    expect(applyTombstone(device, second!)).toEqual({ entries: 0, events: 0 });
+    expect(tombstoneCount(device)).toBe(1);
+    expect(() => applyTombstone(device, { ...first!, reason: 'changed' })).toThrow(
+      /different content/,
+    );
+  });
+
+  it('rejects malformed tombstones', () => {
+    const good = {
+      id: 'tmb_0123456789ab',
+      target: 'fake:e1',
+      reason: null,
+      createdAt: 1,
+      origin: 'laptop',
+      entries: [],
+      events: ['fake:e1'],
+    };
+    expect(parseTombstoneRecord(good)).toEqual(good);
+    for (const bad of [
+      null,
+      [],
+      { ...good, id: 7 },
+      { ...good, id: 'ent_0123456789ab' },
+      { ...good, target: '' },
+      { ...good, reason: 3 },
+      { ...good, createdAt: -1 },
+      { ...good, createdAt: 1.5 },
+      { ...good, origin: 'Bad Name' },
+      { ...good, entries: 'x' },
+      { ...good, events: [1] },
+    ]) {
+      expect(() => parseTombstoneRecord(bad)).toThrow(OriginError);
+    }
   });
 });

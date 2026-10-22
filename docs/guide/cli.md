@@ -25,7 +25,7 @@ origin push                                            Sync locally, push raw mi
 - **Time values** are relative durations (`30m`, `24h`, `7d`, `2w`) or dates (`YYYY-MM-DD`, ISO 8601).
 - **Source ids** are `claude-code` and `codex` (plus `cursor`, `zcode`, and `grok` once their adapters ship).
 - **Entry kinds** are `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries).
-- **Ids** look like `ent_5f0c2a9e41b7` for entries and `claude-code:<uuid>` or `codex:<session>:o12` for events.
+- **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, and `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting leaves.
 
 ## Searching
 
@@ -99,7 +99,7 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 | `CODEX_HOME` | `~/.codex` | Codex's home directory (rollouts are read from `sessions/` and `archived_sessions/`) |
 | `ORIGIN_HUB_URL` | — | Hub URL; overrides `origin hub connect` |
 | `ORIGIN_HUB_TOKEN` | — | Hub token; overrides `origin hub connect` |
-| `ORIGIN_DEVICE` | host name | This device's name on the hub |
+| `ORIGIN_DEVICE` | host name | The name a new store takes: this device's name on the hub, and the origin recorded on what it writes |
 | `ORIGIN_ADMIN` | `off` | `on` serves the admin UI at `/admin` (`origin serve --admin`) |
 | `ORIGIN_ADMIN_LISTEN` | — | Serve the admin UI on this `host:port` instead (`--admin-listen`) |
 | `ORIGIN_PUBLIC_URL` | — | The hub's public https URL (`--public-url`) |

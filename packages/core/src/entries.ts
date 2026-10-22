@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { OriginError } from './errors.js';
-import { refreshSession } from './ingest.js';
+import { storeName } from './identity.js';
 import { getEvent, toFtsQuery, VISIBLE_EVENT } from './store.js';
 import type { EventRow } from './types.js';
 
@@ -19,11 +19,21 @@ export interface Entry {
   author: string;
   project: string | null;
   supersedes: string | null;
+  /** The current version of this entry, when this version is superseded. */
   supersededBy: string | null;
+  /** The first version of this entry; every version of it shares the same root. */
+  root: string;
+  /** The store that wrote this version: a device's name, or the hub's. */
+  origin: string;
   validFrom: number | null;
   validTo: number | null;
   createdAt: number;
   status: EntryStatus;
+  /**
+   * Superseded although nothing corrects this version: a concurrent correction that lost to the
+   * current version (see docs/architecture.md#entries).
+   */
+  concurrent: boolean;
 }
 
 /** A source to cite: an event id, an exact quote from an event, or both. */
@@ -73,24 +83,21 @@ export interface EntryFilter {
   offset?: number;
 }
 
-export interface ForgetResult {
-  target: string;
-  targetType: 'entry' | 'event';
-  /** Entries newly forgotten (every version of each affected entry). */
-  entries: string[];
-  /** Events newly excluded. */
-  events: string[];
-  /** Null when there was nothing left to forget. */
-  tombstoneId: number | null;
-}
+/**
+ * True when `en` is the current version of its entry: no other version of the same chain has a
+ * greater (created_at, id). Concurrent corrections are therefore resolved the same way on every
+ * store, whatever order they arrive in.
+ */
+export const CURRENT_VERSION = `NOT EXISTS (SELECT 1 FROM entry o WHERE o.root = en.root
+  AND (o.created_at > en.created_at OR (o.created_at = en.created_at AND o.id > en.id)))`;
 
 const ENTRY_SELECT = `SELECT en.id, en.kind, en.text, en.confidence, en.author, en.project,
-  en.supersedes, nx.id AS superseded_by, en.valid_from, en.valid_to, en.created_at,
-  CASE WHEN fe.entry_id IS NOT NULL THEN 'forgotten'
-       WHEN nx.id IS NOT NULL THEN 'superseded'
-       ELSE 'active' END AS status
+  en.supersedes, en.root, en.origin, en.valid_from, en.valid_to, en.created_at,
+  (SELECT o.id FROM entry o WHERE o.root = en.root ORDER BY o.created_at DESC, o.id DESC LIMIT 1)
+    AS current_id,
+  EXISTS (SELECT 1 FROM entry c WHERE c.supersedes = en.id) AS corrected,
+  fe.entry_id IS NOT NULL AS forgotten
   FROM entry en
-  LEFT JOIN entry nx ON nx.supersedes = en.id
   LEFT JOIN forgotten_entry fe ON fe.entry_id = en.id`;
 
 interface EntryRecord {
@@ -101,14 +108,22 @@ interface EntryRecord {
   author: string;
   project: string | null;
   supersedes: string | null;
-  superseded_by: string | null;
+  root: string;
+  origin: string;
   valid_from: number | null;
   valid_to: number | null;
   created_at: number;
-  status: string;
+  current_id: string;
+  corrected: number;
+  forgotten: number;
 }
 
 function toEntry(r: EntryRecord): Entry {
+  const status: EntryStatus = r.forgotten
+    ? 'forgotten'
+    : r.current_id === r.id
+      ? 'active'
+      : 'superseded';
   return {
     id: r.id,
     kind: r.kind as EntryKind,
@@ -117,13 +132,19 @@ function toEntry(r: EntryRecord): Entry {
     author: r.author,
     project: r.project,
     supersedes: r.supersedes,
-    supersededBy: r.superseded_by,
+    supersededBy: status === 'superseded' ? r.current_id : null,
+    root: r.root,
+    origin: r.origin,
     validFrom: r.valid_from,
     validTo: r.valid_to,
     createdAt: r.created_at,
-    status: r.status as EntryStatus,
+    status,
+    concurrent: status === 'superseded' && !r.corrected,
   };
 }
+
+/** Entry ids: `ent_` and random hex, unique across stores. */
+export const ENTRY_ID_RE = /^ent_[0-9a-f]{12,32}$/;
 
 export function isEntryId(id: string): boolean {
   return id.startsWith('ent_');
@@ -133,7 +154,8 @@ function newEntryId(): string {
   return `ent_${randomBytes(6).toString('hex')}`;
 }
 
-function loadEntry(db: Database, id: string): Entry | null {
+/** An entry by id in any status, forgotten included (for internal use: never shown). */
+export function loadEntry(db: Database, id: string): Entry | null {
   const row = db.prepare(`${ENTRY_SELECT} WHERE en.id = ?`).get(id) as EntryRecord | undefined;
   return row ? toEntry(row) : null;
 }
@@ -150,7 +172,7 @@ export function isEntryForgotten(db: Database, id: string): boolean {
 
 function entryWhere(f: EntryFilter, params: unknown[]): string {
   const parts = ['fe.entry_id IS NULL'];
-  if (!f.includeSuperseded) parts.push('nx.id IS NULL');
+  if (!f.includeSuperseded) parts.push(CURRENT_VERSION);
   if (f.kind) {
     parts.push('en.kind = ?');
     params.push(f.kind);
@@ -176,7 +198,9 @@ export function listEntries(db: Database, filter: EntryFilter = {}): Entry[] {
   const where = entryWhere(filter, params);
   params.push(filter.limit ?? 50, filter.offset ?? 0);
   const rows = db
-    .prepare(`${ENTRY_SELECT} WHERE ${where} ORDER BY en.created_at DESC LIMIT ? OFFSET ?`)
+    .prepare(
+      `${ENTRY_SELECT} WHERE ${where} ORDER BY en.created_at DESC, en.id DESC LIMIT ? OFFSET ?`,
+    )
     .all(...(params as never[])) as unknown as EntryRecord[];
   return rows.map(toEntry);
 }
@@ -187,7 +211,7 @@ export function entriesCiting(db: Database, eventId: string): Entry[] {
     .prepare(
       `${ENTRY_SELECT} WHERE fe.entry_id IS NULL
          AND en.id IN (SELECT entry_id FROM entry_source WHERE event_id = ?)
-       ORDER BY en.created_at DESC`,
+       ORDER BY en.created_at DESC, en.id DESC`,
     )
     .all(eventId) as unknown as EntryRecord[];
   return rows.map(toEntry);
@@ -230,34 +254,50 @@ export function entrySources(db: Database, entryId: string): EntrySource[] {
   return out;
 }
 
-/** Every version of an entry, oldest first. */
-function lineage(db: Database, id: string): string[] {
-  const back: string[] = [];
-  let cur: string | null = id;
-  while (cur) {
-    back.unshift(cur);
-    const row = db.prepare('SELECT supersedes FROM entry WHERE id = ?').get(cur) as
-      | { supersedes: string | null }
-      | undefined;
-    cur = row?.supersedes ?? null;
-  }
-  let next: string | null = id;
-  while (next) {
-    const row = db.prepare('SELECT id FROM entry WHERE supersedes = ?').get(next) as
-      | { id: string }
-      | undefined;
-    next = row?.id ?? null;
-    if (next) back.push(next);
-  }
-  return back;
+/** The root (first version) of an entry, or null if the entry is unknown. */
+export function rootOf(db: Database, id: string): string | null {
+  const row = db.prepare('SELECT root FROM entry WHERE id = ?').get(id) as
+    | { root: string }
+    | undefined;
+  return row?.root ?? null;
 }
 
-/** Versions of a visible entry, oldest first; empty if the entry is unknown or forgotten. */
+/** Every version of the entry with this root, oldest first: its whole chain, forks included. */
+export function chainOf(db: Database, root: string): string[] {
+  return (
+    db
+      .prepare('SELECT id FROM entry WHERE root = ? ORDER BY created_at, id')
+      .all(root) as unknown as Array<{ id: string }>
+  ).map((r) => r.id);
+}
+
+/** The current version of the chain with this root: its greatest (created_at, id). */
+export function currentOf(db: Database, root: string): string | null {
+  const row = db
+    .prepare('SELECT id FROM entry WHERE root = ? ORDER BY created_at DESC, id DESC LIMIT 1')
+    .get(root) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
+/** Every event the given entries cite, visible or not. */
+export function sourcesOf(db: Database, entryIds: string[]): string[] {
+  if (entryIds.length === 0) return [];
+  return (
+    db
+      .prepare(
+        `SELECT DISTINCT event_id FROM entry_source WHERE entry_id IN (${entryIds.map(() => '?').join(',')})`,
+      )
+      .all(...entryIds) as unknown as Array<{ event_id: string }>
+  ).map((r) => r.event_id);
+}
+
+/** Versions of a visible entry, oldest first, forks included; empty if the entry is unknown or forgotten. */
 export function entryHistory(db: Database, id: string): Entry[] {
-  if (!getEntry(db, id)) return [];
-  return lineage(db, id)
+  const entry = getEntry(db, id);
+  if (!entry) return [];
+  return chainOf(db, entry.root)
     .map((v) => loadEntry(db, v))
-    .filter((e): e is Entry => e !== null);
+    .filter((e): e is Entry => e !== null && e.status !== 'forgotten');
 }
 
 const normalize = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -327,7 +367,7 @@ function resolveSources(
   return [...out].map(([eventId, q]) => ({ eventId, quote: q }));
 }
 
-function validate(input: {
+export function validateEntry(input: {
   kind: string;
   text: string;
   confidence: number;
@@ -346,67 +386,88 @@ function validate(input: {
   }
 }
 
-function insertEntry(
-  db: Database,
-  fields: Omit<Entry, 'id' | 'supersededBy' | 'status' | 'createdAt'>,
-  sources: Array<{ eventId: string; quote: string | null }>,
-  now: number,
-): string {
-  const id = newEntryId();
+/** The stored fields of one version of an entry, as written and as replicated. */
+export interface EntryRecordInput {
+  id: string;
+  kind: EntryKind;
+  text: string;
+  confidence: number;
+  author: string;
+  project: string | null;
+  supersedes: string | null;
+  validFrom: number | null;
+  validTo: number | null;
+  createdAt: number;
+  origin: string;
+  sources: Array<{ eventId: string; quote: string | null }>;
+}
+
+/**
+ * Insert one version with its sources. The root is the superseded version's root, or the entry's
+ * own id. Must run inside a write transaction; the caller checks the sources and the version it
+ * supersedes.
+ */
+export function insertEntry(db: Database, e: EntryRecordInput): void {
+  const root = e.supersedes ? rootOf(db, e.supersedes) : e.id;
+  if (!root) throw new OriginError(`Unknown entry ${e.supersedes}.`);
   db.prepare(
-    `INSERT INTO entry (id, kind, text, confidence, author, project, supersedes, valid_from, valid_to, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO entry (id, kind, text, confidence, author, project, supersedes, root, valid_from,
+                        valid_to, created_at, origin)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
-    id,
-    fields.kind,
-    fields.text.trim(),
-    fields.confidence,
-    fields.author,
-    fields.project,
-    fields.supersedes,
-    fields.validFrom,
-    fields.validTo,
-    now,
+    e.id,
+    e.kind,
+    e.text,
+    e.confidence,
+    e.author,
+    e.project,
+    e.supersedes,
+    root,
+    e.validFrom,
+    e.validTo,
+    e.createdAt,
+    e.origin,
   );
   const insertSource = db.prepare(
     'INSERT INTO entry_source (entry_id, event_id, quote) VALUES (?, ?, ?)',
   );
-  for (const s of sources) insertSource.run(id, s.eventId, s.quote);
-  return id;
+  for (const s of e.sources) insertSource.run(e.id, s.eventId, s.quote);
 }
 
 /** Write a new entry. Every entry cites at least one visible event. */
 export function remember(db: Database, input: RememberInput, now = Date.now()): Entry {
-  validate(input);
-  const id = transaction(
+  validateEntry(input);
+  const id = newEntryId();
+  transaction(
     db,
     () =>
-      insertEntry(
-        db,
-        {
-          kind: input.kind,
-          text: input.text,
-          confidence: input.confidence,
-          author: input.author,
-          project: input.project ?? null,
-          supersedes: null,
-          validFrom: input.validFrom ?? null,
-          validTo: input.validTo ?? null,
-        },
-        resolveSources(db, input.sources),
-        now,
-      ),
+      insertEntry(db, {
+        id,
+        kind: input.kind,
+        text: input.text.trim(),
+        confidence: input.confidence,
+        author: input.author,
+        project: input.project ?? null,
+        supersedes: null,
+        validFrom: input.validFrom ?? null,
+        validTo: input.validTo ?? null,
+        createdAt: now,
+        origin: storeName(db),
+        sources: resolveSources(db, input.sources),
+      }),
     { immediate: true },
   );
   return getEntry(db, id) as Entry;
 }
 
 /**
- * Supersede an active entry with a corrected version (invariant 3: entries are never edited in
- * place). Sources carry over, plus any new ones.
+ * Supersede the current version of an entry with a corrected one (invariant 3: entries are never
+ * edited in place). Sources carry over, plus any new ones. A correction is always dated after the
+ * version it corrects, even when this machine's clock is behind, so it sorts after it everywhere.
  */
 export function correct(db: Database, id: string, input: CorrectInput, now = Date.now()): Entry {
-  const newId = transaction(
+  const newId = newEntryId();
+  transaction(
     db,
     () => {
       const old = getEntry(db, id);
@@ -417,20 +478,19 @@ export function correct(db: Database, id: string, input: CorrectInput, now = Dat
       }
       if (old.status === 'superseded') {
         throw new OriginError(
-          `Entry ${id} was already corrected by ${old.supersededBy}; correct that one instead.`,
+          old.concurrent
+            ? `Entry ${id} lost to a concurrent correction, ${old.supersededBy}; correct that one instead.`
+            : `Entry ${id} was already corrected; its current version is ${old.supersededBy}. Correct that one instead.`,
         );
       }
       const fields = {
         kind: input.kind ?? old.kind,
         text: input.text,
         confidence: input.confidence ?? old.confidence,
-        author: input.author,
-        project: old.project,
-        supersedes: old.id,
         validFrom: input.validFrom === undefined ? old.validFrom : input.validFrom,
         validTo: input.validTo === undefined ? old.validTo : input.validTo,
       };
-      validate(fields);
+      validateEntry(fields);
       const carried = entrySources(db, old.id).map((s) => ({ eventId: s.eventId, quote: s.quote }));
       const added = input.sources?.length ? resolveSources(db, input.sources) : [];
       const merged = new Map(carried.map((s) => [s.eventId, s.quote]));
@@ -438,113 +498,21 @@ export function correct(db: Database, id: string, input: CorrectInput, now = Dat
       if (merged.size === 0) {
         throw new OriginError(`Entry ${id} has no remaining sources; cite at least one.`);
       }
-      const sources = [...merged].map(([eventId, quote]) => ({ eventId, quote }));
-      return insertEntry(db, fields, sources, now);
+      insertEntry(db, {
+        id: newId,
+        ...fields,
+        text: fields.text.trim(),
+        author: input.author,
+        project: old.project,
+        supersedes: old.id,
+        createdAt: Math.max(now, old.createdAt + 1),
+        origin: storeName(db),
+        sources: [...merged].map(([eventId, quote]) => ({ eventId, quote })),
+      });
     },
     { immediate: true },
   );
   return getEntry(db, newId) as Entry;
-}
-
-function sourcesOf(db: Database, entryIds: string[]): string[] {
-  if (entryIds.length === 0) return [];
-  return (
-    db
-      .prepare(
-        `SELECT DISTINCT event_id FROM entry_source WHERE entry_id IN (${entryIds.map(() => '?').join(',')})`,
-      )
-      .all(...entryIds) as unknown as Array<{ event_id: string }>
-  ).map((r) => r.event_id);
-}
-
-/** What `forget` would do, without doing it. */
-export function planForget(db: Database, id: string): ForgetResult {
-  const forgottenEntry = (e: string) => isEntryForgotten(db, e);
-  const excludedEvent = (e: string) =>
-    db.prepare('SELECT 1 FROM excluded_event WHERE event_id = ?').get(e) !== undefined;
-  let targetType: ForgetResult['targetType'];
-  let entries: string[];
-  let events: string[];
-  if (db.prepare('SELECT 1 FROM entry WHERE id = ?').get(id)) {
-    // Forgetting an entry forgets every version of it and excludes all of their sources.
-    targetType = 'entry';
-    entries = lineage(db, id);
-    events = sourcesOf(db, entries);
-  } else if (db.prepare('SELECT 1 FROM event WHERE id = ?').get(id)) {
-    // Forgetting an event also forgets every entry that cites it, as above.
-    targetType = 'event';
-    const citing = (
-      db.prepare('SELECT DISTINCT entry_id FROM entry_source WHERE event_id = ?').all(id) as Array<{
-        entry_id: string;
-      }>
-    ).map((r) => r.entry_id);
-    entries = [...new Set(citing.flatMap((e) => lineage(db, e)))];
-    events = [id, ...sourcesOf(db, entries)];
-  } else {
-    throw new OriginError(`Unknown entry or event ${id}.`);
-  }
-  // An active entry left with no visible source has lost its provenance, so it is forgotten too.
-  // This excludes no further events, so the cascade stops here.
-  const excluded = new Set(events);
-  const entrySet = new Set(entries);
-  const affected = events.length
-    ? (db
-        .prepare(
-          `SELECT DISTINCT s.entry_id FROM entry_source s LEFT JOIN entry nx ON nx.supersedes = s.entry_id
-           WHERE nx.id IS NULL AND s.event_id IN (${events.map(() => '?').join(',')})`,
-        )
-        .all(...events) as unknown as Array<{ entry_id: string }>)
-    : [];
-  for (const { entry_id } of affected) {
-    if (entrySet.has(entry_id) || forgottenEntry(entry_id)) continue;
-    if (sourcesOf(db, [entry_id]).every((e) => excluded.has(e) || excludedEvent(e))) {
-      for (const v of lineage(db, entry_id)) entrySet.add(v);
-    }
-  }
-  return {
-    target: id,
-    targetType,
-    entries: [...entrySet].filter((e) => !forgottenEntry(e)),
-    events: [...new Set(events)].filter((e) => !excludedEvent(e)),
-    tombstoneId: null,
-  };
-}
-
-/**
- * Forget an entry or an event (invariant 2, sticky forgetting). Forgotten entries and excluded
- * events leave every query, and excluded events can never be cited again. Raw mirrors are kept
- * on disk but never shown. Irreversible.
- */
-export function forget(db: Database, id: string, reason?: string, now = Date.now()): ForgetResult {
-  return transaction(
-    db,
-    () => {
-      const plan = planForget(db, id);
-      if (plan.entries.length === 0 && plan.events.length === 0) return plan;
-      const tombstoneId = Number(
-        db
-          .prepare('INSERT INTO tombstone (target, reason, created_at) VALUES (?, ?, ?)')
-          .run(id, reason?.trim() || null, now).lastInsertRowid,
-      );
-      const forgetEntry = db.prepare(
-        'INSERT OR IGNORE INTO forgotten_entry (entry_id, tombstone_id) VALUES (?, ?)',
-      );
-      for (const e of plan.entries) forgetEntry.run(e, tombstoneId);
-      const exclude = db.prepare(
-        'INSERT OR IGNORE INTO excluded_event (event_id, tombstone_id) VALUES (?, ?)',
-      );
-      const sessions = new Map<string, { source: string; sessionId: string }>();
-      const sessionOf = db.prepare('SELECT source, session_id FROM event WHERE id = ?');
-      for (const e of plan.events) {
-        exclude.run(e, tombstoneId);
-        const s = sessionOf.get(e) as { source: string; session_id: string };
-        sessions.set(`${s.source}\n${s.session_id}`, { source: s.source, sessionId: s.session_id });
-      }
-      for (const s of sessions.values()) refreshSession(db, s.source, s.sessionId);
-      return { ...plan, tombstoneId };
-    },
-    { immediate: true },
-  );
 }
 
 /** Number of active entries per kind. */
@@ -553,9 +521,8 @@ export function entryCounts(db: Database): Record<EntryKind, number> {
   const rows = db
     .prepare(
       `SELECT en.kind AS kind, COUNT(*) AS n FROM entry en
-       LEFT JOIN entry nx ON nx.supersedes = en.id
        LEFT JOIN forgotten_entry fe ON fe.entry_id = en.id
-       WHERE nx.id IS NULL AND fe.entry_id IS NULL GROUP BY en.kind`,
+       WHERE fe.entry_id IS NULL AND ${CURRENT_VERSION} GROUP BY en.kind`,
     )
     .all() as unknown as Array<{ kind: EntryKind; n: number }>;
   for (const r of rows) counts[r.kind] = r.n;

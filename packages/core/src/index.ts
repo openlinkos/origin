@@ -24,30 +24,49 @@ export {
 export { type Database, openDatabase, openMemoryDatabase, transaction } from './db.js';
 export {
   type CorrectInput,
+  CURRENT_VERSION,
   correct,
+  ENTRY_ID_RE,
   ENTRY_KINDS,
   type Entry,
   type EntryFilter,
   type EntryKind,
+  type EntryRecordInput,
   type EntrySource,
   type EntryStatus,
   entriesCiting,
   entryCounts,
   entryHistory,
   entrySources,
-  type ForgetResult,
-  forget,
   getEntry,
   isEntryForgotten,
   isEntryId,
   listEntries,
-  planForget,
   type RememberInput,
   remember,
   type SourceInput,
   searchEntries,
 } from './entries.js';
 export { OriginError } from './errors.js';
+export {
+  type ApplyOptions,
+  type ApplyResult,
+  applyTombstone,
+  exportTombstone,
+  type ForgetResult,
+  forget,
+  planForget,
+  type RuleThreeJudge,
+  TOMBSTONE_ID_RE,
+  type TombstoneRecord,
+} from './forgetting.js';
+export {
+  defaultStoreName,
+  HUB_STORE_NAME,
+  initStoreName,
+  setStoreName,
+  storeName,
+} from './identity.js';
 export {
   type AppendResult,
   appendRemote,
@@ -84,6 +103,7 @@ export {
   verifyAdminPasswordHash,
 } from './password.js';
 export { dbPath, originHome, parseRawPath, rawDir, remotePath } from './paths.js';
+export { parseTombstoneRecord } from './replication.js';
 export { getSetting, setSetting } from './settings.js';
 export {
   type EventFilter,
@@ -114,12 +134,10 @@ export {
   verifyToken,
 } from './tokens.js';
 export {
-  applyRemoteTombstone,
   listTombstones,
-  type TombstoneRecord,
   type TombstoneSummary,
   tombstoneCount,
-  tombstonesAfter,
+  tombstoneFeed,
 } from './tombstones.js';
 export type {
   EventInput,

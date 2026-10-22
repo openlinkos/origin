@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-5b3d595f
+sourceHash: sha256-2f179619
 ---
 
 # 命令参考
@@ -29,7 +29,7 @@ origin push                                            本地同步、推送原�
 - **时间参数**：相对时长（`30m`、`24h`、`7d`、`2w`）或日期（`YYYY-MM-DD`、ISO 8601）。
 - **来源 id**：`claude-code` 与 `codex`（`cursor`、`zcode`、`grok` 将随适配器上线）。
 - **条目类型**：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。
-- **id 形式**：条目如 `ent_5f0c2a9e41b7`；事件如 `claude-code:<uuid>` 或 `codex:<session>:o12`。
+- **id 形式**：条目如 `ent_5f0c2a9e41b7`；事件如 `claude-code:<uuid>` 或 `codex:<session>:o12`；遗忘记录（遗忘操作留下的记录）如 `tmb_3a9d70c1e2f4`。
 - CLI 输出为英文。
 
 ## 检索 {#searching}
@@ -104,7 +104,7 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 | `CODEX_HOME` | `~/.codex` | Codex 的主目录（从 `sessions/` 与 `archived_sessions/` 读取会话） |
 | `ORIGIN_HUB_URL` | — | 中枢地址，覆盖 `origin hub connect` 的配置 |
 | `ORIGIN_HUB_TOKEN` | — | 中枢令牌，覆盖 `origin hub connect` 的配置 |
-| `ORIGIN_DEVICE` | 主机名 | 本设备在中枢上的名称 |
+| `ORIGIN_DEVICE` | 主机名 | 新库使用的名称：也就是本设备在中枢上的名称，以及它写入的内容所记录的来源库（origin） |
 | `ORIGIN_ADMIN` | `off` | 设为 `on` 时在 `/admin` 下提供管理界面（`origin serve --admin`） |
 | `ORIGIN_ADMIN_LISTEN` | — | 改为在这个 `host:port` 上提供管理界面（`--admin-listen`） |
 | `ORIGIN_PUBLIC_URL` | — | 中枢的公开 https URL（`--public-url`） |

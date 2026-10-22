@@ -1,136 +1,77 @@
 import type { Database } from './db.js';
-import { transaction } from './db.js';
-import { refreshSession } from './ingest.js';
-
-/** A forget operation as a hub hands it to its devices (see docs/architecture.md#personal-hub). */
-export interface TombstoneRecord {
-  id: number;
-  target: string;
-  reason: string | null;
-  createdAt: number;
-  /** Entries this tombstone forgot. */
-  entries: string[];
-  /** Events this tombstone excluded. */
-  events: string[];
-}
-
-/** Tombstones with an id greater than `afterId`, oldest first. */
-export function tombstonesAfter(db: Database, afterId: number, limit = 500): TombstoneRecord[] {
-  const rows = db
-    .prepare(
-      'SELECT id, target, reason, created_at FROM tombstone WHERE id > ? ORDER BY id LIMIT ?',
-    )
-    .all(afterId, limit) as unknown as Array<{
-    id: number;
-    target: string;
-    reason: string | null;
-    created_at: number;
-  }>;
-  const entries = db.prepare(
-    'SELECT entry_id FROM forgotten_entry WHERE tombstone_id = ? ORDER BY entry_id',
-  );
-  const events = db.prepare(
-    'SELECT event_id FROM excluded_event WHERE tombstone_id = ? ORDER BY event_id',
-  );
-  return rows.map((r) => ({
-    id: r.id,
-    target: r.target,
-    reason: r.reason,
-    createdAt: r.created_at,
-    entries: (entries.all(r.id) as unknown as Array<{ entry_id: string }>).map((e) => e.entry_id),
-    events: (events.all(r.id) as unknown as Array<{ event_id: string }>).map((e) => e.event_id),
-  }));
-}
+import { exportTombstone, type TombstoneRecord } from './forgetting.js';
 
 /**
- * Apply a hub's tombstone to this store, so forgetting reaches every replica (invariant 2, sticky
- * forgetting, see docs/architecture.md). Only entries and events known here and not yet forgotten
- * are affected; when there are none, nothing is written, which makes re-applying a no-op.
+ * Tombstones in the change log, as a hub hands them to one device (see
+ * docs/architecture.md#personal-hub): those after `afterSeq` in this store's change sequence, minus
+ * the ones that device created, each with its current effects here. A tombstone appears again when
+ * its effects here have grown. `next` is the sequence number to continue after.
  */
-export function applyRemoteTombstone(
+export function tombstoneFeed(
   db: Database,
-  t: TombstoneRecord,
-  origin: string,
-  now = Date.now(),
-): { entries: number; events: number } {
-  return transaction(
-    db,
-    () => {
-      const entryKnown = db.prepare(
-        `SELECT 1 FROM entry en WHERE en.id = ?
-           AND NOT EXISTS (SELECT 1 FROM forgotten_entry f WHERE f.entry_id = en.id)`,
-      );
-      const eventKnown = db.prepare(
-        `SELECT 1 FROM event e WHERE e.id = ?
-           AND NOT EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_id = e.id)`,
-      );
-      const entries = [...new Set(t.entries)].filter((id) => entryKnown.get(id) !== undefined);
-      const events = [...new Set(t.events)].filter((id) => eventKnown.get(id) !== undefined);
-      if (entries.length === 0 && events.length === 0) return { entries: 0, events: 0 };
-
-      const reason = t.reason ? `${origin}#${t.id}: ${t.reason}` : `${origin}#${t.id}`;
-      const tombstoneId = Number(
-        db
-          .prepare('INSERT INTO tombstone (target, reason, created_at) VALUES (?, ?, ?)')
-          .run(t.target, reason, now).lastInsertRowid,
-      );
-      const forgetEntry = db.prepare(
-        'INSERT OR IGNORE INTO forgotten_entry (entry_id, tombstone_id) VALUES (?, ?)',
-      );
-      for (const id of entries) forgetEntry.run(id, tombstoneId);
-      const exclude = db.prepare(
-        'INSERT OR IGNORE INTO excluded_event (event_id, tombstone_id) VALUES (?, ?)',
-      );
-      const sessionOf = db.prepare('SELECT source, session_id FROM event WHERE id = ?');
-      const sessions = new Map<string, { source: string; sessionId: string }>();
-      for (const id of events) {
-        exclude.run(id, tombstoneId);
-        const s = sessionOf.get(id) as { source: string; session_id: string };
-        sessions.set(`${s.source}\n${s.session_id}`, { source: s.source, sessionId: s.session_id });
-      }
-      for (const s of sessions.values()) refreshSession(db, s.source, s.sessionId);
-      return { entries: entries.length, events: events.length };
-    },
-    { immediate: true },
-  );
+  opts: { after: number; device: string; limit?: number },
+): { tombstones: TombstoneRecord[]; next: number; more: boolean } {
+  const limit = opts.limit ?? 500;
+  const rows = db
+    .prepare(
+      `SELECT seq, id FROM change_log WHERE kind = 'tombstone' AND seq > ? AND origin <> ?
+       ORDER BY seq LIMIT ?`,
+    )
+    .all(opts.after, opts.device, limit) as unknown as Array<{ seq: number; id: string }>;
+  const seen = new Set<string>();
+  const tombstones: TombstoneRecord[] = [];
+  for (const r of rows) {
+    if (seen.has(r.id)) continue;
+    seen.add(r.id);
+    const t = exportTombstone(db, r.id);
+    if (t) tombstones.push(t);
+  }
+  return {
+    tombstones,
+    next: rows.length > 0 ? (rows[rows.length - 1] as { seq: number }).seq : opts.after,
+    more: rows.length === limit,
+  };
 }
 
 /** A forget operation as listed for the owner: ids and counts, never the forgotten text. */
 export interface TombstoneSummary {
-  id: number;
+  id: string;
   target: string;
   reason: string | null;
   createdAt: number;
-  /** Entries this tombstone forgot. */
+  /** The store that created it. */
+  origin: string;
+  /** Entries this tombstone forgot here. */
   entries: number;
-  /** Events this tombstone excluded. */
+  /** Events this tombstone excluded here. */
   events: number;
 }
 
-/** Tombstones, newest first. `beforeId` pages backwards. */
+/** Tombstones, newest first (in the order this store recorded them). `before` pages backwards. */
 export function listTombstones(
   db: Database,
-  opts: { limit?: number; beforeId?: number } = {},
+  opts: { limit?: number; before?: string } = {},
 ): TombstoneSummary[] {
-  const params: number[] = [];
+  const params: Array<string | number> = [];
   let where = '';
-  if (opts.beforeId !== undefined) {
-    where = 'WHERE t.id < ?';
-    params.push(opts.beforeId);
+  if (opts.before !== undefined) {
+    where = 'WHERE t.rowid < (SELECT b.rowid FROM tombstone b WHERE b.id = ?)';
+    params.push(opts.before);
   }
   params.push(opts.limit ?? 50);
   const rows = db
     .prepare(
-      `SELECT t.id, t.target, t.reason, t.created_at,
+      `SELECT t.id, t.target, t.reason, t.created_at, t.origin,
               (SELECT COUNT(*) FROM forgotten_entry f WHERE f.tombstone_id = t.id) AS entries,
               (SELECT COUNT(*) FROM excluded_event x WHERE x.tombstone_id = t.id) AS events
-       FROM tombstone t ${where} ORDER BY t.id DESC LIMIT ?`,
+       FROM tombstone t ${where} ORDER BY t.rowid DESC LIMIT ?`,
     )
     .all(...params) as unknown as Array<{
-    id: number;
+    id: string;
     target: string;
     reason: string | null;
     created_at: number;
+    origin: string;
     entries: number;
     events: number;
   }>;
@@ -139,6 +80,7 @@ export function listTombstones(
     target: r.target,
     reason: r.reason,
     createdAt: r.created_at,
+    origin: r.origin,
     entries: r.entries,
     events: r.events,
   }));

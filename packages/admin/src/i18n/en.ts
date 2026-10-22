@@ -300,8 +300,8 @@ export const en = {
   'forget.already': '{id} has already been forgotten.',
   'forget.doneTitle': 'Forgotten',
   'forget.done':
-    'Forgot {entries} {entries|entry|entries} and {events} {events|event|events} (tombstone #{tombstone}).',
-  'forget.propagates': 'Each device applies this on its next push.',
+    'Forgot {entries} {entries|entry|entries} and {events} {events|event|events} (tombstone {tombstone}).',
+  'forget.propagates': 'Each device applies this on its next sync.',
 
   'pager.label': 'Pages',
   'pager.page': 'Page {n}',
@@ -317,8 +317,10 @@ export const en = {
   'tombstones.noneHelp':
     'When you forget an entry or an event, its tombstone appears here. The text itself is never shown again.',
   'tombstones.howItWorks': 'How forgetting works',
+  'tombstones.id': 'Tombstone',
   'tombstones.time': 'Time',
   'tombstones.target': 'Target',
+  'tombstones.origin': 'Forgotten on',
   'tombstones.entries': 'Entries',
   'tombstones.events': 'Events',
   'tombstones.reason': 'Reason',

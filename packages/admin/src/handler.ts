@@ -39,7 +39,7 @@ import {
 import { negotiateLang, translator } from './i18n/index.js';
 import { errorPage, loginPage, reauthPage } from './pages/auth.js';
 import { eventPage, eventRawPage, searchPage, sessionPage, sessionsPage } from './pages/browse.js';
-import { beforeParam } from './pages/components.js';
+import { beforeParam, beforeTombstone } from './pages/components.js';
 import {
   correctPage,
   entriesPage,
@@ -444,7 +444,7 @@ const PAGES: Route[] = [
   ),
 
   page('GET', '/tombstones', 'session', (ctx) =>
-    tombstonesPage(ctx, ctx.service.tombstones(beforeParam(ctx))),
+    tombstonesPage(ctx, ctx.service.tombstones(beforeTombstone(ctx))),
   ),
   page('GET', '/audit', 'session', (ctx) => auditPage(ctx, ctx.service.auditLog(beforeParam(ctx)))),
   page('GET', '/signins', 'session', (ctx) => {
@@ -619,7 +619,7 @@ const API: Route[] = [
     });
   }),
   api('GET', 'tombstones', 'session', (ctx) =>
-    json(ctx, 200, ctx.service.tombstones(beforeParam(ctx))),
+    json(ctx, 200, ctx.service.tombstones(beforeTombstone(ctx))),
   ),
   api('GET', 'audit', 'session', (ctx) => json(ctx, 200, ctx.service.auditLog(beforeParam(ctx)))),
   api('GET', 'connect', 'session', (ctx) => json(ctx, 200, ctx.service.connect())),
