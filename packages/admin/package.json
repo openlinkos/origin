@@ -32,7 +32,7 @@
     "@openlinkos/origin-core": "workspace:*"
   },
   "devDependencies": {
-    "@openlinkos/ui": "link:../../../design/packages/ui"
+    "@openlinkos/ui": "0.2.0"
   },
   "engines": {
     "node": ">=22.13"

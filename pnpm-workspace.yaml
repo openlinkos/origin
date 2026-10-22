@@ -2,5 +2,6 @@ packages:
   - packages/*
 allowBuilds:
   esbuild: true
+# Our own packages are published by our CI with provenance; they need not wait out the release age.
 minimumReleaseAgeExclude:
-  - '@openlinkos/vitepress-theme@0.1.0'
+  - '@openlinkos/*'
