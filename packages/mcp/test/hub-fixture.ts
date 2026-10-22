@@ -3,7 +3,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { type Database, openDatabase, syncSource } from '@openlinkos/origin-core';
+import { type Database, initStoreName, openDatabase, syncSource } from '@openlinkos/origin-core';
 import { fakeAdapter, line } from '../../core/test/helpers.js';
 import { handleMcpHttp } from '../src/index.js';
 
@@ -13,6 +13,8 @@ export interface TestHub {
   url: string;
   db: Database;
   home: string;
+  /** Milliseconds the hub waits before handling each /mcp request (a slow hub). */
+  delayMs: number;
   stop(): Promise<void>;
 }
 
@@ -24,6 +26,7 @@ export async function startTestHub(): Promise<TestHub> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-hub-'));
   const src = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-src-'));
   const db = openDatabase(path.join(home, 'origin.db'));
+  initStoreName(db, 'hub');
   fs.writeFileSync(
     path.join(src, 's1.jsonl'),
     line('e1', 's1', 1000, 'user', 'Keep the hub behind TLS and give every device its own token.') +
@@ -31,7 +34,9 @@ export async function startTestHub(): Promise<TestHub> {
   );
   await syncSource({ db, home }, fakeAdapter(src));
 
+  const hub = { delayMs: 0 };
   const server = http.createServer(async (req, res) => {
+    if (hub.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, hub.delayMs));
     if (new URL(req.url ?? '/', 'http://x').pathname !== '/mcp') {
       res.writeHead(404).end();
       return;
@@ -48,11 +53,13 @@ export async function startTestHub(): Promise<TestHub> {
       for await (const chunk of req) chunks.push(chunk as Buffer);
       body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     }
+    // As the CLI's hub does: `<agent>@<device>` for a device's agent, else `<agent>@<token>`.
     const client = req.headers['x-origin-client'];
+    const device = req.headers['x-origin-device'];
     await handleMcpHttp(req, res, body, {
       db,
       home,
-      author: `${typeof client === 'string' ? client : 'mcp'}@test`,
+      author: `${typeof client === 'string' ? client : 'mcp'}@${typeof device === 'string' ? device : 'test'}`,
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -63,6 +70,12 @@ export async function startTestHub(): Promise<TestHub> {
     url: `http://127.0.0.1:${port}`,
     db,
     home,
+    get delayMs() {
+      return hub.delayMs;
+    },
+    set delayMs(ms: number) {
+      hub.delayMs = ms;
+    },
     async stop() {
       if (stopped) return;
       stopped = true;

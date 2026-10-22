@@ -12,8 +12,9 @@ If all your agents run on one machine, you do not need a hub.
 ## How it works
 
 - Every **device** keeps archiving its own sessions locally, exactly as without a hub, and runs `origin sync`. Once the device is connected, a sync also sends the device's raw session mirrors, and the entries and tombstones written on it, to the hub, then pulls back anything that was forgotten on the hub or on another device.
-- The **hub** runs `origin serve`. It parses the pushed mirrors with the same adapters, so every answer still traces back to the original line, and it is the store your agents talk to.
-- On a device, `origin mcp` keeps working as before but forwards each call to the hub, after pushing what is new. Cloud agents connect to the hub's MCP endpoint directly.
+- The **hub** runs `origin serve`. It parses the pushed mirrors with the same adapters, so every answer still traces back to the original line, and it holds what every device has sent: it is where everything can be found.
+- On a device, `origin mcp` keeps answering from the device's own store, so it keeps working offline, and adds what the hub knows: other devices' sessions and entries, and entries written by cloud agents. Cloud agents connect to the hub's MCP endpoint directly.
+- Devices never download each other's data. Only forgetting travels down from the hub, so that what you forget anywhere is hidden everywhere.
 
 The design is in [Architecture](../architecture.md#personal-hub).
 
@@ -57,7 +58,7 @@ origin token revoke laptop
 
 With Docker, run the same commands through `docker exec`, for example `docker exec origin-hub origin token create laptop`. If you enable the [admin UI](./admin.md), you can also create and revoke tokens there, with the connection commands for each new token ready to copy.
 
-The hub stores only a hash of each token, so copy the token when it is printed. If a token is lost or a device is retired, revoke the token. Entries an agent saves through the hub record the agent and the token name as author, for example `claude-code@laptop`.
+The hub stores only a hash of each token, so copy the token when it is printed. If a token is lost or a device is retired, revoke the token. Entries record the agent and the device as author, for example `claude-code@laptop`; an agent that connects to the hub directly is recorded with its token name instead, for example `claude-code@ci`.
 
 ## Connect a device
 
@@ -73,7 +74,7 @@ origin sync
 - `ORIGIN_HUB_URL` and `ORIGIN_HUB_TOKEN` override the stored connection.
 - `origin sync` ingests local sessions, sends the raw mirrors and the entries and tombstones written on the device, and applies the hub's tombstones. It is safe to re-run: a sync picks up where the previous one stopped. `origin push` does the same.
 
-Once the device is connected, `origin mcp` forwards to the hub, so the agent registrations you already have stay the same. Each agent call first pushes new session lines: before reads at most every 10 seconds, and always before `remember` and `correct`. An agent can therefore still cite what you said a moment ago.
+Once the device is connected, the agent registrations you already have stay the same. `origin mcp` answers from the device's store and asks the hub at the same time, then merges both answers; each result says whether it was found on this device (`local`) or on the hub (`hub`). If the hub does not answer within 2 seconds (`ORIGIN_HUB_TIMEOUT_MS`), the agent gets this device's answer with a note that the hub was not consulted. What agents save lands on the device first and is synced to the hub right away, or on the next sync if the hub cannot be reached. Correcting or forgetting something that only the hub has is done on the hub, so it needs the hub to be reachable.
 
 Agents sync only when they are used. To keep the hub current from a device whose agents are idle, schedule `origin sync`, for example with cron (`*/10 * * * * origin sync`) or the Windows Task Scheduler.
 
@@ -99,6 +100,6 @@ The hub can serve an [admin UI](./admin.md) for you: an overview of your devices
 
 ## Limitations
 
-- CLI curation commands (`entries`, `show`, `correct`, `forget`, …) act on the store they run against. On a connected device, that is the local staging copy. Curate through your agents, in the hub's [admin UI](./admin.md), or by running the CLI on the hub (`docker exec origin-hub origin …`). Curation from a device's CLI is planned.
-- Entries saved on a device before it was connected to a hub stay in that device's local store; they are not migrated.
-- The hub is one store for one person. It does not support multiple users or two-way sync between hubs.
+- CLI curation commands (`entries`, `show`, `correct`, `forget`, …) act on the device's own store, then sync. To see and curate the entries of every device, use your agents or the hub's [admin UI](./admin.md).
+- A device does not download other devices' data, so without the hub it can only answer about itself.
+- The hub is one store for one person. It does not support multiple users, sync between hubs, or sync between devices without a hub.

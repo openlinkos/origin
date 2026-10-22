@@ -50,7 +50,7 @@ import {
   storeName,
   syncSource,
 } from '@openlinkos/origin-core';
-import { serveStdio, serveStdioProxy } from '@openlinkos/origin-mcp';
+import { serveReplica, serveStdio } from '@openlinkos/origin-mcp';
 import { count, oneLine, table } from './format.js';
 import {
   type HubConfig,
@@ -544,7 +544,7 @@ async function cmdCorrect(ctx: Ctx, args: string[]): Promise<number> {
   }
   const e = correct(ctx.db, id, {
     text,
-    author: 'user',
+    author: `user@${storeName(ctx.db)}`,
     kind: parseKind(values.kind),
     confidence: values.confidence === undefined ? 1 : Number(values.confidence),
   });
@@ -601,22 +601,46 @@ function cmdProjects(ctx: Ctx): number {
 async function cmdMcp(ctx: Ctx): Promise<number> {
   const log = (m: string) => console.error(`origin: ${m}`);
   const hub = hubOf(ctx);
+  const device = storeName(ctx.db);
   if (hub) {
-    // Forwarding proxy: keep the hub current with this device, then let the hub answer.
-    await serveStdioProxy({
-      url: hub.url,
-      token: hub.token,
+    // Answer from this device's store, merged with the hub's answers; sync up after writes.
+    await serveReplica({
+      db: ctx.db,
+      home: ctx.home,
+      device,
+      hub: { url: hub.url, token: hub.token },
       version: VERSION,
       log,
-      refresh: async () => {
-        await syncAll(ctx);
+      ingest: () => syncAll(ctx),
+      sync: async () => {
         await syncWithHub({ db: ctx.db, home: ctx.home, hub });
       },
+      hubTimeoutMs: hubTimeoutMs(),
     });
     return 0;
   }
-  await serveStdio({ db: ctx.db, home: ctx.home, version: VERSION, sync: () => syncAll(ctx), log });
+  await serveStdio({
+    db: ctx.db,
+    home: ctx.home,
+    device,
+    version: VERSION,
+    sync: () => syncAll(ctx),
+    log,
+  });
   return 0;
+}
+
+/** How long `origin mcp` waits for the hub: ORIGIN_HUB_TIMEOUT_MS, default 2000. */
+function hubTimeoutMs(): number {
+  const value = process.env.ORIGIN_HUB_TIMEOUT_MS;
+  if (value === undefined || value === '') return 2000;
+  const ms = Number(value);
+  if (!Number.isInteger(ms) || ms < 100 || ms > 600_000) {
+    throw new OriginError(
+      `ORIGIN_HUB_TIMEOUT_MS must be a number of milliseconds, not "${value}".`,
+    );
+  }
+  return ms;
 }
 
 /** `on` / `off` (and the usual spellings) from an environment variable. */

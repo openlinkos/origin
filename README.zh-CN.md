@@ -32,7 +32,7 @@ Origin 以**人**而不是工具为中心：
 - **按相关度排序的全文检索**：覆盖会话和条目，支持中文子串检索（SQLite FTS5 trigram）。
 - **增量、幂等的采集**：只读新增字节；源文件被改写时作为新代次保存；透明读取 zstd 压缩的记录；多个进程同时同步也安全。
 - **CLI**：浏览时间线，查看任意条目或事件直到原文行，纠正条目，以及遗忘。
-- **个人中枢**（`origin serve`，或镜像 `ghcr.io/openlinkos/origin`），由你自己托管：各设备用 `origin push` 推送会话，任何设备上的 Agent 通过本地 `origin mcp` 访问它，云端 Agent 则用令牌通过 HTTP 直接连接。
+- **个人中枢**（`origin serve`，或镜像 `ghcr.io/openlinkos/origin`），由你自己托管：每台设备都保有一份完整的、属于自己的记忆，并用 `origin sync` 把自己写下的内容发送到中枢；设备上的 Agent 通过本地 `origin mcp` 同时读取两边，云端 Agent 则用令牌通过 HTTP 直接连接。
 - **中枢的管理界面**（`origin serve --admin`），默认关闭：设备与存储概览、你的会话和条目、检索、纠正，以及先预览再执行的遗忘、附带现成接入命令的令牌管理，以及审计日志。页面由中枢渲染，用中枢的管理密码登录。
 
 ## 支持的 Agent
@@ -123,8 +123,8 @@ Agent 会话记录里常有源代码、命令输出，以及你在提示词里�
 - 很多会话没有标题，因为 Claude Code 只为部分会话写 `summary` 行。
 - 项目名取自工作目录的最后一段，而不是由 git remote 推导。
 - 遗忘只是隐藏，不会从原始镜像文件中物理删除。
-- 没有后台文件监听：MCP server 按需同步，其他时候需要运行 `origin sync`（使用中枢时运行 `origin push`）。
-- CLI 管理命令作用于它们所运行的那个库。在中枢上，可以用管理界面在浏览器中管理；从设备的 CLI 管理中枢已在计划中。
+- 没有后台文件监听：MCP server 按需同步，其他时候需要运行 `origin sync`，它也会与你的中枢同步。
+- 在设备上，CLI 管理命令作用于该设备自己的条目；中枢的管理界面可以查看和管理所有设备的条目。
 
 ## 目录结构
 
@@ -132,7 +132,7 @@ Agent 会话记录里常有源代码、命令输出，以及你在提示词里�
 packages/
 ├── core/       @openlinkos/origin-core      存储、采集、条目、遗忘、查询
 ├── adapters/   @openlinkos/origin-adapters  各 Agent 的会话解析器
-├── mcp/        @openlinkos/origin-mcp       MCP 工具、stdio 与 HTTP server、转发代理
+├── mcp/        @openlinkos/origin-mcp       MCP 工具、stdio 与 HTTP server、已接入设备上的合并读取
 ├── admin/      @openlinkos/origin-admin     中枢的管理界面：服务器端渲染的页面与 JSON API
 └── cli/        @openlinkos/origin           origin 命令与中枢（`origin serve`）
 docs/                                        文档站点（VitePress）

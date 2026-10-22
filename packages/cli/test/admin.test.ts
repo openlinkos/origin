@@ -463,7 +463,7 @@ describe('admin UI on the hub', () => {
     });
     expect(remembered.status).toBe(303);
     const entryId = /id=(ent_[0-9a-f]+)/.exec(remembered.headers.location ?? '')?.[1] ?? '';
-    expect(getEntry(hubDb, entryId)).toMatchObject({ author: 'user', confidence: 1 });
+    expect(getEntry(hubDb, entryId)).toMatchObject({ author: 'user@hub', confidence: 1 });
 
     const preview = await b.get(`/admin/forget?id=${encodeURIComponent(USER_EVENT)}`);
     expect(preview.status).toBe(200);
@@ -564,7 +564,7 @@ describe('admin UI on the hub', () => {
     expect(hubDb.prepare('SELECT * FROM entry WHERE id = ?').get(oldId)).toEqual(before);
     expect(getEntry(hubDb, newId)).toMatchObject({
       supersedes: oldId,
-      author: 'user',
+      author: 'user@hub',
       confidence: 1,
       status: 'active',
     });

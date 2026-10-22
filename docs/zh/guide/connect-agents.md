@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-bcea3507
+sourceHash: sha256-d0264f33
 ---
 
 # 接入 Agent
@@ -73,7 +73,7 @@ server 会告诉 Agent 如何使用这些工具，你只需用自然语言提问
 
 如果你在多台机器上使用 Agent，或者使用云端 Agent，可以运行一个[个人中枢](./hub.md)：
 
-- 已接入中枢的设备上，上面这些本地 `origin mcp` 注册照常可用：server 会先推送新的会话记录，再把每次调用转发给中枢。
+- 已接入中枢的设备上，上面这些本地 `origin mcp` 注册照常可用：server 根据设备自己的库作答，补充中枢的回答，并把 Agent 保存的内容同步到中枢。
 - 云端 Agent 没有本地会话记录，用各自的令牌直接注册中枢的 `/mcp` 地址。例如在 Claude Code 中：`claude mcp add --scope user --transport http origin https://hub.example.com/mcp --header "Authorization: Bearer ogn_…"`。
 
 ## 更新 Origin 之后 {#after-updating-origin}

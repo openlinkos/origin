@@ -1,16 +1,17 @@
 /**
  * Origin MCP (see docs/architecture.md): the seven tools (search · timeline · get · sources ·
- * remember · correct · forget) served over stdio, over stateless HTTP for a hub, or forwarded to a
- * hub by a device's stdio proxy.
+ * remember · correct · forget) served over stdio, over stateless HTTP for a hub, or over stdio on a
+ * device connected to a hub, from its own store merged with the hub's answers.
  */
 export { handleMcpHttp, type McpHttpOptions } from './http.js';
 export {
   CLIENT_HEADER,
-  createProxyServer,
-  type ProxyOptions,
-  type ProxyServer,
-  serveStdioProxy,
-} from './proxy.js';
+  createReplicaServer,
+  DEVICE_HEADER,
+  type ReplicaOptions,
+  type ReplicaServer,
+  serveReplica,
+} from './replica.js';
 export {
   createOriginServer,
   type OriginServer,

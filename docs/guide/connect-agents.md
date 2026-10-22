@@ -69,7 +69,7 @@ The server tells agents how to use these tools, so you can simply ask questions 
 
 If you use agents on several machines, or cloud agents, you can run a [personal hub](./hub.md):
 
-- On a device that is connected to the hub, the local `origin mcp` registrations above keep working. The server pushes new session lines and forwards each call to the hub.
+- On a device that is connected to the hub, the local `origin mcp` registrations above keep working. The server answers from the device's own store, adds the hub's answers, and syncs what agents save to the hub.
 - Cloud agents, which have no local session logs, register the hub's `/mcp` URL directly with their own token. For example, in Claude Code: `claude mcp add --scope user --transport http origin https://hub.example.com/mcp --header "Authorization: Bearer ogn_…"`.
 
 ## After updating Origin

@@ -51,6 +51,7 @@ import {
   searchEntries,
   searchEvents,
   stats,
+  storeName,
   storeUsage,
   type TokenInfo,
   type TombstoneSummary,
@@ -507,7 +508,7 @@ export class AdminService {
       kind,
       text: text(input.text, 'Entry text'),
       confidence: parseConfidence(input.confidence),
-      author: 'user',
+      author: `user@${storeName(this.db)}`,
       project: event.project,
       sources: [{ eventId: event.id, quote }],
     });
@@ -523,7 +524,7 @@ export class AdminService {
     const id = checkId(input.id, 'entry id');
     const entry = correct(this.db, id, {
       text: text(input.text, 'Entry text'),
-      author: 'user',
+      author: `user@${storeName(this.db)}`,
       kind: parseKind(input.kind),
       confidence: parseConfidence(input.confidence),
     });

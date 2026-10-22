@@ -32,7 +32,7 @@ Origin puts **you** at the center instead of the tool:
 - **Relevance-ranked full-text search** across sessions and entries, including CJK substring search (SQLite FTS5 trigram).
 - **Incremental, idempotent ingestion.** Only new bytes are read, rewritten files are kept as a new generation, compressed logs (zstd) are read transparently, and concurrent syncs are safe.
 - **A CLI** to browse the timeline, inspect any entry or event down to its original line, correct entries, and forget.
-- **A personal hub** (`origin serve`, or the `ghcr.io/openlinkos/origin` image) that you host yourself. Devices push their sessions with `origin push`, agents on any device reach it through their local `origin mcp`, and cloud agents connect over HTTP with a token.
+- **A personal hub** (`origin serve`, or the `ghcr.io/openlinkos/origin` image) that you host yourself. Every device keeps a complete memory of its own and sends the hub what it writes with `origin sync`; agents on a device read from both through their local `origin mcp`, and cloud agents connect over HTTP with a token.
 - **An admin UI for your hub** (`origin serve --admin`), off by default: an overview of devices and storage, your sessions and entries, search, correcting, and forgetting with a preview, tokens with ready-made connection commands, and an audit log. Pages are rendered on the hub, and you sign in with the hub's admin password.
 
 ## Supported agents
@@ -123,8 +123,8 @@ Delivered as small, runnable increments, each usable on its own:
 - Many sessions have no title, because Claude Code writes `summary` lines for only some sessions.
 - The project name is the last segment of the working directory, not derived from the git remote.
 - Forgetting hides data but does not erase it from the raw mirror files.
-- There is no background file watching. The MCP server syncs on demand; otherwise run `origin sync` (or `origin push` with a hub).
-- CLI curation commands act on the store they run on. On a hub, the admin UI curates in a browser; curation from a device's CLI is planned.
+- There is no background file watching. The MCP server syncs on demand; otherwise run `origin sync`, which also syncs with your hub.
+- On a device, CLI curation commands act on that device's own entries; the hub's admin UI shows and curates the entries of every device.
 
 ## Project layout
 
@@ -132,7 +132,7 @@ Delivered as small, runnable increments, each usable on its own:
 packages/
 ├── core/       @openlinkos/origin-core      storage, ingestion, entries, forgetting, queries
 ├── adapters/   @openlinkos/origin-adapters  per-agent session parsers
-├── mcp/        @openlinkos/origin-mcp       MCP tools, stdio and HTTP servers, forwarding proxy
+├── mcp/        @openlinkos/origin-mcp       MCP tools, stdio and HTTP servers, merged reads on a connected device
 ├── admin/      @openlinkos/origin-admin     the hub's admin UI: server-rendered pages and a JSON API
 └── cli/        @openlinkos/origin           the `origin` command and the hub (`origin serve`)
 docs/                                        documentation site (VitePress)

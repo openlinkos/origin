@@ -15,13 +15,17 @@ export function parseTime(input: string | undefined, now = Date.now()): number |
   return abs;
 }
 
-/** ISO 8601 timestamp in the local time zone, with offset (e.g. `2026-10-19T11:42:00+08:00`). */
+/**
+ * ISO 8601 timestamp in the local time zone, with milliseconds and offset (e.g.
+ * `2026-10-19T11:42:00.000+08:00`). Milliseconds keep times from different stores exactly
+ * comparable.
+ */
 export function isoLocal(ts: number): string {
   const d = new Date(ts);
-  const pad = (n: number) => String(Math.abs(n)).padStart(2, '0');
+  const pad = (n: number, width = 2) => String(Math.abs(n)).padStart(width, '0');
   const off = -d.getTimezoneOffset();
   const sign = off >= 0 ? '+' : '-';
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
     d.getMinutes(),
-  )}:${pad(d.getSeconds())}${sign}${pad(Math.trunc(off / 60))}:${pad(off % 60)}`;
+  )}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}${sign}${pad(Math.trunc(off / 60))}:${pad(off % 60)}`;
 }

@@ -220,13 +220,24 @@ function checkOrigins(records: Array<{ id: string; origin: string }>, device: st
   }
 }
 
-/** `<agent>@<token>` when a forwarding proxy names the agent, else the token name. */
+/** A request header's first value. */
+function header(req: http.IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/**
+ * The author of entries written through /mcp: `<agent>@<device>` for a device's agent (the device
+ * names the agent and itself in X-Origin-Client and X-Origin-Device), `<agent>@<token>` for an
+ * agent that names itself, and the token name otherwise.
+ */
 function authorFor(req: http.IncomingMessage, tokenName: string): string {
-  const header = req.headers['x-origin-client'];
-  const client = (Array.isArray(header) ? header[0] : header)
+  const client = header(req, 'x-origin-client')
     ?.replace(/[^A-Za-z0-9._-]+/g, '-')
     .slice(0, 64);
-  return client ? `${client}@${tokenName}` : tokenName;
+  const device = header(req, 'x-origin-device');
+  if (!client) return tokenName;
+  return `${client}@${device && NAME_RE.test(device) ? device : tokenName}`;
 }
 
 function requireMethod(req: http.IncomingMessage, ...methods: string[]): void {

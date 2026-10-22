@@ -25,6 +25,7 @@ beforeEach(async () => {
   const server = createOriginServer({
     db,
     home,
+    device: 'laptop',
     sync: async () => {
       await syncSource({ db, home }, fakeAdapter(src));
     },
@@ -78,7 +79,8 @@ describe('origin MCP server', () => {
       sources: [{ quote: 'so it stays local' }],
     });
     const entry = remembered.json.entry;
-    expect(entry).toMatchObject({ kind: 'memory', author: 'test-agent', status: 'active' });
+    // Authors are `<agent>@<device>` on every store.
+    expect(entry).toMatchObject({ kind: 'memory', author: 'test-agent@laptop', status: 'active' });
 
     const listed = await call('search', { scope: 'entries' });
     expect(listed.json.entries.map((e: { id: string }) => e.id)).toEqual([entry.id]);
@@ -97,7 +99,9 @@ describe('origin MCP server', () => {
     });
     const v2 = corrected.json.entry;
     expect(v2.supersedes).toBe(entry.id);
-    expect((await call('get', { id: v2.id })).json.history).toEqual([entry.id, v2.id]);
+    const history = (await call('get', { id: v2.id })).json.history;
+    expect(history.map((v: { id: string }) => v.id)).toEqual([entry.id, v2.id]);
+    expect(history.map((v: { status: string }) => v.status)).toEqual(['superseded', 'active']);
 
     const forgotten = await call('forget', { id: v2.id, reason: 'test' });
     expect(forgotten.json.forgotten_entries.sort()).toEqual([entry.id, v2.id].sort());

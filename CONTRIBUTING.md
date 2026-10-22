@@ -45,9 +45,9 @@ ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtur
 |---|---|
 | `packages/core` | Storage, ingestion, entries, forgetting, queries. Depends on no other workspace package |
 | `packages/adapters` | One deterministic parser per agent. Depends only on `core` |
-| `packages/mcp` | MCP tools, servers over stdio and stateless HTTP, and the forwarding proxy. Depends only on `core` (ingestion is injected by the CLI) |
+| `packages/mcp` | MCP tools, servers over stdio and stateless HTTP, and the server of a device connected to a hub, which merges the hub's answers into its own. Depends only on `core` (ingestion and replication are injected by the CLI) |
 | `packages/admin` | The hub's admin UI: server-rendered pages, a JSON API, a small browser script (`client/`), and static assets (`assets/`). Styled with the OpenLinkOS design system (`@openlinkos/ui`, a dev dependency whose stylesheet, fonts, and icons the build copies into `dist/vendor`). Depends only on `core` |
-| `packages/cli` | The `origin` command, including `origin mcp`, the personal hub (`origin serve`) with its admin UI, and `origin push` |
+| `packages/cli` | The `origin` command, including `origin mcp`, the personal hub (`origin serve`) with its admin UI and replication API, and a device's sync with its hub |
 
 [docs/architecture.md](docs/architecture.md) explains the data model and the five invariants that every change must preserve.
 
@@ -87,7 +87,7 @@ node -e "const c=require('fs').readFileSync(process.argv[1],'utf8').replace(/\r\
 ## Tests and fixtures
 
 - Tests live in `packages/<name>/test/*.test.ts` and run with Vitest.
-- Adapter parsing and the invariants (provenance, sticky forgetting, append-only, idempotent sync) must be covered by tests. MCP tools are tested end to end with in-memory and HTTP MCP clients (`packages/mcp/test`), the hub with a real device-to-hub round trip (`packages/cli/test`), and the admin UI through HTTP with its security checks (`packages/admin/test`, and end to end in `packages/cli/test/admin.test.ts`). Always use temporary `ORIGIN_HOME` directories in tests.
+- Adapter parsing and the invariants (provenance, sticky forgetting, append-only, idempotent sync) must be covered by tests. MCP tools are tested end to end with in-memory and HTTP MCP clients (`packages/mcp/test`, including a connected device against an in-process hub), replication with real device-to-hub round trips (`packages/cli/test`), and the admin UI through HTTP with its security checks (`packages/admin/test`, and end to end in `packages/cli/test/admin.test.ts`). Always use temporary `ORIGIN_HOME` directories in tests.
 - **Fixtures must be synthetic.** Never commit real session logs, even partial ones. Build fixtures by hand or scrub them thoroughly: replace names, paths, repository URLs, prompts, outputs, tokens, and any other identifying or secret content.
 
 ## Adding a source adapter

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-1986aecd
+sourceHash: sha256-8b6c9a78
 ---
 
 # 架构
@@ -41,11 +41,11 @@ sourceHash: sha256-1986aecd
 - 把 Claude Code、Codex、Cursor、ZCode、Grok Build 的本地会话归档进同一个只追加的库。
 - 让任何 Agent 都能通过 MCP 检索归档、浏览时间线、把任何回答展开到它的原始来源，并记录持久的条目（记忆 / 知识 / 认知）。
 - 让人通过 `origin` CLI 或自己中枢的管理界面查看、纠正和遗忘条目；遗忘必须持久生效。
-- 一个人常常在多台机器上运行 Agent（笔记本、服务器、云端 Agent）。可选的自托管**个人中枢**把每台设备的会话汇集到一个库中，并为任何地方的 Agent 提供服务。
+- 一个人常常在多台机器上运行 Agent（笔记本、服务器、云端 Agent）。每台设备都保有一份完整的、属于自己的记忆；可选的自托管**个人中枢**把每台设备写下的内容汇集到一个库中，让任何地方的 Agent 都能找到。
 
 达成目标的标志是：在你任何一台机器上，从任何一个已接入的 Agent 问“上周在项目 X 里我决定了什么，为什么？”，都能得到附带来源的回答，而且被遗忘的条目永远不会再回来。
 
-**目前明确不做：** 多租户托管（Origin 只服务一个人，每个人运行自己的一份）、由本项目运营的托管服务、端到端加密、副本之间的双向同步、自己中枢上供主人使用的管理界面之外的任何 Web 界面（没有公开页面、没有分享、没有多账户）、屏幕 / 邮件 / 浏览器采集、知识图谱、向量检索、主动提醒，以及任何对模型 API 的调用。
+**目前明确不做：** 多租户托管（Origin 只服务一个人，每个人运行自己的一份）、由本项目运营的托管服务、端到端加密、设备之间互相拉取对方的数据、不经过中枢的点对点同步、实时协作、自己中枢上供主人使用的管理界面之外的任何 Web 界面（没有公开页面、没有分享、没有多账户）、屏幕 / 邮件 / 浏览器采集、知识图谱、向量检索、主动提醒，以及任何对模型 API 的调用。
 
 ## 记忆、知识与认知 {#memory-knowledge-and-cognition}
 
@@ -80,13 +80,14 @@ agent session logs on disk ──scan──▶ Raw (append-only mirror)
  people ◀── admin UI (hub, /admin): overview · timeline · search · entries · remember · correct · forget · tokens
 ```
 
-使用个人中枢时，每台设备照常在本地采集，并把原始镜像复制到中枢，由中枢用同样的适配器解析。Agent 通过所在设备上的本地 `origin mcp`（它会转发给中枢）访问中枢；云端 Agent 则通过中枢的 HTTP 端点访问：
+使用个人中枢时，每台设备都保有一份完整的、属于自己的库，离线时也照常可用。它把原始镜像发送给中枢（由中枢用同样的适配器解析），也把自己写下的条目和遗忘记录发送给中枢；它从中枢收到的只有遗忘记录。设备上的 Agent 使用本地的 `origin mcp`，它根据设备自己的库作答，并合并中枢的回答；云端 Agent 则使用中枢的 HTTP 端点：
 
 ```
-device A: logs ─▶ local store ──push raw mirrors──▶ ┐
-device B: logs ─▶ local store ──push raw mirrors──▶ ├─▶ hub store ◀── MCP over HTTP ── cloud agents
-                       ▲                            │       ▲
-                       └──── pull tombstones ───────┘       └── forwarded MCP ── local origin mcp ◀── agents on A, B
+agents on A ──▶ origin mcp ──▶ store A ──raw mirrors · entries · tombstones──▶ ┐
+                    │             ▲                                             │
+                    │             └──────────────── tombstones ─────────────────┤
+                    └──────── reads, merged (MCP over HTTP) ───────────────────▶ hub store ◀── MCP over HTTP ── cloud agents
+agents on B ──▶ origin mcp ──▶ store B ── (as for device A) ───────────────────▶ ┘
 ```
 
 ## 不变量 {#invariants}
@@ -94,10 +95,10 @@ device B: logs ─▶ local store ──push raw mirrors──▶ ├─▶ hub 
 这些是产品层面的保证。每一条都必须有测试覆盖，代码注释按编号引用它们。
 
 1. **溯源。** 每个条目至少引用一个事件；每个事件都指向某个 Raw 文件中的某一行。任何回答都能一路展开到原文。
-2. **遗忘粘性。** 执行 `forget` 之后，条目立即从所有查询中消失，它的来源事件加入一个排除集，此后任何写入都无法让它们复活。
+2. **遗忘粘性。** 执行 `forget` 之后，条目立即从该库的所有查询中消失，它的来源事件加入一个排除集，此后任何写入都无法让它们复活。遗忘记录会到达每一个库，并且只增不减：被遗忘的内容无论到达哪里都保持被遗忘，之后才到达的版本和副本也是如此，而且没有任何东西会被取消遗忘。
 3. **只追加。** Raw 镜像和事件永远不会被改写。条目通过取代（`supersedes`）来变更，从不原地修改。
 4. **你的数据，留在你的机器上。** 所有数据都存放在你控制的机器上：你的各台设备上的 `~/.origin/`，以及可选的你自己的中枢。Origin 从不调用第三方服务；唯一的网络流量发生在你的设备和你的中枢之间。
-5. **单一入口。** 无论来自哪个界面，每一次读写都经过同一组 core 操作：Agent 使用 MCP（本地 stdio，或中枢的 HTTP 端点）；人使用 CLI 或自己中枢的管理界面。中枢的复制 API 在你自己的各个库之间传输原始镜像和遗忘记录，它既不是 Agent 的入口，也不是人的入口。
+5. **单一入口。** 无论来自哪个界面，每一次读写都经过同一组 core 操作：Agent 使用 MCP（所在设备的 `origin mcp`，或中枢的 HTTP 端点）；人使用 CLI 或自己中枢的管理界面。写入发生在发起它的那个库中——在设备上就是先写入设备自己的库——再由复制通过同样的操作应用到其他库。中枢的复制 API 在你自己的各个库之间传输原始镜像、条目和遗忘记录，它既不是 Agent 的入口，也不是人的入口。
 
 ## 设计原则 {#design-principles}
 
@@ -115,7 +116,7 @@ pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.13。`
 |---|---|---|---|
 | `@openlinkos/origin-core` | `packages/core` | 存储、schema、采集（本地与远程）、条目、遗忘、令牌、管理密码与会话、审计日志、查询 | — |
 | `@openlinkos/origin-adapters` | `packages/adapters` | 每个来源一个确定性解析器 | core |
-| `@openlinkos/origin-mcp` | `packages/mcp` | MCP 工具；基于 stdio 和无状态 HTTP 的 server；转发代理 | core |
+| `@openlinkos/origin-mcp` | `packages/mcp` | MCP 工具；基于 stdio 和无状态 HTTP 的 server，以及已接入中枢的设备上的 server，它把中枢的回答合并进自己的回答 | core |
 | `@openlinkos/origin-admin` | `packages/admin` | 中枢的管理界面：服务器端渲染的页面、JSON API 及其静态资源 | core |
 | `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢），以及设备与中枢之间的同步 | core, adapters, mcp, admin |
 
@@ -181,7 +182,7 @@ interface SourceAdapter {
 
 ## 条目 {#entries}
 
-- **记住（remember）。** 一个条目是一条自成一体的陈述，带有类型、0 到 1 之间的置信度、作者（MCP 客户端的名称；通过 CLI 纠正时为 `user`）、可选的项目和有效期，以及至少一个来源（不变量 1）。来源可以是一个事件 id、一段精确引文，或者两者兼有：
+- **记住（remember）。** 一个条目是一条自成一体的陈述，带有类型、0 到 1 之间的置信度、作者（`<agent>@<device>`：MCP 客户端的名称加上它写入的库的名称，例如 `claude-code@laptop`；CLI 和管理界面写入时为 `user@<device>`；直接使用中枢的 Agent 见[访问](#access)）、可选的项目和有效期，以及至少一个来源（不变量 1）。来源可以是一个事件 id、一段精确引文，或者两者兼有：
   - 给出 id 时，该事件必须存在且可见；如果同时给出引文，引文必须出现在该事件中（忽略空白和大小写）。
   - 只给出引文时，Origin 引用包含该引文的最新可见 `message` 事件，找不到时退而查找 `tool_result` 事件。工具调用永远不参与匹配，因为 Agent 自己那次包含该引文的 `remember` 调用，本身就会作为工具调用被记录下来。
 - **纠正（correct）。** 纠正一个条目的当前版本，会插入一个 `supersedes` 它的新版本（不变量 3）。原有来源会被继承，也可以添加新的来源。纠正的时间总是晚于被纠正的版本，即使本机时钟偏慢也是如此。一个条目的所有版本共享它的 `root`，也就是第一个版本；它们合起来构成这个条目的版本链。
@@ -210,7 +211,7 @@ interface SourceAdapter {
 
 ## MCP server {#mcp-server}
 
-`origin mcp` 通过 stdio 提供以下工具。结果是 JSON 文本，时间戳为本地时间的 ISO 8601 格式。
+`origin mcp` 通过 stdio 提供以下工具。结果是 JSON 文本，时间戳为本地时间的 ISO 8601 格式，精确到毫秒。
 
 | 工具 | 用途 |
 |---|---|
@@ -222,7 +223,9 @@ interface SourceAdapter {
 | `correct` | 用纠正后的版本取代一个条目 |
 | `forget` | 按上述规则遗忘一个条目或事件；仅在用户明确要求时使用 |
 
-- **新鲜度。** server 在启动时同步所有来源，在读取类工具之前也会同步（最多每 10 秒一次），在 `remember` 和 `correct` 之前则总会同步，因此 Agent 能引用它当前所在对话中的记录行。
+- **新鲜度。** server 在启动时采集所有来源，在读取类工具之前也会采集（最多每 10 秒一次），在 `remember` 和 `correct` 之前则总会采集，因此 Agent 能引用它当前所在对话中的记录行。
+- **在已接入中枢的设备上。** server 仍然根据设备自己的库作答，读取类工具（`search`、`timeline`、`get`、`sources`）会同时询问中枢的 `/mcp`。两边的结果会合并、按 id 去重，并标上 `origin: "local"`（本设备有这一项）或 `"hub"`。无论中枢返回什么，设备已经遗忘的内容都不会显示；同一个条目的多个版本中，只列出按[条目](#entries)中的规则确定的当前版本；`get` 会合并两个库中该条目的历史。对于设备没有的 id，`get` 和 `sources` 由中枢作答。如果中枢在 2 秒内（`ORIGIN_HUB_TIMEOUT_MS`）没有回应，或者无法连接，工具就只根据设备作答，并附加第二段文本，说明这次没有询问中枢。
+- **已接入中枢的设备上的写入**先落到设备的库中，再同步上去。server 在读取类工具之前与中枢同步（最多每 10 秒一次），每次写入后也会立即同步，而且为了等待中枢而推迟回答的时间不会超过超时时限。对于设备没有的条目或事件，`correct` 和 `forget` 会在中枢上执行；连不上中枢时，它们会失败并给出清楚的错误说明。
 - **引导。** server 的 MCP `instructions` 会告诉 Agent 何时检索、何时记住（带理由的决定、稳定的事实、偏好），以及 `forget` 需要明确的请求。
 - **错误。** 无效输入、未知 id 和已遗忘的 id 会以工具错误的形式返回，并附带可读的说明。
 
@@ -232,8 +235,10 @@ interface SourceAdapter {
 
 ### 角色 {#roles}
 
-- **设备**：任何有 Agent 会话记录的机器。它照常在本地采集（适配器、原始镜像、游标、改写代次、压缩都保持不变），并运行 `origin sync`，它同时也会复制到中枢。它的本地库是一个暂存副本。
-- **中枢**：`origin serve` 为 Agent 提供基于 HTTP 的 MCP，为设备提供一个小型复制 API，启用后还为它的主人提供一个管理界面。对 Agent 而言，中枢是唯一的事实来源：检索、时间线、条目和遗忘都在那里进行。
+每个库都是一个副本；中枢是那个始终在线的副本。
+
+- **设备**：任何有 Agent 会话记录的机器。它的库本身就是完整的：它在本地采集（适配器、原始镜像、游标、改写代次、压缩都保持不变），它的 Agent 读写这个库，离线时也照常工作。接入中枢后，它把自己写下的内容发送给中枢（`origin sync`，以及运行中的 `origin mcp`），并通过中枢读取其他库中的内容。
+- **中枢**：`origin serve` 为 Agent 提供基于 HTTP 的 MCP，为设备提供复制 API，启用后还为它的主人提供一个管理界面。它保存每台设备发来的内容，以及云端 Agent 直接写入它的内容，所以在那里能找到一切。
 
 ### 复制：原始镜像、条目和遗忘记录上行，遗忘记录下行 {#replication-raw-mirrors-entries-and-tombstones-up-tombstones-down}
 
@@ -254,7 +259,7 @@ interface SourceAdapter {
 
 - 发往 `/mcp` 和 `/v1/*` 的每个请求都需要 `Authorization: Bearer <token>`；`/admin` 下的管理界面有自己的登录（见[管理界面](#admin-ui)）。令牌在中枢上创建（`origin token create <name>`），只显示一次，只以 SHA-256 哈希的形式存储，并且可以吊销。每台设备或每个云端 Agent 各用自己的令牌。
 - 中枢使用明文 HTTP。在 localhost 之外开放之前，请把它放在 TLS（反向代理或 CDN）之后。
-- 通过中枢写入的条目会把 Agent 和令牌记为作者，例如 `claude-code@laptop`：Agent 名称来自 MCP 客户端（或转发代理设置的 `X-Origin-Client` 请求头），后缀来自令牌名称。
+- 设备推送上来的条目保留写入时的作者。通过中枢的 `/mcp` 写入的条目，如果是设备上的 `origin mcp` 报上了它的 Agent 和它自己（请求头 `X-Origin-Client` 和 `X-Origin-Device`），作者记为 `<agent>@<device>`；否则记为 Agent 加令牌名称，例如云端 Agent 的 `claude-code@ci`。
 
 ### HTTP 接口 {#http-interface}
 
@@ -275,7 +280,7 @@ interface SourceAdapter {
 ### 从设备使用中枢 {#using-a-hub-from-a-device}
 
 - `origin hub connect <url> --token <token> [--device <name>]` 把连接信息保存在 `<ORIGIN_HOME>/hub.json` 中。设备名就是它的库的名称（见[存储](#storage)）；`--device` 可以给一个还没有写入任何条目或遗忘记录的库改名。`ORIGIN_HUB_URL` 和 `ORIGIN_HUB_TOKEN` 会覆盖保存的连接信息。
-- 配置了中枢之后，`origin mcp` 就成为一个**转发代理**：它通过 stdio 提供同样的工具，每次调用前先同步和推送（读取类调用最多每 10 秒一次，`remember` 和 `correct` 之前总会进行），再把调用转发给中枢。Agent 的注册无需改动，Agent 也仍然能引用刚刚说过的内容。
+- 配置了中枢之后，`origin mcp` 仍然根据设备自己的库提供服务，并合并中枢的回答（见 [MCP server](#mcp-server)）。它在运行中与中枢同步：读取类工具之前最多每 10 秒一次，每次写入后立即同步，而且等待中枢的时间不会超过超时时限。Agent 的注册无需改动，Agent 也仍然能引用刚刚说过的内容。
 - 没有本地记录的云端 Agent 直接用 bearer 令牌注册中枢的 `/mcp` URL。
 - CLI 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct` 和 `forget` 之后会与中枢同步，所以改动会到达中枢；如果是遗忘，还会到达其他每台设备。中枢的管理界面会显示所有设备的条目。
 
@@ -288,7 +293,7 @@ interface SourceAdapter {
 - **会话。** 会话保存在服务器端的 `admin_session` 中，以会话 id 的哈希为键。会话在 30 分钟没有请求或登录满 12 小时后结束；管理密码变化时，所有会话都会结束：用 `origin admin password` 设置新密码时，以及中枢启动时 `ORIGIN_ADMIN_PASSWORD` 与上次不同，或者在它和保存的密码之间切换时。在 https 公开 URL 之后，cookie 是 `__Host-origin-admin`（Secure、HttpOnly、SameSite=Lax）；在回环 http 上，cookie 是 `origin-admin`（HttpOnly、SameSite=Strict，路径 `/admin`）。在 https 公开 URL 之后，普通 cookie 只在回环隧道上有效，所以从兄弟子域名种下的 cookie 无法固定会话。创建或吊销令牌、遗忘、结束会话，要求最近 10 分钟内输入过密码。
 - **请求。** 只有 GET 和 POST，所有写操作都是 POST。POST 需要会话的 CSRF 令牌（表单字段 `_csrf` 或请求头 `X-CSRF-Token`），以及与中枢源相同的 `Origin` 请求头；带有 `Sec-Fetch-Site: cross-site` 的请求会被拒绝。请求体上限为 64 KiB。密码校验失败的次数受到限制：每个客户端每 10 分钟 10 次，总计每 10 分钟 100 次（返回 429 和 `Retry-After`）；只有设置了 `ORIGIN_CLIENT_IP_HEADER` 时才从该请求头取客户端地址，否则取连接的地址。在代理或 CDN 之后，必须设置这个请求头：否则所有客户端共用代理的地址和同一个限额，任何人的失败尝试都可能把主人锁在外面。
 - **响应。** 页面在服务器端由一个对每个插值都做转义的模板渲染；一小段脚本提供一些便利，例如就地加载原始行，但没有页面依赖它。每个响应都带有严格的 Content-Security-Policy（没有内联脚本或样式，启用 Trusted Types 且不允许任何策略）、`Cache-Control: no-store, private`、`Vary: Cookie`，以及防止嵌入、类型嗅探、引用来源泄露和被搜索引擎收录的请求头；在 https 之后还带有 HSTS。所有资源，包括设计系统的样式表、字体和图标，都由中枢自己以带内容哈希的文件名提供；每个页面只内联它用到的图标符号，界面从不发起外部请求。
-- **能做什么。** 概览（数量统计、设备及其最近推送、存储、解析错误）、令牌（创建：令牌只显示一次，旁边附有现成的接入命令；吊销）、设备、时间线、会话、带溯源链的事件（原始行按需加载，截断到 4,000 个字符；工具事件默认隐藏）、检索、条目及其历史、`correct`（未指定时置信度为 1）、从事件页面 `remember`（引用该事件，作者为 `user`），以及预览之后的 `forget`：请求带上所展示计划的摘要，并再次输入 id；如果计划在此期间发生了变化，就不会遗忘任何内容（409）。
+- **能做什么。** 概览（数量统计、设备及其最近推送、存储、解析错误）、令牌（创建：令牌只显示一次，旁边附有现成的接入命令；吊销）、设备、时间线、会话、带溯源链的事件（原始行按需加载，截断到 4,000 个字符；工具事件默认隐藏）、检索、条目及其历史、`correct`（未指定时置信度为 1）、从事件页面 `remember`（引用该事件，作者为 `user@` 加中枢的名称），以及预览之后的 `forget`：请求带上所展示计划的摘要，并再次输入 id；如果计划在此期间发生了变化，就不会遗忘任何内容（409）。
 - **不能做什么。** 编辑或删除事件、原始镜像、条目或遗忘记录；撤销遗忘；显示被遗忘内容的任何文本（遗忘记录只保存目标 id、填写的原因和被移除内容的 id；审计日志只保存 id 和数量）；保存没有可见来源的条目；再次显示令牌；修改管理密码或其他安全设置；执行任意查询，或读取可见事件的镜像行以外的任何文件。
 - **审计日志。** 来自界面的登录和失败尝试（每个客户端在每个时间窗口内合并为一条记录）、令牌变更、写入的条目、遗忘操作和被结束的会话（操作者 `owner`），来自 CLI 的令牌和密码变更（操作者 `cli`），以及中枢启动时生成或变更的密码（操作者 `hub`），都会连同渠道、客户端地址和 user agent 一起追加到 `audit_log`。详情只含 id 和数量，从不包含文本或密码，因此遗忘保持粘性；触发器拒绝任何更新和删除。
 
@@ -296,8 +301,9 @@ interface SourceAdapter {
 
 - **低成本的认知。** 如何在没有专门抽取流水线的情况下，构建并维护一个关于这个人的模型？目前由 Agent 在注意到某些东西时自行写入认知条目。这是否足够，仍是一个悬而未决的问题。
 - **与原生记忆互通。** Claude Code、ZCode 和 Grok Build 都维护一个 `MEMORY.md` 索引，外加每条记忆一个 Markdown 文件。与这种布局的双向导入 / 导出已在计划中，但尚未设计。
-- **变更通知。** 文件监听在某些平台上并不可靠。MCP server 按需同步，CLI 则在运行 `origin sync` 时同步；可能仍然需要一个由定期全量扫描兜底的后台监听器，尤其是为了从 Agent 闲置的设备上推送。
-- **远程管理。** 管理界面已经可以在浏览器中管理中枢上的记忆。在设备的 CLI 上针对它的中枢运行 `entries`、`correct` 和 `forget`，并保持与本地相同的“预览—确认”流程，仍有待解决；设备上只监听回环地址的 `origin ui` 也是如此。
+- **变更通知。** 文件监听在某些平台上并不可靠。MCP server 按需同步，CLI 则在运行 `origin sync` 时同步；可能仍然需要一个由定期全量扫描兜底的后台监听器，尤其是为了同步 Agent 闲置的设备。
+- **小磁盘的中继模式。** 空间不多的设备可以只保留尚未发送的内容，其余一切都通过中枢读取。这样它就不再是一份独立完整的记忆，所以需要单独设计。
+- **中枢的存储后端。** 中枢把原始镜像保存在自己的磁盘上，其余一切保存在 SQLite 中。对于一块磁盘装不下的中枢，原始镜像可以迁到对象存储，库也可以选择改用 PostgreSQL。
 
 ## 相关工作 {#prior-art}
 

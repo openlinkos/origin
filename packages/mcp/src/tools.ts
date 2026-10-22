@@ -136,9 +136,6 @@ export type ToolArgs<N extends ToolName> = z.output<
 
 export type ToolHandlers = { [N in ToolName]: (args: ToolArgs<N>) => Promise<CallToolResult> };
 
-/** Tools that write; they always refresh first so that they can cite what was just said. */
-export const WRITE_TOOLS: ReadonlySet<ToolName> = new Set(['remember', 'correct']);
-
 export function registerOriginTools(mcp: McpServer, handlers: ToolHandlers): void {
   for (const name of TOOL_NAMES) {
     const handler = handlers[name] as (args: unknown) => Promise<CallToolResult>;
@@ -160,25 +157,38 @@ export function toolError(message: string): CallToolResult {
 
 /**
  * Coalesce refreshes: at most one in flight, and reads skip it when the last one finished less
- * than `intervalMs` ago. Failures are logged, never thrown.
+ * than `intervalMs` ago. A forced refresh (after or before a write) asked for while one is in
+ * flight runs once more after it, so that it covers what was just written; forced requests that
+ * arrive meanwhile share that run. Failures are logged, never thrown.
  */
 export function refreshGate(
   fn: (() => Promise<void>) | undefined,
   intervalMs: number,
   log?: (message: string) => void,
+  label = 'sync',
 ): (force?: boolean) => Promise<void> {
   let last = 0;
   let inflight: Promise<void> | null = null;
-  return async (force = false) => {
-    if (!fn) return;
-    if (inflight) return inflight;
-    if (!force && Date.now() - last < intervalMs) return;
-    inflight = fn()
-      .catch((err: unknown) => log?.(`sync failed: ${(err as Error).message}`))
+  let queued: Promise<void> | null = null;
+  const run = (): Promise<void> => {
+    queued = null;
+    const current = (fn as () => Promise<void>)()
+      .catch((err: unknown) => log?.(`${label} failed: ${(err as Error).message}`))
       .finally(() => {
         last = Date.now();
-        inflight = null;
+        if (inflight === current) inflight = null;
       });
-    return inflight;
+    inflight = current;
+    return current;
+  };
+  return async (force = false) => {
+    if (!fn) return;
+    if (inflight) {
+      if (!force) return inflight;
+      queued ??= inflight.then(run);
+      return queued;
+    }
+    if (!force && Date.now() - last < intervalMs) return;
+    return run();
   };
 }

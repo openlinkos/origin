@@ -132,7 +132,7 @@ export const zh: Messages = {
     '尚未配置公开 URL，所以命令里显示的是 https://hub.example.com。请把它替换为这个中枢的地址，或者用 --public-url 启动中枢。',
   'connect.device': '有 Agent 会话的设备',
   'connect.deviceHelp':
-    '在每台运行 Agent 的机器上：先接入一次，再同步。之后这台机器上的 origin mcp 会转发到这个中枢。',
+    '在每台运行 Agent 的机器上：先接入一次，再同步。之后这台机器上的 origin mcp 会根据自己的库和这个中枢作答。',
   'connect.deviceLabel': '接入并同步',
   'connect.cronLabel': '每 10 分钟同步一次（crontab）',
   'connect.agents': '云端 Agent',

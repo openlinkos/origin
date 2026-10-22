@@ -11,13 +11,15 @@ import { createClaudeCodeAdapter } from '@openlinkos/origin-adapters';
 import {
   createToken,
   type Database,
+  getEntry,
   getEvent,
+  initStoreName,
   openDatabase,
   rawLocator,
   revokeToken,
   syncSource,
 } from '@openlinkos/origin-core';
-import { createProxyServer } from '@openlinkos/origin-mcp';
+import { createReplicaServer } from '@openlinkos/origin-mcp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HubConfig } from '../src/hub/config.js';
 import { createHubServer } from '../src/hub/server.js';
@@ -122,21 +124,24 @@ describe('personal hub', () => {
     expect(getEvent(hubDb, USER_EVENT)).toBeNull();
   });
 
-  it('forwards a device agent through the proxy after pushing', async () => {
-    let refreshes = 0;
-    const proxy = createProxyServer({
-      url: hub.url,
-      token: hub.token,
-      refresh: async () => {
-        refreshes++;
+  it('serves a device agent from its own store, then syncs what it wrote', async () => {
+    initStoreName(deviceDb, 'laptop');
+    let syncs = 0;
+    const replica = createReplicaServer({
+      db: deviceDb,
+      home: deviceHome,
+      device: 'laptop',
+      hub: { url: hub.url, token: hub.token },
+      sync: async () => {
+        syncs++;
         await push();
       },
     });
     const client = new Client({ name: 'agent-x', version: '1.0.0' });
-    const [clientSide, proxySide] = InMemoryTransport.createLinkedPair();
-    await Promise.all([client.connect(clientSide), proxy.mcp.connect(proxySide)]);
+    const [clientSide, replicaSide] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client.connect(clientSide), replica.mcp.connect(replicaSide)]);
 
-    // The quoted line exists only on the device until the proxy pushes it.
+    // The quoted line is only on the device: the entry is written there, then synced up.
     const remembered = json(
       await client.callTool({
         name: 'remember',
@@ -148,9 +153,14 @@ describe('personal hub', () => {
         },
       }),
     );
-    expect(remembered.entry.author).toBe('agent-x@laptop');
-    expect(refreshes).toBe(1);
+    expect(remembered.entry).toMatchObject({ author: 'agent-x@laptop', origin: 'local' });
+    expect(syncs).toBe(1);
+    expect(getEntry(hubDb, remembered.entry.id)).toMatchObject({
+      author: 'agent-x@laptop',
+      origin: 'laptop',
+    });
     await client.close();
+    await replica.close();
   });
 
   it('rejects missing or revoked tokens, unsafe paths, and unknown sources', async () => {
