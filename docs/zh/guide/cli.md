@@ -1,11 +1,11 @@
 ---
-sourceHash: sha256-2f179619
+sourceHash: sha256-73ffc6ba
 ---
 
 # 命令参考
 
 ```text
-origin sync      [--source <id>] [--verbose]          采集本机 Agent 会话（幂等，可随时重跑）
+origin sync      [--source <id>] [--verbose] [--local] 采集本机 Agent 会话；已接入中枢时再与中枢同步
 origin status                                          各来源统计、条目数与上次采集时间
 origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
 origin timeline  --session <id> [--all]                单个会话的事件（默认不含工具事件）
@@ -23,7 +23,7 @@ origin token     create <name> | list | revoke <name>  管理中枢的访问令�
 origin admin     password [--generate]                 设置管理界面的密码，并让所有会话退出登录（在中枢上运行）
 origin admin     sessions [--revoke-all] | audit [--limit 50]       管理界面的会话与审计日志
 origin hub       connect <url> --token <token> [--device <name>] | status | disconnect
-origin push                                            本地同步、推送原始镜像到中枢、取回遗忘记录
+origin push                                            与 origin sync 相同（为已有的定时任务保留）
 ```
 
 - **时间参数**：相对时长（`30m`、`24h`、`7d`、`2w`）或日期（`YYYY-MM-DD`、ISO 8601）。
@@ -88,9 +88,9 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 这些命令用于运行[个人中枢](./hub.md)，以及把设备接入中枢。
 
 - 在中枢上，`origin serve` 提供 `POST /mcp` 和复制接口，`GET /healthz` 用于健康检查，不需要鉴权。`origin token create <name>` 会打印一个新令牌，只显示一次（以 `ogn_` 开头）；中枢只保存令牌的哈希。
-- 在设备上，`origin hub connect` 保存中枢地址、令牌和设备名（默认为主机名）。`origin push` 可以随时重跑，每次推送都会从上次停下的位置继续。
+- 在设备上，`origin hub connect` 保存中枢地址和令牌；中枢以设备的库名称来识别它。此后 `origin sync` 也会与中枢同步：发送新的原始镜像字节，以及在本设备上写下的条目和遗忘记录，再应用中枢的遗忘记录。可以随时重跑，每次都会从上次停下的位置继续。`--local` 会跳过中枢。
 - 设备接入后，`origin mcp` 会先推送新的会话记录，再把每次工具调用转发给中枢。
-- 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于它们所运行的那个库。在已接入的设备上，那就是本地暂存副本。
+- 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct` 和 `forget` 之后会与中枢同步；如果连不上中枢，改动会留在设备上，直到下一次同步。
 - `origin serve --admin` 会同时在 `/admin` 下提供[管理界面](./admin.md)；`--admin-listen <host:port>` 则改为在单独的监听地址上提供。在 TLS 之后时，用 `--public-url` 传入中枢的 https 地址；中枢拒绝在回环地址之外通过明文 HTTP 提供管理界面。
 - `origin admin password` 设置管理界面的密码：在终端中询问两次，不显示你输入的内容；没有终端时从标准输入读取一行。`--generate` 随机生成一个密码，只打印一次。密码至少需要 10 个字符，设置后所有管理会话都会退出登录。中枢第一次在启用管理界面的情况下启动时，会生成一个密码，并在日志中打印一次。`origin admin sessions --revoke-all` 让所有会话退出登录，`origin admin audit` 打印审计日志。用 CLI 进行的令牌和密码变更也会记录在其中。
 

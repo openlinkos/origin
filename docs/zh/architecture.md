@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-33728e0d
+sourceHash: sha256-1986aecd
 ---
 
 # 架构
@@ -117,7 +117,7 @@ pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.13。`
 | `@openlinkos/origin-adapters` | `packages/adapters` | 每个来源一个确定性解析器 | core |
 | `@openlinkos/origin-mcp` | `packages/mcp` | MCP 工具；基于 stdio 和无状态 HTTP 的 server；转发代理 | core |
 | `@openlinkos/origin-admin` | `packages/admin` | 中枢的管理界面：服务器端渲染的页面、JSON API 及其静态资源 | core |
-| `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢）和 `origin push` | core, adapters, mcp, admin |
+| `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢），以及设备与中枢之间的同步 | core, adapters, mcp, admin |
 
 `core` 不得依赖任何其他包，`mcp` 和 `admin` 都不得依赖 `adapters`：CLI 以回调的形式把采集注入各个 server，中枢的 HTTP server 位于 CLI 中，并由它挂载管理界面的请求处理函数。适配器实现 `core` 中的 `SourceAdapter` 接口：
 
@@ -232,15 +232,23 @@ interface SourceAdapter {
 
 ### 角色 {#roles}
 
-- **设备**：任何有 Agent 会话记录的机器。它照常在本地采集（适配器、原始镜像、游标、改写代次、压缩都保持不变），并运行 `origin push` 进行复制。它的本地库是一个暂存副本。
+- **设备**：任何有 Agent 会话记录的机器。它照常在本地采集（适配器、原始镜像、游标、改写代次、压缩都保持不变），并运行 `origin sync`，它同时也会复制到中枢。它的本地库是一个暂存副本。
 - **中枢**：`origin serve` 为 Agent 提供基于 HTTP 的 MCP，为设备提供一个小型复制 API，启用后还为它的主人提供一个管理界面。对 Agent 而言，中枢是唯一的事实来源：检索、时间线、条目和遗忘都在那里进行。
 
-### 复制：原始镜像上行，遗忘记录下行 {#replication-raw-mirrors-up-tombstones-down}
+### 复制：原始镜像、条目和遗忘记录上行，遗忘记录下行 {#replication-raw-mirrors-entries-and-tombstones-up-tombstones-down}
 
-- 设备推送的是**原始镜像字节**，而不是解析后的事件。中枢把它们存为自己的只追加镜像，并用同样的适配器解析，因此溯源（不变量 1）在中枢上同样成立，解析器的修复也会在所有地方生效。事件 id 在每个库中都完全相同。
-- 每个远程文件以 `(source, "@<device>:<original path>", generation)` 为键；本地路径永远不会以 `@` 开头。中枢上的镜像位于 `raw/devices/<device>/<source>/<relPath>[.g<n>]`。
-- 推送可续传且幂等：设备先向中枢查询游标，再把每个镜像的 `[cursor, local size)` 区间按完整行分块发送（每块最多 1 MiB，或者单独一个更长的行）。偏移量与中枢游标不一致的块会被拒绝，并返回当前游标，设备从那里继续。
-- 推送之后，设备取回自己尚未应用的中枢遗忘记录，并应用到自己的暂存库中，从而让遗忘到达每一个副本（不变量 2）。它请求中枢 `change_log` 中位于自己游标之后的遗忘记录，中枢会略去该设备自己创建的那些。在中枢上被遗忘的事件即使被再次推送，也会保持排除，因为排除按事件 id 生效。
+设备把自己写下的内容发送给中枢；中枢发给设备的只有被遗忘的内容。一次同步（已接入中枢的设备上的 `origin sync`）按顺序分三步进行：
+
+1. **原始镜像。** 设备推送的是**原始镜像字节**，而不是解析后的事件。中枢把它们存为自己的只追加镜像，并用同样的适配器解析，因此溯源（不变量 1）在中枢上同样成立，解析器的修复也会在所有地方生效。事件 id 在每个库中都完全相同。
+   - 每个远程文件以 `(source, "@<device>:<original path>", generation)` 为键；本地路径永远不会以 `@` 开头。中枢上的镜像位于 `raw/devices/<device>/<source>/<relPath>[.g<n>]`。
+   - 推送可续传且幂等：设备先向中枢查询游标，再把每个镜像的 `[cursor, local size)` 区间按完整行分块发送（每块最多 1 MiB，或者单独一个更长的行）。偏移量与中枢游标不一致的块会被拒绝，并返回当前游标，设备从那里继续。
+2. **条目和遗忘记录上行。** 设备按照自己 `change_log` 的顺序，发送推送游标之后它自己写下的条目和遗忘记录（也就是 `origin` 为它的名称的那些）。它已经遗忘的条目永远不会被发送。中枢以相同的 id 保存它们，保留作者和 origin，并按[遗忘](#forgetting)中的规则应用这些遗忘记录，所以一个到达时已属于被遗忘内容的版本或条目，会在到达时就被遗忘。由于设备先推送镜像，它的条目所引用的事件通常已经在中枢上了；如果某个条目引用的事件或它取代的版本还不在中枢上，中枢会说明缺少哪些 id，推送游标停在这个条目之前，之后的条目等到下一次同步。遗忘记录照样发送：遗忘从不等待。
+3. **遗忘记录下行。** 设备请求中枢 `change_log` 中位于自己拉取游标之后的遗忘记录；中枢会略去该设备自己创建的那些，并附上每条记录在中枢上的当前影响一起发送。设备把它们应用到自己的库中，从而让遗忘到达每一个副本（不变量 2）。当一条遗忘记录在中枢上的影响后来扩大了——因为中枢把它应用到了设备没有的数据上，或者因为到达了它所覆盖的纠正或条目——中枢会再次记录它，于是每台设备，包括创建它的那台，都会收到扩大后的影响。
+
+- **只有遗忘记录下行。** 中枢从不把条目或事件发给设备：设备的库只保存它自己的会话、它自己的条目，以及与之相关的遗忘记录。
+- **每个条目只有一个裁决者。** 设备应用来自中枢的遗忘记录时，只对中枢还没有收到的条目判断规则 3（不再有可见来源）。对其余条目，中枢持有每一个版本，它的裁决作为遗忘记录影响的一部分到达，所以设备和中枢对它们都有的条目永远不会产生分歧。
+- **游标。** 设备在 `setting` 中为每个中枢 URL 保存两个游标：自己的变更推送到了哪里，以及中枢的变更拉取到了哪里。每次请求成功后都会保存游标，所以中断的同步会从中断处继续，再次运行则什么也不会发送。
+- 在中枢上被遗忘的事件即使被再次推送，也会保持排除，因为排除按事件 id 生效。
 
 ### 访问 {#access}
 
@@ -256,6 +264,8 @@ interface SourceAdapter {
 | `POST /mcp` | MCP Streamable HTTP，无状态，JSON 响应；与 stdio server 相同的七个工具 |
 | `GET /v1/cursors?device=<name>` | 该设备每个文件在中枢上的字节游标 |
 | `POST /v1/ingest` | 追加一个块：JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }`，其中 `data` 为 base64；请求体可以使用 gzip 编码。返回 `200 { bytes, eventsAdded, … }`，偏移量不匹配时返回 `409 { bytes }` |
+| `POST /v1/entries` | `{ device, entries }`，最多 1,000 个条目，每个为 `{ id, kind, text, confidence, author, project, supersedes, validFrom, validTo, createdAt, origin, sources: [{ eventId, quote }] }`，其 `origin` 必须等于 `device`。按顺序保存；返回 `200 { applied, pending }`，其中 `pending` 为 null，或者是第一个所引用事件或所取代版本尚不在中枢上的条目的 `{ id, missing }`（它之后的条目都不会被保存）。同一个 id 下内容不同时返回 `409` |
+| `POST /v1/tombstones` | `{ device, tombstones }`，最多 1,000 条遗忘记录，每条为 `{ id, target, reason, createdAt, origin, entries, events }`，附带它在设备上的影响，其 `origin` 必须等于 `device`。按[遗忘](#forgetting)中的规则应用；返回 `200 { applied }`，同一个 id 下内容不同时返回 `409` |
 | `GET /v1/tombstones?after=<seq>&device=<name>` | `{ tombstones, next, more }`：中枢变更日志中序号大于 `after` 的遗忘记录，不含该设备自己创建的，每条都附带 id、目标、原因、`createdAt`、origin，以及它在中枢上遗忘的条目和排除的事件。`more` 为 true 时，用 `after=<next>` 继续 |
 | `GET`, `POST /admin/…` | 启用时的管理界面：需要管理员登录的服务器端渲染页面。未启用时返回 404 |
 | `GET`, `POST /admin/api/…` | 管理界面的 JSON API：与页面相同的操作、会话和检查 |
@@ -267,7 +277,7 @@ interface SourceAdapter {
 - `origin hub connect <url> --token <token> [--device <name>]` 把连接信息保存在 `<ORIGIN_HOME>/hub.json` 中。设备名就是它的库的名称（见[存储](#storage)）；`--device` 可以给一个还没有写入任何条目或遗忘记录的库改名。`ORIGIN_HUB_URL` 和 `ORIGIN_HUB_TOKEN` 会覆盖保存的连接信息。
 - 配置了中枢之后，`origin mcp` 就成为一个**转发代理**：它通过 stdio 提供同样的工具，每次调用前先同步和推送（读取类调用最多每 10 秒一次，`remember` 和 `correct` 之前总会进行），再把调用转发给中枢。Agent 的注册无需改动，Agent 也仍然能引用刚刚说过的内容。
 - 没有本地记录的云端 Agent 直接用 bearer 令牌注册中枢的 `/mcp` URL。
-- 在当前版本中，CLI 管理命令（`entries`、`correct`、`forget` 等）作用于它们所运行的那个库。请通过 Agent、中枢的管理界面，或在中枢上运行 CLI 来管理记忆。
+- CLI 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct` 和 `forget` 之后会与中枢同步，所以改动会到达中枢；如果是遗忘，还会到达其他每台设备。中枢的管理界面会显示所有设备的条目。
 
 ### 管理界面 {#admin-ui}
 

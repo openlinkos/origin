@@ -20,8 +20,8 @@ import {
 import { createProxyServer } from '@openlinkos/origin-mcp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HubConfig } from '../src/hub/config.js';
-import { pushToHub } from '../src/hub/push.js';
 import { createHubServer } from '../src/hub/server.js';
+import { syncWithHub } from '../src/hub/sync.js';
 
 const fixtures = fileURLToPath(
   new URL('../../adapters/test/fixtures/claude-code/', import.meta.url),
@@ -68,7 +68,7 @@ afterEach(async () => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-const push = () => pushToHub({ db: deviceDb, home: deviceHome, hub });
+const push = () => syncWithHub({ db: deviceDb, home: deviceHome, hub });
 
 async function hubClient(): Promise<Client> {
   const client = new Client({ name: 'cloud-agent', version: '1.0.0' });

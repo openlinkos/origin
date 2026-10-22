@@ -3,11 +3,16 @@ import zlib from 'node:zlib';
 import type { AdminHandler } from '@openlinkos/origin-admin';
 import {
   appendRemote,
+  ConflictError,
   type Database,
   HUB_STORE_NAME,
   initStoreName,
   NAME_RE,
   OriginError,
+  parseReplicaEntry,
+  parseTombstoneRecord,
+  receiveEntry,
+  receiveTombstone,
   remoteCursors,
   type SourceAdapter,
   storeName,
@@ -18,6 +23,8 @@ import { handleMcpHttp } from '@openlinkos/origin-mcp';
 
 /** Decompressed request bodies larger than this are rejected. */
 const MAX_BODY = 64 * 1024 * 1024;
+/** Most entries or tombstones in one replication request. */
+const MAX_RECORDS = 1000;
 
 export interface HubOptions {
   db: Database;
@@ -51,7 +58,14 @@ export function createHubServer(opts: HubOptions): http.Server {
   initStoreName(opts.db, HUB_STORE_NAME);
   return http.createServer((req, res) => {
     handle(opts, req, res).catch((err: unknown) => {
-      const status = err instanceof HttpError ? err.status : err instanceof OriginError ? 400 : 500;
+      const status =
+        err instanceof HttpError
+          ? err.status
+          : err instanceof ConflictError
+            ? 409
+            : err instanceof OriginError
+              ? 400
+              : 500;
       if (status === 500) opts.log?.(`hub error: ${(err as Error).stack ?? err}`);
       if (res.headersSent) {
         res.end();
@@ -127,7 +141,35 @@ async function handle(
       else sendJson(res, 409, { bytes: result.bytes });
       return;
     }
+    case '/v1/entries': {
+      requireMethod(req, 'POST');
+      const { device, records } = await replicaBody(opts, req, 'entries');
+      // Validate everything first, then store in order; stop at the first entry that must wait.
+      const entries = records.map(parseReplicaEntry);
+      checkOrigins(entries, device);
+      const growthOrigin = storeName(opts.db);
+      let applied = 0;
+      for (const e of entries) {
+        const r = receiveEntry(opts.db, e, { growthOrigin });
+        if (r.status === 'pending') {
+          sendJson(res, 200, { applied, pending: { id: e.id, missing: r.missing } });
+          return;
+        }
+        applied++;
+      }
+      sendJson(res, 200, { applied, pending: null });
+      return;
+    }
     case '/v1/tombstones': {
+      if (req.method === 'POST') {
+        const { device, records } = await replicaBody(opts, req, 'tombstones');
+        const tombstones = records.map(parseTombstoneRecord);
+        checkOrigins(tombstones, device);
+        const growthOrigin = storeName(opts.db);
+        for (const t of tombstones) receiveTombstone(opts.db, t, { growthOrigin });
+        sendJson(res, 200, { applied: tombstones.length });
+        return;
+      }
       requireMethod(req, 'GET');
       const device = deviceName(opts, url.searchParams.get('device'));
       const after = Number(url.searchParams.get('after') ?? '0');
@@ -152,6 +194,30 @@ function deviceName(opts: HubOptions, value: unknown): string {
     throw new HttpError(400, `"${value}" is this hub's own name; give the device another name.`);
   }
   return value;
+}
+
+/** The device and the records of a replication request. */
+async function replicaBody(
+  opts: HubOptions,
+  req: http.IncomingMessage,
+  field: 'entries' | 'tombstones',
+): Promise<{ device: string; records: unknown[] }> {
+  const body = await readJson(req);
+  if (typeof body !== 'object' || body === null) throw new HttpError(400, 'Invalid body.');
+  const { device, [field]: records } = body as Record<string, unknown>;
+  if (!Array.isArray(records) || records.length > MAX_RECORDS) {
+    throw new HttpError(400, `Invalid or too many ${field}.`);
+  }
+  return { device: deviceName(opts, device), records };
+}
+
+/** A device sends only what it wrote itself: its records carry its name. */
+function checkOrigins(records: Array<{ id: string; origin: string }>, device: string): void {
+  for (const r of records) {
+    if (r.origin !== device) {
+      throw new HttpError(400, `${r.id} comes from ${r.origin}, not from ${device}.`);
+    }
+  }
 }
 
 /** `<agent>@<token>` when a forwarding proxy names the agent, else the token name. */

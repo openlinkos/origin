@@ -189,10 +189,10 @@ export function connectSnippets(
   return {
     hubUrl,
     known: publicUrl !== null,
-    device: `origin hub connect ${hubUrl} --token ${token} --device ${device}\norigin push`,
+    device: `origin hub connect ${hubUrl} --token ${token} --device ${device}\norigin sync`,
     claude: `claude mcp add --scope user --transport http origin ${hubUrl}/mcp --header "Authorization: Bearer ${token}"`,
     codex: `export ORIGIN_TOKEN=${token}\ncodex mcp add origin --url ${hubUrl}/mcp --bearer-token-env-var ORIGIN_TOKEN`,
-    cron: '*/10 * * * * origin push',
+    cron: '*/10 * * * * origin sync',
   };
 }
 

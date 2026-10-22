@@ -59,8 +59,8 @@ import {
   removeHubConfig,
   writeHubConfig,
 } from './hub/config.js';
-import { pushToHub } from './hub/push.js';
 import { type HubAdminOptions, startHub } from './hub/serve.js';
+import { type HubSyncResult, syncWithHub } from './hub/sync.js';
 import { readNewPassword } from './password.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
 
@@ -69,7 +69,7 @@ const VERSION = (createRequire(import.meta.url)('../package.json') as { version:
 const USAGE = `origin — local-first, cross-agent personal memory
 
 Usage:
-  origin sync      [--source <id>] [--verbose]          Ingest local agent sessions (idempotent, safe to re-run)
+  origin sync      [--source <id>] [--verbose] [--local] Ingest local agent sessions, then sync with the hub if connected
   origin status                                          Per-source counts, entries, and last sync
   origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
   origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
@@ -88,7 +88,7 @@ Personal hub:
   origin admin     password [--generate]                 Set the admin UI password; signs out every session (run on the hub)
   origin admin     sessions [--revoke-all] | audit [--limit 50]       Admin UI sessions and the audit log
   origin hub       connect <url> --token <token> [--device <name>] | status | disconnect
-  origin push                                            Sync locally, push raw mirrors to the hub, pull tombstones
+  origin push                                            Same as origin sync (kept for existing schedules)
 
 Entry kinds: ${ENTRY_KINDS.join(' · ')}. Time values: 7d / 24h / 30m / 2w or YYYY-MM-DD.
 Data directory: $ORIGIN_HOME or ~/.origin
@@ -150,9 +150,9 @@ async function main(argv: string[]): Promise<number> {
       case 'entries':
         return cmdEntries(ctx, rest);
       case 'correct':
-        return cmdCorrect(ctx, rest);
+        return await cmdCorrect(ctx, rest);
       case 'forget':
-        return cmdForget(ctx, rest);
+        return await cmdForget(ctx, rest);
       case 'projects':
         return cmdProjects(ctx);
       case 'mcp':
@@ -166,7 +166,7 @@ async function main(argv: string[]): Promise<number> {
       case 'hub':
         return await cmdHub(ctx, rest);
       case 'push':
-        return await cmdPush(ctx);
+        return await cmdSync(ctx, rest);
       default:
         console.error(`Unknown command: ${command}\n`);
         console.log(USAGE);
@@ -187,10 +187,41 @@ async function syncAll(ctx: Ctx): Promise<void> {
   for (const adapter of allAdapters()) await syncSource({ db: ctx.db, home: ctx.home }, adapter);
 }
 
+/** One line about a sync with the hub. */
+function describeHubSync(hub: HubConfig, r: HubSyncResult): string {
+  const lines = [
+    `Hub ${hub.url} (as ${hub.device}): sent ${count(r.files, 'file')} (${fmtBytes(r.bytes)}, ${count(r.eventsAdded, 'new event')}), ${count(r.entriesPushed, 'entry', 'entries')}, and ${count(r.tombstonesPushed, 'tombstone')}; applied ${count(r.tombstonesApplied, 'tombstone')} from the hub.`,
+  ];
+  if (r.waiting) {
+    lines.push(
+      `Entry ${r.waiting.id} waits until the hub has ${r.waiting.missing.join(', ')}; it is sent again on the next sync.`,
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * After a local change on a connected device, sync with the hub. A hub that cannot be reached
+ * leaves the change local; the next sync sends it.
+ */
+async function syncAfterChange(ctx: Ctx): Promise<void> {
+  const hub = hubOf(ctx);
+  if (!hub) return;
+  try {
+    await syncWithHub({ db: ctx.db, home: ctx.home, hub });
+  } catch (err) {
+    console.error(`Saved here; not synced with the hub yet: ${(err as Error).message}`);
+  }
+}
+
 async function cmdSync(ctx: Ctx, args: string[]): Promise<number> {
   const { values } = parseArgs({
     args,
-    options: { source: { type: 'string' }, verbose: { type: 'boolean', default: false } },
+    options: {
+      source: { type: 'string' },
+      verbose: { type: 'boolean', default: false },
+      local: { type: 'boolean', default: false },
+    },
   });
   const adapters = values.source ? [adapterById(values.source)] : allAdapters();
   if (adapters.some((a) => a === null)) {
@@ -234,7 +265,21 @@ async function cmdSync(ctx: Ctx, args: string[]): Promise<number> {
       'time',
     ]),
   );
-  return 0;
+  const hub = values.local ? null : hubOf(ctx);
+  if (!hub) return 0;
+  try {
+    const r = await syncWithHub({
+      db: ctx.db,
+      home: ctx.home,
+      hub,
+      log: values.verbose ? (m) => console.error(`  ${m}`) : undefined,
+    });
+    console.log(`\n${describeHubSync(hub, r)}`);
+    return 0;
+  } catch (err) {
+    console.error(`\nNot synced with the hub: ${(err as Error).message}`);
+    return 1;
+  }
 }
 
 function cmdStatus(ctx: Ctx): number {
@@ -485,7 +530,7 @@ function cmdEntries(ctx: Ctx, args: string[]): number {
   return 0;
 }
 
-function cmdCorrect(ctx: Ctx, args: string[]): number {
+async function cmdCorrect(ctx: Ctx, args: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
@@ -504,10 +549,11 @@ function cmdCorrect(ctx: Ctx, args: string[]): number {
     confidence: values.confidence === undefined ? 1 : Number(values.confidence),
   });
   console.log(`Corrected ${id} → ${e.id}`);
+  await syncAfterChange(ctx);
   return 0;
 }
 
-function cmdForget(ctx: Ctx, args: string[]): number {
+async function cmdForget(ctx: Ctx, args: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
@@ -533,6 +579,7 @@ function cmdForget(ctx: Ctx, args: string[]): number {
   }
   forget(ctx.db, id, values.reason);
   console.log(`Forgot ${summary}.`);
+  await syncAfterChange(ctx);
   return 0;
 }
 
@@ -563,7 +610,7 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
       log,
       refresh: async () => {
         await syncAll(ctx);
-        await pushToHub({ db: ctx.db, home: ctx.home, hub });
+        await syncWithHub({ db: ctx.db, home: ctx.home, hub });
       },
     });
     return 0;
@@ -810,12 +857,18 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
     }
     // The device is known to its hub by the store's name; --device names a store that has not
     // written anything yet.
-    if (values.device !== undefined) setStoreName(ctx.db, values.device);
+    if (values.device !== undefined && values.device !== storeName(ctx.db)) {
+      try {
+        setStoreName(ctx.db, values.device);
+      } catch (err) {
+        console.error(`${(err as Error).message} The hub will know this device by that name.`);
+      }
+    }
     const hub = { url: normalizeHubUrl(url), token: values.token, device: storeName(ctx.db) };
     await checkHub(hub);
     writeHubConfig(ctx.home, hub);
     console.log(
-      `Connected to ${hub.url} as ${hub.device}. Run "origin push" to send this device's sessions.`,
+      `Connected to ${hub.url} as ${hub.device}. Run "origin sync" to send this device's sessions and entries.`,
     );
     return 0;
   }
@@ -854,20 +907,6 @@ async function checkHub(hub: { url: string; token: string; device: string }): Pr
   }
   if (res.status === 401) throw new OriginError(`The hub at ${hub.url} rejected the token.`);
   if (!res.ok) throw new OriginError(`The hub at ${hub.url} answered ${res.status}.`);
-}
-
-async function cmdPush(ctx: Ctx): Promise<number> {
-  const hub = hubOf(ctx);
-  if (!hub) {
-    console.error('Not connected to a hub. Connect with: origin hub connect <url> --token <token>');
-    return 1;
-  }
-  await syncAll(ctx);
-  const r = await pushToHub({ db: ctx.db, home: ctx.home, hub });
-  console.log(
-    `Pushed ${count(r.files, 'file')} (${fmtBytes(r.bytes)}, ${count(r.eventsAdded, 'new event')}) to ${hub.url} as ${hub.device}; applied ${count(r.tombstonesApplied, 'tombstone')} from the hub.`,
-  );
-  return 0;
 }
 
 function fmtBytes(n: number): string {

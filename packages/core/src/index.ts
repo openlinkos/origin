@@ -47,7 +47,7 @@ export {
   type SourceInput,
   searchEntries,
 } from './entries.js';
-export { OriginError } from './errors.js';
+export { ConflictError, OriginError } from './errors.js';
 export {
   type ApplyOptions,
   type ApplyResult,
@@ -103,7 +103,19 @@ export {
   verifyAdminPasswordHash,
 } from './password.js';
 export { dbPath, originHome, parseRawPath, rawDir, remotePath } from './paths.js';
-export { parseTombstoneRecord } from './replication.js';
+export {
+  exportEntry,
+  type OwnChange,
+  ownChanges,
+  parseReplicaEntry,
+  parseTombstoneRecord,
+  type ReceiveResult,
+  type ReplicaEntry,
+  receiveEntry,
+  receiveTombstone,
+  shouldSendEntry,
+  unpushedOnly,
+} from './replication.js';
 export { getSetting, setSetting } from './settings.js';
 export {
   type EventFilter,

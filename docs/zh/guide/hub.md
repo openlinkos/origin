@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-4f5094bb
+sourceHash: sha256-955a2bbe
 ---
 
 # 个人中枢
@@ -15,7 +15,7 @@ sourceHash: sha256-4f5094bb
 
 ## 工作方式 {#how-it-works}
 
-- 每台**设备**照旧在本地归档自己的会话，和没有中枢时完全一样，然后运行 `origin push`：把本机的原始会话镜像推送到中枢，再取回中枢上的遗忘记录。
+- 每台**设备**照旧在本地归档自己的会话，和没有中枢时完全一样，然后运行 `origin sync`。设备接入中枢后，同步还会把本机的原始会话镜像，以及在本机写下的条目和遗忘记录发送到中枢，再取回在中枢或其他设备上被遗忘的内容。
 - **中枢**运行 `origin serve`。它用同样的适配器解析推送来的镜像，所以每个回答仍能追溯到原文行；你的 Agent 访问的就是这个库。
 - 在设备上，`origin mcp` 用法不变，只是每次调用前先推送新内容，再把调用转发给中枢。云端 Agent 直接连接中枢的 MCP 端点。
 
@@ -70,16 +70,16 @@ origin token revoke laptop
 ```bash
 origin hub connect https://hub.example.com --token ogn_… --device laptop
 origin hub status
-origin push
+origin sync
 ```
 
 - 中枢以设备的库名称来识别设备：也就是库第一次使用时的 `ORIGIN_DEVICE` 或主机名。`--device` 可以给一个还没有保存过条目、也没有遗忘过任何内容的库改名；此后库会一直保持这个名称。`origin hub disconnect` 用于断开连接。
 - 环境变量 `ORIGIN_HUB_URL`、`ORIGIN_HUB_TOKEN` 会覆盖保存的连接配置。
-- `origin push` 会先同步本机会话，再推送原始镜像，最后取回中枢的遗忘记录。可以随时重跑：推送会从上次停下的位置继续。
+- `origin sync` 会采集本机会话，发送原始镜像以及在本机写下的条目和遗忘记录，再应用中枢的遗忘记录。可以随时重跑：同步会从上次停下的位置继续。`origin push` 的作用相同。
 
 设备接入后，`origin mcp` 会转发到中枢，所以你已有的 Agent 注册都不用改。每次 Agent 调用前都会先推送新的会话记录：读取类调用最多每 10 秒推送一次，`remember` 和 `correct` 之前则总会推送。因此 Agent 仍能引用你刚刚说过的话。
 
-只有 Agent 被调用时才会推送。如果某台设备上的 Agent 闲置，又想让中枢保持最新，可以定时运行 `origin push`，例如用 cron（`*/10 * * * * origin push`）或 Windows 任务计划程序。
+只有 Agent 被调用时才会同步。如果某台设备上的 Agent 闲置，又想让中枢保持最新，可以定时运行 `origin sync`，例如用 cron（`*/10 * * * * origin sync`）或 Windows 任务计划程序。
 
 ## 接入云端 Agent {#connect-a-cloud-agent}
 
@@ -95,7 +95,7 @@ codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var OR
 
 ## 遗忘 {#forgetting}
 
-通过中枢遗忘，效果和单机时一样（见[隐私与数据](./privacy.md#forgetting)），而且会同步到每台设备：每台设备在下一次推送时应用中枢的遗忘记录，本地暂存副本会隐藏同样的条目和事件。即使某台设备再次推送，被遗忘的事件也保持隐藏。
+通过中枢遗忘，效果和单机时一样（见[隐私与数据](./privacy.md#forgetting)），而且会同步到每台设备：每台设备在下一次同步时应用中枢的遗忘记录，本地副本会隐藏同样的条目和事件；而在某台设备上遗忘的内容会到达中枢，再从中枢到达其他每台设备。即使某台设备再次推送，被遗忘的事件也保持隐藏。
 
 ## 在浏览器中管理 {#manage-it-in-a-browser}
 

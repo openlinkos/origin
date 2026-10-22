@@ -11,7 +11,7 @@ If all your agents run on one machine, you do not need a hub.
 
 ## How it works
 
-- Every **device** keeps archiving its own sessions locally, exactly as without a hub, and runs `origin push`. The push sends the device's raw session mirrors to the hub, then pulls back anything that was forgotten on the hub.
+- Every **device** keeps archiving its own sessions locally, exactly as without a hub, and runs `origin sync`. Once the device is connected, a sync also sends the device's raw session mirrors, and the entries and tombstones written on it, to the hub, then pulls back anything that was forgotten on the hub or on another device.
 - The **hub** runs `origin serve`. It parses the pushed mirrors with the same adapters, so every answer still traces back to the original line, and it is the store your agents talk to.
 - On a device, `origin mcp` keeps working as before but forwards each call to the hub, after pushing what is new. Cloud agents connect to the hub's MCP endpoint directly.
 
@@ -66,16 +66,16 @@ On each machine with agent session logs:
 ```bash
 origin hub connect https://hub.example.com --token ogn_… --device laptop
 origin hub status
-origin push
+origin sync
 ```
 
 - The hub knows the device by its store's name: `ORIGIN_DEVICE`, or the host name, when the store was first used. `--device` renames a store that has not saved an entry or forgotten anything yet; after that, the store keeps its name. `origin hub disconnect` removes the connection.
 - `ORIGIN_HUB_URL` and `ORIGIN_HUB_TOKEN` override the stored connection.
-- `origin push` syncs local sessions, pushes the raw mirrors, and pulls the hub's tombstones. It is safe to re-run: a push picks up where the previous one stopped.
+- `origin sync` ingests local sessions, sends the raw mirrors and the entries and tombstones written on the device, and applies the hub's tombstones. It is safe to re-run: a sync picks up where the previous one stopped. `origin push` does the same.
 
 Once the device is connected, `origin mcp` forwards to the hub, so the agent registrations you already have stay the same. Each agent call first pushes new session lines: before reads at most every 10 seconds, and always before `remember` and `correct`. An agent can therefore still cite what you said a moment ago.
 
-Agents push only when they are used. To keep the hub current from a device whose agents are idle, schedule `origin push`, for example with cron (`*/10 * * * * origin push`) or the Windows Task Scheduler.
+Agents sync only when they are used. To keep the hub current from a device whose agents are idle, schedule `origin sync`, for example with cron (`*/10 * * * * origin sync`) or the Windows Task Scheduler.
 
 ## Connect a cloud agent
 
@@ -91,7 +91,7 @@ codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var OR
 
 ## Forgetting
 
-Forgetting through the hub works as on one machine (see [Privacy and your data](./privacy.md#forgetting)), and it reaches every device. Each device applies the hub's tombstones on its next push, so its local staging copy hides the same entries and events. Forgotten events stay hidden even if a device pushes them again.
+Forgetting through the hub works as on one machine (see [Privacy and your data](./privacy.md#forgetting)), and it reaches every device. Each device applies the hub's tombstones on its next sync, so its local copy hides the same entries and events, and what a device forgets reaches the hub and, from there, every other device. Forgotten events stay hidden even if a device pushes them again.
 
 ## Manage it in a browser
 

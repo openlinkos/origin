@@ -113,7 +113,7 @@ pnpm workspace, TypeScript (strict, ESM, NodeNext), Node.js ≥ 22.13. `core`, `
 | `@openlinkos/origin-adapters` | `packages/adapters` | One deterministic parser per source | core |
 | `@openlinkos/origin-mcp` | `packages/mcp` | MCP tools; servers over stdio and stateless HTTP; the forwarding proxy | core |
 | `@openlinkos/origin-admin` | `packages/admin` | The hub's admin UI: server-rendered pages, a JSON API, and its static assets | core |
-| `@openlinkos/origin` | `packages/cli` | The `origin` command, including `origin mcp`, `origin serve` (the hub), and `origin push` | core, adapters, mcp, admin |
+| `@openlinkos/origin` | `packages/cli` | The `origin` command, including `origin mcp`, `origin serve` (the hub), and a device's sync with its hub | core, adapters, mcp, admin |
 
 `core` must not depend on any other package, and neither `mcp` nor `admin` may depend on `adapters`: the CLI injects ingestion into the servers as callbacks, and the hub's HTTP server lives in the CLI, which mounts the admin UI's request handler. Adapters implement the `SourceAdapter` interface from `core`:
 
@@ -228,15 +228,23 @@ A hub is an ordinary Origin store that also runs `origin serve`. It is self-host
 
 ### Roles
 
-- **Device**: any machine with agent session logs. It keeps ingesting locally (adapters, raw mirrors, cursors, rewrite generations, compression are unchanged) and runs `origin push` to replicate. Its local store is a staging copy.
+- **Device**: any machine with agent session logs. It keeps ingesting locally (adapters, raw mirrors, cursors, rewrite generations, compression are unchanged) and runs `origin sync`, which also replicates to its hub. Its local store is a staging copy.
 - **Hub**: `origin serve` exposes MCP over HTTP for agents, a small replication API for devices, and, when enabled, an admin UI for its owner. The hub is the source of truth for agents: search, timeline, entries, and forgetting all happen there.
 
-### Replication: raw mirrors up, tombstones down
+### Replication: raw mirrors, entries, and tombstones up; tombstones down
 
-- A device pushes **raw mirror bytes**, not parsed events. The hub stores them as its own append-only mirrors and parses them with the same adapters, so provenance (invariant 1) holds on the hub and parser fixes apply everywhere. Event ids are identical on every store.
-- Each remote file is keyed by `(source, "@<device>:<original path>", generation)`; local paths never start with `@`. Hub mirrors live under `raw/devices/<device>/<source>/<relPath>[.g<n>]`.
-- Pushing is resumable and idempotent: the device asks for the hub's cursors, then sends `[cursor, local size)` of each mirror in chunks of complete lines (at most 1 MiB, or one longer line). A chunk whose offset does not match the hub's cursor is rejected with the current cursor, and the device resumes from there.
-- After pushing, the device pulls the hub's tombstones it has not applied yet and applies them to its staging store, so forgetting reaches every replica (invariant 2). It asks for the tombstones after its cursor in the hub's `change_log`, and the hub leaves out the ones that device created. Events forgotten on the hub stay excluded when re-pushed, because exclusion is keyed by event id.
+A device sends its hub what it has written itself; the hub sends devices only what was forgotten. A sync (`origin sync` on a connected device) takes three steps, in this order:
+
+1. **Raw mirrors.** A device pushes **raw mirror bytes**, not parsed events. The hub stores them as its own append-only mirrors and parses them with the same adapters, so provenance (invariant 1) holds on the hub and parser fixes apply everywhere. Event ids are identical on every store.
+   - Each remote file is keyed by `(source, "@<device>:<original path>", generation)`; local paths never start with `@`. Hub mirrors live under `raw/devices/<device>/<source>/<relPath>[.g<n>]`.
+   - Pushing is resumable and idempotent: the device asks for the hub's cursors, then sends `[cursor, local size)` of each mirror in chunks of complete lines (at most 1 MiB, or one longer line). A chunk whose offset does not match the hub's cursor is rejected with the current cursor, and the device resumes from there.
+2. **Entries and tombstones up.** The device sends the entries and tombstones it wrote itself (those whose `origin` is its name), in the order of its `change_log`, after its push cursor. Entries it has forgotten are never sent. The hub stores them under the same ids, with their author and origin, and applies the tombstones by the rules in [Forgetting](#forgetting), so a version or entry that arrives into something already forgotten is forgotten on arrival. Because the device pushes its mirrors first, the events its entries cite are normally on the hub already; if an entry's cited events or the version it supersedes are not there yet, the hub says which ids are missing, the push cursor stops before that entry, and later entries wait for the next sync. Tombstones are sent all the same: forgetting never waits.
+3. **Tombstones down.** The device asks for the tombstones after its pull cursor in the hub's `change_log`; the hub leaves out the ones that device created and sends each with its current effects on the hub. The device applies them to its store, so forgetting reaches every replica (invariant 2). When a tombstone's effects on the hub grow later, because the hub applied it to data the device did not have or because a correction or entry arrived that it covers, the hub logs it again, and every device, its creator included, receives the larger effects.
+
+- **Only tombstones come down.** The hub never sends entries or events to a device: a device's store holds its own sessions, its own entries, and the tombstones that concern them.
+- **One judge per entry.** When a device applies a tombstone from the hub, it decides rule 3 (no visible source left) only for entries the hub has not received yet. For the others, the hub holds every version, and its verdict arrives as part of the tombstone's effects, so a device and its hub never disagree about an entry they both have.
+- **Cursors.** A device keeps two cursors per hub URL in `setting`: how far it has pushed its own changes, and how far it has pulled the hub's. Each is saved after every successful request, so an interrupted sync resumes where it stopped, and running it again sends nothing.
+- Events forgotten on the hub stay excluded when re-pushed, because exclusion is keyed by event id.
 
 ### Access
 
@@ -252,6 +260,8 @@ A hub is an ordinary Origin store that also runs `origin serve`. It is self-host
 | `POST /mcp` | MCP Streamable HTTP, stateless, JSON responses; the same seven tools as the stdio server |
 | `GET /v1/cursors?device=<name>` | The hub's byte cursor for every file of that device |
 | `POST /v1/ingest` | Append one chunk: JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }` with `data` in base64; the body may be gzip-encoded. Returns `200 { bytes, eventsAdded, … }` or `409 { bytes }` on an offset mismatch |
+| `POST /v1/entries` | `{ device, entries }` with at most 1,000 entries, each `{ id, kind, text, confidence, author, project, supersedes, validFrom, validTo, createdAt, origin, sources: [{ eventId, quote }] }`, whose `origin` must be `device`. Stored in order; returns `200 { applied, pending }`, where `pending` is null, or `{ id, missing }` for the first entry whose cited events or superseded version are not on the hub yet (nothing after it is stored). `409` for a different body under an existing id |
+| `POST /v1/tombstones` | `{ device, tombstones }` with at most 1,000 tombstones, each `{ id, target, reason, createdAt, origin, entries, events }` with its effects on the device, whose `origin` must be `device`. Applied by the rules in [Forgetting](#forgetting); returns `200 { applied }`, or `409` for a different body under an existing id |
 | `GET /v1/tombstones?after=<seq>&device=<name>` | `{ tombstones, next, more }`: the tombstones in the hub's change log after sequence number `after`, except those the device created, each with its id, target, reason, `createdAt`, origin, and its forgotten entries and excluded events on the hub. Continue with `after=<next>` while `more` is true |
 | `GET`, `POST /admin/…` | The admin UI when enabled: server-rendered pages behind an admin sign-in. 404 when disabled |
 | `GET`, `POST /admin/api/…` | The admin UI's JSON API: the same operations, session, and checks as its pages |
@@ -263,7 +273,7 @@ The hub validates every field: device names match `[a-z0-9][a-z0-9._-]{0,62}` an
 - `origin hub connect <url> --token <token> [--device <name>]` stores the connection in `<ORIGIN_HOME>/hub.json`. The device's name is its store's name (see [Storage](#storage)); `--device` renames a store that has not written any entry or tombstone yet. `ORIGIN_HUB_URL` and `ORIGIN_HUB_TOKEN` override the stored connection.
 - With a hub configured, `origin mcp` becomes a **forwarding proxy**: it exposes the same tools over stdio, syncs and pushes before each call (at most every 10 seconds for reads, always before `remember` and `correct`), and forwards the call to the hub. Agent registrations do not change, and an agent can still cite what was said a moment ago.
 - Cloud agents with no local logs register the hub's `/mcp` URL directly with a bearer token.
-- In this version, CLI curation commands (`entries`, `correct`, `forget`, …) act on the store they run against. Curate through your agents, through the hub's admin UI, or by running the CLI on the hub.
+- CLI curation commands (`entries`, `show`, `correct`, `forget`, …) act on the device's own store. On a connected device, `correct` and `forget` then sync with the hub, so the change reaches the hub and, for forgetting, every other device. The hub's admin UI shows the entries of every device.
 
 ### Admin UI
 

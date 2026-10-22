@@ -1,7 +1,7 @@
 # CLI reference
 
 ```text
-origin sync      [--source <id>] [--verbose]          Ingest local agent sessions (idempotent, safe to re-run)
+origin sync      [--source <id>] [--verbose] [--local] Ingest local agent sessions, then sync with the hub if connected
 origin status                                          Per-source counts, entries, and last sync
 origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
 origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
@@ -19,7 +19,7 @@ origin token     create <name> | list | revoke <name>  Manage the hub's access t
 origin admin     password [--generate]                 Set the admin UI password; signs out every session (run on the hub)
 origin admin     sessions [--revoke-all] | audit [--limit 50]       Admin UI sessions and the audit log
 origin hub       connect <url> --token <token> [--device <name>] | status | disconnect
-origin push                                            Sync locally, push raw mirrors to the hub, pull tombstones
+origin push                                            Same as origin sync (kept for existing schedules)
 ```
 
 - **Time values** are relative durations (`30m`, `24h`, `7d`, `2w`) or dates (`YYYY-MM-DD`, ISO 8601).
@@ -83,9 +83,9 @@ The rules are described in [Privacy and your data](./privacy.md#forgetting).
 These commands run a [personal hub](./hub.md) and connect devices to it.
 
 - On the hub, `origin serve` exposes `POST /mcp` and the replication API, and `GET /healthz` reports health without authentication. `origin token create <name>` prints a new token once (prefix `ogn_`); the hub stores only its hash.
-- On a device, `origin hub connect` saves the hub's URL, a token, and the device name (by default the host name). `origin push` can be re-run at any time, and each push resumes where the previous one stopped.
+- On a device, `origin hub connect` saves the hub's URL and a token; the hub knows the device by its store's name. From then on, `origin sync` also syncs with the hub: it sends new raw mirror bytes and the entries and tombstones written on the device, then applies the tombstones of the hub. It can be re-run at any time, and each run resumes where the previous one stopped. `--local` skips the hub.
 - Once a device is connected, `origin mcp` forwards every tool call to the hub, after pushing new session lines.
-- Curation commands (`entries`, `show`, `correct`, `forget`, …) act on the store they run against. On a connected device, that is the local staging copy.
+- Curation commands (`entries`, `show`, `correct`, `forget`, …) act on the device's own store. On a connected device, `correct` and `forget` then sync with the hub; if the hub cannot be reached, the change stays on the device until the next sync.
 - `origin serve --admin` also serves the [admin UI](./admin.md) at `/admin`, and `--admin-listen <host:port>` serves it on a separate listener instead. Behind TLS, pass the hub's https address with `--public-url`; the hub refuses to serve the UI over plain HTTP beyond loopback.
 - `origin admin password` sets the admin UI's password: it asks twice on a terminal, without showing what you type, and otherwise reads one line from standard input; `--generate` picks a random one and prints it once. The password needs at least 10 characters, and setting it signs out every admin session. On its first start with the admin UI enabled, the hub generates a password and prints it to its log once. `origin admin sessions --revoke-all` signs out every session, and `origin admin audit` prints the audit log. Token and password changes made with the CLI are recorded there too.
 

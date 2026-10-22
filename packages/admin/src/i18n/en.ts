@@ -86,7 +86,7 @@ export const en = {
   'overview.sourcesHelp': 'The agents whose sessions this hub holds.',
   'overview.source': 'Source',
   'overview.latest': 'Latest event',
-  'overview.noData': 'Connect a device and push its sessions with origin push.',
+  'overview.noData': 'Connect a device and send its sessions with origin sync.',
   'overview.healthTitle': 'Health',
   'overview.healthOk': 'OK',
   'overview.healthCheck': 'Needs a look',
@@ -105,7 +105,8 @@ export const en = {
   'overview.freeDisk': 'Free disk space',
   'overview.staleDevices': '{n} {n|device has|devices have} sent nothing for more than 24 hours.',
 
-  'devices.help': 'Devices push their raw session mirrors to this hub with origin push.',
+  'devices.help':
+    'Devices send their raw session mirrors, entries, and tombstones to this hub with origin sync.',
   'devices.noneTitle': 'No devices yet',
   'devices.none': 'No device has pushed to this hub yet.',
   'devices.howToConnect': 'Connect a device',
@@ -136,9 +137,9 @@ export const en = {
     'No public URL is configured, so the commands show https://hub.example.com. Replace it with the address of this hub, or start the hub with --public-url.',
   'connect.device': 'A device with agent sessions',
   'connect.deviceHelp':
-    'On each machine where agents run: connect once, then push. origin mcp on that machine then forwards to this hub.',
-  'connect.deviceLabel': 'Connect and push',
-  'connect.cronLabel': 'Push every 10 minutes (crontab)',
+    'On each machine where agents run: connect once, then sync. origin mcp on that machine then forwards to this hub.',
+  'connect.deviceLabel': 'Connect and sync',
+  'connect.cronLabel': 'Sync every 10 minutes (crontab)',
   'connect.agents': 'Cloud agents',
   'connect.agentsHelp': 'Agents without local session logs talk to the hub directly over MCP.',
 

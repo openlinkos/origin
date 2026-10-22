@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { chainOf, currentOf, rootOf, sourcesOf } from './entries.js';
-import { OriginError } from './errors.js';
+import { ConflictError, OriginError } from './errors.js';
 import { storeName } from './identity.js';
 import { refreshSession } from './ingest.js';
 
@@ -240,7 +240,7 @@ export function applyTombstoneInTransaction(
       existing.created_at !== t.createdAt ||
       existing.origin !== t.origin)
   ) {
-    throw new OriginError(`Tombstone ${t.id} already exists with different content.`);
+    throw new ConflictError(`Tombstone ${t.id} already exists with different content.`);
   }
   const effects = computeEffects(db, t.target, t, opts.judge);
   const changed = effects.entries.length + effects.events.length;

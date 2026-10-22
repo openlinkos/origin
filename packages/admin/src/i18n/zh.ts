@@ -83,7 +83,7 @@ export const zh: Messages = {
   'overview.sourcesHelp': '这个中枢保存了哪些 Agent 的会话。',
   'overview.source': '来源',
   'overview.latest': '最新事件',
-  'overview.noData': '接入一台设备，再用 origin push 推送它的会话。',
+  'overview.noData': '接入一台设备，再用 origin sync 发送它的会话。',
   'overview.healthTitle': '健康状况',
   'overview.healthOk': '正常',
   'overview.healthCheck': '需要留意',
@@ -101,7 +101,7 @@ export const zh: Messages = {
   'overview.freeDisk': '可用磁盘空间',
   'overview.staleDevices': '有 {n} 台设备超过 24 小时没有发送任何数据。',
 
-  'devices.help': '设备通过 origin push 把原始会话镜像推送到这个中枢。',
+  'devices.help': '设备通过 origin sync 把原始会话镜像、条目和遗忘记录发送到这个中枢。',
   'devices.noneTitle': '还没有设备',
   'devices.none': '还没有设备向这个中枢推送过数据。',
   'devices.howToConnect': '接入设备',
@@ -132,9 +132,9 @@ export const zh: Messages = {
     '尚未配置公开 URL，所以命令里显示的是 https://hub.example.com。请把它替换为这个中枢的地址，或者用 --public-url 启动中枢。',
   'connect.device': '有 Agent 会话的设备',
   'connect.deviceHelp':
-    '在每台运行 Agent 的机器上：先接入一次，再推送。之后这台机器上的 origin mcp 会转发到这个中枢。',
-  'connect.deviceLabel': '接入并推送',
-  'connect.cronLabel': '每 10 分钟推送一次（crontab）',
+    '在每台运行 Agent 的机器上：先接入一次，再同步。之后这台机器上的 origin mcp 会转发到这个中枢。',
+  'connect.deviceLabel': '接入并同步',
+  'connect.cronLabel': '每 10 分钟同步一次（crontab）',
   'connect.agents': '云端 Agent',
   'connect.agentsHelp': '没有本地会话记录的 Agent 直接通过 MCP 访问中枢。',
 

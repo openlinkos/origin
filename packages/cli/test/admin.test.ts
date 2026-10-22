@@ -20,8 +20,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Browser, pageProblems, request } from '../../admin/test/helpers.js';
 import type { HubConfig } from '../src/hub/config.js';
-import { pushToHub } from '../src/hub/push.js';
 import { type RunningHub, startHub } from '../src/hub/serve.js';
+import { syncWithHub } from '../src/hub/sync.js';
 
 const fixtures = fileURLToPath(
   new URL('../../adapters/test/fixtures/claude-code/', import.meta.url),
@@ -106,7 +106,7 @@ afterEach(async () => {
 });
 
 const push = (hubConfig: HubConfig = device) =>
-  pushToHub({ db: deviceDb, home: deviceHome, hub: hubConfig });
+  syncWithHub({ db: deviceDb, home: deviceHome, hub: hubConfig });
 
 async function signedIn(): Promise<Browser> {
   const b = new Browser(hub.url);

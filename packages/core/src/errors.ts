@@ -5,3 +5,11 @@ export class OriginError extends Error {
     this.name = 'OriginError';
   }
 }
+
+/** A record arrived under an id this store already holds with different content. */
+export class ConflictError extends OriginError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConflictError';
+  }
+}
