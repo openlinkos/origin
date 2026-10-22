@@ -66,7 +66,7 @@ export const PAGE_SIZE = 50;
 
 /** Who is acting, for the audit log. */
 export interface Actor {
-  /** `key:<name>`. */
+  /** `owner` once signed in, `anonymous` before. */
   actor: string;
   ip: string | null;
   userAgent: string | null;
@@ -209,7 +209,6 @@ export class AdminService {
       version: string;
       startedAt: number;
       publicUrl: URL | null;
-      envKeyHashes: readonly string[];
     },
   ) {}
 
@@ -547,7 +546,7 @@ export class AdminService {
   }
 
   adminSessions(now: number): AdminSessionInfo[] {
-    return listAdminSessions(this.db, { now, envHashes: this.o.envKeyHashes });
+    return listAdminSessions(this.db, { now });
   }
 
   /** End other admin sessions: one by handle, or all but the caller's. */

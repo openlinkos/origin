@@ -31,17 +31,18 @@ export const en = {
 
   'auth.signIn': 'Sign in',
   'auth.signInTitle': 'Sign in to Origin',
-  'auth.signInHelp': 'Enter an admin key for this hub. Keys start with oga_.',
-  'auth.key': 'Admin key',
-  'auth.createKeyHint': 'To create a key, run this on the hub (it is shown once):',
-  'auth.badKey': 'That key was not accepted.',
+  'auth.signInHelp': 'Enter the admin password of this hub.',
+  'auth.password': 'Admin password',
+  'auth.passwordHint':
+    'On its first start, the hub prints a generated password to its log. To set a new one, run this on the hub (it signs out every session):',
+  'auth.badPassword': 'That password was not accepted.',
   'auth.tooMany': 'Too many failed attempts. Try again in {min} min.',
+  'auth.busy': 'Too many sign-in attempts at once. Try again in a moment.',
   'auth.signOut': 'Sign out',
-  'auth.signedInAs': 'Signed in with this admin key',
   'auth.reauth': 'Confirm it is you',
   'auth.reauthTitle': 'Confirm it is you',
   'auth.reauthHelp':
-    'This action needs your admin key ({key}) again. You will not be asked again for 10 minutes.',
+    'This action needs the admin password again. You will not be asked again for 10 minutes.',
   'auth.confirm': 'Confirm',
 
   'error.notFound': 'Not found',
@@ -273,7 +274,6 @@ export const en = {
   'signins.title': 'Sign-ins',
   'signins.help':
     'Open admin sessions. A session ends after 30 minutes without activity or 12 hours after sign-in.',
-  'signins.key': 'Admin key',
   'signins.started': 'Signed in',
   'signins.lastSeen': 'Last active',
   'signins.thisSession': 'this session',
@@ -281,7 +281,7 @@ export const en = {
   'signins.revokeOthers': 'Sign out the {n} other session(s)',
   'signins.revokedNotice': 'Signed out {n} session(s).',
   'signins.cliHint':
-    'On the hub, origin admin sessions --revoke-all signs out every session, and origin admin key revoke <name> disables a key.',
+    'On the hub, origin admin sessions --revoke-all signs out every session, and so does setting a new password with origin admin password.',
 } as const;
 
 export type MessageKey = keyof typeof en;

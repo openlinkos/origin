@@ -8,21 +8,17 @@ import {
   ADMIN_SESSION_IDLE_MS,
   ADMIN_SESSION_MAX_MS,
   appendRemote,
-  createAdminKey,
   createAdminSession,
-  createToken,
   type Database,
   deviceFiles,
   endAdminSession,
   endAdminSessions,
   entriesCiting,
-  envAdminKeyName,
   forget,
   getAdminSession,
   getSession,
   ingestHealth,
   isAdminSessionFresh,
-  listAdminKeys,
   listAdminSessions,
   listAudit,
   listEntries,
@@ -30,17 +26,12 @@ import {
   listSessions,
   listTombstones,
   markAdminSessionFresh,
-  OriginError,
   openDatabase,
-  parseAdminKeyHashes,
   recordAudit,
   remember,
-  revokeAdminKey,
   storeUsage,
   syncSource,
   tombstoneCount,
-  verifyAdminKey,
-  verifyToken,
 } from '../src/index.js';
 import { fakeAdapter, line } from './helpers.js';
 
@@ -67,76 +58,24 @@ afterEach(() => {
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 
-describe('admin keys', () => {
-  it('are shown once, stored as hashes, verified, and revocable', () => {
-    const key = createAdminKey(db, 'owner', 1000);
-    expect(key).toMatch(/^oga_[A-Za-z0-9_-]{43}$/);
-    const stored = db.prepare('SELECT hash FROM admin_key WHERE name = ?').get('owner') as {
-      hash: string;
-    };
-    expect(stored.hash).toBe(sha256(key));
-    expect(JSON.stringify(db.prepare('SELECT * FROM admin_key').all())).not.toContain(key);
-
-    expect(verifyAdminKey(db, key, { now: 2000 })).toEqual({ name: 'owner' });
-    expect(listAdminKeys(db)).toMatchObject([{ name: 'owner', lastUsedAt: 2000, revokedAt: null }]);
-    expect(verifyAdminKey(db, `${key}x`)).toBeNull();
-    expect(() => createAdminKey(db, 'owner')).toThrow(OriginError);
-    expect(() => createAdminKey(db, 'Bad Name')).toThrow(OriginError);
-
-    expect(revokeAdminKey(db, 'owner', 3000)).toBe(true);
-    expect(revokeAdminKey(db, 'owner', 3000)).toBe(false);
-    expect(verifyAdminKey(db, key)).toBeNull();
-    expect(() => createAdminKey(db, 'owner')).toThrow(/revoked/);
-  });
-
-  it('never accept a hub token, and hub tokens never accept an admin key', () => {
-    const token = createToken(db, 'laptop');
-    const key = createAdminKey(db, 'owner');
-    expect(verifyAdminKey(db, token)).toBeNull();
-    expect(verifyToken(db, key)).toBeNull();
-    // Even a hash that matches is refused when the prefix is wrong.
-    db.prepare('INSERT INTO admin_key (name, hash, created_at) VALUES (?, ?, ?)').run(
-      'clash',
-      sha256(token),
-      0,
-    );
-    expect(verifyAdminKey(db, token)).toBeNull();
-  });
-
-  it('accept keys configured by hash in the environment', () => {
-    const key = `oga_${'a'.repeat(43)}`;
-    const hashes = parseAdminKeyHashes(` ${sha256(key).toUpperCase()} ,`);
-    expect(hashes).toEqual([sha256(key)]);
-    expect(verifyAdminKey(db, key, { envHashes: hashes })).toEqual({
-      name: envAdminKeyName(sha256(key)),
-    });
-    expect(verifyAdminKey(db, key)).toBeNull();
-    expect(() => parseAdminKeyHashes('not-a-hash')).toThrow(OriginError);
-    expect(parseAdminKeyHashes(undefined)).toEqual([]);
-  });
-});
-
 describe('admin sessions', () => {
   it('store only a hash of the id and expire when idle or too old', () => {
-    createAdminKey(db, 'owner');
     const t0 = 1_000_000;
-    const { id, session } = createAdminSession(
-      db,
-      { keyName: 'owner', ip: '127.0.0.1', userAgent: 'test' },
-      t0,
-    );
+    const { id, session } = createAdminSession(db, { ip: '127.0.0.1', userAgent: 'test' }, t0);
     expect(id).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(JSON.stringify(db.prepare('SELECT * FROM admin_session').all())).not.toContain(id);
     expect(session.idHash).toBe(sha256(id));
     expect(session.csrf).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    // The key_name column predates the single password: it holds the owner.
+    expect(db.prepare('SELECT key_name FROM admin_session').get()).toEqual({ key_name: 'owner' });
 
-    expect(getAdminSession(db, id, { now: t0 + 1000 })?.keyName).toBe('owner');
+    expect(getAdminSession(db, id, { now: t0 + 1000 })?.handle).toBe(session.handle);
     expect(getAdminSession(db, 'nope', { now: t0 })).toBeNull();
     // Idle: no request for 30 minutes.
     expect(getAdminSession(db, id, { now: t0 + ADMIN_SESSION_IDLE_MS + 1 })).toBeNull();
 
     // Absolute: active all along, but older than 12 hours.
-    const second = createAdminSession(db, { keyName: 'owner' }, t0);
+    const second = createAdminSession(db, {}, t0);
     let now = t0;
     while (now < t0 + ADMIN_SESSION_MAX_MS - ADMIN_SESSION_IDLE_MS) {
       now += ADMIN_SESSION_IDLE_MS / 2;
@@ -145,13 +84,10 @@ describe('admin sessions', () => {
     expect(getAdminSession(db, second.id, { now: t0 + ADMIN_SESSION_MAX_MS })).toBeNull();
   });
 
-  it('track freshness, end on sign-out, and end with their key', () => {
-    createAdminKey(db, 'owner');
-    createAdminKey(db, 'spare');
+  it('track freshness and end on sign-out', () => {
     const t0 = 5_000_000;
-    const a = createAdminSession(db, { keyName: 'owner' }, t0);
-    const b = createAdminSession(db, { keyName: 'owner' }, t0);
-    const c = createAdminSession(db, { keyName: 'spare' }, t0);
+    const a = createAdminSession(db, {}, t0);
+    const b = createAdminSession(db, {}, t0);
 
     expect(isAdminSessionFresh(a.session, t0 + ADMIN_FRESH_MS)).toBe(true);
     expect(isAdminSessionFresh(a.session, t0 + ADMIN_FRESH_MS + 1)).toBe(false);
@@ -159,35 +95,36 @@ describe('admin sessions', () => {
     const refreshed = getAdminSession(db, a.id, { now: t0 + ADMIN_FRESH_MS + 2 });
     expect(refreshed && isAdminSessionFresh(refreshed, t0 + ADMIN_FRESH_MS + 2)).toBe(true);
 
-    expect(listAdminSessions(db, { now: t0 + 1 }).map((s) => s.keyName)).toHaveLength(3);
+    expect(listAdminSessions(db, { now: t0 + 1 })).toHaveLength(2);
     expect(endAdminSession(db, b.session.idHash, t0 + 1)).toBe(true);
     expect(endAdminSession(db, b.session.idHash, t0 + 1)).toBe(false);
     expect(getAdminSession(db, b.id, { now: t0 + 2 })).toBeNull();
-
-    expect(revokeAdminKey(db, 'spare', t0 + 3)).toBe(true);
-    expect(getAdminSession(db, c.id, { now: t0 + 4 })).toBeNull();
     expect(listAdminSessions(db, { now: t0 + 4 }).map((s) => s.handle)).toEqual([a.session.handle]);
     // Listing never exposes the id hash or the CSRF token.
     expect(Object.keys(listAdminSessions(db, { now: t0 + 4 })[0] ?? {})).not.toContain('csrf');
+    expect(Object.keys(listAdminSessions(db, { now: t0 + 4 })[0] ?? {})).not.toContain('idHash');
   });
 
-  it('can all be ended except the caller', () => {
-    createAdminKey(db, 'owner');
+  it('can all be ended except the caller, or one by its handle', () => {
     const t0 = 9_000_000;
-    const mine = createAdminSession(db, { keyName: 'owner' }, t0);
-    createAdminSession(db, { keyName: 'owner' }, t0);
-    createAdminSession(db, { keyName: 'owner' }, t0);
+    const mine = createAdminSession(db, {}, t0);
+    const other = createAdminSession(db, {}, t0);
+    createAdminSession(db, {}, t0);
+    createAdminSession(db, {}, t0);
+    expect(endAdminSessions(db, { handle: 'not-a-handle' }, t0 + 1)).toBe(0);
+    expect(endAdminSessions(db, { handle: other.session.handle }, t0 + 1)).toBe(1);
     expect(endAdminSessions(db, { exceptIdHash: mine.session.idHash }, t0 + 1)).toBe(2);
     expect(getAdminSession(db, mine.id, { now: t0 + 2 })).not.toBeNull();
     expect(endAdminSessions(db, {}, t0 + 3)).toBe(1);
     expect(listAdminSessions(db, { now: t0 + 4 })).toEqual([]);
   });
 
-  it('are bound to keys from the environment while they stay configured', () => {
-    const hash = sha256('oga_env');
-    const { id } = createAdminSession(db, { keyName: envAdminKeyName(hash) }, 1000);
-    expect(getAdminSession(db, id, { now: 1001, envHashes: [hash] })).not.toBeNull();
-    expect(getAdminSession(db, id, { now: 1002, envHashes: [] })).toBeNull();
+  it('from earlier versions, signed in with a named key, are not valid', () => {
+    const t0 = 2_000_000;
+    const { id } = createAdminSession(db, {}, t0);
+    db.prepare("UPDATE admin_session SET key_name = 'laptop-key'").run();
+    expect(getAdminSession(db, id, { now: t0 + 1 })).toBeNull();
+    expect(listAdminSessions(db, { now: t0 + 1 })).toEqual([]);
   });
 });
 
@@ -196,7 +133,7 @@ describe('audit log', () => {
     const id = recordAudit(
       db,
       {
-        actor: 'key:owner',
+        actor: 'owner',
         channel: 'ui',
         action: 'token.create',
         target: 'laptop',
@@ -209,7 +146,7 @@ describe('audit log', () => {
     recordAudit(db, { actor: 'cli', channel: 'cli', action: 'token.revoke', target: 'laptop' });
     expect(listAudit(db)).toMatchObject([
       { action: 'token.revoke', channel: 'cli', detail: null },
-      { id, at: 1234, actor: 'key:owner', detail: { count: 1 }, userAgent: 'test' },
+      { id, at: 1234, actor: 'owner', detail: { count: 1 }, userAgent: 'test' },
     ]);
     expect(listAudit(db, { beforeId: id + 1 }).map((r) => r.id)).toEqual([id]);
     expect(() => db.prepare("UPDATE audit_log SET actor = 'x'").run()).toThrow(/append-only/);

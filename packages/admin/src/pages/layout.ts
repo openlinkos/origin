@@ -101,8 +101,7 @@ ${script ? html`<script type="module" src="${script}"></script>` : ''}
     ${prefs(ctx)}
     ${
       signedIn
-        ? html`<span class="who" title="${t('auth.signedInAs')}">${ctx.session?.keyName}</span>
-    <form method="post" action="/admin/logout" class="inline">${csrfField(ctx)}<button type="submit" class="link">${t('auth.signOut')}</button></form>`
+        ? html`<form method="post" action="/admin/logout" class="inline">${csrfField(ctx)}<button type="submit" class="link">${t('auth.signOut')}</button></form>`
         : ''
     }
   </div>

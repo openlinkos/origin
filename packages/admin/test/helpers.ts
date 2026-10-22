@@ -128,8 +128,8 @@ export class Browser {
   }
 
   /** Sign in through the login form. */
-  async login(key: string): Promise<TestResponse> {
-    const res = await this.post('/admin/login', { key, next: '/admin/' });
+  async login(password: string): Promise<TestResponse> {
+    const res = await this.post('/admin/login', { password, next: '/admin/' });
     await this.get('/admin/');
     return res;
   }

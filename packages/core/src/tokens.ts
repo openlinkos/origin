@@ -5,7 +5,7 @@ import { OriginError } from './errors.js';
 /** Token and device names: lowercase ASCII, digits, `.`, `_`, `-`; at most 63 characters. */
 export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/;
 
-/** Hub access tokens (devices and agents). Admin UI keys use `oga_`, so neither is accepted as the other. */
+/** Hub access tokens (devices and agents). The admin password can never start with it (see password.ts). */
 export const TOKEN_PREFIX = 'ogn_';
 const LAST_USED_RESOLUTION = 60_000;
 
@@ -16,7 +16,7 @@ export interface TokenInfo {
   revokedAt: number | null;
 }
 
-/** SHA-256 (hex) of a secret: the only form in which tokens, keys, and session ids are stored. */
+/** SHA-256 (hex) of a secret: the only form in which tokens and admin session ids are stored. */
 export function secretHash(secret: string): string {
   return createHash('sha256').update(secret).digest('hex');
 }
@@ -26,7 +26,7 @@ export function newSecret(prefix: string): string {
   return `${prefix}${randomBytes(32).toString('base64url')}`;
 }
 
-/** Throw unless `name` is a valid token, key, or device name. */
+/** Throw unless `name` is a valid token or device name. */
 export function checkName(name: string, what: string): void {
   if (!NAME_RE.test(name)) {
     throw new OriginError(

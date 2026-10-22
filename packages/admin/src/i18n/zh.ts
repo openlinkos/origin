@@ -30,16 +30,17 @@ export const zh: Messages = {
 
   'auth.signIn': '登录',
   'auth.signInTitle': '登录 Origin',
-  'auth.signInHelp': '输入这个中枢的管理密钥。密钥以 oga_ 开头。',
-  'auth.key': '管理密钥',
-  'auth.createKeyHint': '要创建密钥，请在中枢上运行（密钥只显示一次）：',
-  'auth.badKey': '这个密钥未被接受。',
+  'auth.signInHelp': '输入这个中枢的管理密码。',
+  'auth.password': '管理密码',
+  'auth.passwordHint':
+    '中枢第一次启动时，会把生成的密码打印到它的日志中。要设置新密码，请在中枢上运行（这会让所有会话退出登录）：',
+  'auth.badPassword': '密码不正确。',
   'auth.tooMany': '失败次数过多，请在 {min} 分钟后重试。',
+  'auth.busy': '同时进行的登录尝试过多，请稍后重试。',
   'auth.signOut': '退出',
-  'auth.signedInAs': '当前登录所用的管理密钥',
   'auth.reauth': '确认身份',
   'auth.reauthTitle': '确认身份',
-  'auth.reauthHelp': '这个操作需要再次输入你的管理密钥（{key}）。之后 10 分钟内不会再询问。',
+  'auth.reauthHelp': '这个操作需要再次输入管理密码。之后 10 分钟内不会再询问。',
   'auth.confirm': '确认',
 
   'error.notFound': '未找到',
@@ -260,7 +261,6 @@ export const zh: Messages = {
 
   'signins.title': '登录会话',
   'signins.help': '当前打开的管理会话。会话在 30 分钟无活动或登录 12 小时后结束。',
-  'signins.key': '管理密钥',
   'signins.started': '登录时间',
   'signins.lastSeen': '最近活动',
   'signins.thisSession': '当前会话',
@@ -268,5 +268,5 @@ export const zh: Messages = {
   'signins.revokeOthers': '退出其他 {n} 个会话',
   'signins.revokedNotice': '已退出 {n} 个会话。',
   'signins.cliHint':
-    '在中枢上，origin admin sessions --revoke-all 会退出所有会话，origin admin key revoke <name> 会停用一个密钥。',
+    '在中枢上，origin admin sessions --revoke-all 会让所有会话退出登录；用 origin admin password 设置新密码也会如此。',
 };

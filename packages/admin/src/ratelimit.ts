@@ -1,7 +1,9 @@
 /**
- * Limits failed key checks (sign-in and re-authentication): at most `perClient` failures per
+ * Limits failed password checks (sign-in and re-authentication): at most `perClient` failures per
  * client and `global` failures overall within a sliding window. Once a limit is reached, every
- * key check is refused, even with a correct key, until the oldest failure leaves the window.
+ * password check is refused, even with the correct password, until the oldest failure leaves the
+ * window. Behind a proxy, clients are told apart only with ORIGIN_CLIENT_IP_HEADER; without it they
+ * all share the proxy's address, and so one per-client limit.
  */
 export interface LimiterOptions {
   perClient: number;
@@ -59,7 +61,7 @@ export class LoginLimiter {
     return b;
   }
 
-  /** Whether a key check may run now. `firstBlock` is true once per blocked window. */
+  /** Whether a password check may run now. `firstBlock` is true once per blocked window. */
   check(client: string, now: number): LimitCheck {
     this.prune(this.all, now);
     const b = this.bucket(client, now);
@@ -81,5 +83,28 @@ export class LoginLimiter {
     this.prune(this.all, now);
     this.all.failures.push(now);
     return b.failures.length;
+  }
+}
+
+/**
+ * Runs password checks one at a time. scrypt is slow and needs 32 MiB on purpose, so checking in
+ * series bounds the hub's memory, and it makes the limiter exact: a burst of concurrent guesses
+ * cannot all pass the limit check before the first failure is counted. At most `maxWaiting` checks
+ * wait; beyond that, run() returns null and the caller answers 429.
+ */
+export class CheckQueue {
+  private tail: Promise<unknown> = Promise.resolve();
+  private waiting = 0;
+
+  constructor(private readonly maxWaiting = 32) {}
+
+  run<T>(task: () => Promise<T>): Promise<T> | null {
+    if (this.waiting >= this.maxWaiting) return null;
+    this.waiting++;
+    const result = this.tail.then(task).finally(() => {
+      this.waiting--;
+    });
+    this.tail = result.catch(() => undefined);
+    return result;
   }
 }

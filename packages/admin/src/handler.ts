@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
+  type AdminCredential,
   createAdminSession,
   type Database,
   endAdminSession,
@@ -7,7 +8,7 @@ import {
   isAdminSessionFresh,
   markAdminSessionFresh,
   OriginError,
-  verifyAdminKey,
+  verifyAdminPassword,
 } from '@openlinkos/origin-core';
 import { Assets } from './assets.js';
 import { actorOf, type Ctx, field, pageParam, query, type Theme } from './context.js';
@@ -50,7 +51,7 @@ import { beforeParam, here } from './pages/layout.js';
 import { connectPage, devicePage, devicesPage, overviewPage } from './pages/overview.js';
 import { auditPage, signinsPage, tombstonesPage } from './pages/records.js';
 import { newTokenPage, revokeTokenPage, tokenCreatedPage, tokensPage } from './pages/tokens.js';
-import { type LimiterOptions, LOGIN_LIMITS, LoginLimiter } from './ratelimit.js';
+import { CheckQueue, type LimiterOptions, LOGIN_LIMITS, LoginLimiter } from './ratelimit.js';
 import { AdminService } from './service.js';
 
 export interface AdminOptions {
@@ -64,8 +65,11 @@ export interface AdminOptions {
   publicUrl?: URL | null;
   /** A request header with the client address, set by a trusted proxy. Ignored unless configured. */
   clientIpHeader?: string | null;
-  /** SHA-256 hashes of admin keys configured in the environment (ORIGIN_ADMIN_KEY_SHA256). */
-  envKeyHashes?: readonly string[];
+  /**
+   * What sign-in checks the admin password against: ORIGIN_ADMIN_PASSWORD (as a hash) or the stored
+   * password, as settled by prepareAdminCredential when the hub starts. Defaults to the stored one.
+   */
+  credential?: AdminCredential;
   /** When the hub started, for the uptime shown on the overview. */
   startedAt?: number;
   log?: (message: string) => void;
@@ -81,18 +85,19 @@ interface State {
   db: Database;
   publicUrl: URL | null;
   clientIpHeader: string | null;
-  envKeyHashes: readonly string[];
+  credential: AdminCredential;
   version: string;
   service: AdminService;
   assets: Assets;
   limiter: LoginLimiter;
+  checks: CheckQueue;
   log: (message: string) => void;
   now: () => number;
 }
 
 /**
- * `none`: no session needed. `session`: signed in. `fresh`: signed in, and the key entered within
- * the last 10 minutes (token create and revoke, forget, revoking sessions).
+ * `none`: no session needed. `session`: signed in. `fresh`: signed in, and the password entered
+ * within the last 10 minutes (token create and revoke, forget, revoking sessions).
  */
 export type RouteAuth = 'none' | 'session' | 'fresh';
 
@@ -118,47 +123,65 @@ const flag = (v: unknown) => v === '1' || v === 'true' || v === true;
 // ---------------------------------------------------------------------------------------------
 // Authentication
 
-type KeyCheck =
-  | { ok: true; name: string }
+type PasswordCheck =
+  | { ok: true }
   | { ok: false; status: 401 | 429; message: string; retryAfterSec?: number };
 
+/** Seconds a client is told to wait when too many checks are already queued. */
+const BUSY_RETRY_SEC = 5;
+
 /**
- * Check an admin key, subject to the failure limit. Failures are written to the audit log once
- * per window and client (the first failure, then the block), not once per attempt.
+ * Check the admin password, one check at a time and subject to the failure limit. Failures are
+ * written to the audit log once per window and client (the first failure, then the block), not
+ * once per attempt.
  */
-function checkKey(ctx: Ctx, s: State, key: unknown, mode: 'login' | 'reauth'): KeyCheck {
+async function checkPassword(
+  ctx: Ctx,
+  s: State,
+  password: unknown,
+  mode: 'login' | 'reauth',
+): Promise<PasswordCheck> {
   const client = ctx.ip ?? 'unknown';
-  const limit = s.limiter.check(client, ctx.now);
-  if (!limit.ok) {
-    if (limit.firstBlock) {
-      s.service.recordAuth(actorOf(ctx), `${mode}.blocked`, { retryAfterSec: limit.retryAfterSec });
+  const queued = s.checks.run(async (): Promise<PasswordCheck> => {
+    const limit = s.limiter.check(client, ctx.now);
+    if (!limit.ok) {
+      if (limit.firstBlock) {
+        s.service.recordAuth(actorOf(ctx), `${mode}.blocked`, {
+          retryAfterSec: limit.retryAfterSec,
+        });
+      }
+      return {
+        ok: false,
+        status: 429,
+        retryAfterSec: limit.retryAfterSec,
+        message: ctx.t('auth.tooMany', { min: Math.ceil(limit.retryAfterSec / 60) }),
+      };
     }
-    ctx.res.setHeader('Retry-After', String(limit.retryAfterSec));
-    return {
-      ok: false,
-      status: 429,
-      retryAfterSec: limit.retryAfterSec,
-      message: ctx.t('auth.tooMany', { min: Math.ceil(limit.retryAfterSec / 60) }),
-    };
+    if (!(await verifyAdminPassword(s.db, s.credential, password))) {
+      const failures = s.limiter.fail(client, ctx.now);
+      if (failures === 1) s.service.recordAuth(actorOf(ctx), `${mode}.failed`, { failures });
+      return { ok: false, status: 401, message: ctx.t('auth.badPassword') };
+    }
+    return { ok: true };
+  });
+  const result: PasswordCheck = (await queued) ?? {
+    ok: false,
+    status: 429,
+    retryAfterSec: BUSY_RETRY_SEC,
+    message: ctx.t('auth.busy'),
+  };
+  if (!result.ok && result.retryAfterSec !== undefined) {
+    ctx.res.setHeader('Retry-After', String(result.retryAfterSec));
   }
-  const verified =
-    typeof key === 'string' && key.length <= 256
-      ? verifyAdminKey(s.db, key.trim(), { envHashes: s.envKeyHashes, now: ctx.now })
-      : null;
-  if (!verified || (mode === 'reauth' && verified.name !== ctx.session?.keyName)) {
-    const failures = s.limiter.fail(client, ctx.now);
-    if (failures === 1) s.service.recordAuth(actorOf(ctx), `${mode}.failed`, { failures });
-    return { ok: false, status: 401, message: ctx.t('auth.badKey') };
-  }
-  return { ok: true, name: verified.name };
+  return result;
 }
 
 /** Start a new session (never reusing one presented with the request) and set its cookie. */
-function startSession(ctx: Ctx, s: State, keyName: string): string {
+function startSession(ctx: Ctx, s: State): string {
   if (ctx.session) endAdminSession(s.db, ctx.session.idHash, ctx.now);
   const { id, session } = createAdminSession(
     s.db,
-    { keyName, ip: ctx.ip, userAgent: ctx.userAgent },
+    { ip: ctx.ip, userAgent: ctx.userAgent },
     ctx.now,
   );
   appendCookie(ctx.res, sessionCookie(id, ctx.secure));
@@ -215,11 +238,11 @@ const PAGES: Route[] = [
     if (ctx.session) return redirect(ctx.res, next);
     loginPage(ctx, 200, { next });
   }),
-  page('POST', '/login', 'none', (ctx, s) => {
+  page('POST', '/login', 'none', async (ctx, s) => {
     const next = safeNext(field(ctx, 'next'));
-    const r = checkKey(ctx, s, ctx.body.key, 'login');
+    const r = await checkPassword(ctx, s, ctx.body.password, 'login');
     if (!r.ok) return loginPage(ctx, r.status, { next, error: r.message });
-    startSession(ctx, s, r.name);
+    startSession(ctx, s);
     redirect(ctx.res, next);
   }),
   page('POST', '/logout', 'session', (ctx, s) => {
@@ -229,9 +252,9 @@ const PAGES: Route[] = [
   page('GET', '/reauth', 'session', (ctx) =>
     reauthPage(ctx, 200, { next: safeNext(query(ctx, 'next')) }),
   ),
-  page('POST', '/reauth', 'session', (ctx, s) => {
+  page('POST', '/reauth', 'session', async (ctx, s) => {
     const next = safeNext(field(ctx, 'next'));
-    const r = checkKey(ctx, s, ctx.body.key, 'reauth');
+    const r = await checkPassword(ctx, s, ctx.body.password, 'reauth');
     if (!r.ok) return reauthPage(ctx, r.status, { next, error: r.message });
     markAdminSessionFresh(s.db, ctx.session?.idHash ?? '', ctx.now);
     s.service.recordAuth(actorOf(ctx), 'reauth');
@@ -467,25 +490,24 @@ const API: Route[] = [
       ctx.session
         ? {
             signedIn: true,
-            key: ctx.session.keyName,
             fresh: isAdminSessionFresh(ctx.session, ctx.now),
             csrf: ctx.session.csrf,
           }
         : { signedIn: false },
     ),
   ),
-  api('POST', 'login', 'none', (ctx, s) => {
-    const r = checkKey(ctx, s, ctx.body.key, 'login');
+  api('POST', 'login', 'none', async (ctx, s) => {
+    const r = await checkPassword(ctx, s, ctx.body.password, 'login');
     if (!r.ok) return json(ctx, r.status, { error: r.message, retryAfterSec: r.retryAfterSec });
-    const csrf = startSession(ctx, s, r.name);
-    json(ctx, 200, { signedIn: true, key: r.name, fresh: true, csrf });
+    const csrf = startSession(ctx, s);
+    json(ctx, 200, { signedIn: true, fresh: true, csrf });
   }),
   api('POST', 'logout', 'session', (ctx, s) => {
     endSession(ctx, s);
     json(ctx, 200, { signedIn: false });
   }),
-  api('POST', 'reauth', 'session', (ctx, s) => {
-    const r = checkKey(ctx, s, ctx.body.key, 'reauth');
+  api('POST', 'reauth', 'session', async (ctx, s) => {
+    const r = await checkPassword(ctx, s, ctx.body.password, 'reauth');
     if (!r.ok) return json(ctx, r.status, { error: r.message, retryAfterSec: r.retryAfterSec });
     markAdminSessionFresh(s.db, ctx.session?.idHash ?? '', ctx.now);
     s.service.recordAuth(actorOf(ctx), 'reauth');
@@ -622,7 +644,7 @@ const ROUTES = [...PAGES, ...API];
 /**
  * Every route of the admin UI: only GET and POST, and every write is a POST. This list is the
  * whole surface; tests pin the writes so that nothing beyond them (editing or deleting events,
- * mirrors, entries, or tombstones; un-forgetting; creating admin keys) can appear unnoticed.
+ * mirrors, entries, or tombstones; un-forgetting; changing the admin password) can appear unnoticed.
  */
 export const ADMIN_ROUTES: ReadonlyArray<{
   method: 'GET' | 'POST';
@@ -644,7 +666,7 @@ function sessionFrom(req: IncomingMessage, s: State, origins: RequestOrigins, no
   for (const name of names) {
     const value = cookies.get(name);
     if (!value) continue;
-    const session = getAdminSession(s.db, value, { envHashes: s.envKeyHashes, now });
+    const session = getAdminSession(s.db, value, { now });
     if (session) return session;
   }
   return null;
@@ -759,7 +781,7 @@ async function dispatch(
     }
     if (route.auth === 'fresh' && !isAdminSessionFresh(ctx.session, now)) {
       if (isApi) {
-        throw new HttpError(403, 'Enter your admin key again (POST /admin/api/reauth).', {
+        throw new HttpError(403, 'Enter the admin password again (POST /admin/api/reauth).', {
           reauth: true,
         });
       }
@@ -777,7 +799,7 @@ export function createAdminHandler(options: AdminOptions): AdminHandler {
     db: options.db,
     publicUrl,
     clientIpHeader: options.clientIpHeader?.trim() || null,
-    envKeyHashes: options.envKeyHashes ?? [],
+    credential: options.credential ?? { source: 'stored' },
     version: options.version,
     service: new AdminService({
       db: options.db,
@@ -785,10 +807,10 @@ export function createAdminHandler(options: AdminOptions): AdminHandler {
       version: options.version,
       startedAt: options.startedAt ?? now(),
       publicUrl,
-      envKeyHashes: options.envKeyHashes ?? [],
     }),
     assets: new Assets(),
     limiter: new LoginLimiter(options.loginLimits ?? LOGIN_LIMITS),
+    checks: new CheckQueue(),
     log: options.log ?? (() => {}),
     now,
   };

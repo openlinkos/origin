@@ -14,13 +14,13 @@ export function loginPage(ctx: Ctx, status: number, o: { next: string; error?: s
       <form method="post" action="/admin/login" class="stack">
         <input type="hidden" name="next" value="${o.next}">
         <input type="text" name="username" value="origin-admin" autocomplete="username" hidden>
-        <label>${t('auth.key')}
-          <input type="password" name="key" required autocomplete="current-password" spellcheck="false" autofocus placeholder="oga_…">
+        <label>${t('auth.password')}
+          <input type="password" name="password" required autocomplete="current-password" spellcheck="false" autofocus>
         </label>
         <button type="submit" class="primary">${t('auth.signIn')}</button>
       </form>
-      <p class="muted small">${t('auth.createKeyHint')}</p>
-      <pre><code>origin admin key create &lt;name&gt;</code></pre>
+      <p class="muted small">${t('auth.passwordHint')}</p>
+      <pre><code>origin admin password</code></pre>
     </section>`,
   });
 }
@@ -32,14 +32,14 @@ export function reauthPage(ctx: Ctx, status: number, o: { next: string; error?: 
     bare: true,
     body: html`<section class="card narrow">
       <h1>${t('auth.reauthTitle')}</h1>
-      <p class="muted">${t('auth.reauthHelp', { key: ctx.session?.keyName ?? '' })}</p>
+      <p class="muted">${t('auth.reauthHelp')}</p>
       ${o.error ? alert('error', o.error) : ''}
       <form method="post" action="/admin/reauth" class="stack">
         ${csrfField(ctx)}
         <input type="hidden" name="next" value="${o.next}">
         <input type="text" name="username" value="origin-admin" autocomplete="username" hidden>
-        <label>${t('auth.key')}
-          <input type="password" name="key" required autocomplete="current-password" spellcheck="false" autofocus placeholder="oga_…">
+        <label>${t('auth.password')}
+          <input type="password" name="password" required autocomplete="current-password" spellcheck="false" autofocus>
         </label>
         <button type="submit" class="primary">${t('auth.confirm')}</button>
       </form>

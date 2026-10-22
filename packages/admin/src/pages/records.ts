@@ -87,10 +87,9 @@ export function signinsPage(ctx: Ctx, sessions: AdminSessionInfo[], notice?: str
     ${notice ? alert('ok', notice) : ''}
     <section class="card">
       <table>
-        <thead><tr><th>${t('signins.key')}</th><th>${t('signins.started')}</th><th>${t('signins.lastSeen')}</th><th>${t('audit.client')}</th><th></th></tr></thead>
+        <thead><tr><th>${t('signins.started')}</th><th>${t('signins.lastSeen')}</th><th>${t('audit.client')}</th><th></th></tr></thead>
         <tbody>${sessions.map(
           (s) => html`<tr>
-            <td>${s.keyName}</td>
             <td>${time(s.createdAt)}</td>
             <td>${time(s.lastSeenAt)}</td>
             <td class="small">${s.ip ?? ''}${s.userAgent ? html`<div class="muted" title="${s.userAgent}">${clip(s.userAgent, 50)}</div>` : ''}</td>

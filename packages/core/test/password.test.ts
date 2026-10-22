@@ -9,12 +9,15 @@ import {
   createToken,
   type Database,
   generateAdminPassword,
+  getAdminSession,
   getSetting,
   hashAdminPassword,
   hasStoredAdminPassword,
+  listAudit,
   OriginError,
   openDatabase,
   prepareAdminCredential,
+  recordAudit,
   type ScryptParams,
   setAdminPassword,
   setSetting,
@@ -47,8 +50,7 @@ const ended = (idHash: string) =>
     }
   ).ended_at !== null;
 
-const session = (now = Date.now()) =>
-  createAdminSession(db, { keyName: 'owner' }, now).session.idHash;
+const session = (now = Date.now()) => createAdminSession(db, {}, now).session.idHash;
 
 describe('admin password hashes', () => {
   it('use scrypt with a random salt and the default parameters', async () => {
@@ -187,6 +189,28 @@ describe('the admin credential at startup', () => {
     expect(stored).toMatchObject({ generated: null, changed: true, sessionsEnded: 1 });
     expect(ended(b)).toBe(true);
     expect(await verifyAdminPassword(db, stored.credential, PASSWORD)).toBe(true);
+  });
+
+  it('works on a database created when the hub signed in with admin keys', async () => {
+    // That version also had an admin_key table, and sessions named after the key they used.
+    const { id } = createAdminSession(db, {}, Date.now());
+    db.prepare("UPDATE admin_session SET key_name = 'laptop-key'").run();
+    recordAudit(db, { actor: 'key:laptop-key', channel: 'ui', action: 'login' });
+    db.exec(`CREATE TABLE admin_key (
+      name TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL,
+      last_used_at INTEGER, revoked_at INTEGER)`);
+    db.prepare('INSERT INTO admin_key (name, hash, created_at) VALUES (?, ?, ?)').run(
+      'laptop-key',
+      'a'.repeat(64),
+      1,
+    );
+    db.close();
+    db = openDatabase(path.join(home, 'origin.db'));
+    expect(getAdminSession(db, id)).toBeNull();
+    const prepared = await prepareAdminCredential(db, { params: FAST });
+    expect(prepared).toMatchObject({ changed: true, sessionsEnded: 1 });
+    expect(await verifyAdminPassword(db, prepared.credential, prepared.generated)).toBe(true);
+    expect(listAudit(db).map((r) => r.actor)).toEqual(['key:laptop-key']);
   });
 
   it('refuses an ORIGIN_ADMIN_PASSWORD that is too short', async () => {

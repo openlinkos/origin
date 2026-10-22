@@ -10,9 +10,10 @@
  * - entry_fts: FTS5 trigram index over entries.
  * - tombstone / forgotten_entry / excluded_event: forget operations and their effects (Tombstone).
  * - api_token: hub access tokens (name and SHA-256 hash; the token itself is never stored).
- * - setting: small key-value state, e.g. how far a device has applied its hub's tombstones.
- * - admin_key: admin UI sign-in keys (name and SHA-256 hash; the key itself is never stored).
- * - admin_session: server-side admin UI sessions (only a hash of the session id is stored).
+ * - setting: small key-value state, local to this store and never replicated, e.g. how far a device
+ *   has applied its hub's tombstones, or the scrypt hash of the hub's admin password.
+ * - admin_session: server-side admin UI sessions (only a hash of the session id is stored). The
+ *   key_name column predates the single admin password and now always holds `owner`.
  * - audit_log: append-only record of administrative actions with ids and counts only, never
  *   content; triggers reject every UPDATE and DELETE.
  *
@@ -159,14 +160,6 @@ CREATE TABLE IF NOT EXISTS api_token (
 CREATE TABLE IF NOT EXISTS setting (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS admin_key (
-  name         TEXT    PRIMARY KEY,
-  hash         TEXT    NOT NULL UNIQUE,
-  created_at   INTEGER NOT NULL,
-  last_used_at INTEGER,
-  revoked_at   INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS admin_session (

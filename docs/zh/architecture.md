@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-cfdeb104
+sourceHash: sha256-8cf188c9
 ---
 
 # 架构
@@ -113,7 +113,7 @@ pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.13。`
 
 | 包 | 路径 | 职责 | 依赖 |
 |---|---|---|---|
-| `@openlinkos/origin-core` | `packages/core` | 存储、schema、采集（本地与远程）、条目、遗忘、令牌、管理密钥与会话、审计日志、查询 | — |
+| `@openlinkos/origin-core` | `packages/core` | 存储、schema、采集（本地与远程）、条目、遗忘、令牌、管理密码与会话、审计日志、查询 | — |
 | `@openlinkos/origin-adapters` | `packages/adapters` | 每个来源一个确定性解析器 | core |
 | `@openlinkos/origin-mcp` | `packages/mcp` | MCP 工具；基于 stdio 和无状态 HTTP 的 server；转发代理 | core |
 | `@openlinkos/origin-admin` | `packages/admin` | 中枢的管理界面：服务器端渲染的页面、JSON API 及其静态资源 | core |
@@ -148,8 +148,7 @@ interface SourceAdapter {
 | `entry`, `entry_source`, `entry_fts` | 条目、条目引用的事件（含引文），以及条目的 FTS5 索引 |
 | `tombstone`, `forgotten_entry`, `excluded_event` | 遗忘操作及其影响 |
 | `api_token` | 中枢访问令牌：名称和 SHA-256 哈希，从不保存令牌本身 |
-| `setting` | 少量键值状态，例如某台设备已经应用到中枢的哪一条遗忘记录 |
-| `admin_key` | 管理界面的登录密钥：名称和 SHA-256 哈希，从不保存密钥本身 |
+| `setting` | 少量键值状态，只属于各自的库，从不复制：某台设备已经应用到中枢的哪一条遗忘记录，以及中枢上管理密码的 scrypt 哈希 |
 | `admin_session` | 管理界面的会话：会话 id 的哈希、它的 CSRF 令牌和各个时间戳 |
 | `audit_log` | 管理操作的只追加记录，只含 id 和数量，从不包含内容；触发器拒绝任何更新和删除 |
 
@@ -268,13 +267,13 @@ interface SourceAdapter {
 中枢可以为它的主人提供一个 Web 界面。它默认关闭；它是同一个库的一个视图，而不是另一套系统：每个页面、每次 JSON 调用都经过 MCP 和 CLI 所用的同一组 core 操作（不变量 5）。`@openlinkos/origin-admin` 包提供一个请求处理函数，由中枢挂载。
 
 - **提供方式。** `origin serve --admin` 把界面挂载在中枢端口的 `/admin` 下；`origin serve --admin-listen 127.0.0.1:7078` 则改在一个单独的监听地址上提供，通过 SSH 隧道或 `kubectl port-forward` 访问。如果界面会在非回环地址上提供，除非 `--public-url`（`ORIGIN_PUBLIC_URL`）是 https URL，或者是回环主机上的 http URL（例如发布在 `127.0.0.1` 上的容器端口），否则中枢拒绝启动。没有公开 URL 时，界面只响应发往回环主机名的回环连接，这同时也能防御 DNS 重绑定。界面未启用时，`/admin` 返回 404。
-- **登录。** 管理密钥在中枢上用 `origin admin key create <name>` 创建，只显示一次（`oga_…`），以 SHA-256 哈希的形式保存在 `admin_key` 中；也可以通过 `ORIGIN_ADMIN_KEY_SHA256` 提供哈希，便于把配置放在 Git 里。没有首次访问时的设置向导，所以新建的中枢不会被第一个访问到它的人占用。管理密钥和中枢令牌互不接受：`/mcp` 和 `/v1/*` 只接受 bearer 令牌（`ogn_…`），`/admin` 只接受它自己的会话 cookie。
-- **会话。** 会话保存在服务器端的 `admin_session` 中，以会话 id 的哈希为键。会话在 30 分钟没有请求、登录满 12 小时，或者所用密钥被吊销时结束。在 https 公开 URL 之后，cookie 是 `__Host-origin-admin`（Secure、HttpOnly、SameSite=Lax）；在回环 http 上，cookie 是 `origin-admin`（HttpOnly、SameSite=Strict，路径 `/admin`）。在 https 公开 URL 之后，普通 cookie 只在回环隧道上有效，所以从兄弟子域名种下的 cookie 无法固定会话。创建或吊销令牌、遗忘、结束会话，要求最近 10 分钟内输入过密钥。
-- **请求。** 只有 GET 和 POST，所有写操作都是 POST。POST 需要会话的 CSRF 令牌（表单字段 `_csrf` 或请求头 `X-CSRF-Token`），以及与中枢源相同的 `Origin` 请求头；带有 `Sec-Fetch-Site: cross-site` 的请求会被拒绝。请求体上限为 64 KiB。密钥校验失败的次数受到限制：每个客户端每 10 分钟 10 次，总计每 10 分钟 100 次（返回 429 和 `Retry-After`）；只有设置了 `ORIGIN_CLIENT_IP_HEADER` 时才从该请求头取客户端地址，否则取连接的地址。
+- **登录。** 每个中枢只有一个管理密码，没有用户名。设置了 `ORIGIN_ADMIN_PASSWORD` 时，它就是管理密码，并且优先于其他来源；它至少要有 12 个字符，否则中枢拒绝启动。否则，管理密码在中枢上用 `origin admin password` 设置（在终端中输入两次，或从标准输入读取一行），或用 `origin admin password --generate` 生成。如果中枢在启用管理界面的情况下启动时两者都没有，它会生成一个密码（20 个随机 base32 字符，100 位），保存它的哈希，并在日志中只打印这一次。没有首次访问时的设置向导，所以新建的中枢不会被第一个访问到它的人占用。密码以 scrypt 哈希的形式（N = 2^15、r = 8、p = 3，随机的 16 字节盐）写成 `scrypt$N$r$p$<salt>$<hash>`，保存在只留在中枢上的 `setting` 中；中枢也会保存 `ORIGIN_ADMIN_PASSWORD` 的这种哈希，以便发现它是否变化。校验逐个进行，并以恒定时间比较。管理密码和中枢令牌互不接受：密码不能以 `ogn_` 开头，`/mcp` 和 `/v1/*` 只接受 bearer 令牌，`/admin` 只接受它自己的会话 cookie。
+- **会话。** 会话保存在服务器端的 `admin_session` 中，以会话 id 的哈希为键。会话在 30 分钟没有请求或登录满 12 小时后结束；管理密码变化时，所有会话都会结束：用 `origin admin password` 设置新密码时，以及中枢启动时 `ORIGIN_ADMIN_PASSWORD` 与上次不同，或者在它和保存的密码之间切换时。在 https 公开 URL 之后，cookie 是 `__Host-origin-admin`（Secure、HttpOnly、SameSite=Lax）；在回环 http 上，cookie 是 `origin-admin`（HttpOnly、SameSite=Strict，路径 `/admin`）。在 https 公开 URL 之后，普通 cookie 只在回环隧道上有效，所以从兄弟子域名种下的 cookie 无法固定会话。创建或吊销令牌、遗忘、结束会话，要求最近 10 分钟内输入过密码。
+- **请求。** 只有 GET 和 POST，所有写操作都是 POST。POST 需要会话的 CSRF 令牌（表单字段 `_csrf` 或请求头 `X-CSRF-Token`），以及与中枢源相同的 `Origin` 请求头；带有 `Sec-Fetch-Site: cross-site` 的请求会被拒绝。请求体上限为 64 KiB。密码校验失败的次数受到限制：每个客户端每 10 分钟 10 次，总计每 10 分钟 100 次（返回 429 和 `Retry-After`）；只有设置了 `ORIGIN_CLIENT_IP_HEADER` 时才从该请求头取客户端地址，否则取连接的地址。在代理或 CDN 之后，必须设置这个请求头：否则所有客户端共用代理的地址和同一个限额，任何人的失败尝试都可能把主人锁在外面。
 - **响应。** 页面在服务器端由一个对每个插值都做转义的模板渲染；一小段脚本提供一些便利，例如就地加载原始行，但没有页面依赖它。每个响应都带有严格的 Content-Security-Policy（没有内联脚本或样式，启用 Trusted Types 且不允许任何策略）、`Cache-Control: no-store, private`、`Vary: Cookie`，以及防止嵌入、类型嗅探、引用来源泄露和被搜索引擎收录的请求头；在 https 之后还带有 HSTS。没有第三方资源，界面也从不发起外部请求。
 - **能做什么。** 概览（数量统计、设备及其最近推送、存储、解析错误）、令牌（创建：令牌只显示一次，旁边附有现成的接入命令；吊销）、设备、时间线、会话、带溯源链的事件（原始行按需加载，截断到 4,000 个字符；工具事件默认隐藏）、检索、条目及其历史、`correct`（未指定时置信度为 1）、从事件页面 `remember`（引用该事件，作者为 `user`），以及预览之后的 `forget`：请求带上所展示计划的摘要，并再次输入 id；如果计划在此期间发生了变化，就不会遗忘任何内容（409）。
-- **不能做什么。** 编辑或删除事件、原始镜像、条目或遗忘记录；撤销遗忘；显示被遗忘内容的任何文本（遗忘记录只保存目标 id、填写的原因和被移除内容的 id；审计日志只保存 id 和数量）；保存没有可见来源的条目；再次显示令牌；创建管理密钥或修改安全设置；执行任意查询，或读取可见事件的镜像行以外的任何文件。
-- **审计日志。** 来自界面的登录和失败尝试（每个客户端在每个时间窗口内合并为一条记录）、令牌变更、写入的条目、遗忘操作和被结束的会话，以及来自 CLI 的令牌和管理密钥变更，都会连同操作者、渠道、客户端地址和 user agent 一起追加到 `audit_log`。详情只含 id 和数量，从不包含文本，因此遗忘保持粘性；触发器拒绝任何更新和删除。
+- **不能做什么。** 编辑或删除事件、原始镜像、条目或遗忘记录；撤销遗忘；显示被遗忘内容的任何文本（遗忘记录只保存目标 id、填写的原因和被移除内容的 id；审计日志只保存 id 和数量）；保存没有可见来源的条目；再次显示令牌；修改管理密码或其他安全设置；执行任意查询，或读取可见事件的镜像行以外的任何文件。
+- **审计日志。** 来自界面的登录和失败尝试（每个客户端在每个时间窗口内合并为一条记录）、令牌变更、写入的条目、遗忘操作和被结束的会话（操作者 `owner`），来自 CLI 的令牌和密码变更（操作者 `cli`），以及中枢启动时生成或变更的密码（操作者 `hub`），都会连同渠道、客户端地址和 user agent 一起追加到 `audit_log`。详情只含 id 和数量，从不包含文本或密码，因此遗忘保持粘性；触发器拒绝任何更新和删除。
 
 ## 待解决的问题 {#open-questions}
 

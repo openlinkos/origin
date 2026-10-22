@@ -46,7 +46,7 @@ export function isLoopbackListen(host: string): boolean {
 export function checkAdminExposure(listenHost: string, publicUrl: URL | null): void {
   if (publicUrl && publicUrl.protocol === 'http:' && !isLoopbackHostname(publicUrl.hostname)) {
     throw new OriginError(
-      `Refusing to serve the admin UI at ${publicUrl.origin}: admin keys and session cookies would travel ` +
+      `Refusing to serve the admin UI at ${publicUrl.origin}: the admin password and session cookies would travel ` +
         'unencrypted. Put the hub behind TLS and pass an https:// URL with --public-url ' +
         '(or ORIGIN_PUBLIC_URL), or reach the admin UI over a private loopback listener with ' +
         '--admin-listen 127.0.0.1:7078.',

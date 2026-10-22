@@ -6,13 +6,15 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createClaudeCodeAdapter } from '@openlinkos/origin-adapters';
 import {
-  createAdminKey,
   createToken,
   type Database,
   getEntry,
   getEvent,
+  getSetting,
   listAudit,
   openDatabase,
+  type ScryptParams,
+  setAdminPassword,
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -36,7 +38,10 @@ let deviceDb: Database;
 let hub: RunningHub;
 let extra: RunningHub[];
 let device: HubConfig;
-let adminKey: string;
+
+/** Cheap scrypt parameters for tests; a stored hash records its own parameters. */
+const FAST: ScryptParams = { N: 16, r: 1, p: 1 };
+const PASSWORD = 'correct-horse-battery-staple';
 
 /** A synthetic Claude Code session whose message and title are markup. */
 function writeXssSession(projects: string): void {
@@ -69,7 +74,7 @@ beforeEach(async () => {
   deviceHome = path.join(tmp, 'device');
   hubDb = openDatabase(path.join(hubHome, 'origin.db'));
   deviceDb = openDatabase(path.join(deviceHome, 'origin.db'));
-  adminKey = createAdminKey(hubDb, 'owner');
+  await setAdminPassword(hubDb, PASSWORD, { params: FAST });
   extra = [];
   hub = await startHub({
     db: hubDb,
@@ -78,7 +83,7 @@ beforeEach(async () => {
     port: 0,
     adapters: [createClaudeCodeAdapter({ projectsDir: path.join(tmp, 'unused') })],
     version: 'test',
-    admin: {},
+    admin: { passwordParams: FAST },
   });
   device = { url: hub.url, token: createToken(hubDb, 'laptop'), device: 'laptop' };
 
@@ -105,7 +110,7 @@ const push = (hubConfig: HubConfig = device) =>
 
 async function signedIn(): Promise<Browser> {
   const b = new Browser(hub.url);
-  const res = await b.login(adminKey);
+  const res = await b.login(PASSWORD);
   expect(res.status).toBe(303);
   return b;
 }
@@ -124,7 +129,7 @@ async function mcp(): Promise<Client> {
 const toolJson = (result: any) => JSON.parse(result.content[0].text);
 
 describe('admin UI on the hub', () => {
-  it('signs in with an admin key and shows the device and its events', async () => {
+  it('signs in with the admin password and shows the device and its events', async () => {
     const b = await signedIn();
     const page = await b.get('/admin/');
     expect(page.status).toBe(200);
@@ -169,7 +174,7 @@ describe('admin UI on the hub', () => {
       (await request(`${hub.url}/admin/api/overview`, { headers: bearer(device.token) })).status,
     ).toBe(401);
     expect(
-      (await request(`${hub.url}/admin/api/overview`, { headers: bearer(adminKey) })).status,
+      (await request(`${hub.url}/admin/api/overview`, { headers: bearer(PASSWORD) })).status,
     ).toBe(401);
 
     const cookie = [...b.jar].map(([k, v]) => `${k}=${v}`).join('; ');
@@ -193,14 +198,18 @@ describe('admin UI on the hub', () => {
       body: init,
     });
     expect(viaCookie.status).toBe(401);
-    const viaKey = await request(`${hub.url}/mcp`, {
+    const viaPassword = await request(`${hub.url}/mcp`, {
       method: 'POST',
-      headers: { ...mcpHeaders, ...bearer(adminKey) },
+      headers: { ...mcpHeaders, ...bearer(PASSWORD) },
       body: init,
     });
-    expect(viaKey.status).toBe(401);
+    expect(viaPassword.status).toBe(401);
     expect(
-      (await request(`${hub.url}/v1/cursors?device=laptop`, { headers: bearer(adminKey) })).status,
+      (await request(`${hub.url}/v1/cursors?device=laptop`, { headers: bearer(PASSWORD) })).status,
+    ).toBe(401);
+    // A hub token is never an admin password.
+    expect(
+      (await new Browser(hub.url).post('/admin/login', { password: device.token })).status,
     ).toBe(401);
     expect(
       (await request(`${hub.url}/v1/cursors?device=laptop`, { headers: { Cookie: cookie } }))
@@ -257,12 +266,119 @@ describe('admin UI on the hub', () => {
   it('rate-limits failed sign-ins', async () => {
     const b = new Browser(hub.url);
     for (let i = 0; i < 10; i++) {
-      expect((await b.post('/admin/login', { key: `oga_guess${i}` })).status).toBe(401);
+      expect((await b.post('/admin/login', { password: `wrong-guess-${i}` })).status).toBe(401);
     }
-    const eleventh = await b.post('/admin/login', { key: 'oga_guess10' });
+    const eleventh = await b.post('/admin/login', { password: 'wrong-guess-10' });
     expect(eleventh.status).toBe(429);
     expect(Number(eleventh.headers['retry-after'])).toBeGreaterThan(0);
-    expect((await b.post('/admin/login', { key: adminKey })).status).toBe(429);
+    expect((await b.post('/admin/login', { password: PASSWORD })).status).toBe(429);
+  });
+
+  it('generates a password on the first start and logs it only that once', async () => {
+    const home = path.join(tmp, 'fresh-hub');
+    const db = openDatabase(path.join(home, 'origin.db'));
+    try {
+      const start = async (log: string[]) => {
+        const h = await startHub({
+          db,
+          home,
+          host: '127.0.0.1',
+          port: 0,
+          adapters: [],
+          version: 'test',
+          log: (m) => log.push(m),
+          admin: { passwordParams: FAST },
+        });
+        extra.push(h);
+        return h;
+      };
+      const firstLog: string[] = [];
+      const first = await start(firstLog);
+      const notice = firstLog.join('\n');
+      expect(notice).toContain(
+        'Generated an admin password for the admin UI (shown only this once):',
+      );
+      expect(notice).toContain('origin admin password');
+      const password = /^ {4}([0-9a-z]{5}(?:-[0-9a-z]{5}){3})$/m.exec(notice)?.[1] ?? '';
+      expect(password).not.toBe('');
+      const b = new Browser(first.url);
+      expect((await b.login(password)).status).toBe(303);
+      await first.close();
+
+      const secondLog: string[] = [];
+      const second = await start(secondLog);
+      expect(secondLog.join('\n')).not.toContain('Generated');
+      expect(secondLog.join('\n')).not.toContain(password);
+      // The same password still works, and the session survived the restart.
+      const again = new Browser(second.url);
+      for (const [k, v] of b.jar) again.jar.set(k, v);
+      expect((await again.get('/admin/')).status).toBe(200);
+      expect(listAudit(db).map((r) => [r.action, r.actor])).toEqual([
+        ['login', 'owner'],
+        ['password.generate', 'hub'],
+      ]);
+      expect(JSON.stringify(listAudit(db))).not.toContain(password);
+    } finally {
+      for (const h of extra.splice(0)) await h.close();
+      db.close();
+    }
+  });
+
+  it('prefers ORIGIN_ADMIN_PASSWORD, and ends sessions when it changes', async () => {
+    const start = async (envPassword: string) => {
+      const h = await startHub({
+        db: hubDb,
+        home: hubHome,
+        host: '127.0.0.1',
+        port: 0,
+        adapters: [],
+        version: 'test',
+        admin: { envPassword, passwordParams: FAST },
+      });
+      extra.push(h);
+      return h;
+    };
+    const stored = await signedIn();
+    const first = await start('env-password-one');
+    const carry = (from: Browser, url: string) => {
+      const b = new Browser(url);
+      for (const [k, v] of from.jar) b.jar.set(k, v);
+      return b;
+    };
+    // Switching to the environment password ended the session made with the stored one.
+    expect((await carry(stored, first.url).get('/admin/')).status).toBe(303);
+    expect((await new Browser(first.url).login(PASSWORD)).status).toBe(401);
+    const b = new Browser(first.url);
+    expect((await b.login('env-password-one')).status).toBe(303);
+
+    // Restarted with the same value: the session stays.
+    const same = await start('env-password-one');
+    expect((await carry(b, same.url).get('/admin/')).status).toBe(200);
+
+    // Restarted with another value: every session ends, and only the new value signs in.
+    const changed = await start('env-password-two');
+    expect((await carry(b, changed.url).get('/admin/')).status).toBe(303);
+    expect((await new Browser(changed.url).login('env-password-one')).status).toBe(401);
+    expect((await new Browser(changed.url).login('env-password-two')).status).toBe(303);
+    expect(
+      listAudit(hubDb, { action: 'password.change' }).map((r) => [r.actor, r.detail?.source]),
+    ).toEqual([
+      ['hub', 'env'],
+      ['hub', 'env'],
+      // The first start, in beforeEach, with the stored password.
+      ['hub', 'stored'],
+    ]);
+
+    await expect(start('too-short')).rejects.toThrow(
+      /ORIGIN_ADMIN_PASSWORD must be at least 12 characters/,
+    );
+  });
+
+  it('keeps the admin password on the hub: devices never receive it', async () => {
+    await push();
+    expect(getSetting(hubDb, 'admin.password')).toMatch(/^scrypt\$/);
+    expect(getSetting(deviceDb, 'admin.password')).toBeNull();
+    expect(getSetting(deviceDb, 'admin.credential')).toBeNull();
   });
 
   it('ends the session on sign-out', async () => {
@@ -304,11 +420,11 @@ describe('admin UI on the hub', () => {
       {
         action: 'token.revoke',
         target: 'desk',
-        actor: 'key:owner',
+        actor: 'owner',
         channel: 'ui',
         ip: '127.0.0.1',
       },
-      { action: 'token.create', target: 'desk', actor: 'key:owner', channel: 'ui' },
+      { action: 'token.create', target: 'desk', actor: 'owner', channel: 'ui' },
     ]);
   });
 

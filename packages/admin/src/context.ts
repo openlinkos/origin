@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { AdminSession } from '@openlinkos/origin-core';
+import { ADMIN_OWNER, type AdminSession } from '@openlinkos/origin-core';
 import type { Assets } from './assets.js';
 import { html, type SafeHtml } from './html.js';
 import type { RequestOrigins } from './http.js';
@@ -50,7 +50,7 @@ export function pageParam(ctx: Ctx): number {
 
 export function actorOf(ctx: Ctx): Actor {
   return {
-    actor: ctx.session ? `key:${ctx.session.keyName}` : 'anonymous',
+    actor: ctx.session ? ADMIN_OWNER : 'anonymous',
     ip: ctx.ip,
     userAgent: ctx.userAgent,
   };

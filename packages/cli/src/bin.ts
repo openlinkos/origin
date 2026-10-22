@@ -5,7 +5,6 @@ import { adapterById, allAdapters, KNOWN_SOURCE_IDS } from '@openlinkos/origin-a
 import { parseListen, parsePublicUrl } from '@openlinkos/origin-admin';
 import {
   correct,
-  createAdminKey,
   createToken,
   type Database,
   dbPath,
@@ -17,12 +16,12 @@ import {
   entryHistory,
   entrySources,
   forget,
+  generateAdminPassword,
   getEntry,
   getEvent,
   isEntryForgotten,
   isEntryId,
   isEventForgotten,
-  listAdminKeys,
   listAdminSessions,
   listAudit,
   listDevices,
@@ -34,16 +33,15 @@ import {
   OriginError,
   openDatabase,
   originHome,
-  parseAdminKeyHashes,
   parseTime,
   planForget,
   rawLocator,
   readRawLine,
   recordAudit,
-  revokeAdminKey,
   revokeToken,
   searchEntries,
   searchEvents,
+  setAdminPassword,
   stats,
   syncSource,
 } from '@openlinkos/origin-core';
@@ -59,6 +57,7 @@ import {
 } from './hub/config.js';
 import { pushToHub } from './hub/push.js';
 import { type HubAdminOptions, startHub } from './hub/serve.js';
+import { readNewPassword } from './password.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
 
 const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
@@ -82,7 +81,7 @@ Personal hub:
   origin serve     [--host 127.0.0.1] [--port 7077]      Run this store as a personal hub (MCP over HTTP)
                    [--admin | --admin-listen <host:port>] [--public-url <url>]   Also serve the admin UI
   origin token     create <name> | list | revoke <name>  Manage the hub's access tokens (run on the hub)
-  origin admin     key create <name> | key list | key revoke <name>   Manage admin UI sign-in keys (run on the hub)
+  origin admin     password [--generate]                 Set the admin UI password; signs out every session (run on the hub)
   origin admin     sessions [--revoke-all] | audit [--limit 50]       Admin UI sessions and the audit log
   origin hub       connect <url> --token <token> [--device <name>] | status | disconnect
   origin push                                            Sync locally, push raw mirrors to the hub, pull tombstones
@@ -138,7 +137,7 @@ async function main(argv: string[]): Promise<number> {
       case 'token':
         return cmdToken(ctx, rest);
       case 'admin':
-        return cmdAdmin(ctx, rest);
+        return await cmdAdmin(ctx, rest);
       case 'hub':
         return await cmdHub(ctx, rest);
       case 'push':
@@ -558,7 +557,7 @@ function envSwitch(name: string): boolean {
 
 /**
  * How to serve the admin UI: flags first, then the environment (ORIGIN_ADMIN, ORIGIN_ADMIN_LISTEN,
- * ORIGIN_PUBLIC_URL, ORIGIN_CLIENT_IP_HEADER, ORIGIN_ADMIN_KEY_SHA256). Null when it is off.
+ * ORIGIN_PUBLIC_URL, ORIGIN_CLIENT_IP_HEADER, ORIGIN_ADMIN_PASSWORD). Null when it is off.
  */
 function adminOptions(values: {
   admin?: boolean;
@@ -577,7 +576,7 @@ function adminOptions(values: {
   return {
     publicUrl: parsePublicUrl(values['public-url'] ?? process.env.ORIGIN_PUBLIC_URL),
     clientIpHeader: process.env.ORIGIN_CLIENT_IP_HEADER?.trim() || null,
-    envKeyHashes: parseAdminKeyHashes(process.env.ORIGIN_ADMIN_KEY_SHA256),
+    envPassword: process.env.ORIGIN_ADMIN_PASSWORD || null,
     listen: listen ? parseListen(listen) : null,
   };
 }
@@ -616,10 +615,6 @@ async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
     const where =
       admin?.publicUrl && !admin.listen ? `${admin.publicUrl.origin}/admin/` : hub.adminUrl;
     console.log(`Admin UI at ${where}`);
-    const keys = listAdminKeys(ctx.db).filter((k) => k.revokedAt === null);
-    if (keys.length === 0 && (admin?.envKeyHashes ?? []).length === 0) {
-      console.log('No admin keys yet. Create one with: origin admin key create <name>');
-    }
   }
   await new Promise<void>((resolve) => {
     const stop = () => void hub.close().then(resolve);
@@ -634,7 +629,7 @@ function auditCli(
   ctx: Ctx,
   action: string,
   target: string | null,
-  detail?: Record<string, number>,
+  detail?: Record<string, number | boolean>,
 ) {
   recordAudit(ctx.db, { actor: 'cli', channel: 'cli', action, target, detail: detail ?? null });
 }
@@ -680,51 +675,36 @@ function cmdToken(ctx: Ctx, args: string[]): number {
 }
 
 const ADMIN_USAGE = `Usage:
-  origin admin key create <name>      Create an admin UI sign-in key (shown once)
-  origin admin key list
-  origin admin key revoke <name>      Disable a key and end its sessions
+  origin admin password               Set the admin UI password: asked twice on a terminal, or one line on stdin
+  origin admin password --generate    Generate a random password and print it once
   origin admin sessions [--revoke-all]
-  origin admin audit [--limit 50]`;
+  origin admin audit [--limit 50]
 
-function cmdAdmin(ctx: Ctx, args: string[]): number {
+Setting a password replaces the old one and signs out every admin session.`;
+
+async function cmdAdmin(ctx: Ctx, args: string[]): Promise<number> {
   const [area, ...rest] = args;
-  const envHashes = parseAdminKeyHashes(process.env.ORIGIN_ADMIN_KEY_SHA256);
-  if (area === 'key') {
-    const [action, name] = rest;
-    if (action === 'create' && name) {
-      const key = createAdminKey(ctx.db, name);
-      auditCli(ctx, 'admin.key.create', name);
-      console.log(
-        `Admin key ${name} (shown once, store it safely, for example in a password manager):\n\n  ${key}\n\nSign in at <hub>/admin/ with it. Revoke it with: origin admin key revoke ${name}`,
+  if (area === 'password') {
+    const { values } = parseArgs({
+      args: rest,
+      options: { generate: { type: 'boolean', default: false } },
+    });
+    if (process.env.ORIGIN_ADMIN_PASSWORD) {
+      console.error(
+        'Note: ORIGIN_ADMIN_PASSWORD is set. On a hub started with it, that variable is the admin password and takes precedence over the one set here.',
       );
-      return 0;
     }
-    if (action === 'revoke' && name) {
-      if (!revokeAdminKey(ctx.db, name)) {
-        console.error(`No active admin key named ${name}.`);
-        return 1;
-      }
-      auditCli(ctx, 'admin.key.revoke', name);
-      console.log(`Revoked admin key ${name} and ended its sessions.`);
-      return 0;
+    const generated = values.generate === true;
+    const password = generated ? generateAdminPassword() : await readNewPassword();
+    const ended = await setAdminPassword(ctx.db, password);
+    auditCli(ctx, 'password.set', null, { generated, sessionsEnded: ended });
+    if (generated) {
+      console.log(
+        `New admin password (shown only this once; keep it in a password manager):\n\n  ${password}\n`,
+      );
     }
-    if (action === 'list') {
-      const keys = listAdminKeys(ctx.db);
-      if (keys.length === 0 && envHashes.length === 0) {
-        console.log('No admin keys yet. Create one with: origin admin key create <name>');
-        return 0;
-      }
-      const rows = keys.map((k) => [
-        k.name,
-        fmtDateTime(k.createdAt),
-        fmtDateTime(k.lastUsedAt),
-        k.revokedAt === null ? 'active' : `revoked ${fmtDate(k.revokedAt)}`,
-      ]);
-      for (const h of envHashes)
-        rows.push([`env:${h.slice(0, 8)}`, '—', '—', 'ORIGIN_ADMIN_KEY_SHA256']);
-      console.log(table(rows, ['name', 'created', 'last used', 'status']));
-      return 0;
-    }
+    console.log(`Admin password set. Signed out ${count(ended, 'admin session')}.`);
+    return 0;
   }
   if (area === 'sessions') {
     const { values } = parseArgs({
@@ -737,7 +717,7 @@ function cmdAdmin(ctx: Ctx, args: string[]): number {
       console.log(`Ended ${count(n, 'admin session')}.`);
       return 0;
     }
-    const sessions = listAdminSessions(ctx.db, { envHashes });
+    const sessions = listAdminSessions(ctx.db);
     if (sessions.length === 0) {
       console.log('No open admin sessions.');
       return 0;
@@ -745,13 +725,12 @@ function cmdAdmin(ctx: Ctx, args: string[]): number {
     console.log(
       table(
         sessions.map((s) => [
-          s.keyName,
           fmtDateTime(s.createdAt),
           fmtDateTime(s.lastSeenAt),
           s.ip ?? '—',
           oneLine(s.userAgent ?? '—', 40),
         ]),
-        ['key', 'signed in', 'last active', 'client', 'user agent'],
+        ['signed in', 'last active', 'client', 'user agent'],
       ),
     );
     return 0;

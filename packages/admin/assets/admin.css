@@ -184,10 +184,6 @@ body [hidden] {
   font-size: 0.9rem;
 }
 
-.who {
-  color: var(--muted);
-}
-
 .nav {
   display: flex;
   flex-wrap: wrap;
