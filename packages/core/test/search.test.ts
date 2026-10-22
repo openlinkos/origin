@@ -221,7 +221,8 @@ describe('terms without an index', () => {
       `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i + 1 < ?)
        INSERT INTO event (id, source, session_id, ts, project, role, kind, text, raw_file_id,
                           raw_line)
-       SELECT 'fake:bulk' || (? + i), 'fake', 'B', ? + i, ?, 'user', ?, ?, ?, 1 FROM n`,
+       SELECT 'fake:bulk' || CAST(? + i AS INTEGER), 'fake', 'B', CAST(? + i AS INTEGER), ?, 'user', ?, ?, ?, 1
+       FROM n`,
     ).run(count, firstTs, firstTs, project, kind, text, raw);
   }
 
@@ -247,6 +248,26 @@ describe('terms without an index', () => {
     );
     await syncSource({ db, home }, fakeAdapter(src));
     expect(messages('qz', { project: 'small' })).toEqual(['small']);
+  });
+
+  it('filters by a small project through its index and a large one by reading the matches', () => {
+    bulk(1_500, 1_000, 'needle in a haystack', 'big');
+    bulk(1_500, 5_000, 'needle in a haystack', 'other');
+    const size = db.prepare(
+      `INSERT OR REPLACE INTO session (source, session_id, project, started_at, ended_at, event_count)
+       VALUES ('fake', 'big-session', 'big', 1000, 2499, ?)`,
+    );
+    for (const events of [1_500, 1_000_000]) {
+      size.run(events);
+      expect(messages('needle', { project: 'big', order: 'recent', limit: 3 })).toEqual([
+        'bulk2499',
+        'bulk2498',
+        'bulk2497',
+      ]);
+      expect(messages('needle', { project: 'big', limit: 5_000 })).toHaveLength(1_500);
+      expect(messages('needle', { project: 'big', since: 2_400, limit: 5_000 })).toHaveLength(100);
+      expect(messages('needle', { project: 'other', until: 5_009, limit: 5_000 })).toHaveLength(10);
+    }
   });
 });
 

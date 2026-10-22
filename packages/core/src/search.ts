@@ -198,6 +198,8 @@ interface Hit {
 interface Row {
   seq: number;
   ts: number;
+  /** Whether the event passes the filters that need its row: a candidate. */
+  cand: number;
   pass: number;
   text?: string;
 }
@@ -212,16 +214,22 @@ interface Need {
 }
 
 /**
- * What makes an event a candidate besides the indexed terms: the filters on its columns (source,
- * project, session, kinds) and, for event_fts, the terms its trigrams only roughly match.
+ * What makes an event a candidate besides the indexed terms and the time range: the filters on its
+ * columns (source, project unless matched by its index, session, kinds) and, for event_fts, the
+ * terms its trigrams only roughly match.
  */
-function candidateFilters(p: Plan, f: EventFilter, params: unknown[]): string[] {
+function candidateFilters(
+  p: Plan,
+  f: EventFilter,
+  params: unknown[],
+  withProject = true,
+): string[] {
   const parts: string[] = [];
   if (f.source) {
     parts.push('e.source = ?');
     params.push(f.source);
   }
-  if (f.project) {
+  if (f.project && withProject) {
     parts.push('e.project = ?');
     params.push(f.project);
   }
@@ -244,49 +252,77 @@ function passColumn(p: Plan, params: unknown[]): string {
 }
 
 /**
- * SQL reading the candidates of an index-driven plan between two seqs (bound last), latest arrival
- * first: seq, ts, and `pass`.
+ * A project with at most this many events in the time range is matched through its index (its
+ * events' seqs, read once), so that a search in it does not read every match to check its project.
+ */
+const PROJECT_SET_LIMIT = 100_000;
+
+/**
+ * SQL reading the matches of an index-driven plan between two seqs (bound last), latest arrival
+ * first: seq, ts, `cand`, and `pass`. Filters that need an event's row only set `cand`, so every
+ * match comes back and a query can stop as soon as it has enough; the others (the time range, CJK
+ * terms, a small project) are part of the WHERE clause and read no event.
  */
 function rangeQuery(
+  db: Database,
   p: Plan,
   f: EventFilter,
   need: Need,
 ): { sql: string; params: (lo: number, hi: number) => unknown[] } {
   const table = p.table as string;
-  const selectParams: unknown[] = [];
-  const pass = passColumn(p, selectParams);
-  const filterParams: unknown[] = [];
-  const filters = candidateFilters(p, f, filterParams);
-  const row = filters.length > 0 || pass !== '1' || !!need.accept;
-  const ts = row ? 'e.ts' : 'x.ts';
-  const columns = ['f.rowid AS seq', `${ts} AS ts`, `${pass} AS pass`];
-  if (need.accept) columns.push('e.text AS text');
-  // The index stays the outer loop (CROSS JOIN). An event is read only to filter or check it;
-  // otherwise its timestamp comes from the narrow (seq, ts) index.
-  const join = row
-    ? 'CROSS JOIN event e ON e.seq = f.rowid'
-    : 'CROSS JOIN event x INDEXED BY event_seq_ts ON x.seq = f.rowid';
   const conditions: string[] = [];
   const whereParams: unknown[] = [];
   if (p.cjk) {
     conditions.push('+f.rowid IN (SELECT rowid FROM event_cjk WHERE event_cjk MATCH ?)');
     whereParams.push(p.cjk);
   }
-  if (f.since !== undefined) {
-    conditions.push(`${ts} >= ?`);
-    whereParams.push(f.since);
+  const range = (column: string): string => {
+    let sql = '';
+    if (f.since !== undefined) {
+      sql += ` AND ${column} >= ?`;
+      whereParams.push(f.since);
+    }
+    if (f.until !== undefined) {
+      sql += ` AND ${column} <= ?`;
+      whereParams.push(f.until);
+    }
+    return sql;
+  };
+  const projectByIndex = !!f.project && projectSize(db, f) <= PROJECT_SET_LIMIT;
+  if (projectByIndex) {
+    whereParams.push(f.project);
+    conditions.push(`+f.rowid IN (SELECT seq FROM event WHERE project = ?${range('ts')})`);
   }
-  if (f.until !== undefined) {
-    conditions.push(`${ts} <= ?`);
-    whereParams.push(f.until);
-  }
-  conditions.push(...filters);
-  whereParams.push(...filterParams);
+  const inRange = range('x.ts');
+  if (inRange) conditions.push(inRange.slice(' AND '.length));
+  const selectParams: unknown[] = [];
+  const filters = candidateFilters(p, f, selectParams, !projectByIndex);
+  const cand = filters.length > 0 ? `(${filters.join(' AND ')})` : '1';
+  const pass = passColumn(p, selectParams);
+  const row = cand !== '1' || pass !== '1' || !!need.accept;
+  const columns = ['f.rowid AS seq', 'x.ts AS ts', `${cand} AS cand`, `${pass} AS pass`];
+  if (need.accept) columns.push('e.text AS text');
+  // The index stays the outer loop (CROSS JOIN). Timestamps come from the narrow (seq, ts) index; an
+  // event is read only to filter or check it, after the time range.
+  const join = `CROSS JOIN event x INDEXED BY event_seq_ts ON x.seq = f.rowid${
+    row ? ' CROSS JOIN event e ON e.seq = f.rowid' : ''
+  }`;
   const sql = `SELECT ${columns.join(', ')} FROM ${table} f ${join}
     WHERE ${table} MATCH ? AND f.rowid BETWEEN ? AND ? AND ${VISIBLE_SEQ('f.rowid')}
     ${conditions.map((c) => `AND ${c}`).join(' ')}
     ORDER BY f.rowid DESC`;
   return { sql, params: (lo, hi) => [...selectParams, p.match, lo, hi, ...whereParams] };
+}
+
+/** How many events the filter's project has in its time range, from the session aggregates. */
+function projectSize(db: Database, f: EventFilter): number {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(event_count), 0) AS n FROM session
+       WHERE project = ? AND ended_at >= ? AND started_at <= ?`,
+    )
+    .get(f.project ?? null, f.since ?? MIN_SEQ, f.until ?? MAX_SEQ) as { n: number };
+  return row.n;
 }
 
 /**
@@ -308,7 +344,7 @@ function scanQuery(p: Plan, f: EventFilter, need: Need): { sql: string; params: 
   }
   const text = need.accept ? ', e.text AS text' : '';
   return {
-    sql: `SELECT e.seq AS seq, e.ts AS ts, ${pass} AS pass${text} FROM event e
+    sql: `SELECT e.seq AS seq, e.ts AS ts, 1 AS cand, ${pass} AS pass${text} FROM event e
           WHERE ${where.join(' AND ')} ORDER BY e.ts DESC, e.seq DESC LIMIT ${SCAN_LIMIT}`,
     params: [...selectParams, ...whereParams],
   };
@@ -325,6 +361,7 @@ function newest(db: Database, p: Plan, f: EventFilter, need: Need): Hit[] {
   const cap = capped ? SCAN_LIMIT : Number.POSITIVE_INFINITY;
   const hits: Hit[] = [];
   const take = (r: Row) => {
+    if (r.cand !== 1) return;
     const pass = r.pass === 1 && (!need.accept || need.accept(r.text as string));
     hits.push({ seq: r.seq, ts: r.ts, pass });
   };
@@ -334,11 +371,11 @@ function newest(db: Database, p: Plan, f: EventFilter, need: Need): Hit[] {
     let passing = 0;
     for (const r of db.prepare(q.sql).iterate(...(q.params as never[])) as Iterable<Row>) {
       take(r);
-      if ((hits.at(-1) as Hit).pass && ++passing === need.count) break;
+      if (r.cand === 1 && (hits.at(-1) as Hit).pass && ++passing === need.count) break;
     }
     return select(hits, need.count, cap);
   }
-  const q = rangeQuery(p, f, need);
+  const q = rangeQuery(db, p, f, need);
 
   // Few matches: read them all, in any order.
   const few = Math.max(5 * need.count, 2_000);
@@ -358,6 +395,7 @@ function newest(db: Database, p: Plan, f: EventFilter, need: Need): Hit[] {
     db
       .prepare('SELECT block, max_ts FROM event_block ORDER BY block DESC')
       .all() as unknown as Block[],
+    f.since,
   );
   const floor = f.since ?? Number.NEGATIVE_INFINITY;
   let cut = Number.NEGATIVE_INFINITY;
@@ -426,9 +464,10 @@ interface Chain {
 /**
  * Split the blocks (latest arrival first) into chains where an older arrival is much newer, as when
  * old sessions arrived after newer ones. Within a chain, the stream then meets hits roughly from
- * the newest, and the chains are merged by their bounds.
+ * the newest, and the chains are merged by their bounds. A chain stops at its last block that can
+ * hold an event since `since`.
  */
-function chainsOf(blocks: Block[]): Chain[] {
+function chainsOf(blocks: Block[], since?: number): Chain[] {
   const groups: Block[][] = [];
   let oldest = Number.POSITIVE_INFINITY;
   for (const b of blocks) {
@@ -443,17 +482,22 @@ function chainsOf(blocks: Block[]): Chain[] {
     }
   }
   if (groups.length > MAX_CHAINS) groups.splice(0, groups.length, blocks);
-  return groups.map((g) => chain(g));
+  return groups.map((g) => chain(g, since ?? Number.NEGATIVE_INFINITY)).filter((c) => c !== null);
 }
 
-function chain(blocks: Block[]): Chain {
-  // suffix[i]: the latest timestamp in blocks i and below.
-  const suffix = new Array<number>(blocks.length);
+function chain(all: Block[], since: number): Chain | null {
+  // suffix[i]: the latest timestamp in blocks i and below. Blocks below the last one whose suffix
+  // reaches `since` hold only older events.
+  const suffix = new Array<number>(all.length);
   let latest = Number.NEGATIVE_INFINITY;
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    latest = Math.max(latest, (blocks[i] as Block).max_ts);
+  for (let i = all.length - 1; i >= 0; i--) {
+    latest = Math.max(latest, (all[i] as Block).max_ts);
     suffix[i] = latest;
   }
+  let end = all.length;
+  while (end > 0 && (suffix[end - 1] as number) < since) end--;
+  if (end === 0) return null;
+  const blocks = all.slice(0, end);
   let at = 0;
   let pending: Row | null = null;
   let done = false;
