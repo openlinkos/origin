@@ -560,6 +560,24 @@ export function searchEvents(db: Database, query: string, filter: SearchOptions 
   });
 }
 
+/**
+ * The id of the newest visible event of `kind` that matches the query's terms and whose text
+ * `accept` takes, among at most the newest SCAN_LIMIT candidates, so that a miss costs a bounded
+ * number of reads.
+ */
+export function findNewest(
+  db: Database,
+  query: string,
+  kind: EventKind,
+  accept: (text: string) => boolean,
+): string | null {
+  const p = plan(parseQuery(query), [kind]);
+  if (!p) return null;
+  const [hit] = newest(db, p, {}, { count: 1, accept, capped: true });
+  if (!hit) return null;
+  return (db.prepare('SELECT id FROM event WHERE seq = ?').get(hit.seq) as { id: string }).id;
+}
+
 const SNIPPET_LENGTH = 200;
 const SNIPPET_LEAD = 60;
 

@@ -3,7 +3,7 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { OriginError } from './errors.js';
 import { storeName } from './identity.js';
-import { parseQuery, phraseQuery, type QueryTerm, termCheck } from './search.js';
+import { findNewest, parseQuery, phraseQuery, type QueryTerm, termCheck } from './search.js';
 import { getEvent, VISIBLE_EVENT } from './store.js';
 import type { EventRow } from './types.js';
 
@@ -314,29 +314,17 @@ export function entryHistory(db: Database, id: string): Entry[] {
 
 const normalize = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
 
-function escapeLike(s: string): string {
-  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
-}
-
 /**
- * Find the newest visible event containing a quote (whitespace and case are ignored). Tool calls are
- * never matched: the call that is citing the quote is itself logged as a tool call.
+ * Find the newest visible event containing a quote (whitespace and case are ignored): a message, or
+ * failing that a tool result. Tool calls are never matched: the call that is citing the quote is
+ * itself logged as a tool call. The quote's words are looked up like a search query, so at most the
+ * newest SCAN_LIMIT events of each kind that contain all of them are checked.
  */
 function findQuote(db: Database, quote: string): EventRow | null {
   const needle = normalize(quote);
-  const probe = quote
-    .split(/\s+/)
-    .reduce((longest, t) => (t.length > longest.length ? t : longest), '');
-  for (const kind of ['message', 'tool_result']) {
-    const rows = db
-      .prepare(
-        `SELECT e.id, e.text FROM event e
-         WHERE e.kind = ? AND e.text LIKE ? ESCAPE '\\' AND ${VISIBLE_EVENT}
-         ORDER BY e.ts DESC LIMIT 500`,
-      )
-      .all(kind, `%${escapeLike(probe)}%`) as unknown as Array<{ id: string; text: string }>;
-    const hit = rows.find((r) => normalize(r.text).includes(needle));
-    if (hit) return getEvent(db, hit.id);
+  for (const kind of ['message', 'tool_result'] as const) {
+    const id = findNewest(db, quote, kind, (text) => normalize(text).includes(needle));
+    if (id) return getEvent(db, id);
   }
   return null;
 }

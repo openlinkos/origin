@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type Database,
   type EventKind,
+  entrySources,
   forget,
+  OriginError,
   openDatabase,
   parseQuery,
   RANK_WINDOW,
@@ -459,5 +461,61 @@ describe('searchEntries terms', () => {
     expect(searchEntries(db, 'ai db').map((e) => e.id)).toEqual([ai]);
     expect(searchEntries(db, 'notes AI').map((e) => e.id)).toEqual([ai]);
     expect(searchEntries(db, 'notes XY')).toEqual([]);
+  });
+});
+
+describe('remember by quote', () => {
+  const cite = (quote: string) =>
+    entrySources(
+      db,
+      remember(db, {
+        kind: 'memory',
+        text: 'a statement',
+        confidence: 0.5,
+        author: 'test',
+        sources: [{ quote }],
+      }).id,
+    ).map((s) => s.eventId.replace('fake:', ''));
+
+  it('cites the newest message by time, whatever order the events arrived in', async () => {
+    await ingest([['new', 5000, 'We chose SQLite with FTS5 for storage.']]);
+    await ingest([['old', 1000, 'We chose SQLite with FTS5 for storage.']], 'g.jsonl');
+    expect(cite('chose sqlite with  FTS5\nfor storage')).toEqual(['new']);
+  });
+
+  it('prefers messages, falls back to tool results, and never cites tool calls', async () => {
+    await ingest([
+      ['result', 1000, 'build failed: missing semicolon in parser.ts', 'tool_result'],
+      ['msg', 2000, 'the build failed: missing semicolon in parser.ts'],
+      ['call', 3000, 'remember {"quote":"missing semicolon in parser.ts"}', 'tool_use'],
+      ['only-result', 4000, 'exit code 137 (out of memory)', 'tool_result'],
+      ['only-call', 5000, 'remember {"quote":"never in a message or result"}', 'tool_use'],
+    ]);
+    expect(cite('Missing semicolon in parser.ts')).toEqual(['msg']);
+    expect(cite('exit code 137 (out of memory)')).toEqual(['only-result']);
+    expect(() => cite('never in a message or result')).toThrow(OriginError);
+  });
+
+  it('skips forgotten events', async () => {
+    await ingest([
+      ['older', 1000, 'deploy the certificate on Friday'],
+      ['newer', 2000, 'deploy the certificate on Friday'],
+    ]);
+    forget(db, 'fake:newer');
+    expect(cite('deploy the certificate on friday')).toEqual(['older']);
+    forget(db, 'fake:older');
+    expect(() => cite('deploy the certificate on friday')).toThrow(/No event contains the quote/);
+  });
+
+  it('finds quotes of short words, CJK or not, and quotes with wildcards or quotes', async () => {
+    await ingest([
+      ['zh', 1000, '我们先部署 再换证书'],
+      ['short', 2000, 'it is ok to go'],
+      ['wild', 3000, 'coverage is 100% for a_b "quoted"'],
+    ]);
+    expect(cite('部署 再换证书')).toEqual(['zh']);
+    expect(cite('is ok to')).toEqual(['short']);
+    expect(cite('100% for a_b "quoted"')).toEqual(['wild']);
+    expect(() => cite('100% for axb')).toThrow(OriginError);
   });
 });
