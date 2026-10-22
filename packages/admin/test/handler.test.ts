@@ -475,6 +475,27 @@ describe('the admin password', () => {
   });
 });
 
+describe('breadcrumb', () => {
+  it('names the navigation group, never the host', async () => {
+    const base = await serve();
+    const b = new Browser(base);
+    await b.login(PASSWORD);
+    const crumbs = (text: string) =>
+      /<ol class="ol-breadcrumb">([\s\S]*?)<\/ol>/
+        .exec(text)?.[1]
+        ?.replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    expect(crumbs((await b.get('/admin/audit')).text)).toBe('Security Audit log');
+    expect(crumbs((await b.get('/admin/')).text)).toBe('Overview');
+    const host = new URL(base).host;
+    for (const path of ['/admin/', '/admin/sessions', '/admin/login']) {
+      const text = (await b.get(path)).text;
+      expect(crumbs(text) ?? '', path).not.toContain(host);
+    }
+  });
+});
+
 describe('language', () => {
   it('follows the cookie, then Accept-Language', async () => {
     const base = await serve();

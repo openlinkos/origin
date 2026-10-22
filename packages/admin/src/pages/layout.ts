@@ -67,17 +67,6 @@ export function csrfField(ctx: Ctx): SafeHtml {
   return html`<input type="hidden" name="_csrf" value="${ctx.session?.csrf ?? ''}">`;
 }
 
-/** The host the browser reached the hub on: the loopback name of a tunnel, or the public URL. */
-export function hubHost(ctx: Ctx): string {
-  const origin = ctx.origins.local ?? ctx.origins.public;
-  if (!origin) return 'Origin';
-  try {
-    return new URL(origin).host;
-  } catch {
-    return 'Origin';
-  }
-}
-
 export function docsUrl(ctx: Ctx, page = 'guide/admin'): string {
   return `https://origin.openlinkos.com/${ctx.lang === 'zh' ? 'zh/' : ''}${page}`;
 }
@@ -134,10 +123,15 @@ export interface PageOptions {
   bare?: boolean;
 }
 
+/**
+ * The page's place in the navigation: its sidebar group, the pages above it, then the page. The
+ * group is plain text, since it is not a page; the host is left to the browser's address bar.
+ */
 function breadcrumb(ctx: Ctx, o: PageOptions): SafeHtml {
   const crumbs = o.crumbs ?? [];
+  const group = NAV.find((g) => g.items.some((i) => i.key === o.nav))?.label;
   return html`<nav aria-label="${ctx.t('nav.breadcrumb')}"><ol class="ol-breadcrumb">
-      <li><a href="/admin/">${hubHost(ctx)}</a></li>
+      ${group ? html`<li>${ctx.t(group)}</li>` : ''}
       ${crumbs.map((c) => html`<li>${c.href ? html`<a href="${c.href}">${c.label}</a>` : c.label}</li>`)}
       <li><span aria-current="page">${o.title}</span></li>
     </ol></nav>`;
@@ -206,7 +200,6 @@ function authShell(ctx: Ctx, o: PageOptions): SafeHtml {
     <div class="ol-auth-rings" aria-hidden="true"></div>
     <a class="ol-auth-brand" href="/admin/"><img src="${ctx.assets.url('logo-dark.svg')}" alt="" width="24" height="24"><span>Origin</span></a>
     <p class="ol-auth-statement">${t('auth.statement')}</p>
-    <p class="ol-auth-meta">${hubHost(ctx)}</p>
   </aside>`;
   return html`<main class="ol-auth" id="main">
   ${o.bare ? aside : ''}
