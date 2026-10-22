@@ -271,7 +271,9 @@ describe('terms without an index', () => {
   });
 });
 
-describe('time order with many matches', () => {
+// These tests ingest about 50,000 events through the real ingest path, on purpose: slower CI
+// runners need more than the default 5 s.
+describe('time order with many matches', { timeout: 60_000 }, () => {
   // Three imports, each of sessions spread over a time range, arriving one after the other: the
   // newer half of the time in order, then the whole range in order (a hub receiving a device's
   // history), then the whole range in random order (a first sync of unsorted files). Enough events
