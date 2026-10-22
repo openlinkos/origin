@@ -485,7 +485,11 @@ function showEntry(ctx: Ctx, id: string): number {
   if (e.validFrom !== null || e.validTo !== null) {
     console.log(`Valid       ${fmtDateTime(e.validFrom)} → ${fmtDateTime(e.validTo)}`);
   }
-  if (history.length > 1) console.log(`History     ${history.join(' → ')}`);
+  if (e.status === 'superseded') {
+    const why = e.concurrent ? ', after a concurrent correction' : '';
+    console.log(`Current     ${e.supersededBy}${why}`);
+  }
+  if (history.length > 1) console.log(`History     ${history.join(', ')}`);
   console.log(`\n${e.text}\n\nSources:`);
   for (const s of entrySources(ctx.db, id)) {
     console.log(
@@ -577,8 +581,8 @@ async function cmdForget(ctx: Ctx, args: string[]): Promise<number> {
     console.log('\nForgetting cannot be undone. Re-run with --yes to confirm.');
     return 1;
   }
-  forget(ctx.db, id, values.reason);
-  console.log(`Forgot ${summary}.`);
+  const done = forget(ctx.db, id, values.reason);
+  console.log(`Forgot ${summary} (tombstone ${done.tombstoneId}).`);
   await syncAfterChange(ctx);
   return 0;
 }
