@@ -70,14 +70,14 @@ export const en = {
     'What this hub holds, which devices push to it, and whether anything needs attention.',
   'overview.countsTitle': 'At a glance',
   'overview.events': 'Events',
-  'overview.eventsMeta': 'from {n} sources',
+  'overview.eventsMeta': 'from {n} {n|source|sources}',
   'overview.sessions': 'Sessions',
   'overview.latestActivity': 'last active',
   'overview.noSessions': 'No sessions yet',
   'overview.entries': 'Entries',
   'overview.entriesMeta': '{memory} memory, {knowledge} knowledge, {cognition} cognition',
   'overview.devices': 'Devices',
-  'overview.devicesMeta': '{n} active tokens',
+  'overview.devicesMeta': '{n} active {n|token|tokens}',
   'overview.tombstones': 'Forgotten',
   'overview.tombstonesMeta': 'ids and counts only',
   'overview.devicesTitle': 'Devices',
@@ -93,7 +93,7 @@ export const en = {
   'overview.parseErrors': 'Parse errors',
   'overview.parseErrorsValue': '{day} in 24 h, {week} in 7 days',
   'overview.parseErrors24h':
-    '{n} lines could not be parsed in the last 24 hours. An agent may have changed its log format.',
+    '{n} {n|line|lines} could not be parsed in the last 24 hours. An agent may have changed its log format.',
   'overview.local': 'this store',
   'overview.version': 'Version',
   'overview.uptime': 'Uptime',
@@ -103,7 +103,7 @@ export const en = {
   'overview.mirrorsLocal': 'Raw mirrors, this store',
   'overview.mirrorsRemote': 'Raw mirrors, from devices',
   'overview.freeDisk': 'Free disk space',
-  'overview.staleDevices': '{n} device(s) have sent nothing for more than 24 hours.',
+  'overview.staleDevices': '{n} {n|device has|devices have} sent nothing for more than 24 hours.',
 
   'devices.help': 'Devices push their raw session mirrors to this hub with origin push.',
   'devices.noneTitle': 'No devices yet',
@@ -189,7 +189,7 @@ export const en = {
   'sessions.id': 'Session id',
   'sessions.time': 'Time',
   'sessions.cwd': 'Working directory',
-  'sessions.eventCount': '{n} events',
+  'sessions.eventCount': '{n} {n|event|events}',
   'sessions.view': 'Events shown',
   'sessions.conversation': 'Conversation',
   'sessions.withTools': 'With tool calls',
@@ -286,7 +286,8 @@ export const en = {
   'forget.title': 'Forget',
   'forget.warning':
     'Forgetting cannot be undone. The items below disappear from search, timelines, and every agent, on this hub and on every device after its next push.',
-  'forget.summary': 'This will forget {entries} entries and {events} events',
+  'forget.summary':
+    'This will forget {entries} {entries|entry|entries} and {events} {events|event|events}',
   'forget.rules':
     'Forgetting an entry forgets every version of it and hides the events it cites. Forgetting an event hides it and forgets every entry that cites it. An entry left with no visible source is forgotten too.',
   'forget.entries': 'Entries',
@@ -298,7 +299,8 @@ export const en = {
   'forget.submit': 'Forget for good',
   'forget.already': '{id} has already been forgotten.',
   'forget.doneTitle': 'Forgotten',
-  'forget.done': 'Forgot {entries} entries and {events} events (tombstone #{tombstone}).',
+  'forget.done':
+    'Forgot {entries} {entries|entry|entries} and {events} {events|event|events} (tombstone #{tombstone}).',
   'forget.propagates': 'Each device applies this on its next push.',
 
   'pager.label': 'Pages',
@@ -339,8 +341,8 @@ export const en = {
   'signins.lastSeen': 'Last active',
   'signins.thisSession': 'this session',
   'signins.revoke': 'Sign out',
-  'signins.revokeOthers': 'Sign out the {n} other session(s)',
-  'signins.revokedNotice': 'Signed out {n} session(s).',
+  'signins.revokeOthers': 'Sign out the {n} other {n|session|sessions}',
+  'signins.revokedNotice': 'Signed out {n} {n|session|sessions}.',
   'signins.cliHint':
     'On the hub, origin admin sessions --revoke-all signs out every session, and so does setting a new password with origin admin password.',
 } as const;

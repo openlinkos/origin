@@ -70,6 +70,30 @@ describe('i18n', () => {
     );
     expect(translator('zh')('auth.tooMany', { min: 3 })).toBe('失败次数过多，请在 3 分钟后重试。');
   });
+
+  it('makes English words agree with their counts', () => {
+    const t = translator('en');
+    expect(t('forget.summary', { entries: 1, events: 1 })).toBe(
+      'This will forget 1 entry and 1 event',
+    );
+    expect(t('forget.summary', { entries: 2, events: 0 })).toBe(
+      'This will forget 2 entries and 0 events',
+    );
+    expect(t('overview.staleDevices', { n: 1 })).toMatch(/^1 device has sent/);
+    expect(translator('zh')('forget.summary', { entries: 1, events: 2 })).toBe(
+      '将遗忘 1 个条目和 2 个事件',
+    );
+  });
+
+  it('leaves no English count without its plural form', () => {
+    for (const [key, text] of Object.entries(en)) {
+      expect(text, key).not.toMatch(/\(s\)/);
+      for (const m of text.matchAll(/\{(n|count|entries|events)\} ([a-z]+s)\b/g)) {
+        // A count followed by a plural noun must use {n|one|other}.
+        expect(['n characters'], `${key}: ${m[0]}`).toContain(`${m[1]} ${m[2]}`);
+      }
+    }
+  });
 });
 
 describe('brand', () => {

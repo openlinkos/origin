@@ -12,14 +12,21 @@ export const MESSAGES: Record<Lang, Messages> = { en, zh };
 
 export type Translate = (key: MessageKey, params?: Record<string, string | number>) => string;
 
+/**
+ * Messages take `{name}` parameters, and `{name|one|other}` for a word that agrees with a count:
+ * `{n} {n|session|sessions}`. English uses it; Chinese has no plural forms and needs none.
+ */
 export function translator(lang: Lang): Translate {
   const messages = MESSAGES[lang];
+  const plural = new Intl.PluralRules(HTML_LANG[lang]);
   return (key, params) => {
     const text = messages[key] ?? en[key];
     if (!params) return text;
-    return text.replace(/\{(\w+)\}/g, (m, name: string) =>
-      name in params ? String(params[name]) : m,
-    );
+    return text
+      .replace(/\{(\w+)\|([^|{}]*)\|([^|{}]*)\}/g, (m, name: string, one: string, other: string) =>
+        name in params ? (plural.select(Number(params[name])) === 'one' ? one : other) : m,
+      )
+      .replace(/\{(\w+)\}/g, (m, name: string) => (name in params ? String(params[name]) : m));
   };
 }
 
