@@ -1,8 +1,5 @@
 <h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://openlinkos.com/brand/origin/github/readme-dark.svg">
-    <img alt="Origin" src="https://openlinkos.com/brand/origin/github/readme-light.svg" height="48">
-  </picture>
+  <img alt="Origin" src="https://openlinkos.com/brand/origin/github/readme.svg" height="56">
 </h1>
 
 **本地优先、跨 Agent 的个人记忆，服务于 AI 编码 Agent。**
