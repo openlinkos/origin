@@ -35,7 +35,14 @@ export async function startTestHub(): Promise<TestHub> {
   await syncSource({ db, home }, fakeAdapter(src));
 
   const hub = { delayMs: 0 };
-  const server = http.createServer(async (req, res) => {
+  const server = http.createServer((req, res) => {
+    handle(req, res).catch((err: unknown) => {
+      // A client that gave up waiting (the hub-timeout tests) closes the connection mid-request.
+      if (req.destroyed || res.destroyed) return;
+      res.writeHead(500).end(String(err));
+    });
+  });
+  const handle = async (req: http.IncomingMessage, res: http.ServerResponse) => {
     if (hub.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, hub.delayMs));
     if (new URL(req.url ?? '/', 'http://x').pathname !== '/mcp') {
       res.writeHead(404).end();
@@ -61,7 +68,7 @@ export async function startTestHub(): Promise<TestHub> {
       home,
       author: `${typeof client === 'string' ? client : 'mcp'}@${typeof device === 'string' ? device : 'test'}`,
     });
-  });
+  };
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
 
