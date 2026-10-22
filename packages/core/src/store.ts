@@ -298,18 +298,22 @@ export interface SourceStats {
   files: number;
 }
 
+/**
+ * Totals per source. Sessions, events, and the time range come from the derived session table,
+ * which aggregates visible events only, so this never scans the events themselves.
+ */
 export function stats(db: Database): SourceStats[] {
   const rows = db
     .prepare(
-      `SELECT e.source AS source,
-              COUNT(DISTINCT e.session_id) AS sessions,
-              COUNT(*) AS events,
-              MIN(e.ts) AS first_ts,
-              MAX(e.ts) AS last_ts,
-              (SELECT COUNT(*) FROM raw_file r WHERE r.source = e.source) AS files,
-              (SELECT finished_at FROM sync_log s WHERE s.source = e.source ORDER BY id DESC LIMIT 1) AS last_sync_at,
-              (SELECT events_added FROM sync_log s WHERE s.source = e.source ORDER BY id DESC LIMIT 1) AS last_added
-       FROM event e WHERE ${VISIBLE_EVENT} GROUP BY e.source ORDER BY e.source`,
+      `SELECT s.source AS source,
+              COUNT(*) AS sessions,
+              SUM(s.event_count) AS events,
+              MIN(s.started_at) AS first_ts,
+              MAX(s.ended_at) AS last_ts,
+              (SELECT COUNT(*) FROM raw_file r WHERE r.source = s.source) AS files,
+              (SELECT finished_at FROM sync_log l WHERE l.source = s.source ORDER BY id DESC LIMIT 1) AS last_sync_at,
+              (SELECT events_added FROM sync_log l WHERE l.source = s.source ORDER BY id DESC LIMIT 1) AS last_added
+       FROM session s WHERE s.event_count > 0 GROUP BY s.source ORDER BY s.source`,
     )
     .all() as unknown as Array<{
     source: string;

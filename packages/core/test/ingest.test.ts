@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type Database,
+  forget,
   getEvent,
   listEvents,
   listSessions,
@@ -14,6 +15,7 @@ import {
   stats,
   syncSource,
 } from '../src/index.js';
+import { VISIBLE_EVENT } from '../src/store.js';
 import { fakeAdapter, line } from './helpers.js';
 
 let home: string;
@@ -141,6 +143,37 @@ describe('syncSource', () => {
     expect(listSessions(db)[0]?.title).toBe('打招呼');
     const s = stats(db);
     expect(s[0]).toMatchObject({ source: 'fake', sessions: 1, events: 1, files: 1 });
+  });
+
+  it('counts visible sessions and events per source, as a scan of the events would', async () => {
+    fs.writeFileSync(
+      path.join(src, 'h.jsonl'),
+      line('1', 'h1', 5000, 'user', 'one') +
+        line('2', 'h1', 1000, 'assistant', 'two') +
+        line('3', 'h2', 7000, 'user', 'three') +
+        line('4', 'h3', 3000, 'user', 'only event of h3') +
+        `${JSON.stringify({ session: 'h4', title: 'a title without events' })}\n`,
+    );
+    await syncSource({ db, home }, fakeAdapter(src));
+    forget(db, 'fake:4');
+    forget(db, 'fake:3');
+    const scan = db
+      .prepare(
+        `SELECT source, COUNT(DISTINCT session_id) AS sessions, COUNT(*) AS events, MIN(ts) AS first,
+                MAX(ts) AS last
+         FROM event e WHERE ${VISIBLE_EVENT} GROUP BY source`,
+      )
+      .all();
+    expect(stats(db)).toEqual([
+      expect.objectContaining({
+        source: 'fake',
+        sessions: 1,
+        events: 2,
+        firstTs: 1000,
+        lastTs: 5000,
+      }),
+    ]);
+    expect(scan).toEqual([{ source: 'fake', sessions: 1, events: 2, first: 1000, last: 5000 }]);
   });
 });
 

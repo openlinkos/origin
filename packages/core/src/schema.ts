@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS sync_log (
   note          TEXT
 );
 CREATE INDEX IF NOT EXISTS sync_log_finished ON sync_log (finished_at);
+CREATE INDEX IF NOT EXISTS sync_log_source   ON sync_log (source, id);
 
 CREATE TABLE IF NOT EXISTS entry (
   id         TEXT    PRIMARY KEY,
