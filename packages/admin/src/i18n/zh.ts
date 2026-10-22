@@ -233,6 +233,7 @@ export const zh: Messages = {
   'status.active': '有效',
   'status.superseded': '已取代',
   'status.forgotten': '已遗忘',
+  'status.concurrent': '并发修改',
 
   'entries.title': '条目',
   'entries.help': '由你的 Agent 或你自己保存的持久陈述。每个条目都引用它所来自的事件。',
@@ -249,6 +250,8 @@ export const zh: Messages = {
   'entry.correct': '纠正',
   'entry.forget': '遗忘',
   'entry.supersededBy': '这个条目已被更新的版本取代：',
+  'entry.concurrent': '这个版本输给了一次并发纠正：几乎同时在另一个库上做出的纠正。当前版本是',
+  'entry.origin': '写入于',
   'entry.details': '详情',
   'entry.status': '状态',
   'entry.valid': '有效期',

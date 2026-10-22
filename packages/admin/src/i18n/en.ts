@@ -242,6 +242,7 @@ export const en = {
   'status.active': 'active',
   'status.superseded': 'superseded',
   'status.forgotten': 'forgotten',
+  'status.concurrent': 'concurrent edit',
 
   'entries.title': 'Entries',
   'entries.help':
@@ -260,6 +261,9 @@ export const en = {
   'entry.correct': 'Correct',
   'entry.forget': 'Forget',
   'entry.supersededBy': 'A newer version replaces this entry:',
+  'entry.concurrent':
+    'This version lost to a concurrent correction, made on another store at about the same time. The current version is',
+  'entry.origin': 'Written on',
   'entry.details': 'Details',
   'entry.status': 'Status',
   'entry.valid': 'Valid',

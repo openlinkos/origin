@@ -6,13 +6,16 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createClaudeCodeAdapter } from '@openlinkos/origin-adapters';
 import {
+  correct,
   createToken,
   type Database,
   getEntry,
   getEvent,
   getSetting,
+  initStoreName,
   listAudit,
   openDatabase,
+  remember,
   type ScryptParams,
   setAdminPassword,
   syncSource,
@@ -74,6 +77,7 @@ beforeEach(async () => {
   deviceHome = path.join(tmp, 'device');
   hubDb = openDatabase(path.join(hubHome, 'origin.db'));
   deviceDb = openDatabase(path.join(deviceHome, 'origin.db'));
+  initStoreName(deviceDb, 'laptop');
   await setAdminPassword(hubDb, PASSWORD, { params: FAST });
   extra = [];
   hub = await startHub({
@@ -574,5 +578,39 @@ describe('admin UI on the hub', () => {
     expect(listAudit(hubDb, { action: 'entry.correct' })).toMatchObject([
       { target: oldId, detail: { newId } },
     ]);
+  });
+
+  it('shows where each version was written and marks concurrent corrections', async () => {
+    const b = await signedIn();
+    const first = remember(
+      deviceDb,
+      {
+        kind: 'memory',
+        text: 'Checked the repository.',
+        confidence: 0.5,
+        author: 'claude-code@laptop',
+        sources: [{ eventId: USER_EVENT }],
+      },
+      1_000,
+    );
+    await push();
+    const onHub = correct(hubDb, first.id, { text: 'Hub version.', author: 'user@hub' }, 2_000);
+    const onDevice = correct(
+      deviceDb,
+      first.id,
+      { text: 'Device version.', author: 'user@laptop' },
+      3_000,
+    );
+    await push();
+
+    const lost = await b.get(`/admin/entry?id=${onHub.id}`);
+    expect(lost.status).toBe(200);
+    expect(lost.text).toContain('lost to a concurrent correction');
+    expect(lost.text).toContain(onDevice.id);
+    expect(lost.text).toContain('concurrent edit');
+    const original = await b.get(`/admin/entry?id=${first.id}`);
+    expect(original.text).toContain('Written on');
+    expect(original.text).toContain('<dd>laptop</dd>');
+    expect((await b.get(`/admin/entry?id=${onHub.id}`)).text).toContain('<dd>hub</dd>');
   });
 });

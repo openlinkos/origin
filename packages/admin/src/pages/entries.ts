@@ -94,7 +94,7 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
       badges: html`${kindBadge(ctx, e.kind)}${statusBadge(ctx, e.status)}`,
       actions: html`${e.status === 'active' ? linkButton(ctx, { href: href('correct', { id: e.id }), label: t('entry.correct'), icon: 'pencil' }) : ''}${linkButton(ctx, { href: href('forget', { id: e.id }), label: t('entry.forget'), icon: 'eraser', variant: 'danger-soft' })}`,
     })}
-    ${e.status === 'superseded' && e.supersededBy ? html`<div class="ol-notices">${alert(ctx, 'info', html`${t('entry.supersededBy')} <a class="ol-mono" href="${href('entry', { id: e.supersededBy })}">${e.supersededBy}</a>`)}</div>` : ''}
+    ${e.status === 'superseded' && e.supersededBy ? html`<div class="ol-notices">${alert(ctx, 'info', html`${t(e.concurrent ? 'entry.concurrent' : 'entry.supersededBy')} <a class="ol-mono" href="${href('entry', { id: e.supersededBy })}">${e.supersededBy}</a>`)}</div>` : ''}
     <div class="ol-grid ol-grid-sidebar ol-section">
       <section class="ol-panel">
         <h2 class="ol-sr-only">${t('entries.text')}</h2>
@@ -109,6 +109,7 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
           <dt>${t('entry.status')}</dt><dd>${t(`status.${e.status}`)}</dd>
           <dt>${t('entries.confidence')}</dt><dd>${e.confidence}</dd>
           <dt>${t('entries.author')}</dt><dd>${e.author}</dd>
+          <dt>${t('entry.origin')}</dt><dd>${e.origin}</dd>
           <dt>${t('filter.project')}</dt><dd>${e.project ?? '—'}</dd>
           <dt>${t('tokens.created')}</dt><dd>${time(e.createdAt)}</dd>
           ${e.validFrom !== null || e.validTo !== null ? html`<dt>${t('entry.valid')}</dt><dd>${time(e.validFrom)} – ${time(e.validTo)}</dd>` : ''}
@@ -136,7 +137,7 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
                 (v) => html`<tr${v.id === e.id ? html` aria-selected="true"` : ''}>
             <td>${v.id === e.id ? html`<span class="ol-cell-title">${clip(v.text, 300)}</span>` : html`<a class="ol-cell-title" href="${href('entry', { id: v.id })}">${clip(v.text, 300)}</a>`}<span class="ol-cell-sub ol-mono">${v.id}</span></td>
             <td>${v.author}</td>
-            <td>${v.status === 'active' ? badge(t('status.active'), 'success', { dot: true }) : statusBadge(ctx, v.status)}</td>
+            <td>${v.status === 'active' ? badge(t('status.active'), 'success', { dot: true }) : v.concurrent ? badge(t('status.concurrent'), 'neutral') : statusBadge(ctx, v.status)}</td>
             <td class="ol-nowrap">${time(v.createdAt)}</td>
           </tr>`,
               ),

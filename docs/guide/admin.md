@@ -10,7 +10,7 @@ A [personal hub](./hub.md) can serve a web interface for you, its owner. From a 
 - **Timeline and sessions**: every session, and the events of one session in order. Tool calls and results are hidden unless you ask for them.
 - **Events** with their provenance: the device, the original file, the generation, and the mirror line. The original raw line is shown only when you ask for it, shortened to 4,000 characters.
 - **Search** across entries and events.
-- **Entries**: browse them with their sources and version history, **correct** an entry (a new version replaces it; the old one stays in the history), and **remember** a new entry from an event page, citing that event. Entries you write are recorded with the author `user@hub` (`user@` and the hub's name), as `origin correct` records `user@` and the device's name.
+- **Entries**: browse them with their sources and version history (where each version was written, and which versions lost to a concurrent correction), **correct** an entry (a new version replaces it; the old one stays in the history), and **remember** a new entry from an event page, citing that event. Entries you write are recorded with the author `user@hub` (`user@` and the hub's name), as `origin correct` records `user@` and the device's name.
 - **Forget** an entry or an event: the UI first shows exactly which entries and events will be forgotten, and you confirm by typing the id. Forgetting works as everywhere else (see [Privacy and your data](./privacy.md#forgetting)) and reaches every device on its next sync.
 - **Forgotten** (the tombstone each forget operation leaves), the **audit log**, and your open **sign-ins**.
 
