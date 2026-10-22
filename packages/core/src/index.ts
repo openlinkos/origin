@@ -21,6 +21,7 @@ export {
   listAudit,
   recordAudit,
 } from './audit.js';
+export { type BackupResult, backupStore } from './backup.js';
 export { type Database, openDatabase, openMemoryDatabase, transaction } from './db.js';
 export {
   type CorrectInput,

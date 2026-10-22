@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-9c1ea43d
+sourceHash: sha256-e09f556b
 ---
 
 # 命令参考
@@ -15,6 +15,7 @@ origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
 origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
 origin forget    <id> [--reason <text>] [--yes]        永久遗忘条目或事件（需加 --yes 确认）
 origin projects                                        已知的项目名
+origin backup    <dir>                                 把数据库和原始镜像备份到 <dir>（增量）
 origin mcp                                             以 stdio 运行 MCP server（接入中枢后补充中枢的回答）
 
 origin serve     [--host 127.0.0.1] [--port 7077]      把本库作为个人中枢运行（MCP over HTTP）

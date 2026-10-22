@@ -27,7 +27,7 @@ docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data ghcr.io/openli
 curl http://localhost:7077/healthz
 ```
 
-Inside the container, `ORIGIN_HOME` is `/data`, and the hub listens on `0.0.0.0:7077`. Keep the `/data` volume, because it holds the whole store.
+Inside the container, `ORIGIN_HOME` is `/data`, and the hub listens on `0.0.0.0:7077`. Keep the `/data` volume, because it holds the whole store; to back it up, see [Backing up](./privacy.md#backing-up).
 
 From source, on any machine with Origin installed:
 

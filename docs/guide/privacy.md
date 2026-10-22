@@ -35,6 +35,18 @@ A [personal hub](./hub.md) changes where your data lives:
 - **The audit log records clients.** Sign-ins and administrative actions are logged on the hub with the client's address and the browser's user agent, but never with entry or event text.
 - **A CDN sees decrypted traffic.** A CDN or proxy that terminates TLS sees everything that passes through it: what devices push, what agents read, and what the admin UI shows you. Prefer [private access](./admin.md#private-access) to the admin UI if that matters to you.
 
+## Backing up
+
+`origin backup <dir>` backs up a store into a directory, even while agents or the hub keep using it:
+
+```bash
+origin backup /backups/origin
+```
+
+It first copies `origin.db` with SQLite's online backup in a single step, so that the copy is one consistent snapshot, and then the `raw/` mirrors. Mirrors only grow, so running it again into the same directory copies only what is new. To restore, copy the directory into an empty `ORIGIN_HOME` (on a hub, the `/data` volume). Like the store, a backup keeps the raw lines of forgotten events. It needs Node.js 22.16 or later.
+
+Other ways of copying a large database that is in use are slower or unsafe. `VACUUM INTO` rebuilds every table and index, which takes many times longer (about 13 minutes rather than 40 seconds for a 20 GB database). The `.backup` command of `sqlite3` copies in small steps and starts over whenever another process writes, which Origin does every few seconds while agents run. A plain copy of the file is consistent only when no Origin process is running, because recent writes may still be in `origin.db-wal`.
+
 ## Removing everything
 
 Delete `~/.origin` (or your `ORIGIN_HOME`). Without a hub, Origin keeps nothing anywhere else; with a hub, also delete the hub's data directory (`/data` in the container) and revoke the device's token. Also remove the MCP registration from your agents (for Claude Code: `claude mcp remove --scope user origin`).

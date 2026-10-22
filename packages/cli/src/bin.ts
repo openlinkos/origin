@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import { adapterById, allAdapters, KNOWN_SOURCE_IDS } from '@openlinkos/origin-adapters';
 import { parseListen, parsePublicUrl } from '@openlinkos/origin-admin';
 import {
+  backupStore,
   correct,
   createToken,
   type Database,
@@ -79,6 +80,7 @@ Usage:
   origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
   origin forget    <id> [--reason <text>] [--yes]        Forget an entry or event for good (needs --yes)
   origin projects                                        Known project names
+  origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
   origin mcp                                             Run the MCP server over stdio (forwards to the hub when connected)
 
 Personal hub:
@@ -155,6 +157,8 @@ async function main(argv: string[]): Promise<number> {
         return await cmdForget(ctx, rest);
       case 'projects':
         return cmdProjects(ctx);
+      case 'backup':
+        return await cmdBackup(ctx, rest);
       case 'mcp':
         return await cmdMcp(ctx);
       case 'serve':
@@ -602,6 +606,20 @@ function cmdProjects(ctx: Ctx): number {
   return 0;
 }
 
+async function cmdBackup(ctx: Ctx, args: string[]): Promise<number> {
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  const target = positionals[0];
+  if (!target || positionals.length > 1) {
+    console.error('Usage: origin backup <dir>');
+    return 2;
+  }
+  const r = await backupStore(ctx.db, ctx.home, target);
+  console.log(
+    `Backed up the database (${fmtBytes(r.databaseBytes)}) and ${count(r.mirrorFiles, 'mirror file')} (${fmtBytes(r.mirrorBytesCopied)} new) to ${target}.`,
+  );
+  return 0;
+}
+
 async function cmdMcp(ctx: Ctx): Promise<number> {
   const log = (m: string) => console.error(`origin: ${m}`);
   const hub = hubOf(ctx);
@@ -940,7 +958,8 @@ async function checkHub(hub: { url: string; token: string; device: string }): Pr
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 main(process.argv.slice(2)).then(
