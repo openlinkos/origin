@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-8cf188c9
+sourceHash: sha256-bd89553e
 ---
 
 # 架构
@@ -267,7 +267,7 @@ interface SourceAdapter {
 中枢可以为它的主人提供一个 Web 界面。它默认关闭；它是同一个库的一个视图，而不是另一套系统：每个页面、每次 JSON 调用都经过 MCP 和 CLI 所用的同一组 core 操作（不变量 5）。`@openlinkos/origin-admin` 包提供一个请求处理函数，由中枢挂载。
 
 - **提供方式。** `origin serve --admin` 把界面挂载在中枢端口的 `/admin` 下；`origin serve --admin-listen 127.0.0.1:7078` 则改在一个单独的监听地址上提供，通过 SSH 隧道或 `kubectl port-forward` 访问。如果界面会在非回环地址上提供，除非 `--public-url`（`ORIGIN_PUBLIC_URL`）是 https URL，或者是回环主机上的 http URL（例如发布在 `127.0.0.1` 上的容器端口），否则中枢拒绝启动。没有公开 URL 时，界面只响应发往回环主机名的回环连接，这同时也能防御 DNS 重绑定。界面未启用时，`/admin` 返回 404。
-- **登录。** 每个中枢只有一个管理密码，没有用户名。设置了 `ORIGIN_ADMIN_PASSWORD` 时，它就是管理密码，并且优先于其他来源；它至少要有 12 个字符，否则中枢拒绝启动。否则，管理密码在中枢上用 `origin admin password` 设置（在终端中输入两次，或从标准输入读取一行），或用 `origin admin password --generate` 生成。如果中枢在启用管理界面的情况下启动时两者都没有，它会生成一个密码（20 个随机 base32 字符，100 位），保存它的哈希，并在日志中只打印这一次。没有首次访问时的设置向导，所以新建的中枢不会被第一个访问到它的人占用。密码以 scrypt 哈希的形式（N = 2^15、r = 8、p = 3，随机的 16 字节盐）写成 `scrypt$N$r$p$<salt>$<hash>`，保存在只留在中枢上的 `setting` 中；中枢也会保存 `ORIGIN_ADMIN_PASSWORD` 的这种哈希，以便发现它是否变化。校验逐个进行，并以恒定时间比较。管理密码和中枢令牌互不接受：密码不能以 `ogn_` 开头，`/mcp` 和 `/v1/*` 只接受 bearer 令牌，`/admin` 只接受它自己的会话 cookie。
+- **登录。** 每个中枢只有一个管理密码，没有用户名。设置了 `ORIGIN_ADMIN_PASSWORD` 时，它就是管理密码，并且优先于其他来源；它至少要有 10 个字符，否则中枢拒绝启动。否则，管理密码在中枢上用 `origin admin password` 设置（在终端中输入两次，或从标准输入读取一行），或用 `origin admin password --generate` 生成。如果中枢在启用管理界面的情况下启动时两者都没有，它会生成一个密码（20 个随机 base32 字符，100 位），保存它的哈希，并在日志中只打印这一次。没有首次访问时的设置向导，所以新建的中枢不会被第一个访问到它的人占用。密码以 scrypt 哈希的形式（N = 2^15、r = 8、p = 3，随机的 16 字节盐）写成 `scrypt$N$r$p$<salt>$<hash>`，保存在只留在中枢上的 `setting` 中；中枢也会保存 `ORIGIN_ADMIN_PASSWORD` 的这种哈希，以便发现它是否变化。校验逐个进行，并以恒定时间比较。管理密码和中枢令牌互不接受：密码不能以 `ogn_` 开头，`/mcp` 和 `/v1/*` 只接受 bearer 令牌，`/admin` 只接受它自己的会话 cookie。
 - **会话。** 会话保存在服务器端的 `admin_session` 中，以会话 id 的哈希为键。会话在 30 分钟没有请求或登录满 12 小时后结束；管理密码变化时，所有会话都会结束：用 `origin admin password` 设置新密码时，以及中枢启动时 `ORIGIN_ADMIN_PASSWORD` 与上次不同，或者在它和保存的密码之间切换时。在 https 公开 URL 之后，cookie 是 `__Host-origin-admin`（Secure、HttpOnly、SameSite=Lax）；在回环 http 上，cookie 是 `origin-admin`（HttpOnly、SameSite=Strict，路径 `/admin`）。在 https 公开 URL 之后，普通 cookie 只在回环隧道上有效，所以从兄弟子域名种下的 cookie 无法固定会话。创建或吊销令牌、遗忘、结束会话，要求最近 10 分钟内输入过密码。
 - **请求。** 只有 GET 和 POST，所有写操作都是 POST。POST 需要会话的 CSRF 令牌（表单字段 `_csrf` 或请求头 `X-CSRF-Token`），以及与中枢源相同的 `Origin` 请求头；带有 `Sec-Fetch-Site: cross-site` 的请求会被拒绝。请求体上限为 64 KiB。密码校验失败的次数受到限制：每个客户端每 10 分钟 10 次，总计每 10 分钟 100 次（返回 429 和 `Retry-After`）；只有设置了 `ORIGIN_CLIENT_IP_HEADER` 时才从该请求头取客户端地址，否则取连接的地址。在代理或 CDN 之后，必须设置这个请求头：否则所有客户端共用代理的地址和同一个限额，任何人的失败尝试都可能把主人锁在外面。
 - **响应。** 页面在服务器端由一个对每个插值都做转义的模板渲染；一小段脚本提供一些便利，例如就地加载原始行，但没有页面依赖它。每个响应都带有严格的 Content-Security-Policy（没有内联脚本或样式，启用 Trusted Types 且不允许任何策略）、`Cache-Control: no-store, private`、`Vary: Cookie`，以及防止嵌入、类型嗅探、引用来源泄露和被搜索引擎收录的请求头；在 https 之后还带有 HSTS。没有第三方资源，界面也从不发起外部请求。

@@ -370,7 +370,7 @@ describe('admin UI on the hub', () => {
     ]);
 
     await expect(start('too-short')).rejects.toThrow(
-      /ORIGIN_ADMIN_PASSWORD must be at least 12 characters/,
+      /ORIGIN_ADMIN_PASSWORD must be at least 10 characters/,
     );
   });
 

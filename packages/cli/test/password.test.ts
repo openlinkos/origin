@@ -42,7 +42,7 @@ describe('origin admin password', () => {
     );
     await expect(
       readNewPassword({ input: piped('hunter2\n'), output: new PassThrough() }),
-    ).rejects.toThrow(/at least 12 characters/);
+    ).rejects.toThrow(/at least 10 characters/);
   });
 
   it('asks twice on a terminal without echoing what is typed', async () => {
@@ -63,7 +63,7 @@ describe('origin admin password', () => {
     });
     await expect(readNewPassword(mismatch.io)).rejects.toThrow(/do not match/);
     const short = terminal({ 'New admin password: ': 'short' });
-    await expect(readNewPassword(short.io)).rejects.toThrow(/at least 12 characters/);
+    await expect(readNewPassword(short.io)).rejects.toThrow(/at least 10 characters/);
     expect(short.shown()).not.toContain('Repeat it');
   });
 });

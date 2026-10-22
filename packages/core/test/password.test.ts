@@ -81,19 +81,19 @@ describe('admin password hashes', () => {
 });
 
 describe('admin passwords', () => {
-  it('need at least 12 characters, no surrounding whitespace, and no token prefix', () => {
-    expect(ADMIN_PASSWORD_MIN_LENGTH).toBe(12);
-    expect(() => checkAdminPassword('a'.repeat(11))).toThrow(/at least 12 characters/);
-    expect(() => checkAdminPassword('a'.repeat(12))).not.toThrow();
+  it('need at least 10 characters, no surrounding whitespace, and no token prefix', () => {
+    expect(ADMIN_PASSWORD_MIN_LENGTH).toBe(10);
+    expect(() => checkAdminPassword('a'.repeat(9))).toThrow(/at least 10 characters/);
+    expect(() => checkAdminPassword('a'.repeat(10))).not.toThrow();
     // Characters, not UTF-16 code units.
-    expect(() => checkAdminPassword('密'.repeat(12))).not.toThrow();
-    expect(() => checkAdminPassword('😀'.repeat(6))).toThrow(/at least 12/);
+    expect(() => checkAdminPassword('密'.repeat(10))).not.toThrow();
+    expect(() => checkAdminPassword('😀'.repeat(5))).toThrow(/at least 10/);
     expect(() => checkAdminPassword(`${PASSWORD}\n`)).toThrow(/line break/);
     expect(() => checkAdminPassword(` ${PASSWORD}`)).toThrow(/space/);
     expect(() => checkAdminPassword('a'.repeat(1025))).toThrow(/at most/);
     expect(() => checkAdminPassword(`ogn_${'a'.repeat(43)}`)).toThrow(/ogn_/);
     expect(() => checkAdminPassword('short', 'ORIGIN_ADMIN_PASSWORD')).toThrow(
-      /^ORIGIN_ADMIN_PASSWORD must be at least 12 characters long\.$/,
+      /^ORIGIN_ADMIN_PASSWORD must be at least 10 characters long\.$/,
     );
   });
 
@@ -215,7 +215,7 @@ describe('the admin credential at startup', () => {
 
   it('refuses an ORIGIN_ADMIN_PASSWORD that is too short', async () => {
     await expect(prepareAdminCredential(db, { envPassword: 'hunter2' })).rejects.toThrow(
-      /ORIGIN_ADMIN_PASSWORD must be at least 12 characters/,
+      /ORIGIN_ADMIN_PASSWORD must be at least 10 characters/,
     );
     expect(getSetting(db, 'admin.credential')).toBeNull();
     expect(hasStoredAdminPassword(db)).toBe(false);

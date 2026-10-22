@@ -87,7 +87,7 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 - Once a device is connected, `origin mcp` forwards every tool call to the hub, after pushing new session lines.
 - Curation commands (`entries`, `show`, `correct`, `forget`, …) act on the store they run against. On a connected device, that is the local staging copy.
 - `origin serve --admin` also serves the [admin UI](./admin.md) at `/admin`, and `--admin-listen <host:port>` serves it on a separate listener instead. Behind TLS, pass the hub's https address with `--public-url`; the hub refuses to serve the UI over plain HTTP beyond loopback.
-- `origin admin password` sets the admin UI's password: it asks twice on a terminal, without showing what you type, and otherwise reads one line from standard input; `--generate` picks a random one and prints it once. The password needs at least 12 characters, and setting it signs out every admin session. On its first start with the admin UI enabled, the hub generates a password and prints it to its log once. `origin admin sessions --revoke-all` signs out every session, and `origin admin audit` prints the audit log. Token and password changes made with the CLI are recorded there too.
+- `origin admin password` sets the admin UI's password: it asks twice on a terminal, without showing what you type, and otherwise reads one line from standard input; `--generate` picks a random one and prints it once. The password needs at least 10 characters, and setting it signs out every admin session. On its first start with the admin UI enabled, the hub generates a password and prints it to its log once. `origin admin sessions --revoke-all` signs out every session, and `origin admin audit` prints the audit log. Token and password changes made with the CLI are recorded there too.
 
 ## Environment variables
 
@@ -104,4 +104,4 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 | `ORIGIN_ADMIN_LISTEN` | — | Serve the admin UI on this `host:port` instead (`--admin-listen`) |
 | `ORIGIN_PUBLIC_URL` | — | The hub's public https URL (`--public-url`) |
 | `ORIGIN_CLIENT_IP_HEADER` | — | Header with the client address set by your proxy; trusted only when set, and needed behind a proxy or CDN |
-| `ORIGIN_ADMIN_PASSWORD` | — | The admin UI's password (at least 12 characters); when set, it takes the place of the one set with `origin admin password` |
+| `ORIGIN_ADMIN_PASSWORD` | — | The admin UI's password (at least 10 characters); when set, it takes the place of the one set with `origin admin password` |

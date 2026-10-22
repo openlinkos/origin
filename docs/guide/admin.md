@@ -44,7 +44,7 @@ docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data \
 | `ORIGIN_ADMIN_LISTEN` | `host:port` of a separate listener for the admin UI, like `--admin-listen` |
 | `ORIGIN_PUBLIC_URL` | The hub's public URL, like `--public-url`; the UI's commands use it as the hub's address |
 | `ORIGIN_CLIENT_IP_HEADER` | A header with the client's address set by your proxy, such as `X-Real-IP`; trusted only when set, and needed behind a proxy or CDN (see [below](#behind-tls-and-a-cdn)) |
-| `ORIGIN_ADMIN_PASSWORD` | The admin password, at least 12 characters; when set, it takes the place of the stored one (see [Sign in](#sign-in)) |
+| `ORIGIN_ADMIN_PASSWORD` | The admin password, at least 10 characters; when set, it takes the place of the stored one (see [Sign in](#sign-in)) |
 
 Command-line flags take precedence over the environment. Use either `/admin` on the hub or a separate listener, not both.
 
@@ -68,9 +68,9 @@ docker exec -it origin-hub origin admin password    # the same, with Docker
 origin admin password --generate                    # or pick a random one, printed once
 ```
 
-The password needs at least 12 characters. A new password replaces the old one at once and signs out every session; nothing needs restarting. Run the same command if you lose the password. Without a terminal, the command reads the password from the first line of its standard input, so scripts can pipe it in, for example `docker exec -i origin-hub origin admin password < password.txt`. The sign-in form presents it as the password of a fixed user name, so your browser's password manager can save it.
+The password needs at least 10 characters. A new password replaces the old one at once and signs out every session; nothing needs restarting. Run the same command if you lose the password. Without a terminal, the command reads the password from the first line of its standard input, so scripts can pipe it in, for example `docker exec -i origin-hub origin admin password < password.txt`. The sign-in form presents it as the password of a fixed user name, so your browser's password manager can save it.
 
-To keep the password in your deployment's configuration instead, such as a Docker Compose file or a Kubernetes Secret, set `ORIGIN_ADMIN_PASSWORD`. When it is set, it is the password, and the stored one is ignored. It must have at least 12 characters, or the hub refuses to start. To change it, restart the hub with the new value: the hub notices the change and signs out every session. `origin admin password` warns you when it sees this variable, since a password it stores has no effect while the variable is set.
+To keep the password in your deployment's configuration instead, such as a Docker Compose file or a Kubernetes Secret, set `ORIGIN_ADMIN_PASSWORD`. When it is set, it is the password, and the stored one is ignored. It must have at least 10 characters, or the hub refuses to start. To change it, restart the hub with the new value: the hub notices the change and signs out every session. `origin admin password` warns you when it sees this variable, since a password it stores has no effect while the variable is set.
 
 The hub keeps the password only as a scrypt hash in its own database, and never sends it to devices. The admin password and the tokens of devices and agents are separate: a token (`ogn_…`) never signs in to the admin UI, and the admin password never works for MCP or for pushing.
 

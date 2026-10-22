@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-04f75586
+sourceHash: sha256-a66edc9d
 ---
 
 # 管理界面
@@ -48,7 +48,7 @@ docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data \
 | `ORIGIN_ADMIN_LISTEN` | 管理界面单独监听的 `host:port`，等同于 `--admin-listen` |
 | `ORIGIN_PUBLIC_URL` | 中枢的公开 URL，等同于 `--public-url`；界面里的命令把它当作中枢的地址 |
 | `ORIGIN_CLIENT_IP_HEADER` | 由你的代理设置、携带客户端地址的请求头，例如 `X-Real-IP`；只有设置了才会被信任，在代理或 CDN 之后必须设置（见[下文](#behind-tls-and-a-cdn)） |
-| `ORIGIN_ADMIN_PASSWORD` | 管理密码，至少 12 个字符；设置后取代保存在中枢上的密码（见[登录](#sign-in)） |
+| `ORIGIN_ADMIN_PASSWORD` | 管理密码，至少 10 个字符；设置后取代保存在中枢上的密码（见[登录](#sign-in)） |
 
 命令行参数优先于环境变量。在中枢的 `/admin` 下提供和单独监听，二者只能选一种。
 
@@ -72,9 +72,9 @@ docker exec -it origin-hub origin admin password    # 使用 Docker 时的相同
 origin admin password --generate                    # 或者随机生成一个，只打印一次
 ```
 
-密码至少需要 12 个字符。新密码会立即取代旧密码，并让所有会话退出登录；不需要重启任何东西。忘记密码时，也运行同一个命令。没有终端时，这个命令从标准输入的第一行读取密码，方便脚本通过管道传入，例如 `docker exec -i origin-hub origin admin password < password.txt`。登录表单把它作为一个固定用户名的密码提交，所以浏览器自带的密码管理器可以保存它。
+密码至少需要 10 个字符。新密码会立即取代旧密码，并让所有会话退出登录；不需要重启任何东西。忘记密码时，也运行同一个命令。没有终端时，这个命令从标准输入的第一行读取密码，方便脚本通过管道传入，例如 `docker exec -i origin-hub origin admin password < password.txt`。登录表单把它作为一个固定用户名的密码提交，所以浏览器自带的密码管理器可以保存它。
 
-如果想把密码放在部署配置里，例如 Docker Compose 文件或 Kubernetes Secret，请设置 `ORIGIN_ADMIN_PASSWORD`。设置后，它就是管理密码，保存在中枢上的密码会被忽略。它至少要有 12 个字符，否则中枢拒绝启动。要修改它，用新的值重启中枢：中枢会发现变化，并让所有会话退出登录。`origin admin password` 发现这个变量时会提醒你，因为只要这个变量存在，它保存的密码就不起作用。
+如果想把密码放在部署配置里，例如 Docker Compose 文件或 Kubernetes Secret，请设置 `ORIGIN_ADMIN_PASSWORD`。设置后，它就是管理密码，保存在中枢上的密码会被忽略。它至少要有 10 个字符，否则中枢拒绝启动。要修改它，用新的值重启中枢：中枢会发现变化，并让所有会话退出登录。`origin admin password` 发现这个变量时会提醒你，因为只要这个变量存在，它保存的密码就不起作用。
 
 中枢只在自己的数据库里保存密码的 scrypt 哈希，也从不把它发送给设备。管理密码与设备和 Agent 的令牌是分开的：令牌（`ogn_…`）永远不能登录管理界面，管理密码也永远不能用于 MCP 或推送。
 

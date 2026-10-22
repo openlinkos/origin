@@ -11,7 +11,7 @@ import { TOKEN_PREFIX } from './tokens.js';
  * set with `origin admin password` or generated on the first start with the admin UI enabled. Only
  * a scrypt hash is kept, in the local `setting` table, which is never replicated.
  */
-export const ADMIN_PASSWORD_MIN_LENGTH = 12;
+export const ADMIN_PASSWORD_MIN_LENGTH = 10;
 export const ADMIN_PASSWORD_MAX_LENGTH = 1024;
 
 /** `setting` keys: the hash of the stored password, and the credential sessions were created under. */

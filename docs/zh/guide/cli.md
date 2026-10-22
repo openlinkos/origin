@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-51c22e10
+sourceHash: sha256-5b3d595f
 ---
 
 # 命令参考
@@ -92,7 +92,7 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 - 设备接入后，`origin mcp` 会先推送新的会话记录，再把每次工具调用转发给中枢。
 - 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于它们所运行的那个库。在已接入的设备上，那就是本地暂存副本。
 - `origin serve --admin` 会同时在 `/admin` 下提供[管理界面](./admin.md)；`--admin-listen <host:port>` 则改为在单独的监听地址上提供。在 TLS 之后时，用 `--public-url` 传入中枢的 https 地址；中枢拒绝在回环地址之外通过明文 HTTP 提供管理界面。
-- `origin admin password` 设置管理界面的密码：在终端中询问两次，不显示你输入的内容；没有终端时从标准输入读取一行。`--generate` 随机生成一个密码，只打印一次。密码至少需要 12 个字符，设置后所有管理会话都会退出登录。中枢第一次在启用管理界面的情况下启动时，会生成一个密码，并在日志中打印一次。`origin admin sessions --revoke-all` 让所有会话退出登录，`origin admin audit` 打印审计日志。用 CLI 进行的令牌和密码变更也会记录在其中。
+- `origin admin password` 设置管理界面的密码：在终端中询问两次，不显示你输入的内容；没有终端时从标准输入读取一行。`--generate` 随机生成一个密码，只打印一次。密码至少需要 10 个字符，设置后所有管理会话都会退出登录。中枢第一次在启用管理界面的情况下启动时，会生成一个密码，并在日志中打印一次。`origin admin sessions --revoke-all` 让所有会话退出登录，`origin admin audit` 打印审计日志。用 CLI 进行的令牌和密码变更也会记录在其中。
 
 ## 环境变量 {#environment-variables}
 
@@ -109,4 +109,4 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 | `ORIGIN_ADMIN_LISTEN` | — | 改为在这个 `host:port` 上提供管理界面（`--admin-listen`） |
 | `ORIGIN_PUBLIC_URL` | — | 中枢的公开 https URL（`--public-url`） |
 | `ORIGIN_CLIENT_IP_HEADER` | — | 由你的代理设置、携带客户端地址的请求头；只有设置了才会被信任，在代理或 CDN 之后必须设置 |
-| `ORIGIN_ADMIN_PASSWORD` | — | 管理界面的密码（至少 12 个字符）；设置后取代用 `origin admin password` 设置的密码 |
+| `ORIGIN_ADMIN_PASSWORD` | — | 管理界面的密码（至少 10 个字符）；设置后取代用 `origin admin password` 设置的密码 |
