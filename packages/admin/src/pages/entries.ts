@@ -58,7 +58,7 @@ export function entriesPage(
             html`<option value="${p}"${p === o.filter.project ? html` selected` : ''}>${p}</option>`,
         )}</select>
       </div>
-      <label class="ol-check admin-toolbar-check"><input class="ol-checkbox" type="checkbox" name="history" value="1"${o.filter.history ? html` checked` : ''}>${t('entries.history')}</label>
+      <label class="ol-check"><input class="ol-checkbox" type="checkbox" name="history" value="1"${o.filter.history ? html` checked` : ''}>${t('entries.history')}</label>
       <button type="submit" class="ol-btn ol-btn-secondary">${icon(ctx, 'filter')}${t('filter.apply')}</button>
     </form>
     ${
@@ -94,11 +94,11 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
       badges: html`${kindBadge(ctx, e.kind)}${statusBadge(ctx, e.status)}`,
       actions: html`${e.status === 'active' ? linkButton(ctx, { href: href('correct', { id: e.id }), label: t('entry.correct'), icon: 'pencil' }) : ''}${linkButton(ctx, { href: href('forget', { id: e.id }), label: t('entry.forget'), icon: 'eraser', variant: 'danger-soft' })}`,
     })}
-    ${e.status === 'superseded' && e.supersededBy ? html`<div class="admin-notices">${alert(ctx, 'info', html`${t('entry.supersededBy')} <a class="ol-mono" href="${href('entry', { id: e.supersededBy })}">${e.supersededBy}</a>`)}</div>` : ''}
+    ${e.status === 'superseded' && e.supersededBy ? html`<div class="ol-notices">${alert(ctx, 'info', html`${t('entry.supersededBy')} <a class="ol-mono" href="${href('entry', { id: e.supersededBy })}">${e.supersededBy}</a>`)}</div>` : ''}
     <div class="ol-grid ol-grid-sidebar ol-section">
       <section class="ol-panel">
         <h2 class="ol-sr-only">${t('entries.text')}</h2>
-        <div class="ol-panel-body admin-text">${e.text}</div>
+        <div class="ol-panel-body ol-text-pre">${e.text}</div>
       </section>
       ${panel(ctx, {
         tag: 'aside',
@@ -122,7 +122,7 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
         feedItem(ctx, s.event, {
           body: clip(s.event.text, 600),
           meta: html`<span>${s.event.project ?? s.event.source}</span>`,
-          extra: s.quote ? html`<blockquote class="admin-quote">${s.quote}</blockquote>` : '',
+          extra: s.quote ? html`<blockquote class="ol-quote">${s.quote}</blockquote>` : '',
         }),
       )}</ol>`,
     })}
@@ -196,7 +196,7 @@ export function correctPage(
         title: t('correct.current'),
         icon: 'book-marked',
         badge: kindBadge(ctx, e.kind),
-        body: html`<div class="admin-text">${e.text}</div>`,
+        body: html`<div class="ol-text-pre">${e.text}</div>`,
       })}
     </div>`,
   });
@@ -277,7 +277,7 @@ export function forgetPage(
       title: html`${t('forget.title')} <span class="ol-mono">${o.id}</span>`,
       description: t('forget.rules'),
     })}
-    ${o.error ? html`<div class="admin-notices">${alert(ctx, 'danger', o.error)}</div>` : ''}
+    ${o.error ? html`<div class="ol-notices">${alert(ctx, 'danger', o.error)}</div>` : ''}
     ${
       !plan
         ? ''

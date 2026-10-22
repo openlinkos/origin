@@ -79,7 +79,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
     })}
     ${
       stale.length > 0 || o.parseErrors.last24h > 0
-        ? html`<div class="ol-stack admin-notices">
+        ? html`<div class="ol-notices">
       ${stale.length > 0 ? alert(ctx, 'warning', t('overview.staleDevices', { n: stale.length })) : ''}
       ${o.parseErrors.last24h > 0 ? alert(ctx, 'warning', t('overview.parseErrors24h', { n: o.parseErrors.last24h })) : ''}
     </div>`
@@ -149,7 +149,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
             <dd>${t('overview.parseErrorsValue', { day: n(o.parseErrors.last24h), week: n(o.parseErrors.last7d) })}</dd>
             ${o.parseErrors.bySource7d.map(
               (r) =>
-                html`<dt class="admin-dt-sub">${r.source} ${r.device ? html`<a href="${href('device', { name: r.device })}">${r.device}</a>` : html`<span class="ol-subtle">${t('overview.local')}</span>`}</dt><dd>${n(r.parseErrors)}</dd>`,
+                html`<dt class="ol-dl-sub">${r.source} ${r.device ? html`<a href="${href('device', { name: r.device })}">${r.device}</a>` : html`<span class="ol-subtle">${t('overview.local')}</span>`}</dt><dd>${n(r.parseErrors)}</dd>`,
             )}
             <dt>${t('overview.version')}</dt><dd>${o.version}</dd>
             <dt>${t('overview.uptime')}</dt><dd>${fmtDuration(o.uptimeMs, t)}</dd>

@@ -136,7 +136,7 @@ export interface PageOptions {
 
 function breadcrumb(ctx: Ctx, o: PageOptions): SafeHtml {
   const crumbs = o.crumbs ?? [];
-  return html`<nav class="admin-crumbs" aria-label="${ctx.t('nav.breadcrumb')}"><ol class="ol-breadcrumb">
+  return html`<nav aria-label="${ctx.t('nav.breadcrumb')}"><ol class="ol-breadcrumb">
       <li><a href="/admin/">${hubHost(ctx)}</a></li>
       ${crumbs.map((c) => html`<li>${c.href ? html`<a href="${c.href}">${c.label}</a>` : c.label}</li>`)}
       <li><span aria-current="page">${o.title}</span></li>

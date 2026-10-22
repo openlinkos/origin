@@ -33,7 +33,7 @@ export function tokensPage(ctx: Ctx, tokens: TokenInfo[], notice?: string): void
         variant: 'primary',
       }),
     })}
-    ${notice ? html`<div class="admin-notices">${alert(ctx, 'success', notice)}</div>` : ''}
+    ${notice ? html`<div class="ol-notices">${alert(ctx, 'success', notice)}</div>` : ''}
     ${
       tokens.length === 0
         ? empty(ctx, {

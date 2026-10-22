@@ -27,9 +27,9 @@ export function pageHeader(
   const meta = (o.meta ?? []).filter((m) => m !== '' && m !== null && m !== undefined);
   return html`<div class="ol-page-header">
       <div class="ol-page-heading">
-        <h1 class="ol-page-title">${o.badges ? html`<span class="admin-title">${o.title}${o.badges}</span>` : o.title}</h1>
+        <h1 class="ol-page-title">${o.badges ? html`<span class="ol-title-row">${o.title}${o.badges}</span>` : o.title}</h1>
         ${o.description ? html`<p class="ol-page-description">${o.description}</p>` : ''}
-        ${meta.length > 0 ? html`<ul class="admin-meta">${meta.map((m) => html`<li>${m}</li>`)}</ul>` : ''}
+        ${meta.length > 0 ? html`<ul class="ol-page-meta">${meta.map((m) => html`<li>${m}</li>`)}</ul>` : ''}
       </div>
       ${o.actions ? html`<div class="ol-page-actions">${o.actions}</div>` : ''}
     </div>`;

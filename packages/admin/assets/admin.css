@@ -4,90 +4,6 @@
  * used, never literal colours. Rules here are outside any cascade layer, so they win over the kit.
  */
 
-/* Columns start at the top, rather than stretching to the tallest one. */
-.ol-content .ol-grid {
-  align-items: start;
-}
-
-/* The breadcrumb's navigation landmark may shrink, so the current page can be truncated. */
-.admin-crumbs {
-  min-width: 0;
-}
-
-.ol-topbar .ol-search {
-  width: min(18rem, 50vw);
-}
-
-/* Stats fill every row: the last ones grow, so no empty track shows the divider colour. */
-.ol-stats {
-  display: flex;
-  flex-wrap: wrap;
-}
-
-.ol-stat {
-  flex: 1 1 9.5rem;
-}
-
-/* A title followed by badges (a device's status, an entry's kind). */
-.admin-title {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--ol-space-2) var(--ol-space-3);
-}
-
-/* Facts about the object a page shows, as separate items with icons. */
-.admin-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--ol-space-1) var(--ol-space-5);
-  margin-block-start: var(--ol-space-2);
-  color: var(--ol-color-fg-muted);
-  font-size: var(--ol-font-size-sm);
-}
-
-.admin-meta li {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ol-space-1-5);
-}
-
-.admin-meta .ol-icon {
-  color: var(--ol-color-fg-subtle);
-}
-
-/* Alerts between the page header and the content. */
-.admin-notices {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ol-space-2);
-  margin-block-end: var(--ol-space-6);
-}
-
-/* Text from the store, shown whole: line breaks kept, long words wrapped. */
-.admin-text {
-  line-height: 1.65;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-/* The words an entry quotes from its source event. */
-.admin-quote {
-  margin-block-end: var(--ol-space-2);
-  padding-inline-start: var(--ol-space-3);
-  border-inline-start: 2px solid var(--ol-color-accent-border);
-  color: var(--ol-color-fg-muted);
-  font-size: var(--ol-font-size-sm);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-/* Sub-rows of a description list, such as parse errors per source. */
-.ol-dl .admin-dt-sub {
-  padding-inline-start: var(--ol-space-3);
-  color: var(--ol-color-fg-subtle);
-}
-
 /* Ids in the forget preview. */
 .admin-ids {
   display: flex;
@@ -95,28 +11,6 @@
   gap: var(--ol-space-1) var(--ol-space-4);
   margin-block-start: var(--ol-space-1);
   font-size: var(--ol-font-size-sm);
-}
-
-/* Figures in tables stay on one line. */
-.ol-table .ol-num {
-  white-space: nowrap;
-}
-
-/* A raw line from a session log: one long JSON line, wrapped so it can be read. */
-.admin-raw pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-/* Results below a filter or search toolbar. */
-.ol-toolbar + .ol-section {
-  margin-block-start: var(--ol-space-8);
-}
-
-/* A checkbox in a toolbar, level with the controls next to it. */
-.ol-toolbar .admin-toolbar-check {
-  align-items: center;
-  min-height: var(--ol-size-control-md);
 }
 
 .admin-heading {
@@ -130,21 +24,4 @@
 /* Text after a table or code block. */
 .admin-after {
   margin-block-start: var(--ol-space-3);
-}
-
-/* Sign-in pages: the language and theme switches sit in the footer line. */
-.ol-auth-foot {
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.ol-auth-foot .ol-btn-link {
-  font-size: inherit;
-}
-
-/* Narrow screens: the bar keeps its height and the panel takes the rest, on short pages too. */
-@media (max-width: 860px) {
-  .ol-app {
-    grid-template-rows: auto minmax(0, 1fr);
-  }
 }

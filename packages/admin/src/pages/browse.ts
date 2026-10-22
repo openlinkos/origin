@@ -177,7 +177,7 @@ export function eventPage(ctx: Ctx, d: EventDetail): void {
           <input type="hidden" name="id" value="${e.id}">
           <button type="submit" class="ol-btn ol-btn-secondary ol-btn-sm">${icon(ctx, 'file-text', 'sm')}${t('event.showRaw')}</button>
         </form>
-        <div class="ol-code admin-raw" hidden><div class="ol-code-label">${icon(ctx, 'file-text', 'sm')}${t('event.rawTitle')}</div><pre id="raw-line"></pre></div>
+        <div class="ol-code ol-code-wrap" hidden><div class="ol-code-label">${icon(ctx, 'file-text', 'sm')}${t('event.rawTitle')}</div><pre id="raw-line"></pre></div>
       </div>`
         : html`<p class="ol-muted ol-text-sm">${t('event.noProvenance')}</p>`,
     })}
@@ -220,7 +220,7 @@ export function eventRawPage(
     ${
       r.line === null
         ? alert(ctx, 'warning', t('event.rawMissing'))
-        : html`<div class="ol-code admin-raw"><pre>${r.line}</pre></div>`
+        : html`<div class="ol-code ol-code-wrap"><pre>${r.line}</pre></div>`
     }
     ${r.truncated ? html`<p class="ol-hint admin-after">${t('event.rawTruncated', { n: fmtNumber(r.length, ctx.lang) })}</p>` : ''}`,
   });
@@ -251,7 +251,7 @@ export function searchPage(
         <label class="ol-label ol-sr-only" for="q">${t('nav.search')}</label>
         <div class="ol-search">${icon(ctx, 'search')}<input class="ol-input" type="search" id="q" name="q" value="${o.query}" placeholder="${t('search.placeholder')}" autofocus></div>
       </div>
-      <label class="ol-check admin-toolbar-check"><input class="ol-checkbox" type="checkbox" name="tools" value="1"${o.tools ? html` checked` : ''}>${t('search.tools')}</label>
+      <label class="ol-check"><input class="ol-checkbox" type="checkbox" name="tools" value="1"${o.tools ? html` checked` : ''}>${t('search.tools')}</label>
       <button type="submit" class="ol-btn ol-btn-primary">${t('nav.search')}</button>
     </form>
     ${

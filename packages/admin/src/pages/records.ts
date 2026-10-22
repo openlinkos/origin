@@ -101,7 +101,7 @@ export function signinsPage(ctx: Ctx, sessions: AdminSessionInfo[], notice?: str
           ? html`<form method="post" action="/admin/signins/revoke">${csrfField(ctx)}<button type="submit" class="ol-btn ol-btn-danger-soft">${icon(ctx, 'log-out')}${t('signins.revokeOthers', { n: others })}</button></form>`
           : '',
     })}
-    ${notice ? html`<div class="admin-notices">${alert(ctx, 'success', notice)}</div>` : ''}
+    ${notice ? html`<div class="ol-notices">${alert(ctx, 'success', notice)}</div>` : ''}
     ${tableWrap(
       html`<th>${t('signins.started')}</th><th>${t('signins.lastSeen')}</th><th>${t('audit.client')}</th><th class="ol-actions"><span class="ol-sr-only">${t('tokens.actions')}</span></th>`,
       sessions.map(
