@@ -1,9 +1,17 @@
 /**
  * Database schema (see docs/architecture.md).
  * - raw_file: append-only mirror cursors for original files (Raw).
- * - event: unified events (Event), append-only.
+ * - event: unified events (Event), append-only, keyed by `seq`, their order of arrival in this store
+ *   (the rowid; explicit so that VACUUM keeps it, since the search indexes refer to it).
+ * - event_block: for each block of 4,096 consecutive arrivals, the latest timestamp in it and up to
+ *   its end, kept by a trigger, so that a newest-first query reading an index by arrival knows when
+ *   nothing older can follow (see search.ts); derived.
  * - session: derived aggregate per (source, session_id); rebuildable.
- * - event_fts: FTS5 trigram index; can be dropped and rebuilt.
+ * - event_fts, message_fts, event_cjk: the search indexes, all keyed by seq and filled by
+ *   triggers; rebuildSearchIndexes() rebuilds them. event_fts is a trigram index of every event
+ *   that records only which events contain each trigram (detail=none), message_fts a full trigram
+ *   index of message events (positions, for phrases and BM25; its content is the event_message
+ *   view), and event_cjk a contentless index of CJK bigrams (see cjk.ts).
  * - sync_log: per-sync statistics.
  * - entry / entry_source: durable entries and the events they cite (Entry), append-only; an entry
  *   changes only by being superseded. Several versions may supersede the same one (concurrent
@@ -54,7 +62,8 @@ CREATE TABLE IF NOT EXISTS session (
 );
 
 CREATE TABLE IF NOT EXISTS event (
-  id            TEXT PRIMARY KEY,
+  seq           INTEGER PRIMARY KEY,
+  id            TEXT    NOT NULL UNIQUE,
   source        TEXT    NOT NULL,
   session_id    TEXT    NOT NULL,
   parent_id     TEXT,
@@ -73,22 +82,68 @@ CREATE TABLE IF NOT EXISTS event (
 CREATE INDEX IF NOT EXISTS event_ts      ON event (ts);
 CREATE INDEX IF NOT EXISTS event_session ON event (source, session_id, ts);
 CREATE INDEX IF NOT EXISTS event_project ON event (project, ts);
+CREATE INDEX IF NOT EXISTS event_seq_ts  ON event (seq, ts);
+
+CREATE TABLE IF NOT EXISTS event_block (
+  block     INTEGER PRIMARY KEY,
+  max_ts    INTEGER NOT NULL,
+  latest_ts INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS event_block_ai AFTER INSERT ON event BEGIN
+  INSERT OR IGNORE INTO event_block (block, max_ts, latest_ts)
+    VALUES (new.seq >> 12, new.ts, MAX(new.ts, COALESCE(
+      (SELECT latest_ts FROM event_block WHERE block = (new.seq >> 12) - 1), new.ts)));
+  UPDATE event_block SET max_ts = MAX(max_ts, new.ts), latest_ts = MAX(latest_ts, new.ts)
+    WHERE block = new.seq >> 12;
+END;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS event_fts USING fts5(
   text,
   content = 'event',
-  content_rowid = 'rowid',
+  content_rowid = 'seq',
+  tokenize = 'trigram',
+  detail = 'none'
+);
+CREATE VIEW IF NOT EXISTS event_message (seq, text) AS
+  SELECT seq, text FROM event WHERE kind = 'message';
+CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
+  text,
+  content = 'event_message',
+  content_rowid = 'seq',
   tokenize = 'trigram'
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS event_cjk USING fts5(
+  text,
+  content = '',
+  detail = 'none',
+  columnsize = 0,
+  tokenize = 'ascii'
+);
 CREATE TRIGGER IF NOT EXISTS event_ai AFTER INSERT ON event BEGIN
-  INSERT INTO event_fts (rowid, text) VALUES (new.rowid, new.text);
+  INSERT INTO event_fts (rowid, text) VALUES (new.seq, new.text);
+  INSERT INTO message_fts (rowid, text) SELECT new.seq, new.text WHERE new.kind = 'message';
+  INSERT INTO event_cjk (rowid, text)
+    SELECT new.seq, t FROM (SELECT origin_cjk(new.text, new.kind) AS t) WHERE t IS NOT NULL;
 END;
 CREATE TRIGGER IF NOT EXISTS event_ad AFTER DELETE ON event BEGIN
-  INSERT INTO event_fts (event_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+  INSERT INTO event_fts (event_fts, rowid, text) VALUES ('delete', old.seq, old.text);
+  INSERT INTO message_fts (message_fts, rowid, text)
+    SELECT 'delete', old.seq, old.text WHERE old.kind = 'message';
+  INSERT INTO event_cjk (event_cjk, rowid, text)
+    SELECT 'delete', old.seq, t FROM (SELECT origin_cjk(old.text, old.kind) AS t)
+    WHERE t IS NOT NULL;
 END;
-CREATE TRIGGER IF NOT EXISTS event_au AFTER UPDATE OF text ON event BEGIN
-  INSERT INTO event_fts (event_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
-  INSERT INTO event_fts (rowid, text) VALUES (new.rowid, new.text);
+CREATE TRIGGER IF NOT EXISTS event_au AFTER UPDATE OF text, kind ON event BEGIN
+  INSERT INTO event_fts (event_fts, rowid, text) VALUES ('delete', old.seq, old.text);
+  INSERT INTO message_fts (message_fts, rowid, text)
+    SELECT 'delete', old.seq, old.text WHERE old.kind = 'message';
+  INSERT INTO event_cjk (event_cjk, rowid, text)
+    SELECT 'delete', old.seq, t FROM (SELECT origin_cjk(old.text, old.kind) AS t)
+    WHERE t IS NOT NULL;
+  INSERT INTO event_fts (rowid, text) VALUES (new.seq, new.text);
+  INSERT INTO message_fts (rowid, text) SELECT new.seq, new.text WHERE new.kind = 'message';
+  INSERT INTO event_cjk (rowid, text)
+    SELECT new.seq, t FROM (SELECT origin_cjk(new.text, new.kind) AS t) WHERE t IS NOT NULL;
 END;
 
 CREATE TABLE IF NOT EXISTS sync_log (

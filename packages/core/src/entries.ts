@@ -3,7 +3,8 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { OriginError } from './errors.js';
 import { storeName } from './identity.js';
-import { getEvent, toFtsQuery, VISIBLE_EVENT } from './store.js';
+import { parseQuery, phraseQuery, type QueryTerm, termCheck } from './search.js';
+import { getEvent, VISIBLE_EVENT } from './store.js';
 import type { EventRow } from './types.js';
 
 /** memory = what happened; knowledge = stable facts; cognition = the person's preferences, methods, goals, boundaries. */
@@ -217,25 +218,36 @@ export function entriesCiting(db: Database, eventId: string): Entry[] {
   return rows.map(toEntry);
 }
 
-/** Full-text search over active entries, best match first. Queries shorter than 3 characters fall back to LIKE. */
+/**
+ * Full-text search over active entries. Every term must occur in the text, ignoring case: terms of
+ * three or more characters through the trigram index (ranked by BM25, best first), shorter ones by
+ * checking the text. Without a term of three or more characters, newest first.
+ */
 export function searchEntries(db: Database, query: string, filter: EntryFilter = {}): Entry[] {
-  const fts = toFtsQuery(query);
+  const terms = parseQuery(query);
+  if (terms.length === 0) return [];
+  const long = terms.filter((t) => t.kind === 'long');
   const params: unknown[] = [];
   let sql: string;
-  if (fts) {
-    params.push(fts);
+  if (long.length > 0) {
+    params.push(phraseQuery(long));
     sql = `${ENTRY_SELECT} JOIN entry_fts f ON f.rowid = en.rowid
-           WHERE entry_fts MATCH ? AND ${entryWhere(filter, params)}
+           WHERE entry_fts MATCH ? AND ${entryWhere(filter, params)}${shortChecks(terms, params)}
            ORDER BY bm25(entry_fts), en.created_at DESC LIMIT ? OFFSET ?`;
   } else {
-    const q = query.trim();
-    if (q.length === 0) return [];
-    params.push(`%${q}%`);
-    sql = `${ENTRY_SELECT} WHERE en.text LIKE ? AND ${entryWhere(filter, params)}
+    sql = `${ENTRY_SELECT} WHERE ${entryWhere(filter, params)}${shortChecks(terms, params)}
            ORDER BY en.created_at DESC LIMIT ? OFFSET ?`;
   }
   params.push(filter.limit ?? 20, filter.offset ?? 0);
   return (db.prepare(sql).all(...(params as never[])) as unknown as EntryRecord[]).map(toEntry);
+}
+
+/** Checks for the terms the trigram index cannot find (entries are few, so they are read). */
+function shortChecks(terms: QueryTerm[], params: unknown[]): string {
+  return terms
+    .filter((t) => t.kind !== 'long')
+    .map((t) => ` AND ${termCheck('en.text', t.text, params)}`)
+    .join('');
 }
 
 /** The visible sources of an entry (sources forgotten since are hidden). */

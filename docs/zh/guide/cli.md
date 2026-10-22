@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-93e2e83c
+sourceHash: sha256-9c1ea43d
 ---
 
 # 命令参考
@@ -34,7 +34,7 @@ origin push                                            与 origin sync 相同（
 
 ## 检索 {#searching}
 
-`search` 同时检索条目和会话消息，默认按相关度排序。加 `--recent` 改为按时间排序，加 `--all` 会把工具调用及其输出也纳入检索。中文同样支持子串检索。
+`search` 同时检索条目和会话消息。查询中的每个词都必须作为子串出现（不区分大小写）；中文同样支持，包括 `部署` 这样一到两个字的词。结果在最新的 2,000 个匹配中按相关度排序；加 `--recent` 改为按时间从新到旧排序，加 `--all` 会把工具调用及其输出也纳入检索。其他短于三个字符的词，例如 `AI`，只在匹配查询其余部分的最新 25,000 个事件中核对，所以要找更早的事件，请加上一个更长的词或限定时间范围。详见[检索与时间线](../architecture.md#search-and-timeline)。
 
 ```console
 $ origin search "schema migrations"

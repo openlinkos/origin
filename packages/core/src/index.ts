@@ -116,6 +116,15 @@ export {
   shouldSendEntry,
   unpushedOnly,
 } from './replication.js';
+export {
+  parseQuery,
+  type QueryTerm,
+  RANK_WINDOW,
+  rebuildSearchIndexes,
+  SCAN_LIMIT,
+  searchEvents,
+  type TermKind,
+} from './search.js';
 export { getSetting, setSetting } from './settings.js';
 export {
   type EventFilter,
@@ -131,9 +140,7 @@ export {
   type SearchHit,
   type SearchOptions,
   type SourceStats,
-  searchEvents,
   stats,
-  toFtsQuery,
 } from './store.js';
 export { isoLocal, parseTime } from './time.js';
 export {

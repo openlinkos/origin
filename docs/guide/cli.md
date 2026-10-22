@@ -29,7 +29,7 @@ origin push                                            Same as origin sync (kept
 
 ## Searching
 
-`search` looks in entries and in session messages. Results are ranked by relevance; `--recent` sorts by time instead, and `--all` also searches tool calls and their output. CJK text works too, as substrings.
+`search` looks in entries and in session messages. Every word of the query must occur, as a case-insensitive substring; CJK text works too, including one- and two-character words such as `部署`. Results are ranked by relevance among the newest 2,000 matches; `--recent` sorts by time instead, newest first, and `--all` also searches tool calls and their output. Other words shorter than three characters, such as `AI`, are checked against the newest 25,000 events that match the rest of the query, so add a longer word or a time range to reach older ones. The details are in [Search and timeline](../architecture.md#search-and-timeline).
 
 ```console
 $ origin search "schema migrations"

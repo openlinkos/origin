@@ -1,14 +1,32 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { cjkIndexText } from './cjk.js';
 import { SCHEMA } from './schema.js';
 
 export type Database = DatabaseSync;
+
+/**
+ * Functions the schema and the queries use, registered on every connection: `origin_cjk` fills the
+ * CJK index from a trigger, and `origin_contains` checks a lowercased term against a text, ignoring
+ * case beyond ASCII (which LIKE does not).
+ */
+function registerFunctions(db: Database): void {
+  db.function('origin_cjk', { deterministic: true }, (text, kind) =>
+    typeof text === 'string' ? cjkIndexText(text, String(kind)) : null,
+  );
+  db.function('origin_contains', { deterministic: true }, (text, needle) =>
+    typeof text === 'string' && typeof needle === 'string' && text.toLowerCase().includes(needle)
+      ? 1
+      : 0,
+  );
+}
 
 /** Open (creating if needed) the database and apply the schema. */
 export function openDatabase(file: string): Database {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
+  registerFunctions(db);
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA synchronous = NORMAL;');
@@ -21,6 +39,7 @@ export function openDatabase(file: string): Database {
 /** In-memory database for tests and one-off analysis. */
 export function openMemoryDatabase(): Database {
   const db = new DatabaseSync(':memory:');
+  registerFunctions(db);
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
   return db;

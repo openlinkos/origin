@@ -213,3 +213,86 @@ describe('searchEvents', () => {
     ]);
   });
 });
+
+describe('time order', () => {
+  // Newer events arrive first, then a backfill of older ones (as when a hub receives a device's old
+  // sessions later), including one with the same timestamp as an earlier arrival.
+  async function ingestOutOfOrder(): Promise<void> {
+    fs.writeFileSync(
+      path.join(src, 'a-new.jsonl'),
+      line('n1', 'new', 5000, 'user', 'sqlite plan one') +
+        line('n2', 'new', 6000, 'user', 'sqlite plan two'),
+    );
+    await syncSource({ db, home }, fakeAdapter(src));
+    fs.writeFileSync(
+      path.join(src, 'b-old.jsonl'),
+      line('o1', 'old', 1000, 'user', 'sqlite plan zero') +
+        line('o2', 'old', 5500, 'user', 'sqlite plan between') +
+        line('o3', 'old', 6000, 'user', 'sqlite plan tie'),
+    );
+    await syncSource({ db, home }, fakeAdapter(src));
+  }
+
+  it('returns search results newest first whatever order they arrived in', async () => {
+    await ingestOutOfOrder();
+    const recent = (o: Parameters<typeof searchEvents>[2] = {}) =>
+      searchEvents(db, 'sqlite plan', { order: 'recent', ...o }).map((h) => h.id);
+    // Same timestamp: the later arrival comes first.
+    expect(recent()).toEqual(['fake:o3', 'fake:n2', 'fake:o2', 'fake:n1', 'fake:o1']);
+    expect(recent({ limit: 2, offset: 1 })).toEqual(['fake:n2', 'fake:o2']);
+    expect(recent({ since: 5500, until: 6000 })).toEqual(['fake:o3', 'fake:n2', 'fake:o2']);
+    expect(recent({ until: 5499 })).toEqual(['fake:n1', 'fake:o1']);
+    expect(recent({ project: 'demo', since: 5001 })).toEqual(['fake:o3', 'fake:n2', 'fake:o2']);
+  });
+
+  it('lists events in time order, ties in arrival order', async () => {
+    await ingestOutOfOrder();
+    expect(listEvents(db).map((e) => e.id)).toEqual([
+      'fake:o1',
+      'fake:n1',
+      'fake:o2',
+      'fake:n2',
+      'fake:o3',
+    ]);
+  });
+
+  it('keeps the arrival order of events with the same timestamp', async () => {
+    fs.writeFileSync(
+      path.join(src, 'same.jsonl'),
+      Array.from({ length: 50 }, (_, i) => line(`s${i}`, 'same', 7000, 'user', `tied ${i}`)).join(
+        '',
+      ),
+    );
+    await syncSource({ db, home }, fakeAdapter(src));
+    const ids = Array.from({ length: 50 }, (_, i) => `fake:s${i}`);
+    expect(listEvents(db).map((e) => e.id)).toEqual(ids);
+    expect(searchEvents(db, 'tied', { order: 'recent', limit: 50 }).map((h) => h.id)).toEqual(
+      [...ids].reverse(),
+    );
+  });
+
+  it('ingests the files of a sync oldest first', async () => {
+    fs.writeFileSync(path.join(src, 'a.jsonl'), line('recent', 'a', 9000, 'user', 'recent'));
+    fs.writeFileSync(path.join(src, 'b.jsonl'), line('old', 'b', 1000, 'user', 'old'));
+    fs.utimesSync(path.join(src, 'b.jsonl'), new Date(2020, 0, 1), new Date(2020, 0, 1));
+    await syncSource({ db, home }, fakeAdapter(src));
+    const arrival = db.prepare('SELECT id FROM event ORDER BY seq').all() as Array<{ id: string }>;
+    expect(arrival.map((r) => r.id)).toEqual(['fake:old', 'fake:recent']);
+  });
+
+  it('orders extreme timestamps too', async () => {
+    fs.writeFileSync(
+      path.join(src, 'far.jsonl'),
+      line('far-future', 'far', 5e15, 'user', 'far away') +
+        line('normal', 'far', 2000, 'user', 'far away') +
+        line('far-past', 'far', -5e15, 'user', 'far away'),
+    );
+    expect((await syncSource({ db, home }, fakeAdapter(src))).eventsAdded).toBe(3);
+    expect(searchEvents(db, 'far away', { order: 'recent' }).map((h) => h.id)).toEqual([
+      'fake:far-future',
+      'fake:normal',
+      'fake:far-past',
+    ]);
+    expect(getEvent(db, 'fake:far-future')?.ts).toBe(5e15);
+  });
+});

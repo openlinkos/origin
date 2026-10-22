@@ -62,7 +62,7 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
     newGenerations: 0,
     durationMs: 0,
   };
-  const files = await adapter.discover();
+  const files = oldestFirst(await adapter.discover());
   result.filesSeen = files.length;
   const agentVersion = adapter.version();
 
@@ -87,6 +87,23 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
     note: result.newGenerations > 0 ? `new generations: ${result.newGenerations}` : null,
   });
   return result;
+}
+
+/**
+ * Files oldest first, by modification time, so that the order events arrive in follows time as far
+ * as possible: a first sync ingests old sessions before new ones, which keeps newest-first queries
+ * short (see event_block in schema.ts).
+ */
+function oldestFirst(files: SourceFile[]): SourceFile[] {
+  const mtime = new Map<SourceFile, number>();
+  for (const f of files) {
+    try {
+      mtime.set(f, fs.statSync(f.absPath).mtimeMs);
+    } catch {
+      mtime.set(f, Number.POSITIVE_INFINITY); // deleted since discovery
+    }
+  }
+  return [...files].sort((a, b) => (mtime.get(a) as number) - (mtime.get(b) as number));
 }
 
 /** Ingest the newly appended complete lines of one file. Must run inside a write transaction. */
@@ -381,7 +398,10 @@ export function remoteCursors(
   }));
 }
 
-/** This store's own (not replicated) raw files, as a device pushes them to its hub. */
+/**
+ * This store's own (not replicated) raw files, as a device pushes them to its hub: least recently
+ * updated first, so that the hub receives a device's history roughly in the order it happened.
+ */
 export function localRawFiles(
   db: Database,
   home: string,
@@ -397,7 +417,7 @@ export function localRawFiles(
   const rows = db
     .prepare(
       `SELECT ${RAW_COLUMNS} FROM raw_file WHERE substr(path, 1, 1) <> '@'
-       ORDER BY source, path, generation`,
+       ORDER BY updated_at, source, path, generation`,
     )
     .all() as unknown as RawFileRow[];
   return rows.map((r) => {

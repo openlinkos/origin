@@ -139,7 +139,9 @@ interface SourceAdapter {
 | Table | Contents |
 |---|---|
 | `raw_file` | One row per mirrored file generation, with its ingestion cursor |
-| `event`, `event_fts` | Normalized events and their FTS5 trigram index |
+| `event` | Normalized events, keyed by their order of arrival in this store (`seq`) |
+| `event_block` | For each block of 4,096 consecutive arrivals, the latest timestamp in it and up to it (derived, kept by a trigger) |
+| `message_fts`, `event_fts`, `event_cjk` | The search indexes over events: a full trigram index of `message` events, a trigram index of every event that records only which events contain each trigram, and an index of CJK bigrams (see [Search and timeline](#search-and-timeline)) |
 | `session` | Per-session aggregates over visible events (derived, rebuildable) |
 | `sync_log` | One row per sync run |
 | `entry`, `entry_source`, `entry_fts` | Entries, the events they cite (with quotes), and their FTS5 index. Each version records its `root` (the first version, fixed when it is written) and its `origin` |
@@ -151,7 +153,8 @@ interface SourceAdapter {
 | `audit_log` | Append-only record of administrative actions, with ids and counts but never content; triggers reject updates and deletes |
 
 - Storage uses Node's built-in `node:sqlite`, so there are no native modules to compile. Several processes may share the database (the CLI and one MCP server per agent session); WAL mode and a busy timeout handle this.
-- `session` is derived and can be rebuilt from `event`. The FTS indexes are external-content tables kept in sync by triggers.
+- `session` is derived and can be rebuilt from `event`; per-source totals (`origin status`, the admin overview) are read from it. The search indexes are derived too and kept in sync by triggers: `message_fts` and `event_fts` are external-content tables (the content of `message_fts` is the `event_message` view of message events), and `event_cjk` is contentless, filled through a function that the core registers on every connection. `rebuildSearchIndexes()` rebuilds them all, and `event_block`, from the events and entries.
+- **Arrival order.** Events, and the search indexes with them, are keyed by `seq`, their order of arrival in this store: FTS5 stores the differences between consecutive keys, so dense keys keep the indexes small. A sync ingests the files it finds oldest first, by modification time, and a device pushes its files to its hub in the order it last updated them, so arrival order follows time as far as possible; but it is not time order, since a hub, for example, may receive a device's old sessions long after newer ones. So a trigger records, for each block of 4,096 consecutive arrivals, the latest timestamp in it and up to it (`event_block`). A newest-first query reads its index latest arrival first, in a few chains of consecutive blocks (a block more than a day newer than the chain before it starts a new one), always from the chain whose unread part may hold the newest event, and stops as soon as no chain may hold one newer than those it needs. A narrow `(seq, ts)` index gives an event's timestamp without reading the event.
 - **Store names.** Every store has a name, kept in `setting`: on a device it is the device's name, and a hub calls its store `hub`. Entries and tombstones record the name of the store that wrote them as their `origin`, and a device is known to its hub by its store's name. A store is named the first time it needs a name: `origin serve` names it `hub`; other commands use `ORIGIN_DEVICE` or the host name. Once a store has written an entry or a tombstone, it keeps its name.
 - **No migrations before the first release.** The schema is one set of idempotent statements applied every time the database is opened, so added tables and indexes appear in existing databases automatically. Any other schema change is made in place and needs a fresh `ORIGIN_HOME`. Delete the whole directory, never just `origin.db`: mirror paths are deterministic, so re-syncing into an existing `raw/` would append duplicate content. Versioned migrations will arrive with the first release.
 
@@ -163,7 +166,7 @@ interface SourceAdapter {
 2. **Rewrite detection.** If the file shrank or its tail no longer matches, it was rewritten rather than appended. Origin opens a new *generation* with a fresh mirror and keeps the old mirror intact (invariant 3).
 3. **Complete lines only.** Bytes up to the last newline are appended to the mirror; a trailing partial line waits for the next sync. A mirror always equals the ingested bytes of its generation, so bytes left past the cursor by an interrupted sync are dropped before appending (invariant 1).
 4. **Parse and insert.** Each line goes through `parseLine`; failures are counted, not fatal. Events are inserted with `INSERT OR IGNORE` under the id `<source>:<native-id>[#<block-index>]`, which makes sync idempotent (invariant 3). Each event stores its mirror file and line number (invariant 1).
-5. **Bookkeeping.** Affected sessions are re-aggregated, the cursor advances in the same transaction, and a `sync_log` row records the run.
+5. **Bookkeeping.** Affected sessions are re-aggregated, the cursor advances in the same transaction, and a `sync_log` row records the sync.
 
 **Compressed sources.** An adapter can mark a file as `compression: 'zstd'`. Origin then ingests and mirrors the decompressed content, using Node's built-in zstd, so cursors, line numbers, and raw lines work as for plain files. Compressed files are written once, so they are skipped when unchanged since their last ingestion.
 
@@ -201,9 +204,29 @@ Excluded events disappear from search, timelines, session counts, `get`, and `so
 
 ## Search and timeline
 
-- Full-text search uses FTS5 with the `trigram` tokenizer, so case-insensitive substring search works for CJK as well as Latin text. Each whitespace-separated term becomes a quoted phrase, and terms are combined with AND. A trigram index cannot serve terms shorter than three characters, so those queries fall back to `LIKE`.
-- Results are ranked by BM25 relevance by default, or by time on request (`--recent`); `LIKE` fallbacks are always ordered by time. Event search covers `message` events unless tool events are requested (`--all` / `include_tools`). Entry search covers active entries.
-- The timeline lists sessions by time, or the events of one session in order (tool events are hidden unless requested).
+Event search covers `message` events unless tool events are requested (`--all` / `include_tools`), and never returns forgotten events. Entry search covers active entries.
+
+**Terms.** A query is split on whitespace, and every term must occur in the text, ignoring case, as a substring (`log` matches `catalog`). How a term is found depends on its length in characters:
+
+- **Three or more characters**: through a trigram index, for CJK as well as Latin text.
+- **One or two CJK letters** (Han, kana, or Hangul), such as `部署` or `库`: through the CJK index, which holds every pair of adjacent CJK letters and the last letter of each stretch of them.
+- **One or two other characters**, such as `AI`, `C#`, or `5号`: no index can find them, so Origin checks the text of candidate events, newest first. The candidates are the events the search covers (its kinds, and the requested project, source, and time range) that match the query's other terms. At most the newest 25,000 candidates are checked (`SCAN_LIMIT`), so such a term can miss older events; a time range, a project, or a longer term reaches them.
+
+**Indexes.** Three FTS5 indexes serve event search, all keyed by `seq`. One of them drives a query, newest first, and the other terms filter its matches:
+
+| Index | Holds | Used for |
+|---|---|---|
+| `message_fts` | `message` events, with the position of every trigram (`detail=full`) | Message searches with a term of three or more characters: each term is matched exactly as a phrase and scored by BM25 |
+| `event_fts` | Every event, recording only which events contain each trigram (`detail=none`), a fraction of the size of a full index | Searches that include tool events: an event must contain every trigram of every term, and is then checked against the terms themselves |
+| `event_cjk` | The CJK bigrams of every event with CJK text (`detail=none`, contentless) | CJK terms of one or two letters, and queries whose only other terms are that short |
+
+**Order.** By default, results are ranked by BM25 relevance, best first. Ranking considers the newest 2,000 matches (`RANK_WINDOW`), or all of them if there are fewer: when a query matches more events, the older ones are neither ranked nor returned, so very common terms favour recent events, and a time range moves the window. For messages, BM25 scores the terms as phrases; with tool events, it scores their trigrams. Queries without a term of three or more characters, and `--recent`, are ordered by time instead. Ordered by time means newest first by timestamp, and among events with the same timestamp, the later arrival first; ties in relevance are broken the same way. Results ordered by time, and the window of the newest 2,000 matches, are exact whatever order events arrived in: a query reads its index by blocks of arrivals (see [Storage](#storage)) and stops as soon as no unread block can hold a newer match than those it needs. A query with only a few matches (up to 2,000, or five times as many as it needs) reads them all instead.
+
+**Snippets** show up to 200 characters of text around the first match, with every match in brackets.
+
+**Entries** are searched by the same terms: terms of three or more characters through `entry_fts`, ranked by BM25, and shorter ones by checking the text (entries are few). Without a term of three or more characters, entries are newest first.
+
+The timeline lists sessions by time, or the events of one session in order (tool events are hidden unless requested).
 
 ## MCP server
 

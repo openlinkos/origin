@@ -19,7 +19,10 @@ export interface EventFilter {
 }
 
 export interface SearchOptions extends EventFilter {
-  /** `relevance` (BM25, default) or `recent` (newest first). Short queries are always `recent`. */
+  /**
+   * `relevance` (BM25 over the newest RANK_WINDOW matches, default) or `recent` (newest first).
+   * Queries without a term of three or more characters are always `recent`.
+   */
   order?: 'relevance' | 'recent';
 }
 
@@ -27,13 +30,13 @@ export interface SearchHit extends EventRow {
   snippet: string;
 }
 
-const EVENT_COLUMNS = `e.id, e.source, e.session_id, e.parent_id, e.ts, e.project, e.cwd, e.git_branch,
+export const EVENT_COLUMNS = `e.id, e.source, e.session_id, e.parent_id, e.ts, e.project, e.cwd, e.git_branch,
   e.role, e.kind, e.text, e.raw_file_id, e.raw_line, e.agent_version, e.meta`;
 
 /** Forgotten events are excluded from every query (invariant 2, sticky forgetting). */
 export const VISIBLE_EVENT = 'NOT EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_id = e.id)';
 
-interface RawEventRecord {
+export interface RawEventRecord {
   id: string;
   source: string;
   session_id: string;
@@ -52,7 +55,7 @@ interface RawEventRecord {
   snippet?: string;
 }
 
-function toEventRow(r: RawEventRecord): EventRow {
+export function toEventRow(r: RawEventRecord): EventRow {
   return {
     id: r.id,
     source: r.source,
@@ -99,49 +102,6 @@ function whereClause(f: EventFilter, params: unknown[]): string {
     params.push(...f.kinds);
   }
   return ` AND ${parts.join(' AND ')}`;
-}
-
-/** Turn a user query into an FTS5 trigram query: each whitespace-separated term becomes a phrase, joined with AND. */
-export function toFtsQuery(query: string): string | null {
-  const terms = query
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 3); // trigram needs at least 3 characters
-  if (terms.length === 0) return null;
-  return terms.map((t) => `"${t.replace(/"/g, '""')}"`).join(' AND ');
-}
-
-/** Full-text search over events. Queries shorter than 3 characters fall back to LIKE. */
-export function searchEvents(db: Database, query: string, filter: SearchOptions = {}): SearchHit[] {
-  const limit = filter.limit ?? 20;
-  const fts = toFtsQuery(query);
-  const params: unknown[] = [];
-  if (fts) {
-    params.push(fts);
-    const where = whereClause(filter, params);
-    params.push(limit, filter.offset ?? 0);
-    const rows = db
-      .prepare(
-        `SELECT ${EVENT_COLUMNS}, snippet(event_fts, 0, '[', ']', '…', 24) AS snippet
-         FROM event_fts f JOIN event e ON e.rowid = f.rowid
-         WHERE event_fts MATCH ?${where}
-         ORDER BY ${filter.order === 'recent' ? 'e.ts DESC' : 'bm25(event_fts), e.ts DESC'} LIMIT ? OFFSET ?`,
-      )
-      .all(...(params as never[])) as unknown as RawEventRecord[];
-    return rows.map((r) => ({ ...toEventRow(r), snippet: r.snippet ?? '' }));
-  }
-  const q = query.trim();
-  if (q.length === 0) return [];
-  params.push(`%${q}%`);
-  const where = whereClause(filter, params);
-  params.push(limit, filter.offset ?? 0);
-  const rows = db
-    .prepare(
-      `SELECT ${EVENT_COLUMNS}, substr(e.text, 1, 160) AS snippet
-       FROM event e WHERE e.text LIKE ?${where} ORDER BY e.ts DESC LIMIT ? OFFSET ?`,
-    )
-    .all(...(params as never[])) as unknown as RawEventRecord[];
-  return rows.map((r) => ({ ...toEventRow(r), snippet: r.snippet ?? '' }));
 }
 
 /** Session timeline (most recent first). */
@@ -223,7 +183,7 @@ export function listEvents(db: Database, filter: EventFilter = {}): EventRow[] {
   params.push(filter.limit ?? 200, filter.offset ?? 0);
   const rows = db
     .prepare(
-      `SELECT ${EVENT_COLUMNS} FROM event e WHERE 1 = 1${where} ORDER BY e.ts ASC, e.rowid ASC
+      `SELECT ${EVENT_COLUMNS} FROM event e WHERE 1 = 1${where} ORDER BY e.ts ASC, e.seq ASC
        LIMIT ? OFFSET ?`,
     )
     .all(...(params as never[])) as unknown as RawEventRecord[];
