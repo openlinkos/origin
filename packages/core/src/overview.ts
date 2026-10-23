@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import type { Database } from './db.js';
+import { mirrorUsage } from './mirror.js';
 import { dbPath, remotePath } from './paths.js';
 
 /** Disk usage of a store (see docs/architecture.md#storage). */
@@ -8,8 +9,10 @@ export interface StoreUsage {
   databaseBytes: number;
   /** The write-ahead log next to it. */
   walBytes: number;
-  /** Raw mirror bytes ingested: this store's own files, and files replicated from devices. */
+  /** Raw mirror bytes ingested (uncompressed): this store's own files, and files replicated from devices. */
   mirrorBytes: { local: number; remote: number };
+  /** What those mirrors take on disk, compressed (see mirror.ts). */
+  mirrorStoredBytes: { local: number; remote: number };
   /** Free space for the store's directory, or null if the platform cannot tell. */
   freeDiskBytes: number | null;
 }
@@ -23,13 +26,7 @@ export function storeUsage(db: Database, home: string): StoreUsage {
   } catch {
     // no WAL file (in-memory database, or checkpointed and removed)
   }
-  const mirror = db
-    .prepare(
-      `SELECT COALESCE(SUM(CASE WHEN substr(path, 1, 1) = '@' THEN 0 ELSE bytes_ingested END), 0) AS local,
-              COALESCE(SUM(CASE WHEN substr(path, 1, 1) = '@' THEN bytes_ingested ELSE 0 END), 0) AS remote
-       FROM raw_file`,
-    )
-    .get() as { local: number; remote: number };
+  const mirrors = mirrorUsage(db);
   let freeDiskBytes: number | null = null;
   try {
     const s = fs.statfsSync(home);
@@ -40,7 +37,8 @@ export function storeUsage(db: Database, home: string): StoreUsage {
   return {
     databaseBytes: pageCount * pageSize,
     walBytes,
-    mirrorBytes: { local: mirror.local, remote: mirror.remote },
+    mirrorBytes: { local: mirrors.local.bytes, remote: mirrors.remote.bytes },
+    mirrorStoredBytes: { local: mirrors.local.storedBytes, remote: mirrors.remote.storedBytes },
     freeDiskBytes,
   };
 }

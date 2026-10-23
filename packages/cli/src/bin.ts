@@ -475,7 +475,7 @@ function cmdShow(ctx: Ctx, args: string[]): number {
     console.log('\nRaw locator:');
     console.log(`  original  ${loc.originalPath} (generation ${loc.generation})`);
     console.log(`  mirror    ${loc.mirrorPath}:${loc.line}`);
-    const raw = readRawLine(loc);
+    const raw = readRawLine(ctx.db, ctx.home, loc);
     if (raw) console.log(`\nOriginal line:\n${oneLine(raw, 600)}`);
   }
   return 0;

@@ -285,7 +285,7 @@ export function sourcesOf(db: Database, home: string, id: string): SourceView[] 
   }
   return cited.map(({ quote, event }) => {
     const loc = rawLocator(db, home, event);
-    const raw = loc ? readRawLine(loc) : null;
+    const raw = loc ? readRawLine(db, home, loc) : null;
     return {
       event_id: event.id,
       time: isoLocal(event.ts),

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import {
+  appendRemote,
   listEvents,
   listSessions,
   openMemoryDatabase,
@@ -162,7 +163,7 @@ describe('codex adapter', () => {
     const [archivedEvent] = listEvents(db, { sessionId: other });
     expect(archivedEvent).toMatchObject({ text: 'Archive me.', project: 'billing' });
     const loc = rawLocator(db, originHome, archivedEvent!)!;
-    expect(JSON.parse(readRawLine(loc)!)).toMatchObject({ ordinal: 1 });
+    expect(JSON.parse(readRawLine(db, originHome, loc)!)).toMatchObject({ ordinal: 1 });
 
     expect(
       listSessions(db)
@@ -188,9 +189,36 @@ describe('codex adapter', () => {
     db.close();
   });
 
+  it('knows the session cwd on a hub, from the mirror, after a restart', () => {
+    // A hub has only the mirror, stored compressed: a fresh adapter (a restarted hub) reads the
+    // session_meta line of earlier pushes through readLine, not from a file.
+    const db = openMemoryDatabase();
+    const push = (text: string, offset: number) =>
+      appendRemote(
+        { db, home: originHome, frameBytes: 64 },
+        createCodexAdapter({ home: codexHome }),
+        {
+          device: 'laptop',
+          source: 'codex',
+          path: `/home/me/.codex/${REL}`,
+          relPath: REL,
+          generation: 1,
+          offset,
+          data: Buffer.from(text),
+        },
+      );
+    const head = `${lines.slice(0, 6).join('\n')}\n`;
+    expect(push(head, 0)).toMatchObject({ ok: true });
+    expect(push(`${lines.slice(6).join('\n')}\n`, Buffer.byteLength(head))).toMatchObject({
+      ok: true,
+    });
+    const last = listEvents(db, { sessionId: SESSION }).at(-1);
+    expect(last).toMatchObject({ kind: 'tool_use', project: 'demo-app', agentVersion: '0.160.0' });
+    db.close();
+  });
+
   it('detects compression by magic bytes, not by file name', () => {
-    // On a hub, the mirror of a `.jsonl.zst` rollout is plain JSONL under that name; a compressed
-    // file without the suffix must still be read.
+    // A rollout named `.jsonl.zst` may hold plain JSONL, and a compressed one may lack the suffix.
     const content = `${lines.join('\n')}\n`;
     const plainZst = path.join(codexHome, `rollout-2026-10-20T09-00-00-${SESSION}.jsonl.zst`);
     const realZst = path.join(codexHome, 'other', `rollout-2026-10-20T09-00-00-${SESSION}.jsonl`);

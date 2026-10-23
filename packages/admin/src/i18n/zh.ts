@@ -98,6 +98,7 @@ export const zh: Messages = {
   'overview.wal': '预写日志（WAL）',
   'overview.mirrorsLocal': '原始镜像（本库）',
   'overview.mirrorsRemote': '原始镜像（来自设备）',
+  'overview.mirrorSize': '{stored}（解压后 {size}）',
   'overview.freeDisk': '可用磁盘空间',
   'overview.staleDevices': '有 {n} 台设备超过 24 小时没有发送任何数据。',
 

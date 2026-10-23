@@ -3,14 +3,25 @@ import path from 'node:path';
 import * as sqlite from 'node:sqlite';
 import type { Database } from './db.js';
 import { OriginError } from './errors.js';
+import {
+  allMirrorStates,
+  framesPath,
+  hasFrameBoundary,
+  type MirrorState,
+  readMirror,
+  tailPath,
+} from './mirror.js';
 import { dbPath, rawDir } from './paths.js';
 
 export interface BackupResult {
   /** Size of the database copy. */
   databaseBytes: number;
-  /** Mirror files in the backup. */
+  /** Mirrors in the backup. */
   mirrorFiles: number;
-  /** Mirror bytes copied this time (a previous backup into the same directory is extended). */
+  /**
+   * Mirror bytes written this time, as stored (sealed frames and open tails); a previous backup
+   * into the same directory is extended.
+   */
   mirrorBytesCopied: number;
 }
 
@@ -23,19 +34,18 @@ const COPY_CHUNK = 4 * 1024 * 1024;
  * Back up a store into `target` (see docs/guide/privacy.md#backing-up): first the database, with
  * SQLite's online backup in a single step, so that the copy is one consistent snapshot even while
  * other processes keep writing (copied in small steps, it would restart at every write); then the
- * raw mirrors. Mirrors only grow, so a mirror already in `target` is extended with the bytes it
- * lacks. Copying mirrors after the database means the backup holds every line the database refers
- * to. To restore, copy `target` into an empty ORIGIN_HOME.
+ * mirrors, exactly as that snapshot records them (see mirror.ts). Sealed frames never change, so
+ * the frames a previous backup into `target` holds are extended with those it lacks; an open tail
+ * is extended as long as no frame was sealed from it since, and written again otherwise. Its
+ * content is read from the live store, where it may have been sealed in the meantime: a mirror's
+ * content only grows, so it is the same. To restore, copy `target` into an empty ORIGIN_HOME.
  */
 export async function backupStore(
   db: Database,
   home: string,
   target: string,
 ): Promise<BackupResult> {
-  const backup = (sqlite as unknown as { backup?: BackupFn }).backup;
-  if (typeof backup !== 'function') {
-    throw new OriginError('Backing up needs Node.js 22.16 or later (node:sqlite backup).');
-  }
+  const backup = (sqlite as unknown as { backup: BackupFn }).backup;
   const dest = path.join(target, 'origin.db');
   const inside = path.relative(path.resolve(rawDir(home)), path.resolve(target));
   if (
@@ -46,50 +56,137 @@ export async function backupStore(
     throw new OriginError('Back up into a directory outside the store.');
   }
   fs.mkdirSync(target, { recursive: true });
+  // What a previous backup here holds, to extend it rather than copy everything again.
+  const previous = new Map(snapshotMirrors(dest)?.map((m) => [m.state.rawFileId, m]));
   for (const f of [dest, `${dest}-wal`, `${dest}-shm`]) fs.rmSync(f, { force: true });
   await backup(db, dest, { rate: 2 ** 31 - 1 });
-  const copied = { files: 0, bytes: 0 };
-  copyMirrors(rawDir(home), path.join(target, 'raw'), copied);
+  const mirrors = snapshotMirrors(dest);
+  if (!mirrors) throw new OriginError(`Cannot read the backed-up database ${dest}.`);
+  let copied = 0;
+  for (const m of mirrors) {
+    const before = previous.get(m.state.rawFileId);
+    copied += copyMirror(
+      db,
+      home,
+      target,
+      m.state,
+      before && before.identity === m.identity ? before.state : undefined,
+    );
+  }
   return {
     databaseBytes: fs.statSync(dest).size,
-    mirrorFiles: copied.files,
-    mirrorBytesCopied: copied.bytes,
+    mirrorFiles: mirrors.length,
+    mirrorBytesCopied: copied,
   };
 }
 
-function copyMirrors(from: string, to: string, copied: { files: number; bytes: number }): void {
-  if (!fs.existsSync(from)) return;
-  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
-    const src = path.join(from, entry.name);
-    const dst = path.join(to, entry.name);
-    if (entry.isDirectory()) {
-      copyMirrors(src, dst, copied);
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    fs.mkdirSync(to, { recursive: true });
-    const size = fs.statSync(src).size;
-    let have = fs.existsSync(dst) ? fs.statSync(dst).size : 0;
-    if (have > size) {
-      // Not a prefix of the mirror (a mirror never shrinks): copy it again.
-      fs.rmSync(dst);
-      have = 0;
-    }
-    copied.files++;
-    if (have === size) continue;
-    appendRange(src, dst, have, size);
-    copied.bytes += size - have;
+/**
+ * The mirrors a database file records, each with what identifies its raw file across copies of
+ * the store (original path, generation, and when it was first seen), or null if there is no
+ * database or it cannot be read.
+ */
+function snapshotMirrors(file: string): Array<{ state: MirrorState; identity: string }> | null {
+  if (!fs.existsSync(file)) return null;
+  let copy: sqlite.DatabaseSync | null = null;
+  try {
+    copy = new sqlite.DatabaseSync(file);
+    const identities = new Map(
+      (
+        copy
+          .prepare('SELECT id, source, path, generation, first_seen_at FROM raw_file')
+          .all() as unknown as Array<{
+          id: number;
+          source: string;
+          path: string;
+          generation: number;
+          first_seen_at: number;
+        }>
+      ).map((r) => [r.id, `${r.source}\n${r.path}\n${r.generation}\n${r.first_seen_at}`]),
+    );
+    return allMirrorStates(copy).map((state) => ({
+      state,
+      identity: identities.get(state.rawFileId) ?? '',
+    }));
+  } catch {
+    return null;
+  } finally {
+    copy?.close();
   }
 }
 
+/**
+ * Bring one mirror in `target` to the state `m` of the snapshot; `before` is its state in the
+ * previous backup there. Returns the bytes written.
+ */
+function copyMirror(
+  db: Database,
+  home: string,
+  target: string,
+  m: MirrorState,
+  before: MirrorState | undefined,
+): number {
+  const frames = framesPath(target, m.mirror);
+  const tail = tailPath(target, m.mirror);
+  fs.mkdirSync(path.dirname(frames), { recursive: true });
+  // The previous backup is of this mirror if its frames end where one of this mirror's ends.
+  const same =
+    before !== undefined &&
+    before.mirror === m.mirror &&
+    before.bytes <= m.bytes &&
+    before.frameBytes <= m.frameBytes &&
+    hasFrameBoundary(db, m.rawFileId, before.frameBytes, before.sealedBytes);
+  let written = 0;
+
+  const haveFrames = same ? Math.min(fileSize(frames), before.frameBytes) : 0;
+  if (m.frameBytes > 0 || fileSize(frames) > 0) {
+    resize(frames, haveFrames);
+    appendRange(framesPath(home, m.mirror), frames, haveFrames, m.frameBytes);
+    written += m.frameBytes - haveFrames;
+  }
+
+  const tailLength = m.bytes - m.sealedBytes;
+  const haveTail =
+    same && before.sealedBytes === m.sealedBytes
+      ? Math.min(fileSize(tail), before.bytes - before.sealedBytes)
+      : 0;
+  if (tailLength > 0 || fileSize(tail) > 0) {
+    resize(tail, haveTail);
+    if (tailLength > haveTail) {
+      const data = readMirror(db, home, m.rawFileId, m.sealedBytes + haveTail, m.bytes);
+      if (data.length !== tailLength - haveTail) {
+        throw new OriginError(`The mirror ${m.mirror} is shorter than the database records.`);
+      }
+      fs.appendFileSync(tail, data);
+      written += data.length;
+    }
+  }
+  return written;
+}
+
+function fileSize(file: string): number {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
+/** Create `file` if needed, and cut it to `size` bytes. */
+function resize(file: string, size: number): void {
+  if (!fs.existsSync(file)) fs.writeFileSync(file, '');
+  if (fileSize(file) !== size) fs.truncateSync(file, size);
+}
+
+/** Append bytes `[start, end)` of `src` to `dst`. */
 function appendRange(src: string, dst: string, start: number, end: number): void {
+  if (end <= start) return;
   const input = fs.openSync(src, 'r');
   const output = fs.openSync(dst, 'a');
   try {
     const buf = Buffer.alloc(Math.min(COPY_CHUNK, end - start));
     for (let at = start; at < end; ) {
       const n = fs.readSync(input, buf, 0, Math.min(buf.length, end - at), at);
-      if (n <= 0) break;
+      if (n <= 0) throw new OriginError(`The mirror ${src} is shorter than the database records.`);
       fs.writeSync(output, buf, 0, n);
       at += n;
     }

@@ -58,7 +58,7 @@ Origin distinguishes three kinds of durable entries. Every entry carries its sou
 | Object | Meaning | Key fields |
 |---|---|---|
 | **Source** | An adapter for one agent: `claude-code`, `codex`, `cursor`, `zcode`, `grok` | id, agent version, discovery root |
-| **Raw** | Append-only mirror of an original log file | source, original path, generation, byte/line cursor, tail hash |
+| **Raw** | Append-only mirror of an original log file, stored in zstd frames | source, original path, generation, byte/line cursor, tail hash, sealed frames |
 | **Event** | A normalized conversation event: user message, assistant message, tool call, tool result | id, source, session, timestamp, project, cwd, git branch, role, kind, text, raw locator |
 | **Entry** | A durable `memory` / `knowledge` / `cognition` statement | id (`ent_…`), kind, text, confidence, author, project, sources (event ids + quotes), supersedes, root (its first version), valid_from / valid_to, created_at, origin (the store that wrote it); status (`active` / `superseded` / `forgotten`) is derived, never stored |
 | **Tombstone** | Record of a forget operation | id (`tmb_…`), target id, reason, time, origin (the store that created it); the entries it forgot and the events it excluded on each store |
@@ -92,7 +92,7 @@ These are product guarantees. Each must be covered by tests, and code comments r
 
 1. **Provenance.** Every Entry cites at least one Event; every Event points to a Raw file and line. Any answer can be expanded down to the original text.
 2. **Sticky forgetting.** After `forget`, an entry leaves every query on that store immediately, and its source events join an exclusion set that no later write can resurrect. Tombstones reach every store and only accumulate: what was forgotten stays forgotten wherever it arrives, including versions and copies that arrive later, and nothing un-forgets.
-3. **Append-only.** Raw mirrors and Events are never rewritten. Entries change by supersession (`supersedes`), never in place.
+3. **Append-only.** Raw mirrors and Events are never rewritten: the content of a mirror, its uncompressed bytes, only grows, and a line once ingested never changes, however it is stored (see [Raw mirrors](#raw-mirrors)). Entries change by supersession (`supersedes`), never in place.
 4. **Your data, your machines.** All data lives on machines you control: your devices under `~/.origin/` and, optionally, your own hub. Origin never calls a third-party service; the only network traffic is between your devices and your hub.
 5. **Single entry point.** Every read and write goes through the same core operations, whichever interface it comes from: agents use MCP (their device's `origin mcp`, or the hub's HTTP endpoint); people use the CLI or the admin UI of their hub. A write lands in the store where it is made, on a device its own store first, and replication applies it to other stores through the same operations. The hub's replication API carries raw mirrors, entries, and tombstones between your own stores and is not an entry point for agents or people.
 
@@ -106,7 +106,7 @@ These are product guarantees. Each must be covered by tests, and code comments r
 
 ## Packages
 
-pnpm workspace, TypeScript (strict, ESM, NodeNext), Node.js ≥ 22.13. `core`, `adapters`, and `admin` use only Node built-ins; `mcp` depends on the official [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) and zod. The hub and its admin UI use Node's built-in `node:http`.
+pnpm workspace, TypeScript (strict, ESM, NodeNext), Node.js ≥ 22.16 (for zstd in `node:zlib` and the online backup of `node:sqlite`). `core`, `adapters`, and `admin` use only Node built-ins; `mcp` depends on the official [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) and zod. The hub and its admin UI use Node's built-in `node:http`.
 
 | Package | Path | Responsibility | Depends on |
 |---|---|---|---|
@@ -126,6 +126,8 @@ interface SourceAdapter {
   discover(): Promise<SourceFile[]>; // { absPath, relPath, compression?: 'zstd' }
   parseLine(line: string, ctx: ParseContext): ParsedLine | null; // deterministic; throws on malformed input
 }
+// ctx: { absPath, relPath, lineNo, fileMtimeMs, readLine(n) }; readLine returns an earlier line of
+// the same file as ingested, for an adapter that needs, say, a file's first line on a hub.
 ```
 
 ## Storage
@@ -133,12 +135,14 @@ interface SourceAdapter {
 ```
 ~/.origin/                 # or $ORIGIN_HOME
 ├── origin.db              # SQLite (WAL)
-└── raw/<source>/...       # append-only mirrors of the original log files
+└── raw/<source>/...       # append-only mirrors of the original log files:
+                           #   <mirror>.zst (sealed zstd frames) and <mirror>.tail (open tail)
 ```
 
 | Table | Contents |
 |---|---|
 | `raw_file` | One row per mirrored file generation, with its ingestion cursor |
+| `raw_chunk` | The sealed frames of each mirror: first line, line count, offset and length in the content and in the `.zst` file. Triggers reject updates and deletes |
 | `event` | Normalized events, keyed by their order of arrival in this store (`seq`) |
 | `event_block` | For each block of 4,096 consecutive arrivals, the latest timestamp in it and up to it (derived, kept by a trigger) |
 | `message_fts`, `event_fts`, `event_cjk` | The search indexes over events: a full trigram index of `message` events, a trigram index of every event that records only which events contain each trigram, and an index of CJK bigrams (see [Search and timeline](#search-and-timeline)) |
@@ -156,9 +160,23 @@ interface SourceAdapter {
 - `session` is derived and can be rebuilt from `event`; per-source totals (`origin status`, the admin overview) are read from it. The search indexes are derived too and kept in sync by triggers: `message_fts` and `event_fts` are external-content tables (the content of `message_fts` is the `event_message` view of message events), and `event_cjk` is contentless, filled through a function that the core registers on every connection. `rebuildSearchIndexes()` rebuilds them all, and `event_block`, from the events and entries.
 - **Arrival order.** Events, and the search indexes with them, are keyed by `seq`, their order of arrival in this store: FTS5 stores the differences between consecutive keys, so dense keys keep the indexes small. A sync ingests the files it finds oldest first, by modification time, and a device pushes its files to its hub in the order it last updated them, so arrival order follows time as far as possible; but it is not time order, since a hub, for example, may receive a device's old sessions long after newer ones. So a trigger records, for each block of 4,096 consecutive arrivals, the latest timestamp in it and up to it (`event_block`). A newest-first query reads its index latest arrival first, in a few chains of consecutive blocks (a block more than a day newer than the chain before it starts a new one), always from the chain whose unread part may hold the newest event, and stops as soon as no chain may hold one newer than those it needs. A narrow `(seq, ts)` index gives an event's timestamp without reading the event.
 - **Size.** On a store of two million events averaging about 800 characters of text, the database takes about 2,550 bytes per event: 1,360 for the event itself, 205 for its indexes, 500 for `event_fts`, 460 for `message_fts`, and 20 for `event_cjk`. A full trigram index of every event would take about 2,350 bytes per event on its own.
-- **Backups.** `origin backup <dir>` copies the database with SQLite's online backup in one step, a consistent snapshot even while other processes write, and then copies the raw mirrors, only the bytes the directory does not have yet (see [Backing up](guide/privacy.md#backing-up)).
+- **Backups.** `origin backup <dir>` copies the database with SQLite's online backup in one step, a consistent snapshot even while other processes write, and then the raw mirrors as that snapshot records them: the sealed frames the directory does not have yet, and each open tail, extended, or written again if frames were sealed from it since. A tail is read from the live store, where it may have been sealed meanwhile; a mirror's content only grows, so it is the same (see [Backing up](guide/privacy.md#backing-up)).
 - **Store names.** Every store has a name, kept in `setting`: on a device it is the device's name, and a hub calls its store `hub`. Entries and tombstones record the name of the store that wrote them as their `origin`, and a device is known to its hub by its store's name. A store is named the first time it needs a name: `origin serve` names it `hub`; other commands use `ORIGIN_DEVICE` or the host name. Once a store has written an entry or a tombstone, it keeps its name.
-- **No migrations before the first release.** The schema is one set of idempotent statements applied every time the database is opened, so added tables and indexes appear in existing databases automatically. Any other schema change is made in place and needs a fresh `ORIGIN_HOME`. Delete the whole directory, never just `origin.db`: mirror paths are deterministic, so re-syncing into an existing `raw/` would append duplicate content. Versioned migrations will arrive with the first release.
+- **No migrations before the first release.** The schema is one set of idempotent statements applied every time the database is opened, so added tables and indexes appear in existing databases automatically. Any other schema change is made in place and needs a fresh `ORIGIN_HOME`. Delete the whole directory, never just `origin.db`: the mirrors under `raw/` are only meaningful with the database that records them. Versioned migrations will arrive with the first release.
+
+### Raw mirrors
+
+A mirror holds the ingested bytes of one generation of a file: its *content*, complete lines only. It is stored compressed, in two files named after it:
+
+- `<mirror>.zst`: the **sealed frames**, independent zstd frames (level 3, with checksums), each holding complete lines, appended one after another. `raw_chunk` records each frame: its first line, its line count, its offset and length in the content, and its offset and length in the file. Reading a line decompresses only the frame that holds it.
+- `<mirror>.tail`: the **open tail**, the newest lines, uncompressed.
+
+The content is the frames, decompressed, followed by the tail, each up to what the database records (`raw_chunk` for the frames, `raw_file.bytes_ingested` for the end); every read and write of `raw/` goes through one module (`mirror.ts` in `core`). Line numbers, cursors, rewrite generations, tail hashes, and event ids are all in terms of the content, as for a plain copy of the file.
+
+- **Sealing.** New lines are appended to the tail while it stays under 1 MiB. The append that would bring it to 1 MiB or more seals the tail and the new lines instead: they are cut into frames, each ending at the first line break once it holds 1 MiB (a longer line fills a frame of its own, and a last piece under half a MiB joins the frame before it), the frames are appended to `<mirror>.zst` and flushed to disk, and `raw_chunk` records them in the transaction that advances the cursor. Once that transaction has committed and the write-ahead log has been flushed, a short transaction empties the tail. A file that has not grown for an hour is likely finished, so its tail is sealed too, whatever its size, by the next sync of its source on a device and by a check every 10 minutes on a hub; lines appended later start a new tail.
+- **What append-only means here.** The content only grows, and the bytes of a line never change (invariant 3). On disk, `<mirror>.zst` only grows and its frames are never rewritten (`raw_chunk` rejects updates and deletes); `<mirror>.tail` is only appended to, except that it is emptied once its lines are in frames. Sealing moves lines from the tail into a frame without changing the content.
+- **Crash safety.** Bytes in either file past what the database records are not part of the mirror: readers never read them, and the next write to the mirror drops them before appending. A crash after a frame is written but before its transaction commits leaves a frame that nothing records; it is dropped, and the lines, still in the tail, are sealed again. A crash after the commit but before the tail is emptied leaves lines in the tail that are also in a frame; the database says the tail is empty, so they are ignored and then dropped. Neither loses or doubles a line. A file shorter than the database records has lost data, and Origin refuses to append to that mirror rather than break provenance (invariant 1). A reader that finds the tail emptied by a concurrent seal in another process reads again.
+- **Size.** On 171 MiB of synthetic Claude Code logs shaped like real ones (large tool results, base64 screenshots for about a quarter of the bytes, Chinese and English text), the mirrors take 35 MiB once their files have stopped growing (4.9×; 52 MiB right after an import, while every file still has an open tail). Ingesting takes about 15% longer, and reading a random raw line takes 1.5 ms on average, against 6.8 ms to scan a whole plain mirror.
 
 ## Ingestion
 
@@ -166,7 +184,7 @@ interface SourceAdapter {
 
 1. **Cursor.** Each `raw_file` row tracks `bytes_ingested`, `lines_ingested`, and `tail_hash` (SHA-256 of the last 4 KB ingested). The cursor is read under the write lock, and only bytes after it are read.
 2. **Rewrite detection.** If the file shrank or its tail no longer matches, it was rewritten rather than appended. Origin opens a new *generation* with a fresh mirror and keeps the old mirror intact (invariant 3).
-3. **Complete lines only.** Bytes up to the last newline are appended to the mirror; a trailing partial line waits for the next sync. A mirror always equals the ingested bytes of its generation, so bytes left past the cursor by an interrupted sync are dropped before appending (invariant 1).
+3. **Complete lines only.** Bytes up to the last newline are appended to the mirror (see [Raw mirrors](#raw-mirrors)); a trailing partial line waits for the next sync. A mirror's content always equals the ingested bytes of its generation, so bytes left past the cursor by an interrupted sync are dropped before appending (invariant 1).
 4. **Parse and insert.** Each line goes through `parseLine`; failures are counted, not fatal. Events are inserted with `INSERT OR IGNORE` under the id `<source>:<native-id>[#<block-index>]`, which makes sync idempotent (invariant 3). Each event stores its mirror file and line number (invariant 1).
 5. **Bookkeeping.** Affected sessions are re-aggregated, the cursor advances in the same transaction, and a `sync_log` row records the sync.
 
@@ -268,8 +286,8 @@ Every store is a replica; the hub is the one that is always online.
 A device sends its hub what it has written itself; the hub sends devices only what was forgotten. A sync (`origin sync` on a connected device) takes three steps, in this order:
 
 1. **Raw mirrors.** A device pushes **raw mirror bytes**, not parsed events. The hub stores them as its own append-only mirrors and parses them with the same adapters, so provenance (invariant 1) holds on the hub and parser fixes apply everywhere. Event ids are identical on every store.
-   - Each remote file is keyed by `(source, "@<device>:<original path>", generation)`; local paths never start with `@`. Hub mirrors live under `raw/devices/<device>/<source>/<relPath>[.g<n>]`.
-   - Pushing is resumable and idempotent: the device asks for the hub's cursors, then sends `[cursor, local size)` of each mirror in chunks of complete lines (at most 1 MiB, or one longer line). A chunk whose offset does not match the hub's cursor is rejected with the current cursor, and the device resumes from there.
+   - Each remote file is keyed by `(source, "@<device>:<original path>", generation)`; local paths never start with `@`. Hub mirrors live under `raw/devices/<device>/<source>/<relPath>[.g<n>]`, stored like any other (see [Raw mirrors](#raw-mirrors)).
+   - Pushing is resumable and idempotent: the device asks for the hub's cursors, then sends `[cursor, local size)` of each mirror in chunks of complete lines (at most 1 MiB, or one longer line). A chunk whose offset does not match the hub's cursor is rejected with the current cursor, and the device resumes from there. Offsets and cursors count bytes of a mirror's content, uncompressed: the device reads its mirror decompressed, the request is gzip-encoded on the way, and the hub compresses what it stores.
 2. **Entries and tombstones up.** The device sends the entries and tombstones it wrote itself (those whose `origin` is its name), in the order of its `change_log`, after its push cursor. Entries it has forgotten are never sent. The hub stores them under the same ids, with their author and origin, and applies the tombstones by the rules in [Forgetting](#forgetting), so a version or entry that arrives into something already forgotten is forgotten on arrival. Because the device pushes its mirrors first, the events its entries cite are normally on the hub already; if an entry's cited events or the version it supersedes are not there yet, the hub says which ids are missing, the push cursor stops before that entry, and later entries wait for the next sync. Tombstones are sent all the same: forgetting never waits.
 3. **Tombstones down.** The device asks for the tombstones after its pull cursor in the hub's `change_log`; the hub leaves out the ones that device created and sends each with its current effects on the hub. The device applies them to its store, so forgetting reaches every replica (invariant 2). When a tombstone's effects on the hub grow later, because the hub applied it to data the device did not have or because a correction or entry arrived that it covers, the hub logs it again, and every device, its creator included, receives the larger effects.
 
@@ -293,7 +311,7 @@ A device sends its hub what it has written itself; the hub sends devices only wh
 | `POST /mcp` | MCP Streamable HTTP, stateless, JSON responses; the same seven tools as the stdio server |
 | `GET /v1/device` | `{ device, hub }`: the device the token belongs to (its name), and the hub's name |
 | `GET /v1/cursors?device=<name>` | The hub's byte cursor for every file of the token's device |
-| `POST /v1/ingest` | Append one chunk: JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }` with `data` in base64; the body may be gzip-encoded. Returns `200 { bytes, eventsAdded, … }` or `409 { bytes }` on an offset mismatch |
+| `POST /v1/ingest` | Append one chunk: JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }` with `data` in base64 and `offset` in the mirror's uncompressed content; the body may be gzip-encoded. Returns `200 { bytes, eventsAdded, … }` or `409 { bytes }` on an offset mismatch |
 | `POST /v1/entries` | `{ device, entries }` with at most 1,000 entries, each `{ id, kind, text, confidence, author, project, supersedes, validFrom, validTo, createdAt, origin, sources: [{ eventId, quote }] }`, whose `origin` must be the token's device. Stored in order; returns `200 { applied, pending }`, where `pending` is null, or `{ id, missing }` for the first entry whose cited events or superseded version are not on the hub yet (nothing after it is stored). `409` for a different body under an existing id |
 | `POST /v1/tombstones` | `{ device, tombstones }` with at most 1,000 tombstones, each `{ id, target, reason, createdAt, origin, entries, events }` with its effects on the device, whose `origin` must be the token's device. Applied by the rules in [Forgetting](#forgetting); returns `200 { applied }`, or `409` for a different body under an existing id |
 | `GET /v1/tombstones?after=<seq>&device=<name>` | `{ tombstones, next, more }`: the tombstones in the hub's change log after sequence number `after`, except those the token's device created, each with its id, target, reason, `createdAt`, origin, and its forgotten entries and excluded events on the hub. Continue with `after=<next>` while `more` is true |

@@ -271,7 +271,7 @@ describe('device to hub replication', () => {
     // A first sync whose mirror push is skipped: the hub has no events yet.
     const noMirrors: typeof fetch = async (input, init) => {
       if (!String(input).includes('/v1/cursors')) return fetch(input, init);
-      const cursors = localRawFiles(deviceDb, deviceHome).map((f) => ({
+      const cursors = localRawFiles(deviceDb).map((f) => ({
         source: f.source,
         path: f.path,
         generation: f.generation,

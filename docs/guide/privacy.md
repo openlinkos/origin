@@ -7,7 +7,7 @@ Agent session logs often contain source code, file contents, command output, and
 Everything lives in one directory, `~/.origin` (or `ORIGIN_HOME`):
 
 - `origin.db`: a SQLite database with the normalized events, their search index, your entries, and the record of everything you forgot.
-- `raw/`: append-only copies of the original session log files.
+- `raw/`: append-only copies of the original session log files, compressed with zstd: each is a `.zst` file of compressed frames and a `.tail` file with its newest lines.
 
 Your data lives only on machines you control: your devices and, if you run one, your own hub. Origin never calls a third-party service or an LLM API. Without a hub it makes no network connections at all; with a hub, the only traffic is between your devices and your hub. The directory is not encrypted, so protect it the way you would protect the original logs.
 
@@ -43,7 +43,7 @@ A [personal hub](./hub.md) changes where your data lives:
 origin backup /backups/origin
 ```
 
-It first copies `origin.db` with SQLite's online backup in a single step, so that the copy is one consistent snapshot, and then the `raw/` mirrors. Mirrors only grow, so running it again into the same directory copies only what is new. To restore, copy the directory into an empty `ORIGIN_HOME` (on a hub, the `/data` volume). Like the store, a backup keeps the raw lines of forgotten events. It needs Node.js 22.16 or later.
+It first copies `origin.db` with SQLite's online backup in a single step, so that the copy is one consistent snapshot, and then the `raw/` mirrors as that copy records them. Compressed frames never change, so running it again into the same directory copies only new frames and the newest lines. To restore, copy the directory into an empty `ORIGIN_HOME` (on a hub, the `/data` volume). Like the store, a backup keeps the raw lines of forgotten events.
 
 Other ways of copying a large database that is in use are slower or unsafe. `VACUUM INTO` rebuilds every table and index, which takes many times longer (about 13 minutes rather than 40 seconds for a 20 GB database). The `.backup` command of `sqlite3` copies in small steps and starts over whenever another process writes, which Origin does every few seconds while agents run. A plain copy of the file is consistent only when no Origin process is running, because recent writes may still be in `origin.db-wal`.
 

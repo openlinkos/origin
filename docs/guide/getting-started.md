@@ -8,7 +8,7 @@ Origin is not yet published to npm. Install it from source as shown below.
 
 ## Requirements
 
-- Node.js 22.13 or later (24 LTS recommended)
+- Node.js 22.16 or later (24 LTS recommended)
 - pnpm (`corepack enable` installs the version pinned by the repository)
 - At least one supported agent: Claude Code or Codex CLI. Cursor, ZCode, and Grok Build can already *use* Origin; archiving their own sessions is coming next.
 

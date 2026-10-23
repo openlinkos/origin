@@ -2,7 +2,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { listEvents, listSessions, openMemoryDatabase, syncSource } from '@openlinkos/origin-core';
+import {
+  listEvents,
+  listSessions,
+  openMemoryDatabase,
+  rawLocator,
+  readRawLine,
+  syncSource,
+} from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createClaudeCodeAdapter,
@@ -140,7 +147,10 @@ describe('createClaudeCodeAdapter end-to-end', () => {
       eventCount: 6,
     });
     expect(adapter.version()).toBe('2.1.303');
-    expect(fs.existsSync(path.join(home, 'raw', 'claude-code', REL))).toBe(true);
+    // The mirror holds the file's lines (in its open tail: the file is smaller than a frame).
+    expect(readRawLine(db, home, rawLocator(db, home, events[1]!)!)).toBe(
+      fs.readFileSync(path.join(fixtures, REL), 'utf8').split(/\r?\n/)[4],
+    );
     db.close();
   });
 });

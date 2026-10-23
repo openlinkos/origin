@@ -5,6 +5,18 @@ import zlib from 'node:zlib';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { OriginError } from './errors.js';
+import {
+  appendMirror,
+  FRAME_BYTES,
+  IDLE_SEAL_MS,
+  type MirrorState,
+  mirrorState,
+  readMirror,
+  readMirrorLine,
+  readRange,
+  sealIdleMirrors,
+  settleMirror,
+} from './mirror.js';
 import { parseRawPath, rawDir, remotePath } from './paths.js';
 import { NAME_RE } from './tokens.js';
 import type { EventInput, SourceAdapter, SourceFile, SyncResult } from './types.js';
@@ -34,6 +46,8 @@ export interface IngestContext {
    */
   home: string;
   log?: (message: string) => void;
+  /** Size at which a mirror's open tail is sealed into zstd frames (default FRAME_BYTES; tests). */
+  frameBytes?: number;
 }
 
 /** Counters shared by local syncs and remote appends. */
@@ -78,11 +92,19 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
       const step = transaction(ctx.db, () => ingestFile(ctx, adapter, file, agentVersion, result), {
         immediate: true,
       });
-      if (step !== 'none') changed = true;
-      if (step !== 'more') break;
+      if (step.sealed !== null) settleMirror(ctx.db, ctx.home, step.sealed);
+      if (step.status !== 'none') changed = true;
+      if (step.status !== 'more') break;
     }
     if (changed) result.filesChanged++;
   }
+  // Files that stopped growing an hour ago are likely finished: store their last lines compressed.
+  sealIdleMirrors(ctx.db, ctx.home, {
+    before: Date.now() - IDLE_SEAL_MS,
+    remote: false,
+    source: adapter.id,
+    frameBytes: ctx.frameBytes,
+  });
 
   result.durationMs = Date.now() - startedAt;
   logSync(ctx.db, {
@@ -138,6 +160,14 @@ function isUnchanged(ctx: IngestContext, source: string, file: SourceFile): bool
   return st.size === raw.bytes_ingested && tailMatches(fileContent(file.absPath), raw);
 }
 
+/** What one ingestion step did, and the raw file whose mirror it sealed frames for, if any. */
+interface Step {
+  status: 'none' | 'more' | 'done';
+  sealed: number | null;
+}
+
+const NOTHING: Step = { status: 'none', sealed: null };
+
 /**
  * Ingest the next newly appended complete lines of one file, at most TRANSACTION_BYTES of them:
  * `none` if there were none, `more` if complete lines may remain, `done` otherwise. Must run inside
@@ -149,10 +179,10 @@ function ingestFile(
   file: SourceFile,
   agentVersion: string | null,
   result: SyncResult,
-): 'none' | 'more' | 'done' {
+): Step {
   let raw = latestRawFile(ctx.db, adapter.id, file.absPath);
-  const content = openContent(ctx, file, raw);
-  if (!content) return 'none';
+  const content = openContent(file, raw);
+  if (!content) return NOTHING;
   if (raw && (content.size < raw.bytes_ingested || !tailMatches(content, raw))) {
     ctx.log?.(`rewrite detected, new generation: ${file.relPath}`);
     const generation = raw.generation + 1;
@@ -174,7 +204,7 @@ function ingestFile(
       1,
     );
   }
-  if (content.size === raw.bytes_ingested) return 'none';
+  if (content.size === raw.bytes_ingested) return NOTHING;
 
   const start = raw.bytes_ingested;
   let end = file.compression ? content.size : Math.min(content.size, start + TRANSACTION_BYTES);
@@ -186,25 +216,29 @@ function ingestFile(
     chunk = content.read(start, end);
     lastNl = chunk.lastIndexOf(0x0a);
   }
-  if (lastNl < 0) return 'none'; // no complete line yet
+  if (lastNl < 0) return NOTHING; // no complete line yet
   chunk = chunk.subarray(0, lastNl + 1);
 
-  appendLines(
+  const sealed = appendLines(
     ctx,
     adapter,
     raw,
     chunk,
     { absPath: file.absPath, relPath: file.relPath, fileMtimeMs: content.mtimeMs, agentVersion },
-    (bytes) => tailHash(content, bytes),
+    tailHash(content, start + chunk.length),
     result,
   );
-  return start + chunk.length < content.size ? 'more' : 'done';
+  return {
+    status: start + chunk.length < content.size ? 'more' : 'done',
+    sealed: sealed ? raw.id : null,
+  };
 }
 
 /**
- * Append complete lines to a raw file's mirror, parse them, insert events, refresh the touched
- * sessions, and advance the cursor. Shared by local syncs and hub appends; must run inside a write
- * transaction.
+ * Parse complete lines of a raw file, insert their events, refresh the touched sessions, append
+ * the lines to the file's mirror, and advance the cursor, whose tail hash after these lines is
+ * `newTailHash`. Shared by local syncs and hub appends; must run inside a write transaction.
+ * Returns whether frames of the mirror were sealed (see appendMirror).
  */
 function appendLines(
   ctx: IngestContext,
@@ -212,14 +246,12 @@ function appendLines(
   raw: RawFileRow,
   chunk: Buffer,
   parse: { absPath: string; relPath: string; fileMtimeMs: number; agentVersion: string | null },
-  tail: (bytesIngested: number) => string,
+  newTailHash: string,
   stats: AppendStats,
-): void {
-  const mirrorAbs = path.join(rawDir(ctx.home), raw.mirror);
-  fs.mkdirSync(path.dirname(mirrorAbs), { recursive: true });
-  alignMirror(mirrorAbs, raw.bytes_ingested);
-  fs.appendFileSync(mirrorAbs, chunk);
-
+): boolean {
+  // Lines ingested before these, read from the mirror (an adapter may need a file's first line).
+  const readLine = (n: number) =>
+    n >= 1 && n <= raw.lines_ingested ? readMirrorLine(ctx.db, ctx.home, raw.id, n) : null;
   const lines = chunk.toString('utf8').split('\n');
   lines.pop(); // trailing empty string
   const baseLine = raw.lines_ingested;
@@ -248,6 +280,7 @@ function appendLines(
         relPath: parse.relPath,
         lineNo,
         fileMtimeMs: parse.fileMtimeMs,
+        readLine,
       });
     } catch (err) {
       stats.parseErrors++;
@@ -284,13 +317,21 @@ function appendLines(
     }
   }
   for (const sessionId of touchedSessions) refreshSession(ctx.db, adapter.id, sessionId);
-  const newBytes = raw.bytes_ingested + chunk.length;
+  const st = mirrorState(ctx.db, raw.id) as MirrorState;
+  const sealed = appendMirror(ctx.db, ctx.home, st, chunk, ctx.frameBytes ?? FRAME_BYTES);
   ctx.db
     .prepare(
       `UPDATE raw_file SET bytes_ingested = ?, lines_ingested = ?, tail_hash = ?, updated_at = ?
          WHERE id = ?`,
     )
-    .run(newBytes, baseLine + lines.length, tail(newBytes), Date.now(), raw.id);
+    .run(
+      raw.bytes_ingested + chunk.length,
+      baseLine + lines.length,
+      newTailHash,
+      Date.now(),
+      raw.id,
+    );
+  return sealed;
 }
 
 /** A chunk of a device's raw mirror, replicated to a hub (see docs/architecture.md#personal-hub). */
@@ -326,7 +367,8 @@ export function appendRemote(
   chunk: RemoteChunk,
 ): AppendResult {
   const relPath = validateChunk(adapter, chunk);
-  return transaction(
+  let sealed: number | null = null;
+  const result = transaction(
     ctx.db,
     (): AppendResult => {
       const key = remotePath(chunk.device, chunk.path);
@@ -349,22 +391,23 @@ export function appendRemote(
       const stats: AppendStats = { linesRead: 0, eventsAdded: 0, parseErrors: 0 };
       if (chunk.data.length > 0) {
         const startedAt = Date.now();
-        const mirrorAbs = path.join(rawDir(ctx.home), raw.mirror);
         const mtime = chunk.mtimeMs;
-        appendLines(
+        const sealedFrames = appendLines(
           ctx,
           adapter,
           raw,
           chunk.data,
           {
-            absPath: mirrorAbs,
+            // The original file is on the device; adapters read earlier lines through readLine.
+            absPath: path.join(rawDir(ctx.home), raw.mirror),
             relPath,
             fileMtimeMs: typeof mtime === 'number' && Number.isFinite(mtime) ? mtime : startedAt,
             agentVersion: chunk.agentVersion ?? null,
           },
-          (bytes) => tailHash(fileContent(mirrorAbs), bytes),
+          mirrorTailHash(ctx, raw, chunk.data),
           stats,
         );
+        if (sealedFrames) sealed = raw.id;
         logSync(ctx.db, {
           source: adapter.id,
           startedAt,
@@ -378,6 +421,22 @@ export function appendRemote(
     },
     { immediate: true },
   );
+  if (sealed !== null) settleMirror(ctx.db, ctx.home, sealed);
+  return result;
+}
+
+/** The tail hash of a mirror once `data` is appended to it: of its last TAIL_WINDOW bytes. */
+function mirrorTailHash(ctx: IngestContext, raw: RawFileRow, data: Buffer): string {
+  const window = Math.min(TAIL_WINDOW, raw.bytes_ingested + data.length);
+  const fromData = Math.min(window, data.length);
+  const before = window - fromData;
+  const hash = createHash('sha256');
+  if (before > 0) {
+    hash.update(
+      readMirror(ctx.db, ctx.home, raw.id, raw.bytes_ingested - before, raw.bytes_ingested),
+    );
+  }
+  return hash.update(data.subarray(data.length - fromData)).digest('hex');
 }
 
 /**
@@ -445,16 +504,14 @@ export function remoteCursors(
 /**
  * This store's own (not replicated) raw files, as a device pushes them to its hub: least recently
  * updated first, so that the hub receives a device's history roughly in the order it happened.
+ * Their content is read with readMirror (see mirror.ts).
  */
-export function localRawFiles(
-  db: Database,
-  home: string,
-): Array<{
+export function localRawFiles(db: Database): Array<{
+  id: number;
   source: string;
   path: string;
   relPath: string;
   generation: number;
-  mirrorPath: string;
   bytes: number;
   updatedAt: number;
 }> {
@@ -471,11 +528,11 @@ export function localRawFiles(
     const suffix = `.g${r.generation}`;
     if (r.generation > 1 && rel.endsWith(suffix)) rel = rel.slice(0, -suffix.length);
     return {
+      id: r.id,
       source: r.source,
       path: r.path,
       relPath: rel,
       generation: r.generation,
-      mirrorPath: path.join(rawDir(home), r.mirror),
       bytes: r.bytes_ingested,
       updatedAt: r.updated_at,
     };
@@ -517,7 +574,7 @@ function fileContent(file: string): Content {
   return { size: st.size, mtimeMs: st.mtimeMs, read: (a, b) => readRange(file, a, b) };
 }
 
-function openContent(ctx: IngestContext, file: SourceFile, raw: RawFileRow | null): Content | null {
+function openContent(file: SourceFile, raw: RawFileRow | null): Content | null {
   let st: fs.Stats;
   try {
     st = fs.statSync(file.absPath);
@@ -529,26 +586,8 @@ function openContent(ctx: IngestContext, file: SourceFile, raw: RawFileRow | nul
   }
   // Compressed files are written once; skip them if unchanged since they were last ingested.
   if (raw && st.mtimeMs <= raw.updated_at) return null;
-  if (typeof zlib.zstdDecompressSync !== 'function') {
-    ctx.log?.(`skipped ${file.relPath}: this Node.js version cannot read zstd`);
-    return null;
-  }
   const data = zlib.zstdDecompressSync(fs.readFileSync(file.absPath));
   return { size: data.length, mtimeMs: st.mtimeMs, read: (a, b) => data.subarray(a, b) };
-}
-
-/**
- * A mirror holds exactly the ingested bytes of its generation. Bytes past the cursor were appended
- * by a sync that never committed, so they are dropped before appending again.
- */
-function alignMirror(mirror: string, bytesIngested: number): void {
-  let size: number;
-  try {
-    size = fs.statSync(mirror).size;
-  } catch {
-    return;
-  }
-  if (size > bytesIngested) fs.truncateSync(mirror, bytesIngested);
 }
 
 /**
@@ -664,22 +703,6 @@ function createRawFile(
     tail_hash: '',
     updated_at: now,
   };
-}
-
-function readRange(file: string, start: number, end: number): Buffer {
-  const fd = fs.openSync(file, 'r');
-  try {
-    const buf = Buffer.alloc(end - start);
-    let off = 0;
-    while (off < buf.length) {
-      const n = fs.readSync(fd, buf, off, buf.length - off, start + off);
-      if (n <= 0) break;
-      off += n;
-    }
-    return off === buf.length ? buf : buf.subarray(0, off);
-  } finally {
-    fs.closeSync(fd);
-  }
 }
 
 function tailHash(content: Content, bytesIngested: number): string {

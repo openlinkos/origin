@@ -1,6 +1,9 @@
 /**
  * Database schema (see docs/architecture.md).
  * - raw_file: append-only mirror cursors for original files (Raw).
+ * - raw_chunk: the sealed zstd frames of each mirror (see mirror.ts): first line, line count,
+ *   offset and length in the mirror's content and in its `.zst` file. Append-only: triggers reject
+ *   updates and deletes.
  * - event: unified events (Event), append-only, keyed by `seq`, their order of arrival in this store
  *   (the rowid; explicit so that VACUUM keeps it, since the search indexes refer to it).
  * - event_block: for each block of 4,096 consecutive arrivals, the latest timestamp in it and up to
@@ -48,6 +51,24 @@ CREATE TABLE IF NOT EXISTS raw_file (
   updated_at     INTEGER NOT NULL,
   UNIQUE (source, path, generation)
 );
+
+CREATE TABLE IF NOT EXISTS raw_chunk (
+  raw_file_id  INTEGER NOT NULL REFERENCES raw_file(id),
+  first_line   INTEGER NOT NULL,
+  line_count   INTEGER NOT NULL,
+  byte_offset  INTEGER NOT NULL,
+  byte_length  INTEGER NOT NULL,
+  frame_offset INTEGER NOT NULL,
+  frame_length INTEGER NOT NULL,
+  PRIMARY KEY (raw_file_id, first_line)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS raw_chunk_offset ON raw_chunk (raw_file_id, byte_offset);
+CREATE TRIGGER IF NOT EXISTS raw_chunk_no_update BEFORE UPDATE ON raw_chunk BEGIN
+  SELECT RAISE(ABORT, 'raw_chunk is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS raw_chunk_no_delete BEFORE DELETE ON raw_chunk BEGIN
+  SELECT RAISE(ABORT, 'raw_chunk is append-only');
+END;
 
 CREATE TABLE IF NOT EXISTS session (
   source      TEXT NOT NULL,

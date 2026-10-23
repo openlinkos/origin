@@ -1,12 +1,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { JOURNAL_SIZE_LIMIT } from '../src/db.js';
 import {
   type Database,
   forget,
   getEvent,
+  IDLE_SEAL_MS,
   listEvents,
   listSessions,
   openDatabase,
@@ -14,11 +16,12 @@ import {
   readRawLine,
   searchEvents,
   stats,
+  storeUsage,
   syncSource,
 } from '../src/index.js';
 import { TRANSACTION_BYTES } from '../src/ingest.js';
 import { VISIBLE_EVENT } from '../src/store.js';
-import { fakeAdapter, line } from './helpers.js';
+import { fakeAdapter, line, mirrorText } from './helpers.js';
 
 let home: string;
 let src: string;
@@ -104,8 +107,8 @@ describe('syncSource', () => {
     const loc2 = rawLocator(db, home, second!);
     expect(loc1?.generation).toBe(1);
     expect(loc2?.generation).toBe(2);
-    expect(readRawLine(loc1!)).toContain('original content here');
-    expect(readRawLine(loc2!)).toContain('rewritten from scratch');
+    expect(readRawLine(db, home, loc1!)).toContain('original content here');
+    expect(readRawLine(db, home, loc2!)).toContain('rewritten from scratch');
   });
 
   it('records parse errors without aborting the file', async () => {
@@ -125,15 +128,16 @@ describe('syncSource', () => {
     await syncSource({ db, home }, fakeAdapter(src));
     const first = getEvent(db, 'fake:1');
     const mirror = rawLocator(db, home, first!)!.mirrorPath;
-    fs.appendFileSync(mirror, line('x', 's7', 1500, 'user', 'uncommitted'));
+    fs.appendFileSync(`${mirror}.tail`, line('x', 's7', 1500, 'user', 'uncommitted'));
 
     fs.appendFileSync(file, line('2', 's7', 2000, 'user', 'second'));
     await syncSource({ db, home }, fakeAdapter(src));
     const second = getEvent(db, 'fake:2')!;
-    expect(readRawLine(rawLocator(db, home, second)!)).toBe(
+    expect(readRawLine(db, home, rawLocator(db, home, second)!)).toBe(
       line('2', 's7', 2000, 'user', 'second').trim(),
     );
-    expect(fs.readFileSync(mirror, 'utf8')).toBe(fs.readFileSync(file, 'utf8'));
+    expect(mirrorText(db, home, second.rawFileId)).toBe(fs.readFileSync(file, 'utf8'));
+    expect(fs.readFileSync(`${mirror}.tail`, 'utf8')).toBe(fs.readFileSync(file, 'utf8'));
   });
 
   it('applies session titles and exposes stats', async () => {
@@ -240,15 +244,17 @@ describe('write transactions', () => {
     for (let i = 0; i < 1500; i++) content += line(`b${i}`, 'big', 1000 + i, 'user', `${i} ${pad}`);
     fs.writeFileSync(file, content);
     expect(content.length).toBeGreaterThan(2.5 * TRANSACTION_BYTES);
-    expect(await syncCountingTransactions()).toBe(Math.ceil(content.length / TRANSACTION_BYTES));
+    // One more transaction empties the open tail after its lines were sealed into frames.
+    expect(await syncCountingTransactions()).toBe(
+      Math.ceil(content.length / TRANSACTION_BYTES) + 1,
+    );
     const events = listEvents(db, { sessionId: 'big', limit: 2000 });
     expect(events).toHaveLength(1500);
     expect(events[1499]?.rawLine).toBe(1500);
-    expect(readRawLine(rawLocator(db, home, events[1499]!)!)).toBe(
+    expect(readRawLine(db, home, rawLocator(db, home, events[1499]!)!)).toBe(
       line('b1499', 'big', 2499, 'user', `1499 ${pad}`).trim(),
     );
-    const mirror = rawLocator(db, home, events[0]!)!.mirrorPath;
-    expect(fs.readFileSync(mirror, 'utf8')).toBe(content);
+    expect(mirrorText(db, home, events[0]!.rawFileId)).toBe(content);
     expect(listSessions(db)[0]?.eventCount).toBe(1500);
   });
 
@@ -361,5 +367,195 @@ describe('time order', () => {
       'fake:far-past',
     ]);
     expect(getEvent(db, 'fake:far-future')?.ts).toBe(5e15);
+  });
+});
+
+describe('compressed mirrors', () => {
+  const FRAME = 300;
+  const file = () => path.join(src, 'z.jsonl');
+  const ctx = () => ({ db, home, frameBytes: FRAME });
+  const lineN = (i: number) =>
+    line(`z${i}`, 'z', 1000 + i, 'user', `line ${i} ${'数据'.repeat(i % 9)}`);
+  const write = (from: number, to: number) => {
+    let text = '';
+    for (let i = from; i < to; i++) text += lineN(i);
+    fs.appendFileSync(file(), text);
+  };
+  const chunks = (rawFileId: number) =>
+    db
+      .prepare(
+        `SELECT first_line, line_count, byte_offset, byte_length, frame_offset, frame_length
+         FROM raw_chunk WHERE raw_file_id = ? ORDER BY first_line`,
+      )
+      .all(rawFileId) as unknown as Array<{
+      first_line: number;
+      line_count: number;
+      byte_offset: number;
+      byte_length: number;
+      frame_offset: number;
+      frame_length: number;
+    }>;
+  const rawFileOf = () => getEvent(db, 'fake:z0')!.rawFileId;
+  const mirrorBase = () => rawLocator(db, home, getEvent(db, 'fake:z0')!)!.mirrorPath;
+  /** Every line of the source, read back from the mirror, and the mirror's whole content. */
+  const expectIntact = (count: number) => {
+    const source = fs.readFileSync(file(), 'utf8');
+    expect(mirrorText(db, home, rawFileOf())).toBe(source);
+    for (let i = 0; i < count; i++) {
+      const e = getEvent(db, `fake:z${i}`)!;
+      expect(e.rawLine).toBe(i + 1);
+      expect(readRawLine(db, home, rawLocator(db, home, e)!)).toBe(lineN(i).trim());
+    }
+    expect(listEvents(db, { sessionId: 'z', limit: 1000 })).toHaveLength(count);
+  };
+
+  it('seals the open tail into zstd frames of complete lines, keeping the content (invariant 3)', async () => {
+    // Batches of one to four lines: some stay in the tail, some reach the frame size and seal it.
+    let n = 0;
+    for (const size of [1, 2, 4, 1, 3, 4, 2, 1, 4, 3, 1]) {
+      write(n, n + size);
+      n += size;
+      await syncSource(ctx(), fakeAdapter(src));
+    }
+    expectIntact(n);
+
+    const id = rawFileOf();
+    const sealed = chunks(id);
+    expect(sealed.length).toBeGreaterThan(2);
+    const frames = fs.readFileSync(`${mirrorBase()}.zst`);
+    const content = fs.readFileSync(file());
+    let firstLine = 1;
+    let offset = 0;
+    let frameOffset = 0;
+    for (const c of sealed) {
+      // Contiguous, and each frame decompresses on its own into complete lines.
+      expect([c.first_line, c.byte_offset, c.frame_offset]).toEqual([
+        firstLine,
+        offset,
+        frameOffset,
+      ]);
+      const piece = zlib.zstdDecompressSync(
+        frames.subarray(c.frame_offset, c.frame_offset + c.frame_length),
+      );
+      expect(piece.equals(content.subarray(c.byte_offset, c.byte_offset + c.byte_length))).toBe(
+        true,
+      );
+      expect(piece.at(-1)).toBe(0x0a);
+      expect(piece.toString('utf8').split('\n').length - 1).toBe(c.line_count);
+      expect(c.byte_length).toBeGreaterThanOrEqual(FRAME / 2);
+      firstLine += c.line_count;
+      offset += c.byte_length;
+      frameOffset += c.frame_length;
+    }
+    // The frames fill the frames file, and the tail holds the rest, uncompressed.
+    expect(frames.length).toBe(frameOffset);
+    const tail = fs.readFileSync(`${mirrorBase()}.tail`);
+    expect(tail.equals(content.subarray(offset))).toBe(true);
+    expect(tail.length).toBeLessThan(FRAME);
+
+    const usage = storeUsage(db, home);
+    expect(usage.mirrorBytes.local).toBe(content.length);
+    expect(usage.mirrorStoredBytes.local).toBe(frames.length + tail.length);
+    // Frames are never rewritten.
+    expect(() => db.prepare('UPDATE raw_chunk SET line_count = 0').run()).toThrow(/append-only/);
+    expect(() => db.prepare('DELETE FROM raw_chunk').run()).toThrow(/append-only/);
+  });
+
+  it('seals the tail of a file that stopped growing, whatever its size', async () => {
+    write(0, 2);
+    await syncSource(ctx(), fakeAdapter(src));
+    const id = rawFileOf();
+    expect(chunks(id)).toEqual([]);
+    const { updated_at } = db.prepare('SELECT updated_at FROM raw_file WHERE id = ?').get(id) as {
+      updated_at: number;
+    };
+    // An hour later, a sync with nothing new seals the tail into one small frame.
+    const hourAgo = updated_at - IDLE_SEAL_MS - 1;
+    db.prepare('UPDATE raw_file SET updated_at = ? WHERE id = ?').run(hourAgo, id);
+    await syncSource(ctx(), fakeAdapter(src));
+    expect(chunks(id)).toMatchObject([{ first_line: 1, line_count: 2 }]);
+    expect(fs.statSync(`${mirrorBase()}.tail`).size).toBe(0);
+    expectIntact(2);
+    // Sealing leaves the cursor alone; new lines start a new tail.
+    expect(db.prepare('SELECT updated_at FROM raw_file WHERE id = ?').get(id)).toEqual({
+      updated_at: hourAgo,
+    });
+    write(2, 3);
+    await syncSource(ctx(), fakeAdapter(src));
+    expect(fs.readFileSync(`${mirrorBase()}.tail`, 'utf8')).toBe(lineN(2));
+    expectIntact(3);
+  });
+
+  it('seals a line longer than a frame whole, and reads it back', async () => {
+    const long = line('z0', 'z', 1000, 'user', 'w'.repeat(5 * FRAME));
+    fs.writeFileSync(file(), long + lineN(1));
+    await syncSource(ctx(), fakeAdapter(src));
+    expect(chunks(rawFileOf())).toHaveLength(1);
+    expect(readRawLine(db, home, rawLocator(db, home, getEvent(db, 'fake:z0')!)!)).toBe(
+      long.trim(),
+    );
+    expect(mirrorText(db, home, rawFileOf())).toBe(long + lineN(1));
+  });
+
+  /** Run a sync whose `n`-th `sql` statement (1-based) fails, as if the process died there. */
+  async function crashAt(sql: string, n: number): Promise<void> {
+    let seen = 0;
+    const exec = db.exec.bind(db);
+    db.exec = (s: string) => {
+      if (s === sql && ++seen === n) throw new Error('simulated crash');
+      return exec(s);
+    };
+    try {
+      await expect(syncSource(ctx(), fakeAdapter(src))).rejects.toThrow('simulated crash');
+    } finally {
+      db.exec = exec;
+    }
+  }
+
+  it('recovers from a crash after writing a frame, before the transaction commits', async () => {
+    write(0, 2);
+    await syncSource(ctx(), fakeAdapter(src));
+    const tail = fs.readFileSync(`${mirrorBase()}.tail`);
+    write(2, 8); // reaches the frame size: this sync seals
+    await crashAt('COMMIT', 1);
+    // The frame reached the disk, but the database records neither it nor the new lines.
+    expect(fs.statSync(`${mirrorBase()}.zst`).size).toBeGreaterThan(0);
+    expect(chunks(rawFileOf())).toEqual([]);
+    expect(fs.readFileSync(`${mirrorBase()}.tail`).equals(tail)).toBe(true);
+    expect(getEvent(db, 'fake:z2')).toBeNull();
+    expect(mirrorText(db, home, rawFileOf())).toBe(tail.toString('utf8'));
+
+    // The next sync drops the frame nothing records, then seals again: no line lost or doubled.
+    await syncSource(ctx(), fakeAdapter(src));
+    expectIntact(8);
+    const last = chunks(rawFileOf()).at(-1)!;
+    expect(fs.statSync(`${mirrorBase()}.zst`).size).toBe(last.frame_offset + last.frame_length);
+  });
+
+  it('recovers from a crash after sealing commits, before the tail is emptied', async () => {
+    write(0, 2);
+    await syncSource(ctx(), fakeAdapter(src));
+    write(2, 8);
+    // The first write transaction seals and commits; the second, which empties the tail, never runs.
+    await crashAt('BEGIN IMMEDIATE', 2);
+    expect(chunks(rawFileOf()).length).toBeGreaterThan(0);
+    // The tail still holds lines that are now in frames; readers ignore them.
+    expect(fs.statSync(`${mirrorBase()}.tail`).size).toBeGreaterThan(0);
+    expectIntact(8);
+
+    // The next write to the mirror drops them before appending.
+    write(8, 9);
+    await syncSource(ctx(), fakeAdapter(src));
+    expectIntact(9);
+    expect(fs.readFileSync(`${mirrorBase()}.tail`, 'utf8')).toBe(lineN(8));
+  });
+
+  it('refuses to append to a mirror that lost data (invariant 1)', async () => {
+    write(0, 2);
+    await syncSource(ctx(), fakeAdapter(src));
+    fs.truncateSync(`${mirrorBase()}.tail`, 10);
+    write(2, 3);
+    await expect(syncSource(ctx(), fakeAdapter(src))).rejects.toThrow(/the store is damaged/);
+    expect(getEvent(db, 'fake:z2')).toBeNull();
   });
 });

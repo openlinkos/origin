@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-7b57151c
+sourceHash: sha256-ab5f2595
 ---
 
 # 快速开始
@@ -12,7 +12,7 @@ Origin 尚未发布到 npm，请按下面的方式从源码安装。
 
 ## 环境要求 {#requirements}
 
-- Node.js 22.13 或更高（推荐 24 LTS）
+- Node.js 22.16 或更高（推荐 24 LTS）
 - pnpm（`corepack enable` 会安装仓库锁定的版本）
 - 至少一个已支持的 Agent：Claude Code 或 Codex CLI。Cursor、ZCode、Grok Build 现在就能*使用* Origin，归档它们自己的会话即将支持。
 

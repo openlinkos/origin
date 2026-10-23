@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { EventKind, SourceAdapter } from '../src/index.js';
+import { type Database, type EventKind, readMirror, type SourceAdapter } from '../src/index.js';
 
 /** Minimal fake source: one {"id","session","ts","role","text"} object per line. */
 export function fakeAdapter(root: string): SourceAdapter {
@@ -52,3 +52,8 @@ export const line = (
   kind?: EventKind,
 ) => `${JSON.stringify({ id, session, ts, role, text, kind })}
 `;
+
+/** The whole content of a raw file's mirror, decompressed (see mirror.ts). */
+export function mirrorText(db: Database, home: string, rawFileId: number): string {
+  return readMirror(db, home, rawFileId, 0, Number.MAX_SAFE_INTEGER).toString('utf8');
+}

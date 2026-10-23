@@ -162,8 +162,8 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
           body: html`<dl class="ol-dl">
             <dt>${t('overview.database')}</dt><dd>${fmtBytes(o.usage.databaseBytes)}</dd>
             <dt>${t('overview.wal')}</dt><dd>${fmtBytes(o.usage.walBytes)}</dd>
-            <dt>${t('overview.mirrorsLocal')}</dt><dd>${fmtBytes(o.usage.mirrorBytes.local)}</dd>
-            <dt>${t('overview.mirrorsRemote')}</dt><dd>${fmtBytes(o.usage.mirrorBytes.remote)}</dd>
+            <dt>${t('overview.mirrorsLocal')}</dt><dd>${t('overview.mirrorSize', { stored: fmtBytes(o.usage.mirrorStoredBytes.local), size: fmtBytes(o.usage.mirrorBytes.local) })}</dd>
+            <dt>${t('overview.mirrorsRemote')}</dt><dd>${t('overview.mirrorSize', { stored: fmtBytes(o.usage.mirrorStoredBytes.remote), size: fmtBytes(o.usage.mirrorBytes.remote) })}</dd>
             <dt>${t('overview.freeDisk')}</dt><dd>${fmtBytes(o.usage.freeDiskBytes)}</dd>
           </dl>`,
         })}

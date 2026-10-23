@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-f456d1e2
+sourceHash: sha256-15201047
 ---
 
 # 命令参考
@@ -54,7 +54,7 @@ Events:
 
 ## 查看 {#inspecting}
 
-`show` 显示条目及其来源与版本历史；对事件则显示原始定位：原文件、镜像文件与行号，以及原文行。
+`show` 显示条目及其来源与版本历史；对事件则显示原始定位：原文件、镜像与行号（镜像以压缩形式存储为 `<mirror>.zst` 和 `<mirror>.tail`），以及原文行。
 
 ```console
 $ origin show ent_5f0c2a9e41b7

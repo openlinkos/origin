@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import zlib from 'node:zlib';
 import {
   applyTombstone,
@@ -11,6 +10,7 @@ import {
   ownChanges,
   parseTombstoneRecord,
   type ReplicaEntry,
+  readMirrorLines,
   setSetting,
   shouldSendEntry,
   type TombstoneRecord,
@@ -80,41 +80,38 @@ async function pushMirrors(opts: HubSyncOptions, call: Call, result: HubSyncResu
   )) as { cursors: Array<{ source: string; path: string; generation: number; bytes: number }> };
   const remote = new Map(cursors.map((c) => [`${c.source}\n${c.path}\n${c.generation}`, c.bytes]));
 
-  for (const file of localRawFiles(opts.db, opts.home)) {
+  for (const file of localRawFiles(opts.db)) {
     let offset = remote.get(`${file.source}\n${file.path}\n${file.generation}`) ?? 0;
     if (offset >= file.bytes) continue;
     result.files++;
-    const fd = fs.openSync(file.mirrorPath, 'r');
-    try {
-      let conflicts = 0;
-      while (offset < file.bytes) {
-        const data = readLines(fd, offset, file.bytes);
-        const body = {
-          device: opts.hub.device,
-          source: file.source,
-          path: file.path,
-          relPath: file.relPath,
-          generation: file.generation,
-          offset,
-          mtimeMs: file.updatedAt,
-          data: data.toString('base64'),
-        };
-        const reply = (await call('POST', '/v1/ingest', body, [409])) as {
-          bytes: number;
-          eventsAdded?: number;
-        };
-        if (reply.eventsAdded === undefined) {
-          // Offset mismatch: continue from the hub's cursor.
-          if (++conflicts > 3) throw new Error(`hub keeps rejecting ${file.path}`);
-          offset = reply.bytes;
-          continue;
-        }
-        result.bytes += reply.bytes - offset;
-        result.eventsAdded += reply.eventsAdded;
+    let conflicts = 0;
+    while (offset < file.bytes) {
+      // Offsets are in the mirror's uncompressed content; the hub compresses what it stores.
+      const data = readMirrorLines(opts.db, opts.home, file.id, offset, CHUNK_BYTES);
+      if (data.length === 0) throw new Error(`the mirror of ${file.path} ends before its cursor`);
+      const body = {
+        device: opts.hub.device,
+        source: file.source,
+        path: file.path,
+        relPath: file.relPath,
+        generation: file.generation,
+        offset,
+        mtimeMs: file.updatedAt,
+        data: data.toString('base64'),
+      };
+      const reply = (await call('POST', '/v1/ingest', body, [409])) as {
+        bytes: number;
+        eventsAdded?: number;
+      };
+      if (reply.eventsAdded === undefined) {
+        // Offset mismatch: continue from the hub's cursor.
+        if (++conflicts > 3) throw new Error(`hub keeps rejecting ${file.path}`);
         offset = reply.bytes;
+        continue;
       }
-    } finally {
-      fs.closeSync(fd);
+      result.bytes += reply.bytes - offset;
+      result.eventsAdded += reply.eventsAdded;
+      offset = reply.bytes;
     }
   }
 }
@@ -207,20 +204,6 @@ async function pullTombstones(opts: HubSyncOptions, call: Call, result: HubSyncR
       setSetting(opts.db, key, String(after));
     }
     if (page.more !== true) break;
-  }
-}
-
-/** Complete lines starting at `offset`: up to CHUNK_BYTES, or one longer line. */
-function readLines(fd: number, offset: number, end: number): Buffer {
-  let size = Math.min(CHUNK_BYTES, end - offset);
-  for (;;) {
-    const buf = Buffer.alloc(size);
-    const n = fs.readSync(fd, buf, 0, size, offset);
-    const chunk = buf.subarray(0, n);
-    const lastNl = chunk.lastIndexOf(0x0a);
-    if (lastNl >= 0) return chunk.subarray(0, lastNl + 1);
-    if (offset + n >= end) throw new Error('mirror does not end with a newline');
-    size = Math.min(size * 2, end - offset);
   }
 }
 

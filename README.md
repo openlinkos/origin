@@ -49,7 +49,7 @@ Any MCP-capable agent can already query the archive and entries. Archiving an ag
 
 ## Getting started
 
-**Requirements:** Node.js 22.13 or later (24 LTS recommended) and pnpm (`corepack enable` installs the pinned version).
+**Requirements:** Node.js 22.16 or later (24 LTS recommended) and pnpm (`corepack enable` installs the pinned version).
 
 ```bash
 git clone https://github.com/openlinkos/origin.git

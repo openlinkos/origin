@@ -49,7 +49,7 @@ Origin 以**人**而不是工具为中心：
 
 ## 快速开始
 
-**环境要求：** Node.js 22.13 或更高（推荐 24 LTS），以及 pnpm（`corepack enable` 会安装锁定的版本）。
+**环境要求：** Node.js 22.16 或更高（推荐 24 LTS），以及 pnpm（`corepack enable` 会安装锁定的版本）。
 
 ```bash
 git clone https://github.com/openlinkos/origin.git

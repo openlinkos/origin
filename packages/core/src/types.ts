@@ -59,12 +59,19 @@ export interface SourceFile {
 }
 
 export interface ParseContext {
+  /** The original file; on a hub, which has no original, the path of its mirror. */
   absPath: string;
   relPath: string;
   /** 1-based line number (in the mirror, equal to the line number in this generation of the source file). */
   lineNo: number;
   /** Source file mtime (epoch ms), the fallback for lines without a timestamp. */
   fileMtimeMs: number;
+  /**
+   * An earlier line of this generation of the file (1-based), as ingested, or null. Adapters that
+   * need, say, a file's first line read it here rather than from `absPath`, which on a hub is not a
+   * readable file.
+   */
+  readLine?: (lineNo: number) => string | null;
 }
 
 /** A session source adapter for one agent (Source, see docs/architecture.md). Parsing must be deterministic and LLM-free. */

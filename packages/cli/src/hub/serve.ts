@@ -7,10 +7,12 @@ import {
 } from '@openlinkos/origin-admin';
 import {
   type Database,
+  IDLE_SEAL_MS,
   prepareAdminCredential,
   recordAudit,
   type ScryptParams,
   type SourceAdapter,
+  sealIdleMirrors,
 } from '@openlinkos/origin-core';
 import { createHubServer } from './server.js';
 
@@ -158,13 +160,26 @@ export async function startHub(o: StartHubOptions): Promise<RunningHub> {
     }
   }
   const url = urlOf(hub, o.host);
+  // Devices' files that stopped growing are stored compressed to the end (see mirror.ts).
+  const sealing = setInterval(() => {
+    try {
+      sealIdleMirrors(o.db, o.home, { before: Date.now() - IDLE_SEAL_MS, remote: true });
+    } catch (err) {
+      o.log?.(`sealing idle mirrors failed: ${(err as Error).message}`);
+    }
+  }, IDLE_SEAL_CHECK_MS);
+  sealing.unref();
   return {
     url,
     adminUrl: handler
       ? `${adminServer && separate ? urlOf(adminServer, separate.host) : url}/admin/`
       : null,
     async close() {
+      clearInterval(sealing);
       await Promise.all([close(hub), adminServer ? close(adminServer) : Promise.resolve()]);
     },
   };
 }
+
+/** How often the hub looks for mirrors that stopped growing. */
+const IDLE_SEAL_CHECK_MS = 10 * 60_000;

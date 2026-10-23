@@ -31,7 +31,7 @@
     "@openlinkos/origin-mcp": "workspace:*"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.16"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.32.1"

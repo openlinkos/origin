@@ -394,7 +394,7 @@ export class AdminService {
   eventRaw(id: unknown): { id: string; line: string | null; truncated: boolean; length: number } {
     const event = this.visibleEvent(id);
     const loc = rawLocator(this.db, this.o.home, event);
-    const line = loc ? readRawLine(loc) : null;
+    const line = loc ? readRawLine(this.db, this.o.home, loc) : null;
     if (line === null) return { id: event.id, line: null, truncated: false, length: 0 };
     return {
       id: event.id,

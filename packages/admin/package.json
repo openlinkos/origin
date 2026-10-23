@@ -35,6 +35,6 @@
     "@openlinkos/ui": "0.2.0"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.16"
   }
 }

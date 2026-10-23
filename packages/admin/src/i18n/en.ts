@@ -102,6 +102,7 @@ export const en = {
   'overview.wal': 'Write-ahead log',
   'overview.mirrorsLocal': 'Raw mirrors, this store',
   'overview.mirrorsRemote': 'Raw mirrors, from devices',
+  'overview.mirrorSize': '{stored} ({size} uncompressed)',
   'overview.freeDisk': 'Free disk space',
   'overview.staleDevices': '{n} {n|device has|devices have} sent nothing for more than 24 hours.',
 

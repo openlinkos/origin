@@ -74,11 +74,14 @@ export function createCodexAdapter(opts: CodexAdapterOptions = {}): SourceAdapte
   const home = opts.home ?? codexHome();
   const sessions = new Map<string, CodexSessionInfo>();
   let lastVersion: string | null = null;
-  const sessionInfo = (absPath: string): CodexSessionInfo => {
-    let info = sessions.get(absPath);
+  const sessionInfo = (ctx: ParseContext): CodexSessionInfo => {
+    let info = sessions.get(ctx.absPath);
     if (!info) {
-      info = readSessionInfo(absPath);
-      sessions.set(absPath, info);
+      // The first line, as ingested before (on a hub, the mirror is all there is), or else read
+      // from the file.
+      const first = ctx.readLine?.(1);
+      info = typeof first === 'string' ? infoFromLine(first) : readSessionInfo(ctx.absPath);
+      sessions.set(ctx.absPath, info);
     }
     return info;
   };
@@ -100,7 +103,7 @@ export function createCodexAdapter(opts: CodexAdapterOptions = {}): SourceAdapte
         if (info.version) lastVersion = info.version;
         return null;
       }
-      return parseRecord(obj, ctx, () => sessionInfo(ctx.absPath));
+      return parseRecord(obj, ctx, () => sessionInfo(ctx));
     },
   };
 }
@@ -140,7 +143,16 @@ function readSessionInfo(absPath: string): CodexSessionInfo {
   try {
     const head = readHead(absPath);
     const nl = head.indexOf(0x0a);
-    const first = JSON.parse(head.subarray(0, nl < 0 ? head.length : nl).toString('utf8'));
+    return infoFromLine(head.subarray(0, nl < 0 ? head.length : nl).toString('utf8'));
+  } catch {
+    return { cwd: null, version: null };
+  }
+}
+
+/** Session facts from a rollout's first line, if it is the `session_meta` line. */
+function infoFromLine(line: string): CodexSessionInfo {
+  try {
+    const first = JSON.parse(line) as CodexLine | null;
     return first?.type === 'session_meta' ? sessionInfoFrom(first) : { cwd: null, version: null };
   } catch {
     return { cwd: null, version: null };
@@ -150,8 +162,9 @@ function readSessionInfo(absPath: string): CodexSessionInfo {
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 
 /**
- * The beginning of a rollout, up to its first newline. Compression is detected by magic bytes, not
- * by the `.zst` name: on a hub, the mirror of a `.jsonl.zst` rollout is plain JSONL with that name.
+ * The beginning of a rollout file, up to its first newline, for a parser used without Origin's
+ * ingestion (which passes earlier lines in ParseContext.readLine). Compression is detected by magic
+ * bytes, not by the `.zst` name, which a file may have without being compressed.
  */
 function readHead(absPath: string): Buffer {
   const fd = fs.openSync(absPath, 'r');

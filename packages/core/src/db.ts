@@ -1,10 +1,26 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import * as sqlite from 'node:sqlite';
 import { DatabaseSync } from 'node:sqlite';
+import zlib from 'node:zlib';
 import { cjkIndexText } from './cjk.js';
+import { OriginError } from './errors.js';
 import { SCHEMA } from './schema.js';
 
 export type Database = DatabaseSync;
+
+/**
+ * Origin needs Node.js 22.16 or later: zstd in node:zlib (raw mirrors are compressed with it) and
+ * the online backup of node:sqlite. Fail clearly on anything older.
+ */
+function checkRuntime(): void {
+  if (
+    typeof zlib.zstdCompressSync !== 'function' ||
+    typeof (sqlite as { backup?: unknown }).backup !== 'function'
+  ) {
+    throw new OriginError(`Origin needs Node.js 22.16 or later; this is ${process.version}.`);
+  }
+}
 
 /** The size the write-ahead log is truncated to after a checkpoint. */
 export const JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024;
@@ -27,6 +43,7 @@ function registerFunctions(db: Database): void {
 
 /** Open (creating if needed) the database and apply the schema. */
 export function openDatabase(file: string): Database {
+  checkRuntime();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   registerFunctions(db);
@@ -44,6 +61,7 @@ export function openDatabase(file: string): Database {
 
 /** In-memory database for tests and one-off analysis. */
 export function openMemoryDatabase(): Database {
+  checkRuntime();
   const db = new DatabaseSync(':memory:');
   registerFunctions(db);
   db.exec('PRAGMA foreign_keys = ON;');

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +12,7 @@ import {
   forget,
   getEvent,
   getSetting,
+  IDLE_SEAL_MS,
   initStoreName,
   listDevices,
   listEvents,
@@ -27,13 +29,14 @@ import {
   remember,
   remoteCursors,
   revokeToken,
+  sealIdleMirrors,
   setSetting,
   syncSource,
   tombstoneCount,
   tombstoneFeed,
   verifyToken,
 } from '../src/index.js';
-import { fakeAdapter, line } from './helpers.js';
+import { fakeAdapter, line, mirrorText } from './helpers.js';
 
 let dirs: string[];
 let home: string;
@@ -107,7 +110,9 @@ describe('appendRemote', () => {
     });
 
     const mirror = path.join(home, 'raw', 'devices', 'laptop', 'fake', 'proj', 's1.jsonl');
-    expect(fs.readFileSync(mirror, 'utf8')).toBe(two);
+    const id = getEvent(db, 'fake:e1')!.rawFileId;
+    expect(mirrorText(db, home, id)).toBe(two);
+    expect(fs.readFileSync(`${mirror}.tail`, 'utf8')).toBe(two); // smaller than a frame
     expect(seen.map((c) => [c.absPath, c.relPath, c.lineNo, c.fileMtimeMs])).toEqual([
       [mirror, 'proj/s1.jsonl', 1, 42],
       [mirror, 'proj/s1.jsonl', 2, 42],
@@ -122,7 +127,9 @@ describe('appendRemote', () => {
       mirrorPath: mirror,
       line: 2,
     });
-    expect(readRawLine(loc)).toBe(line('e2', 's1', 2000, 'assistant', 'second message').trim());
+    expect(readRawLine(db, home, loc)).toBe(
+      line('e2', 's1', 2000, 'assistant', 'second message').trim(),
+    );
     expect(listSessions(db)[0]).toMatchObject({ sessionId: 's1', eventCount: 2 });
 
     const log = db.prepare('SELECT note, events_added FROM sync_log').all();
@@ -164,6 +171,81 @@ describe('appendRemote', () => {
     ]);
   });
 
+  it('compresses what devices push, keeping offsets and tail hashes in uncompressed bytes', () => {
+    const { adapter } = spyAdapter();
+    const lines = Array.from({ length: 60 }, (_, i) =>
+      line(
+        `e${i}`,
+        's1',
+        1000 + i,
+        i % 2 ? 'assistant' : 'user',
+        `message ${i} 镜像 ${'z'.repeat(i)}`,
+      ),
+    );
+    const text = lines.join('');
+    let offset = 0;
+    for (let i = 0; i < lines.length; i += 3) {
+      const piece = lines.slice(i, i + 3).join('');
+      const r = appendRemote(
+        { db, home, frameBytes: 512 },
+        adapter,
+        chunk({ offset, text: piece }),
+      );
+      expect(r).toMatchObject({ ok: true, bytes: offset + Buffer.byteLength(piece) });
+      offset += Buffer.byteLength(piece);
+    }
+    const id = getEvent(db, 'fake:e0')!.rawFileId;
+    expect(mirrorText(db, home, id)).toBe(text);
+    expect(remoteCursors(db, 'laptop')[0]?.bytes).toBe(Buffer.byteLength(text));
+    const frames = (
+      db.prepare('SELECT COUNT(*) AS n FROM raw_chunk WHERE raw_file_id = ?').get(id) as {
+        n: number;
+      }
+    ).n;
+    expect(frames).toBeGreaterThan(5);
+    for (const [i, l] of lines.entries()) {
+      const loc = rawLocator(db, home, getEvent(db, `fake:e${i}`)!)!;
+      expect(readRawLine(db, home, loc)).toBe(l.trim());
+    }
+    // The tail hash is of the last 4 KB of the content, as for a local file.
+    const { tail_hash } = db.prepare('SELECT tail_hash FROM raw_file WHERE id = ?').get(id) as {
+      tail_hash: string;
+    };
+    const content = Buffer.from(text);
+    expect(tail_hash).toBe(
+      createHash('sha256')
+        .update(content.subarray(content.length - 4096))
+        .digest('hex'),
+    );
+  });
+
+  it("seals the tails of devices' files that stopped growing", async () => {
+    const { adapter } = spyAdapter();
+    appendRemote({ db, home }, adapter, chunk({ text: two }));
+    const local = tmp('origin-local-');
+    fs.writeFileSync(path.join(local, 'l.jsonl'), line('l1', 'sl', 1000, 'user', 'local'));
+    await syncSource({ db, home }, fakeAdapter(local));
+    const frames = () =>
+      db
+        .prepare(
+          `SELECT substr(r.path, 1, 1) = '@' AS remote, COUNT(c.first_line) AS n
+           FROM raw_file r LEFT JOIN raw_chunk c ON c.raw_file_id = r.id GROUP BY 1 ORDER BY 1`,
+        )
+        .all();
+    expect(sealIdleMirrors(db, home, { before: Date.now() - IDLE_SEAL_MS, remote: true })).toBe(0);
+    expect(sealIdleMirrors(db, home, { before: Date.now() + 1, remote: true })).toBe(1);
+    expect(frames()).toEqual([
+      { remote: 0, n: 0 },
+      { remote: 1, n: 1 },
+    ]);
+    expect(mirrorText(db, home, getEvent(db, 'fake:e1')!.rawFileId)).toBe(two);
+    // Nothing left to seal; and more lines from the device start a new tail.
+    expect(sealIdleMirrors(db, home, { before: Date.now() + 1, remote: true })).toBe(0);
+    const third = line('e3', 's1', 3000, 'user', 'third');
+    appendRemote({ db, home }, adapter, chunk({ offset: Buffer.byteLength(two), text: third }));
+    expect(mirrorText(db, home, getEvent(db, 'fake:e3')!.rawFileId)).toBe(two + third);
+  });
+
   it('opens a separate raw file and mirror for each generation', () => {
     const { adapter } = spyAdapter();
     appendRemote({ db, home }, adapter, chunk({ text: line('e1', 's1', 1000, 'user', 'one') }));
@@ -174,7 +256,9 @@ describe('appendRemote', () => {
     );
     expect(r).toMatchObject({ ok: true, eventsAdded: 1 });
     expect(
-      fs.existsSync(path.join(home, 'raw', 'devices', 'laptop', 'fake', 'proj', 's1.jsonl.g2')),
+      fs.existsSync(
+        path.join(home, 'raw', 'devices', 'laptop', 'fake', 'proj', 's1.jsonl.g2.tail'),
+      ),
     ).toBe(true);
     expect(rawLocator(db, home, getEvent(db, 'fake:e3')!)).toMatchObject({
       generation: 2,
@@ -260,7 +344,7 @@ describe('appendRemote', () => {
       ['desk', 1, Buffer.byteLength(line('e9', 's9', 9000, 'user', 'nine'))],
       ['laptop', 1, Buffer.byteLength(two)],
     ]);
-    expect(localRawFiles(db, home).map((f) => f.path)).toEqual([path.join(src, 'local.jsonl')]);
+    expect(localRawFiles(db).map((f) => f.path)).toEqual([path.join(src, 'local.jsonl')]);
     expect(rawLocator(db, home, getEvent(db, 'fake:l1')!)?.device).toBeNull();
     expect(rawLocator(db, home, getEvent(db, 'fake:e9')!)).toMatchObject({
       device: 'desk',
@@ -285,7 +369,7 @@ describe('localRawFiles', () => {
        VALUES ('fake', ?, 2, ?, 7, 1, 1)`,
     ).run(['C:', 'x', 'b.jsonl'].join('\\'), ['fake', 'win', 'b.jsonl.g2'].join('\\'));
 
-    const files = localRawFiles(db, home)
+    const files = localRawFiles(db)
       .map((f) => [f.relPath, f.generation, f.bytes])
       .sort((x, y) => String(x).localeCompare(String(y)));
     expect(files).toEqual([
@@ -293,8 +377,8 @@ describe('localRawFiles', () => {
       ['a.jsonl', 2, Buffer.byteLength(rewritten)],
       ['win/b.jsonl', 2, 7],
     ]);
-    const g2 = localRawFiles(db, home).find((f) => f.path === file && f.generation === 2);
-    expect(fs.readFileSync(g2!.mirrorPath, 'utf8')).toBe(rewritten);
+    const g2 = localRawFiles(db).find((f) => f.path === file && f.generation === 2);
+    expect(mirrorText(db, home, g2!.id)).toBe(rewritten);
   });
 });
 

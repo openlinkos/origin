@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-5115eaa8
+sourceHash: sha256-ae1fde18
 ---
 
 # 架构
@@ -62,7 +62,7 @@ Origin 区分三类持久条目。每个条目都带有自己的来源，并且�
 | 对象 | 含义 | 关键字段 |
 |---|---|---|
 | **Source**（来源） | 某个 Agent 的适配器：`claude-code`、`codex`、`cursor`、`zcode`、`grok` | id、Agent 版本、发现根目录 |
-| **Raw**（原始镜像） | 原始记录文件的只追加镜像 | 来源、原始路径、代次、字节 / 行游标、尾部哈希 |
+| **Raw**（原始镜像） | 原始记录文件的只追加镜像，以 zstd 帧存储 | 来源、原始路径、代次、字节 / 行游标、尾部哈希、已封存的帧 |
 | **Event**（事件） | 规范化后的对话事件：用户消息、助手消息、工具调用、工具结果 | id、来源、会话、时间戳、项目、cwd、git 分支、角色、类型、正文、原始定位 |
 | **Entry**（条目） | 一条持久的 `memory` / `knowledge` / `cognition` 陈述 | id（`ent_…`）、类型、正文、置信度、作者、项目、来源（事件 id + 引文）、supersedes、root（它的第一个版本）、valid_from / valid_to、created_at、origin（写入它的库）；状态（`active` / `superseded` / `forgotten`）由推导得出，从不存储 |
 | **Tombstone**（遗忘记录） | 一次遗忘操作的记录 | id（`tmb_…`）、目标 id、原因、时间、origin（创建它的库）；它在每个库中遗忘的条目和排除的事件 |
@@ -96,7 +96,7 @@ agents on B ──▶ origin mcp ──▶ store B ── (as for device A) ─�
 
 1. **溯源。** 每个条目至少引用一个事件；每个事件都指向某个 Raw 文件中的某一行。任何回答都能一路展开到原文。
 2. **遗忘粘性。** 执行 `forget` 之后，条目立即从该库的所有查询中消失，它的来源事件加入一个排除集，此后任何写入都无法让它们复活。遗忘记录会到达每一个库，并且只增不减：被遗忘的内容无论到达哪里都保持被遗忘，之后才到达的版本和副本也是如此，而且没有任何东西会被取消遗忘。
-3. **只追加。** Raw 镜像和事件永远不会被改写。条目通过取代（`supersedes`）来变更，从不原地修改。
+3. **只追加。** Raw 镜像和事件永远不会被改写：镜像的内容（即其未压缩的字节）只会增长，一行一旦采集就永远不变，无论它以何种形式存储（见[原始镜像](#raw-mirrors)）。条目通过取代（`supersedes`）来变更，从不原地修改。
 4. **你的数据，留在你的机器上。** 所有数据都存放在你控制的机器上：你的各台设备上的 `~/.origin/`，以及可选的你自己的中枢。Origin 从不调用第三方服务；唯一的网络流量发生在你的设备和你的中枢之间。
 5. **单一入口。** 无论来自哪个界面，每一次读写都经过同一组 core 操作：Agent 使用 MCP（所在设备的 `origin mcp`，或中枢的 HTTP 端点）；人使用 CLI 或自己中枢的管理界面。写入发生在发起它的那个库中——在设备上就是先写入设备自己的库——再由复制通过同样的操作应用到其他库。中枢的复制 API 在你自己的各个库之间传输原始镜像、条目和遗忘记录，它既不是 Agent 的入口，也不是人的入口。
 
@@ -110,7 +110,7 @@ agents on B ──▶ origin mcp ──▶ store B ── (as for device A) ─�
 
 ## 包 {#packages}
 
-pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.13。`core`、`adapters` 和 `admin` 只使用 Node 内置模块；`mcp` 依赖官方的 [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) 和 zod。中枢及其管理界面使用 Node 内置的 `node:http`。
+pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.16（需要 `node:zlib` 的 zstd 和 `node:sqlite` 的在线备份）。`core`、`adapters` 和 `admin` 只使用 Node 内置模块；`mcp` 依赖官方的 [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) 和 zod。中枢及其管理界面使用 Node 内置的 `node:http`。
 
 | 包 | 路径 | 职责 | 依赖 |
 |---|---|---|---|
@@ -130,6 +130,8 @@ interface SourceAdapter {
   discover(): Promise<SourceFile[]>; // { absPath, relPath, compression?: 'zstd' }
   parseLine(line: string, ctx: ParseContext): ParsedLine | null; // deterministic; throws on malformed input
 }
+// ctx: { absPath, relPath, lineNo, fileMtimeMs, readLine(n) }; readLine returns an earlier line of
+// the same file as ingested, for an adapter that needs, say, a file's first line on a hub.
 ```
 
 ## 存储 {#storage}
@@ -137,12 +139,14 @@ interface SourceAdapter {
 ```
 ~/.origin/                 # or $ORIGIN_HOME
 ├── origin.db              # SQLite (WAL)
-└── raw/<source>/...       # append-only mirrors of the original log files
+└── raw/<source>/...       # append-only mirrors of the original log files:
+                           #   <mirror>.zst (sealed zstd frames) and <mirror>.tail (open tail)
 ```
 
 | 表 | 内容 |
 |---|---|
 | `raw_file` | 每个镜像文件代次一行，带有它的采集游标 |
+| `raw_chunk` | 每个镜像已封存的帧：首行行号、行数、在内容中和在 `.zst` 文件中的偏移量与长度。触发器拒绝更新和删除 |
 | `event` | 规范化后的事件，以它们到达本库的次序（`seq`）为键 |
 | `event_block` | 每一块 4,096 个连续到达的事件中最晚的时间戳，以及到这一块为止最晚的时间戳（派生数据，由触发器维护） |
 | `message_fts`, `event_fts`, `event_cjk` | 事件的检索索引：`message` 事件的完整 trigram 索引、只记录哪些事件含有每个 trigram 的全部事件索引，以及 CJK 二元组索引（见[检索与时间线](#search-and-timeline)） |
@@ -160,9 +164,23 @@ interface SourceAdapter {
 - `session` 是派生数据，可以从 `event` 重建；按来源的汇总（`origin status`、管理界面的概览）从它读取。检索索引也是派生数据，由触发器保持同步：`message_fts` 和 `event_fts` 是外部内容（external-content）表（`message_fts` 的内容是消息事件的视图 `event_message`），`event_cjk` 没有内容表，通过核心在每个连接上注册的函数填写。`rebuildSearchIndexes()` 从事件和条目重建所有这些索引以及 `event_block`。
 - **到达次序。** 事件以及随之的检索索引都以 `seq` 为键，即事件到达本库的次序：FTS5 保存相邻键之间的差值，所以连续的键能让索引保持很小。同步时按修改时间从旧到新采集找到的文件，设备也按最后更新的先后把文件推送给中枢，所以到达次序尽可能地跟随时间；但它并不是时间次序，例如中枢可能在收到较新的会话很久之后，才收到某台设备的旧会话。因此，一个触发器为每一块 4,096 个连续到达的事件记录其中最晚的时间戳，以及到这一块为止最晚的时间戳（`event_block`）。按从新到旧的查询从最后到达的事件开始读取索引，分成几条由连续的块组成的链（某一块比它之前的链新一天以上时，就开始一条新链），总是从未读部分可能含有最新事件的那条链读取，一旦没有链可能含有比所需事件更新的事件，就立即停止。一个窄的 `(seq, ts)` 索引无需读取事件就能给出它的时间戳。
 - **大小。** 在一个有两百万个事件、平均每个事件约 800 个字符文本的库上，数据库每个事件约占 2,550 字节：事件本身 1,360，它的索引 205，`event_fts` 500，`message_fts` 460，`event_cjk` 20。而所有事件的完整 trigram 索引单独就要每个事件约 2,350 字节。
-- **备份。** `origin backup <dir>` 先用 SQLite 的在线备份一次性复制数据库，即使其他进程正在写入，也能得到一致的快照；然后复制原始镜像，只复制该目录中还没有的字节（见[备份](guide/privacy.md#backing-up)）。
+- **备份。** `origin backup <dir>` 先用 SQLite 的在线备份一次性复制数据库，即使其他进程正在写入，也能得到一致的快照；然后按这个快照记录的状态复制原始镜像：该目录中还没有的已封存帧，以及每个开放尾部（续写；如果此后已有帧从它封存，则重新写入）。尾部从正在使用的库中读取，那里它可能已经被封存，但镜像的内容只会增长，所以读到的内容相同（见[备份](guide/privacy.md#backing-up)）。
 - **库的名称。** 每个库都有一个名称，保存在 `setting` 中：在设备上就是设备名，中枢则把自己的库叫作 `hub`。条目和遗忘记录把写入它们的库的名称记为 `origin`，设备也以自己库的名称为中枢所知。库在第一次需要名称时被命名：`origin serve` 把它命名为 `hub`；其他命令使用 `ORIGIN_DEVICE` 或主机名。库一旦写入过条目或遗忘记录，就保持这个名称不变。
-- **首个版本发布前不做迁移。** schema 是一组幂等语句，每次打开数据库时都会执行，所以新增的表和索引会自动出现在已有的数据库中。其他任何 schema 改动都直接原地修改，并且需要一个全新的 `ORIGIN_HOME`。请删除整个目录，而不要只删 `origin.db`：镜像路径是确定的，重新同步到已有的 `raw/` 里会追加重复内容。带版本的迁移将随首个版本一起推出。
+- **首个版本发布前不做迁移。** schema 是一组幂等语句，每次打开数据库时都会执行，所以新增的表和索引会自动出现在已有的数据库中。其他任何 schema 改动都直接原地修改，并且需要一个全新的 `ORIGIN_HOME`。请删除整个目录，而不要只删 `origin.db`：`raw/` 下的镜像只有配合记录它们的数据库才有意义。带版本的迁移将随首个版本一起推出。
+
+### 原始镜像 {#raw-mirrors}
+
+镜像保存一个文件某一代次已采集的字节，即它的*内容*，而且只包含完整的行。它以压缩形式存储在两个以镜像命名的文件中：
+
+- `<mirror>.zst`：**已封存的帧**，彼此独立的 zstd 帧（级别 3，带校验和），每帧包含若干完整的行，依次追加。`raw_chunk` 记录每一帧：首行行号、行数、在内容中的偏移量和长度，以及在文件中的偏移量和长度。读取一行只需解压包含它的那一帧。
+- `<mirror>.tail`：**开放尾部**，最新的若干行，未压缩。
+
+内容就是解压后的各帧，后接尾部，二者都以数据库的记录为准（帧以 `raw_chunk` 为准，结尾以 `raw_file.bytes_ingested` 为准）；对 `raw/` 的每一次读写都经过同一个模块（`core` 中的 `mirror.ts`）。行号、游标、重写代次、尾部哈希和事件 id 都以内容为准，就像对文件的普通副本一样。
+
+- **封存。** 尾部不到 1 MiB 时，新的行追加到尾部。如果某次追加会让尾部达到或超过 1 MiB，就改为把尾部和新的行一起封存：它们被切成若干帧，每一帧在内容达到 1 MiB 后的第一个换行处结束（更长的行单独占一帧，最后不足半 MiB 的部分并入前一帧），这些帧追加到 `<mirror>.zst` 并刷到磁盘，`raw_chunk` 在推进游标的同一事务中记录它们。这个事务提交、预写日志刷到磁盘之后，再用一个很短的事务清空尾部。一个文件一小时没有增长，多半已经结束，所以它的尾部也会被封存，无论大小：在设备上由该来源的下一次同步完成，在中枢上由每 10 分钟一次的检查完成；之后追加的行会开始一个新的尾部。
+- **这里的“只追加”是什么意思。** 内容只会增长，一行的字节永远不变（不变量 3）。在磁盘上，`<mirror>.zst` 只会增长，其中的帧永远不会被改写（`raw_chunk` 拒绝更新和删除）；`<mirror>.tail` 只会被追加，唯一的例外是其中的行进入帧之后它会被清空。封存把行从尾部移入帧，而不改变内容。
+- **崩溃安全。** 两个文件中超出数据库记录的字节都不属于镜像：读取时永远不会读到它们，对这个镜像的下一次写入会在追加之前丢弃它们。如果在帧写入之后、事务提交之前崩溃，会留下一个没有记录的帧；它会被丢弃，而那些行仍在尾部，会再次被封存。如果在提交之后、尾部清空之前崩溃，尾部中会留下已经进入帧的行；数据库记录的尾部为空，所以它们会被忽略，随后被丢弃。两种情况都不会丢失或重复任何一行。如果某个文件比数据库记录的短，说明数据已经丢失，Origin 会拒绝向这个镜像追加，而不是破坏来源追溯（不变量 1）。如果读取时发现尾部被另一个进程的封存清空，就重新读取。
+- **大小。** 在 171 MiB 按真实形态生成的 Claude Code 合成记录上（大型工具结果、约占四分之一字节的 base64 截图、中英文文本），文件停止增长之后，镜像占 35 MiB（4.9 倍；刚导入时每个文件都还有开放尾部，占 52 MiB）。采集耗时增加约 15%，随机读取一行原始记录平均需要 1.5 ms，而扫描整个未压缩镜像需要 6.8 ms。
 
 ## 采集 {#ingestion}
 
@@ -170,7 +188,7 @@ interface SourceAdapter {
 
 1. **游标。** 每个 `raw_file` 行记录 `bytes_ingested`、`lines_ingested` 和 `tail_hash`（最后采集的 4 KB 的 SHA-256）。游标在写锁之下读取，并且只读取游标之后的字节。
 2. **改写检测。** 如果文件变小了，或者尾部不再匹配，说明它是被改写而不是被追加。Origin 会开启一个新的*代次*，使用全新的镜像，并保持旧镜像完好无损（不变量 3）。
-3. **只取完整行。** 截至最后一个换行符的字节会被追加到镜像中；末尾不完整的行留待下一次同步。镜像始终等于其代次已采集的字节，因此被中断的同步遗留在游标之后的字节，会在追加之前被丢弃（不变量 1）。
+3. **只取完整行。** 截至最后一个换行符的字节会被追加到镜像中（见[原始镜像](#raw-mirrors)）；末尾不完整的行留待下一次同步。镜像的内容始终等于其代次已采集的字节，因此被中断的同步遗留在游标之后的字节，会在追加之前被丢弃（不变量 1）。
 4. **解析与插入。** 每一行都经过 `parseLine`；失败只计数，不致命。事件以 `<source>:<native-id>[#<block-index>]` 为 id、用 `INSERT OR IGNORE` 插入，这使同步具有幂等性（不变量 3）。每个事件都保存它的镜像文件和行号（不变量 1）。
 5. **收尾记录。** 受影响的会话被重新聚合，游标在同一个事务中前移，并由一行 `sync_log` 记录这次运行。
 
@@ -272,8 +290,8 @@ interface SourceAdapter {
 设备把自己写下的内容发送给中枢；中枢发给设备的只有被遗忘的内容。一次同步（已接入中枢的设备上的 `origin sync`）按顺序分三步进行：
 
 1. **原始镜像。** 设备推送的是**原始镜像字节**，而不是解析后的事件。中枢把它们存为自己的只追加镜像，并用同样的适配器解析，因此溯源（不变量 1）在中枢上同样成立，解析器的修复也会在所有地方生效。事件 id 在每个库中都完全相同。
-   - 每个远程文件以 `(source, "@<device>:<original path>", generation)` 为键；本地路径永远不会以 `@` 开头。中枢上的镜像位于 `raw/devices/<device>/<source>/<relPath>[.g<n>]`。
-   - 推送可续传且幂等：设备先向中枢查询游标，再把每个镜像的 `[cursor, local size)` 区间按完整行分块发送（每块最多 1 MiB，或者单独一个更长的行）。偏移量与中枢游标不一致的块会被拒绝，并返回当前游标，设备从那里继续。
+   - 每个远程文件以 `(source, "@<device>:<original path>", generation)` 为键；本地路径永远不会以 `@` 开头。中枢上的镜像位于 `raw/devices/<device>/<source>/<relPath>[.g<n>]`，存储方式与其他镜像相同（见[原始镜像](#raw-mirrors)）。
+   - 推送可续传且幂等：设备先向中枢查询游标，再把每个镜像的 `[cursor, local size)` 区间按完整行分块发送（每块最多 1 MiB，或者单独一个更长的行）。偏移量与中枢游标不一致的块会被拒绝，并返回当前游标，设备从那里继续。偏移量和游标都按镜像未压缩内容的字节计算：设备解压读取自己的镜像，请求在传输中以 gzip 编码，中枢再压缩存储。
 2. **条目和遗忘记录上行。** 设备按照自己 `change_log` 的顺序，发送推送游标之后它自己写下的条目和遗忘记录（也就是 `origin` 为它的名称的那些）。它已经遗忘的条目永远不会被发送。中枢以相同的 id 保存它们，保留作者和 origin，并按[遗忘](#forgetting)中的规则应用这些遗忘记录，所以一个到达时已属于被遗忘内容的版本或条目，会在到达时就被遗忘。由于设备先推送镜像，它的条目所引用的事件通常已经在中枢上了；如果某个条目引用的事件或它取代的版本还不在中枢上，中枢会说明缺少哪些 id，推送游标停在这个条目之前，之后的条目等到下一次同步。遗忘记录照样发送：遗忘从不等待。
 3. **遗忘记录下行。** 设备请求中枢 `change_log` 中位于自己拉取游标之后的遗忘记录；中枢会略去该设备自己创建的那些，并附上每条记录在中枢上的当前影响一起发送。设备把它们应用到自己的库中，从而让遗忘到达每一个副本（不变量 2）。当一条遗忘记录在中枢上的影响后来扩大了——因为中枢把它应用到了设备没有的数据上，或者因为到达了它所覆盖的纠正或条目——中枢会再次记录它，于是每台设备，包括创建它的那台，都会收到扩大后的影响。
 
@@ -297,7 +315,7 @@ interface SourceAdapter {
 | `POST /mcp` | MCP Streamable HTTP，无状态，JSON 响应；与 stdio server 相同的七个工具 |
 | `GET /v1/device` | `{ device, hub }`：令牌所属的设备（即令牌名）和中枢的名称 |
 | `GET /v1/cursors?device=<name>` | 令牌所属设备的每个文件在中枢上的字节游标 |
-| `POST /v1/ingest` | 追加一个块：JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }`，其中 `data` 为 base64；请求体可以使用 gzip 编码。返回 `200 { bytes, eventsAdded, … }`，偏移量不匹配时返回 `409 { bytes }` |
+| `POST /v1/ingest` | 追加一个块：JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }`，其中 `data` 为 base64，`offset` 按镜像未压缩的内容计算；请求体可以使用 gzip 编码。返回 `200 { bytes, eventsAdded, … }`，偏移量不匹配时返回 `409 { bytes }` |
 | `POST /v1/entries` | `{ device, entries }`，最多 1,000 个条目，每个为 `{ id, kind, text, confidence, author, project, supersedes, validFrom, validTo, createdAt, origin, sources: [{ eventId, quote }] }`，其 `origin` 必须是令牌所属的设备。按顺序保存；返回 `200 { applied, pending }`，其中 `pending` 为 null，或者是第一个所引用事件或所取代版本尚不在中枢上的条目的 `{ id, missing }`（它之后的条目都不会被保存）。同一个 id 下内容不同时返回 `409` |
 | `POST /v1/tombstones` | `{ device, tombstones }`，最多 1,000 条遗忘记录，每条为 `{ id, target, reason, createdAt, origin, entries, events }`，附带它在设备上的影响，其 `origin` 必须是令牌所属的设备。按[遗忘](#forgetting)中的规则应用；返回 `200 { applied }`，同一个 id 下内容不同时返回 `409` |
 | `GET /v1/tombstones?after=<seq>&device=<name>` | `{ tombstones, next, more }`：中枢变更日志中序号大于 `after` 的遗忘记录，不含令牌所属设备自己创建的，每条都附带 id、目标、原因、`createdAt`、origin，以及它在中枢上遗忘的条目和排除的事件。`more` 为 true 时，用 `after=<next>` 继续 |

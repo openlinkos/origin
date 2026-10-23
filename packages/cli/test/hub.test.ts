@@ -14,8 +14,11 @@ import {
   getEntry,
   getEvent,
   initStoreName,
+  localRawFiles,
   openDatabase,
   rawLocator,
+  readMirror,
+  readRawLine,
   revokeToken,
   syncSource,
 } from '@openlinkos/origin-core';
@@ -110,6 +113,33 @@ describe('personal hub', () => {
     );
     expect(remembered.entry.author).toBe('laptop');
     await client.close();
+  });
+
+  it('pushes a compressed mirror as its uncompressed content', async () => {
+    // A device whose mirror is sealed into many small frames.
+    const home2 = path.join(tmp, 'device2');
+    const db2 = openDatabase(path.join(home2, 'origin.db'));
+    try {
+      await syncSource(
+        { db: db2, home: home2, frameBytes: 600 },
+        createClaudeCodeAdapter({ projectsDir: fixtures }),
+      );
+      const [file] = localRawFiles(db2);
+      expect(
+        (db2.prepare('SELECT COUNT(*) AS n FROM raw_chunk').get() as { n: number }).n,
+      ).toBeGreaterThan(1);
+      const r = await syncWithHub({ db: db2, home: home2, hub });
+      expect(r).toMatchObject({ files: 1, bytes: file?.bytes, eventsAdded: 6 });
+      const onHub = getEvent(hubDb, USER_EVENT)!;
+      expect(readMirror(hubDb, hubHome, onHub.rawFileId, 0, Number.MAX_SAFE_INTEGER)).toEqual(
+        readMirror(db2, home2, file!.id, 0, Number.MAX_SAFE_INTEGER),
+      );
+      expect(readRawLine(hubDb, hubHome, rawLocator(hubDb, hubHome, onHub)!)).toBe(
+        readRawLine(db2, home2, rawLocator(db2, home2, getEvent(db2, USER_EVENT)!)!),
+      );
+    } finally {
+      db2.close();
+    }
   });
 
   it('propagates forgetting from the hub to the device (invariant 2)', async () => {

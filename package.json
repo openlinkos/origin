@@ -16,7 +16,7 @@
   "type": "module",
   "packageManager": "pnpm@12.14.0",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.16"
   },
   "scripts": {
     "build": "tsc -b packages/core packages/adapters packages/mcp packages/admin packages/cli && node packages/admin/scripts/vendor.mjs",

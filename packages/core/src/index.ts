@@ -81,6 +81,18 @@ export {
   syncSource,
 } from './ingest.js';
 export {
+  FRAME_BYTES,
+  IDLE_SEAL_MS,
+  type MirrorState,
+  type MirrorUsage,
+  mirrorState,
+  mirrorUsage,
+  readMirror,
+  readMirrorLine,
+  readMirrorLines,
+  sealIdleMirrors,
+} from './mirror.js';
+export {
   type DeviceFile,
   deviceFiles,
   type IngestHealth,

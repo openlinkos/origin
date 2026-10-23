@@ -49,7 +49,7 @@ Events:
 
 ## Inspecting
 
-`show` prints an entry with its sources and version history, or an event with its raw locator: the original file, the mirror file and line, and the original line itself.
+`show` prints an entry with its sources and version history, or an event with its raw locator: the original file, the mirror and line (a mirror is stored compressed, as `<mirror>.zst` and `<mirror>.tail`), and the original line itself.
 
 ```console
 $ origin show ent_5f0c2a9e41b7

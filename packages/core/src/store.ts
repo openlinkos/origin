@@ -1,6 +1,6 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import type { Database } from './db.js';
+import { readMirrorLine } from './mirror.js';
 import { parseRawPath, rawDir } from './paths.js';
 import type { EventKind, EventRow, Role, SessionRow } from './types.js';
 
@@ -199,13 +199,18 @@ export function getEvent(db: Database, id: string): EventRow | null {
 }
 
 export interface RawLocator {
+  /** The raw file (one generation of the original file) the event was parsed from. */
+  rawFileId: number;
   source: string;
   /** Device the file was replicated from (on a hub); null for this store's own files. */
   device: string | null;
   /** Absolute path of the source agent's original file (on that device). */
   originalPath: string;
   generation: number;
-  /** Absolute path of the mirror file (append-only copy). */
+  /**
+   * Absolute path of the mirror (the append-only copy). Its content is stored compressed, in
+   * `<mirrorPath>.zst` and `<mirrorPath>.tail` (see mirror.ts); read it with readRawLine.
+   */
   mirrorPath: string;
   /** 1-based line number in the mirror. */
   line: number;
@@ -221,6 +226,7 @@ export function rawLocator(db: Database, home: string, event: EventRow): RawLoca
   if (!row) return null;
   const { device, originalPath } = parseRawPath(row.path);
   return {
+    rawFileId: event.rawFileId,
     source: row.source,
     device,
     originalPath,
@@ -230,21 +236,9 @@ export function rawLocator(db: Database, home: string, event: EventRow): RawLoca
   };
 }
 
-/** Read an original line from the mirror (1-based). A sequential scan is fine since mirrors are append-only. */
-export function readRawLine(locator: RawLocator): string | null {
-  if (!fs.existsSync(locator.mirrorPath)) return null;
-  const content = fs.readFileSync(locator.mirrorPath, 'utf8');
-  let lineNo = 0;
-  let start = 0;
-  while (start <= content.length) {
-    const nl = content.indexOf('\n', start);
-    const end = nl < 0 ? content.length : nl;
-    lineNo++;
-    if (lineNo === locator.line) return content.slice(start, end).replace(/\r$/, '');
-    if (nl < 0) break;
-    start = nl + 1;
-  }
-  return null;
+/** The original line an event points to, read from its mirror; null if it is missing. */
+export function readRawLine(db: Database, home: string, locator: RawLocator): string | null {
+  return readMirrorLine(db, home, locator.rawFileId, locator.line);
 }
 
 export interface SourceStats {

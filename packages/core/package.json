@@ -28,6 +28,6 @@
     "build": "tsc -b"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.16"
   }
 }

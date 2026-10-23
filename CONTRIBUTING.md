@@ -12,7 +12,7 @@ For security or privacy problems, follow [SECURITY.md](SECURITY.md) instead of o
 
 ## Development setup
 
-Requirements: Node.js 22.13 or later (24 LTS recommended) and pnpm. Run `corepack enable` to use the pnpm version pinned in `package.json`.
+Requirements: Node.js 22.16 or later (24 LTS recommended) and pnpm. Run `corepack enable` to use the pnpm version pinned in `package.json`.
 
 ```bash
 git clone https://github.com/openlinkos/origin.git
