@@ -8,7 +8,7 @@ Where each target agent stores its sessions on disk and what an adapter needs to
 | `codex` | [Codex CLI](https://developers.openai.com/codex) | **Supported** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl[.zst]` | JSONL rollout, first line `session_meta` |
 | `cursor` | [Cursor](https://cursor.com) | Planned | CLI: `~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`; IDE: `state.vscdb` | JSONL message blocks; SQLite key-value |
 | `zcode` | [ZCode](https://github.com/zai-org/ZCode) | Planned | `~/.zcode/cli/db/db.sqlite` | SQLite (relational) |
-| `grok` | [Grok Build](https://github.com/xai-org/grok-build) | Planned | `~/.grok/sessions/<url-encoded-cwd>/<session-id>/` | Directory of JSONL/JSON files |
+| `grok` | [Grok Build](https://github.com/xai-org/grok-build) | **Supported** | `~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl` | JSONL ACP session-update stream |
 
 All five agents also keep their own memory, scoped per repository, project, or machine. These native memories have no source references, so Origin treats them as a possible import target and never as a source of truth.
 
@@ -62,11 +62,19 @@ Checked against v3.1x (October 2026). Source: [zai-org/ZCode](https://github.com
 
 ## Grok Build
 
-Checked against 1.0.4x (September–October 2026). Source: [xai-org/grok-build](https://github.com/xai-org/grok-build) (Apache-2.0); docs: [docs.x.ai/build](https://docs.x.ai/build/overview) and the in-repo user guide (`17-sessions.md`, `13-memory.md`).
+Checked against 1.0.41 on disk (October 2026). Source: [xai-org/grok-build](https://github.com/xai-org/grok-build) (Apache-2.0); docs: [docs.x.ai/build](https://docs.x.ai/build/overview) and the in-repo user guide (`17-sessions.md`, `07-mcp-servers.md`, `13-memory.md`).
 
-- **Location:** `~/.grok/sessions/<url-encoded-cwd>/<session-id>/` (`GROK_HOME` overrides `~/.grok`). Session ids are UUIDv7.
-- **Format:** a directory per session. `updates.jsonl` is the authoritative log (an ACP session-update stream). `chat_history.jsonl` holds the raw messages sent to the model, and `summary.json` the title, timestamps, model, message count, and parent session. The directory also contains `system_prompt.txt`, `plan.json`, `rewind_points.jsonl`, `compaction_checkpoints/`, and `subagents/`.
+- **Location:** `$GROK_HOME/sessions/<group>/<session-id>/` (`GROK_HOME` defaults to `~/.grok`). The group is the URL-encoded working directory; when that would exceed 255 bytes, Grok names it by a slug and a hash instead and records the path in a `.cwd` file. Session ids are UUIDv7, unless a client supplies its own with `-s`. `sessions/` also holds Grok's own `session_search.sqlite`.
+- **Format:** a directory per session. `updates.jsonl` is the authoritative log, an ACP session-update stream with one `{ method, params: { sessionId, update, _meta }, timestamp }` object per line: `method` is `session/update` or `_x.ai/session/update`, `timestamp` is in seconds, and `_meta` carries `eventId` (unique within the file, mostly `<session-id>-<n>`) and `agentTimestampMs`. `update.sessionUpdate` is `user_message_chunk`, `agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`, `plan`, `turn_completed`, `background_tasks`, `subagent_spawned`, `subagent_finished`, `goal_updated`, or another kind. On disk, each message chunk holds a whole message.
+- **Other files:** `chat_history.jsonl` holds the messages sent to the model, without timestamps; `events.jsonl` is telemetry (phases, tool timings); `summary.json` holds the title, timestamps, model, and message counts. The directory also contains `system_prompt.txt`, `plan.json`, `rewind_points.jsonl`, `compaction_checkpoints/`, and `subagents/`. Internal planning agents (`grok-build-plan`) leave sessions without `updates.jsonl`; sub-agents run as sessions of their own in the same tree.
 - **Native memory:** experimental and off by default (`GROK_MEMORY=1`). Markdown under `~/.grok/memory/` (global `MEMORY.md` plus per-workspace directories keyed by a git-remote hash) or `~/.grok/memory-v2/`.
-- **Interop:** Grok merges MCP servers from `~/.claude.json` and `.mcp.json`, so registering Origin for Claude Code also exposes it to Grok.
+- **Interop:** by default Grok merges MCP servers from `~/.claude.json`, Cursor's `mcp.json`, and a project's `.mcp.json`, so registering Origin for Claude Code also exposes it to Grok. `grok inspect` lists the merged servers; `grok mcp list` shows only Grok's own.
+
+**Origin mapping:**
+
+- Only `updates.jsonl` is read. User and agent message chunks become `message` events; user messages that Grok hides from the transcript (`hideFromScrollback`, such as goal follow-ups) become `meta`. Thoughts, plans, and turn, task, goal, and sub-agent notices are skipped; the raw mirror keeps them.
+- A `tool_call` becomes a `tool_use` event (`<name> <input>`, at most 2,000 characters), with the name from `_meta["x.ai/tool"]` and server-side searches named `web_search`. The `tool_call_update` that carries `rawOutput` becomes its `tool_result` (the text, images, and diffs Grok shows, or else the raw output; at most 4,000 characters), noting `status` unless it is `completed`. Other `tool_call_update` lines only refine the call and are skipped.
+- Event id: `grok:<session-id>:e<n>` for an `eventId` of the form `<session-id>-<n>`, otherwise `grok:<session-id>:<eventId>`, falling back to the line number.
+- Timestamps come from `agentTimestampMs`, then `timestamp`. The cwd and project come from the group's name; sessions in a slug-and-hash group have none, since a hub never sees the `.cwd` file. Lines carry no Grok version, so events record the version installed when they are synced (`$GROK_HOME/version.json`).
 
 To register Origin with each agent, see [Connect your agents](guide/connect-agents.md).

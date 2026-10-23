@@ -1,6 +1,7 @@
 import type { SourceAdapter } from '@openlinkos/origin-core';
 import { CLAUDE_CODE_SOURCE_ID, createClaudeCodeAdapter } from './claude-code.js';
 import { CODEX_SOURCE_ID, createCodexAdapter } from './codex.js';
+import { createGrokAdapter, GROK_SOURCE_ID } from './grok.js';
 
 export {
   CLAUDE_CODE_SOURCE_ID,
@@ -18,11 +19,20 @@ export {
   createCodexAdapter,
   parseCodexLine,
 } from './codex.js';
+export {
+  createGrokAdapter,
+  GROK_SOURCE_ID,
+  type GrokAdapterOptions,
+  grokCwdFromGroup,
+  grokHome,
+  grokSessionIdFromPath,
+  parseGrokLine,
+} from './grok.js';
 export { projectFromCwd } from './util.js';
 
 /** All implemented adapters (added one at a time, in roadmap order). */
 export function allAdapters(): SourceAdapter[] {
-  return [createClaudeCodeAdapter(), createCodexAdapter()];
+  return [createClaudeCodeAdapter(), createCodexAdapter(), createGrokAdapter()];
 }
 
 export function adapterById(id: string): SourceAdapter | null {
@@ -32,7 +42,7 @@ export function adapterById(id: string): SourceAdapter | null {
 export const KNOWN_SOURCE_IDS = [
   CLAUDE_CODE_SOURCE_ID,
   CODEX_SOURCE_ID,
+  GROK_SOURCE_ID,
   'cursor',
   'zcode',
-  'grok',
 ] as const;

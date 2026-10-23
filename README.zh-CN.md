@@ -9,7 +9,7 @@
 
 [English](README.md) | 简体中文
 
-各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：目前支持 Claude Code 与 Codex，Cursor、ZCode、Grok Build 将陆续接入。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。如果你在多台机器上工作，或者使用云端 Agent，可以用自托管的**个人中枢**把它们接入同一份记忆。
+各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：目前支持 Claude Code、Codex 与 Grok Build，Cursor、ZCode 将陆续接入。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。如果你在多台机器上工作，或者使用云端 Agent，可以用自托管的**个人中枢**把它们接入同一份记忆。
 
 > **状态：早期版本（0.1）。** Claude Code 与 Codex 会话的采集、MCP server、CLI 与个人中枢（含管理界面）已经端到端可用；其余 Agent 的适配器正在开发（见[路线图](#路线图)）。1.0 之前，次版本可能改变存储格式，[更新日志](CHANGELOG.md)会说明需要怎么做。
 
@@ -43,7 +43,7 @@ Origin 以**人**而不是工具为中心：
 | Codex CLI | ✅ | ✅ |
 | Cursor | 规划中 | ✅ |
 | ZCode | 规划中 | ✅ |
-| Grok Build | 规划中 | ✅ |
+| Grok Build | ✅ | ✅ |
 
 任何支持 MCP 的 Agent 现在都能查询归档和条目；归档某个 Agent 自己的会话则需要它的适配器。如何为各 Agent 注册 Origin，见[接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)；各 Agent 把会话存放在哪里，见[会话来源](https://origin.openlinkos.com/zh/sources)。
 
@@ -113,9 +113,9 @@ Agent 会话记录里常有源代码、命令输出，以及你在提示词里�
 2. ✅ MCP server、条目、纠正与遗忘粘性，已接入 Claude Code
 3. ✅ Codex 适配器，支持 zstd 压缩与归档的会话
 4. ✅ 个人中枢：自托管、多设备、远程 MCP，附带管理界面
-5. Cursor 适配器
+5. ✅ Grok Build 适配器
 6. ZCode 适配器
-7. Grok Build 适配器
+7. Cursor 适配器
 
 **当前已知限制：**
 

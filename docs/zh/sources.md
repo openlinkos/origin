@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-e8c7b11f
+sourceHash: sha256-d5233131
 ---
 
 # 会话来源
@@ -12,7 +12,7 @@ sourceHash: sha256-e8c7b11f
 | `codex` | [Codex CLI](https://developers.openai.com/codex) | **已支持** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl[.zst]` | JSONL rollout，首行为 `session_meta` |
 | `cursor` | [Cursor](https://cursor.com) | 规划中 | CLI：`~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`；IDE：`state.vscdb` | JSONL 消息块；SQLite 键值存储 |
 | `zcode` | [ZCode](https://github.com/zai-org/ZCode) | 规划中 | `~/.zcode/cli/db/db.sqlite` | SQLite（关系型） |
-| `grok` | [Grok Build](https://github.com/xai-org/grok-build) | 规划中 | `~/.grok/sessions/<url-encoded-cwd>/<session-id>/` | 由 JSONL/JSON 文件组成的目录 |
+| `grok` | [Grok Build](https://github.com/xai-org/grok-build) | **已支持** | `~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl` | JSONL 格式的 ACP session-update 流 |
 
 这五个 Agent 也都维护各自的记忆，范围限定在单个仓库、项目或机器。这些原生记忆没有来源引用，因此 Origin 把它们视为可能的导入对象，而从不把它们当作事实来源。
 
@@ -66,11 +66,19 @@ sourceHash: sha256-e8c7b11f
 
 ## Grok Build {#grok-build}
 
-核对版本：1.0.4x（2026 年 9–10 月）。源码：[xai-org/grok-build](https://github.com/xai-org/grok-build)（Apache-2.0）；文档：[docs.x.ai/build](https://docs.x.ai/build/overview) 以及仓库内的用户指南（`17-sessions.md`、`13-memory.md`）。
+核对依据：磁盘上的 1.0.41（2026 年 10 月）。源码：[xai-org/grok-build](https://github.com/xai-org/grok-build)（Apache-2.0）；文档：[docs.x.ai/build](https://docs.x.ai/build/overview) 以及仓库内的用户指南（`17-sessions.md`、`07-mcp-servers.md`、`13-memory.md`）。
 
-- **位置：** `~/.grok/sessions/<url-encoded-cwd>/<session-id>/`（`GROK_HOME` 可覆盖 `~/.grok`）。会话 id 是 UUIDv7。
-- **格式：** 每个会话一个目录。`updates.jsonl` 是权威记录（一个 ACP session-update 流）。`chat_history.jsonl` 保存发送给模型的原始消息，`summary.json` 保存标题、时间戳、模型、消息数和父会话。该目录还包含 `system_prompt.txt`、`plan.json`、`rewind_points.jsonl`、`compaction_checkpoints/` 和 `subagents/`。
+- **位置：** `$GROK_HOME/sessions/<group>/<session-id>/`（`GROK_HOME` 默认为 `~/.grok`）。group 是 URL 编码后的工作目录；编码后超过 255 字节时，Grok 改用 slug 加哈希命名，并把原路径记在 `.cwd` 文件里。会话 id 是 UUIDv7，客户端也可以用 `-s` 指定自己的 id。`sessions/` 下还有 Grok 自己的 `session_search.sqlite`。
+- **格式：** 每个会话一个目录。`updates.jsonl` 是权威记录，一个 ACP session-update 流，每行一个 `{ method, params: { sessionId, update, _meta }, timestamp }` 对象：`method` 是 `session/update` 或 `_x.ai/session/update`，`timestamp` 以秒为单位，`_meta` 带有 `eventId`（在文件内唯一，大多是 `<session-id>-<n>`）和 `agentTimestampMs`。`update.sessionUpdate` 是 `user_message_chunk`、`agent_message_chunk`、`agent_thought_chunk`、`tool_call`、`tool_call_update`、`plan`、`turn_completed`、`background_tasks`、`subagent_spawned`、`subagent_finished`、`goal_updated` 或其他类型。在磁盘上，每个消息块都是一整条消息。
+- **其他文件：** `chat_history.jsonl` 保存发送给模型的消息，不带时间戳；`events.jsonl` 是遥测（阶段、工具耗时）；`summary.json` 保存标题、时间戳、模型和消息数。目录里还有 `system_prompt.txt`、`plan.json`、`rewind_points.jsonl`、`compaction_checkpoints/` 和 `subagents/`。内部的规划 Agent（`grok-build-plan`）留下的会话没有 `updates.jsonl`；子 Agent 作为独立会话，存放在同一棵目录树里。
 - **原生记忆：** 实验性功能，默认关闭（`GROK_MEMORY=1`）。以 Markdown 形式存放在 `~/.grok/memory/` 下（全局的 `MEMORY.md`，加上按 git remote 哈希区分的各工作区目录），或者存放在 `~/.grok/memory-v2/` 下。
-- **互通：** Grok 会合并 `~/.claude.json` 和 `.mcp.json` 中的 MCP server，因此为 Claude Code 注册 Origin 之后，Grok 也能使用它。
+- **互通：** Grok 默认合并 `~/.claude.json`、Cursor 的 `mcp.json` 和项目 `.mcp.json` 中的 MCP server，因此为 Claude Code 注册 Origin 之后，Grok 也能使用它。`grok inspect` 列出合并后的 server；`grok mcp list` 只显示 Grok 自己配置的。
+
+**Origin 映射：**
+
+- 只读取 `updates.jsonl`。用户和 Agent 的消息块变成 `message` 事件；Grok 在对话记录里隐藏的用户消息（`hideFromScrollback`，例如目标的后续提示）变成 `meta`。思考、计划，以及轮次、任务、目标和子 Agent 的通知会被跳过；原始镜像保留它们。
+- `tool_call` 变成 `tool_use` 事件（`<name> <input>`，最多 2,000 个字符），名称取自 `_meta["x.ai/tool"]`，服务端搜索命名为 `web_search`。带有 `rawOutput` 的 `tool_call_update` 变成它的 `tool_result`（Grok 显示的文本、图片和 diff，没有时用原始输出；最多 4,000 个字符），`status` 不是 `completed` 时会记下。其他 `tool_call_update` 行只是在细化这次调用，会被跳过。
+- 事件 id：`eventId` 形如 `<session-id>-<n>` 时为 `grok:<session-id>:e<n>`，否则为 `grok:<session-id>:<eventId>`，没有时退回使用行号。
+- 时间戳取自 `agentTimestampMs`，其次是 `timestamp`。cwd 和项目来自 group 的名称；slug 加哈希命名的 group 里的会话没有 cwd，因为中枢看不到 `.cwd` 文件。行里不带 Grok 的版本，所以事件记录的是同步时已安装的版本（`$GROK_HOME/version.json`）。
 
 如何为每个 Agent 注册 Origin，见[接入 Agent](guide/connect-agents.md)。

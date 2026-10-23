@@ -8,7 +8,7 @@ Every agent launches the same stdio server, `origin mcp`, which `npm install -g 
 | Codex CLI | ✅ | ✅ | Registration |
 | Cursor | Planned | ✅ | Per Cursor's docs |
 | ZCode | Planned | ✅ | Per ZCode's docs |
-| Grok Build | Planned | ✅ | Per Grok's docs |
+| Grok Build | ✅ | ✅ | Registration |
 
 ## Claude Code
 
@@ -49,7 +49,7 @@ Add the server under `mcp.servers` in `~/.zcode/cli/config.json`, or use ZCode's
 
 ## Grok Build
 
-Grok reads `~/.claude.json`, so the Claude Code registration above is picked up automatically. Otherwise, add an `[mcp_servers.origin]` table to `~/.grok/config.toml` as for Codex.
+Grok merges the MCP servers in `~/.claude.json` by default, so the Claude Code registration above is picked up automatically; `grok inspect` lists it (`grok mcp list` shows only Grok's own servers). Otherwise, add an `[mcp_servers.origin]` table to `~/.grok/config.toml` as for Codex.
 
 ## What agents can do
 

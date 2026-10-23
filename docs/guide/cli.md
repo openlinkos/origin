@@ -24,7 +24,7 @@ origin push                                            Same as origin sync (kept
 ```
 
 - **Time values** are relative durations (`30m`, `24h`, `7d`, `2w`) or dates (`YYYY-MM-DD`, ISO 8601).
-- **Source ids** are `claude-code` and `codex` (plus `cursor`, `zcode`, and `grok` once their adapters ship).
+- **Source ids** are `claude-code`, `codex`, and `grok` (plus `cursor` and `zcode` once their adapters ship).
 - **Entry kinds** are `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries).
 - **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, and `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting leaves.
 

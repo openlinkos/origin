@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-fd394e4b
+sourceHash: sha256-a5aeac7d
 ---
 
 # 接入 Agent
@@ -12,7 +12,7 @@ sourceHash: sha256-fd394e4b
 | Codex CLI | ✅ | ✅ | 已注册 |
 | Cursor | 规划中 | ✅ | 依据 Cursor 文档 |
 | ZCode | 规划中 | ✅ | 依据 ZCode 文档 |
-| Grok Build | 规划中 | ✅ | 依据 Grok 文档 |
+| Grok Build | ✅ | ✅ | 已注册 |
 
 ## Claude Code {#claude-code}
 
@@ -53,7 +53,7 @@ args = ["mcp"]
 
 ## Grok Build {#grok-build}
 
-Grok 会读取 `~/.claude.json`，所以完成上面的 Claude Code 注册后会自动生效；否则仿照 Codex，在 `~/.grok/config.toml` 中添加 `[mcp_servers.origin]`。
+Grok 默认合并 `~/.claude.json` 中的 MCP server，所以完成上面的 Claude Code 注册后会自动生效，`grok inspect` 能看到它（`grok mcp list` 只显示 Grok 自己配置的 server）；否则仿照 Codex，在 `~/.grok/config.toml` 中添加 `[mcp_servers.origin]`。
 
 ## Agent 能做什么 {#what-agents-can-do}
 
