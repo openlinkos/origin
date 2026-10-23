@@ -1,0 +1,101 @@
+name: Release
+
+# Publishes the five packages to npm when a v* tag is pushed, then creates the GitHub release. They
+# share one version; a package whose version is already on npm is skipped. `pnpm pack` replaces the
+# workspace references with that version, and npm publishes the tarballs with trusted publishing
+# (OIDC), so no token is stored and provenance is attached automatically. The `npm` environment
+# requires a maintainer's approval before the job runs.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Trusted publishing needs npm 11.5.1 or later
+        run: |
+          npm --version
+          node -e "const [a,b,c]=process.argv[1].split('.').map(Number);process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)" "$(npm --version)"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint, build and test
+        run: |
+          pnpm lint
+          pnpm build
+          pnpm test
+
+      - name: The tag matches every package version
+        run: |
+          for pkg in core adapters mcp admin cli; do
+            test "${GITHUB_REF_NAME}" = "v$(node -p "require('./packages/${pkg}/package.json').version")"
+          done
+
+      - name: Pack
+        run: |
+          mkdir -p "$RUNNER_TEMP/pack"
+          for pkg in core adapters mcp admin cli; do
+            (cd "packages/${pkg}" && pnpm pack --pack-destination "$RUNNER_TEMP/pack")
+          done
+          ls -l "$RUNNER_TEMP/pack"
+
+      # Dependencies first, so that each package's dependencies are on npm when it appears.
+      - name: Publish
+        run: |
+          for pkg in core adapters mcp admin cli; do
+            name="$(node -p "require('./packages/${pkg}/package.json').name")"
+            version="$(node -p "require('./packages/${pkg}/package.json').version")"
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "${name}@${version} is already published"
+            else
+              tarball="$RUNNER_TEMP/pack/$(echo "${name#@}" | tr '/' '-')-${version}.tgz"
+              npm publish "${tarball}" --access public
+            fi
+          done
+
+  release:
+    name: Create the GitHub release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          test -s "$RUNNER_TEMP/notes.md"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --title "Origin ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
