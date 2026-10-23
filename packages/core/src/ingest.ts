@@ -17,6 +17,7 @@ import {
   sealIdleMirrors,
   settleMirror,
 } from './mirror.js';
+import { assertComplete } from './mode.js';
 import { parseRawPath, rawDir, remotePath } from './paths.js';
 import { NAME_RE } from './tokens.js';
 import type {
@@ -57,7 +58,7 @@ export interface IngestContext {
 }
 
 /** Counters shared by local syncs and remote appends. */
-interface AppendStats {
+export interface AppendStats {
   linesRead: number;
   eventsAdded: number;
   parseErrors: number;
@@ -71,6 +72,8 @@ interface AppendStats {
  * see docs/architecture.md).
  */
 export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Promise<SyncResult> {
+  // A relay sends its agents' logs to its hub instead (see relay.ts); it mirrors nothing itself.
+  assertComplete(ctx.db, "ingest its agents' logs");
   const startedAt = Date.now();
   const result: SyncResult = {
     source: adapter.id,
@@ -168,7 +171,7 @@ export async function fingerprintSources(adapters: SourceAdapter[]): Promise<str
  * as possible: a first sync ingests old sessions before new ones, which keeps newest-first queries
  * short (see event_block in schema.ts).
  */
-function oldestFirst(files: SourceFile[]): SourceFile[] {
+export function oldestFirst(files: SourceFile[]): SourceFile[] {
   const mtime = new Map<SourceFile, number>();
   for (const f of files) {
     if (f.generated) {
@@ -267,20 +270,12 @@ function ingestFile(
   }
 
   const start = raw.bytes_ingested;
-  let end =
+  const end =
     file.compression || file.generated
       ? content.size
       : Math.min(content.size, start + TRANSACTION_BYTES);
-  let chunk = content.read(start, end);
-  let lastNl = chunk.lastIndexOf(0x0a);
-  while (lastNl < 0 && end < content.size) {
-    // A line longer than the bound: read on until it ends, and take it whole.
-    end = Math.min(content.size, start + (end - start) * 2);
-    chunk = content.read(start, end);
-    lastNl = chunk.lastIndexOf(0x0a);
-  }
-  if (lastNl < 0) return NOTHING; // no complete line yet
-  chunk = chunk.subarray(0, lastNl + 1);
+  const chunk = completeLines(content, start, end);
+  if (!chunk) return NOTHING; // no complete line yet
 
   const sealed = appendLines(
     ctx,
@@ -299,6 +294,23 @@ function ingestFile(
     status: start + chunk.length < content.size || content.more ? 'more' : 'done',
     sealed: sealed ? raw.id : null,
   };
+}
+
+/**
+ * The complete lines of `content` from `start` (before its size), read up to `end`, or further for
+ * a line longer than that, which is taken whole; null if no line is complete yet.
+ */
+export function completeLines(content: Content, start: number, end: number): Buffer | null {
+  let to = end;
+  let chunk = content.read(start, to);
+  let lastNl = chunk.lastIndexOf(0x0a);
+  while (lastNl < 0 && to < content.size) {
+    // A line longer than the bound: read on until it ends, and take it whole.
+    to = Math.min(content.size, start + (to - start) * 2);
+    chunk = content.read(start, to);
+    lastNl = chunk.lastIndexOf(0x0a);
+  }
+  return lastNl < 0 ? null : chunk.subarray(0, lastNl + 1);
 }
 
 /**
@@ -630,7 +642,7 @@ export function listDevices(
 }
 
 /** The bytes of a source file as Origin ingests and mirrors them: decompressed when needed. */
-interface Content {
+export interface Content {
   size: number;
   mtimeMs: number;
   read(start: number, end: number): Buffer;
@@ -721,7 +733,7 @@ export function refreshSession(db: Database, source: string, sessionId: string):
   ).run(source, sessionId, first('project'), first('cwd'), agg.started, agg.ended, agg.n);
 }
 
-function logSync(
+export function logSync(
   db: Database,
   run: {
     source: string;
@@ -804,7 +816,7 @@ function createRawFile(
   };
 }
 
-function tailHash(content: Content, bytesIngested: number): string {
+export function tailHash(content: Content, bytesIngested: number): string {
   if (bytesIngested <= 0) return '';
   const len = Math.min(TAIL_WINDOW, bytesIngested);
   const buf = content.read(bytesIngested - len, bytesIngested);

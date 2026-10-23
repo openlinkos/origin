@@ -94,6 +94,14 @@ export {
   sealIdleMirrors,
 } from './mirror.js';
 export {
+  assertComplete,
+  checkRelayable,
+  isRelay,
+  makeRelay,
+  type StoreMode,
+  storeMode,
+} from './mode.js';
+export {
   type DeviceFile,
   deviceFiles,
   type IngestHealth,
@@ -118,6 +126,20 @@ export {
   verifyAdminPasswordHash,
 } from './password.js';
 export { dbPath, originHome, parseRawPath, rawDir, remotePath } from './paths.js';
+export {
+  lastRelayed,
+  type RelayAnswer,
+  type RelayChunk,
+  type RelayContext,
+  type RelayCursor,
+  type RelayHub,
+  type RelayPending,
+  type RelayResult,
+  relayCursor,
+  relayPending,
+  relaySource,
+  saveRelayCursor,
+} from './relay.js';
 export {
   exportEntry,
   type OwnChange,
