@@ -273,7 +273,6 @@ export function connectSnippetsBlock(ctx: Ctx, s: Snippets): SafeHtml {
     description: t('connect.deviceHelp'),
     body: html`<div class="ol-stack">
         ${snippet(ctx, 'snippet-device', t('connect.deviceLabel'), s.device)}
-        ${snippet(ctx, 'snippet-cron', t('connect.cronLabel'), s.cron)}
       </div>`,
   })}
     ${section({

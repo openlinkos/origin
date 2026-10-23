@@ -134,8 +134,7 @@ export const zh: Messages = {
   'connect.device': '有 Agent 会话的设备',
   'connect.deviceHelp':
     '在每台运行 Agent 的机器上：以令牌的名称接入一次，再同步。之后这台机器上的 origin mcp 会根据自己的库和这个中枢作答，并在 Agent 运行期间同步。',
-  'connect.deviceLabel': '接入并同步',
-  'connect.cronLabel': '可选：另外每 10 分钟同步一次，用于不使用 Origin 的 Agent（crontab）',
+  'connect.deviceLabel': '安装、接入并同步',
   'connect.agents': '云端 Agent',
   'connect.agentsHelp': '没有本地会话记录的 Agent 直接通过 MCP 访问中枢。',
 

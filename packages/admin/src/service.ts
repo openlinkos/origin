@@ -134,7 +134,6 @@ export interface Snippets {
   device: string;
   claude: string;
   codex: string;
-  cron: string;
 }
 
 /** Ids are opaque, but bounded: they go into queries, never into SQL. */
@@ -190,10 +189,9 @@ export function connectSnippets(
   return {
     hubUrl,
     known: publicUrl !== null,
-    device: `origin hub connect ${hubUrl} --token ${token} --device ${device}\norigin sync`,
+    device: `npm install -g @openlinkos/origin\norigin hub connect ${hubUrl} --token ${token} --device ${device}\norigin sync`,
     claude: `claude mcp add --scope user --transport http origin ${hubUrl}/mcp --header "Authorization: Bearer ${token}"`,
     codex: `export ORIGIN_TOKEN=${token}\ncodex mcp add origin --url ${hubUrl}/mcp --bearer-token-env-var ORIGIN_TOKEN`,
-    cron: '*/10 * * * * origin sync',
   };
 }
 

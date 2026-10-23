@@ -139,9 +139,7 @@ export const en = {
   'connect.device': 'A device with agent sessions',
   'connect.deviceHelp':
     'On each machine where agents run: connect once, under the name of its token, then sync. origin mcp on that machine then answers from its own store and from this hub, and syncs while agents run.',
-  'connect.deviceLabel': 'Connect and sync',
-  'connect.cronLabel':
-    'Optional: also sync every 10 minutes, for agents that do not use Origin (crontab)',
+  'connect.deviceLabel': 'Install, connect, and sync',
   'connect.agents': 'Cloud agents',
   'connect.agentsHelp': 'Agents without local session logs talk to the hub directly over MCP.',
 
