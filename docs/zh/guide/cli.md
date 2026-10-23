@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-7fe2f914
+sourceHash: sha256-9f1391e6
 ---
 
 # 命令参考
@@ -21,6 +21,8 @@ origin ui        [--port 7079] [--no-open]             在浏览器中浏览和�
 
 origin serve     [--host 127.0.0.1] [--port 7077]      把本库作为个人中枢运行（MCP over HTTP）
                  [--admin | --admin-listen <host:port>] [--public-url <url>]   同时提供管理界面
+                 [--raw-s3-endpoint <url> --raw-s3-bucket <name> [--raw-s3-prefix <p>]]   把已封存的帧保存在存储桶中
+origin raw       upload [--remove]                      把仍在中枢磁盘上的已封存帧移入它的存储桶（在中枢上运行）
 origin token     create <name> | list | revoke <name>  管理中枢的访问令牌（在中枢上运行）
 origin admin     password [--generate]                 设置管理界面的密码，并让所有会话退出登录（在中枢上运行）
 origin admin     sessions [--revoke-all] | audit [--limit 50]       管理界面的会话与审计日志
@@ -99,6 +101,7 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 - 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct` 和 `forget` 之后会与中枢同步；如果连不上中枢，改动会留在设备上，直到下一次同步。
 - `origin hub connect … --relay` 把一个空库变成[中继](./hub.md#run-a-device-as-a-relay)，它不保有自己的会话或条目；已经保存了这些内容的库会被拒绝。在中继上，`origin sync` 直接把 Agent 新增的记录行发送给中枢（`--local` 不适用），`origin status` 按来源显示尚未发送的文件和字节，`origin mcp` 把每一次工具调用都交给中枢，`search`、`timeline`、`show`、`entries`、`correct` 和 `forget` 都会询问中枢；`entries --history` 和 `projects` 不可用。`origin hub status` 会显示模式。
 - `origin serve --admin` 会同时在 `/admin` 下提供[管理界面](./admin.md)；`--admin-listen <host:port>` 则改为在单独的监听地址上提供。在 TLS 之后时，用 `--public-url` 传入中枢的 https 地址；中枢拒绝在回环地址之外通过明文 HTTP 提供管理界面。
+- `origin serve --raw-s3-endpoint <url> --raw-s3-bucket <name>`，或 `ORIGIN_RAW_S3_*` 环境变量，会把中枢已封存的帧——原始镜像的大部分——保存在兼容 S3 的存储桶中，例如 MinIO；密钥只从环境变量读取。`origin raw upload` 把此前封存的帧移入存储桶并逐帧校验，`--remove` 随后删除原先存放它们的本地文件。见[把原始镜像放进存储桶](./hub.md#keep-raw-mirrors-in-a-bucket)。
 - `origin admin password` 设置管理界面的密码：在终端中询问两次，不显示你输入的内容；没有终端时从标准输入读取一行。`--generate` 随机生成一个密码，只打印一次。密码至少需要 10 个字符，设置后所有管理会话都会退出登录。中枢第一次在启用管理界面的情况下启动时，会生成一个密码，并在日志中打印一次。`origin admin sessions --revoke-all` 让所有会话退出登录，`origin admin audit` 打印审计日志。用 CLI 进行的令牌和密码变更也会记录在其中。
 
 ## 环境变量 {#environment-variables}
@@ -119,3 +122,9 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 | `ORIGIN_PUBLIC_URL` | — | 中枢的公开 https URL（`--public-url`） |
 | `ORIGIN_CLIENT_IP_HEADER` | — | 由你的代理设置、携带客户端地址的请求头；只有设置了才会被信任，在代理或 CDN 之后必须设置 |
 | `ORIGIN_ADMIN_PASSWORD` | — | 管理界面的密码（至少 10 个字符）；设置后取代用 `origin admin password` 设置的密码 |
+| `ORIGIN_RAW_S3_ENDPOINT`, `ORIGIN_RAW_S3_BUCKET` | — | 把中枢已封存的帧保存在这个兼容 S3 的存储桶中（`--raw-s3-endpoint`、`--raw-s3-bucket`） |
+| `ORIGIN_RAW_S3_PREFIX` | 无 | 存储桶中键的前缀（`--raw-s3-prefix`） |
+| `ORIGIN_RAW_S3_REGION` | `us-east-1` | 发往存储桶的请求签名所用的区域（`--raw-s3-region`） |
+| `ORIGIN_RAW_S3_ADDRESSING` | `path` | `path` 或 `virtual`：存储桶的寻址方式（`--raw-s3-addressing`） |
+| `ORIGIN_RAW_S3_ACCESS_KEY_ID`, `ORIGIN_RAW_S3_SECRET_ACCESS_KEY` | — | 存储桶的密钥；加上 `_FILE` 时指定存放它们的文件 |
+| `ORIGIN_RAW_S3_TIMEOUT_MS` | `30000` | 发往存储桶的单个请求最长可用的时间 |

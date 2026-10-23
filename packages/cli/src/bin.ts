@@ -61,6 +61,7 @@ import {
   stats,
   storeName,
   syncSource,
+  uploadFrames,
 } from '@openlinkos/origin-core';
 import {
   type EntryResult,
@@ -78,6 +79,7 @@ import {
   WATCH_INTERVAL_MS,
 } from '@openlinkos/origin-mcp';
 import { count, oneLine, table } from './format.js';
+import { BUCKET_OPTIONS, setUpFrames } from './hub/bucket.js';
 import {
   type HubConfig,
   normalizeHubUrl,
@@ -116,6 +118,8 @@ Usage:
 Personal hub:
   origin serve     [--host 127.0.0.1] [--port 7077]      Run this store as a personal hub (MCP over HTTP)
                    [--admin | --admin-listen <host:port>] [--public-url <url>]   Also serve the admin UI
+                   [--raw-s3-endpoint <url> --raw-s3-bucket <name> [--raw-s3-prefix <p>]]   Keep sealed frames in a bucket
+  origin raw       upload [--remove]                      Move sealed frames still on the hub's disk to its bucket (run on the hub)
   origin token     create <name> | list | revoke <name>  Manage the hub's access tokens (run on the hub)
   origin admin     password [--generate]                 Set the admin UI password; signs out every session (run on the hub)
   origin admin     sessions [--revoke-all] | audit [--limit 50]       Admin UI sessions and the audit log
@@ -168,6 +172,10 @@ async function main(argv: string[]): Promise<number> {
   const ctx: Ctx = { db, home };
   try {
     nameStore(db, command);
+    // A hub may keep its sealed frames in a bucket; serve and raw set that up with their flags.
+    if (command !== 'serve' && command !== 'raw') {
+      setUpFrames(db, home, { command: 'other', env: process.env });
+    }
     switch (command) {
       case 'sync':
         return await cmdSync(ctx, rest);
@@ -201,6 +209,8 @@ async function main(argv: string[]): Promise<number> {
         return await cmdAdmin(ctx, rest);
       case 'hub':
         return await cmdHub(ctx, rest);
+      case 'raw':
+        return cmdRaw(ctx, rest);
       case 'push':
         return await cmdSync(ctx, rest);
       default:
@@ -1187,6 +1197,7 @@ async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
       admin: { type: 'boolean' },
       'admin-listen': { type: 'string' },
       'public-url': { type: 'string' },
+      ...BUCKET_OPTIONS,
     },
   });
   assertComplete(ctx.db, 'serve as a hub');
@@ -1195,6 +1206,11 @@ async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
     throw new OriginError(`Invalid port: ${values.port}`);
   }
   const admin = adminOptions(values);
+  const bucket = setUpFrames(ctx.db, ctx.home, {
+    command: 'serve',
+    flags: values,
+    env: process.env,
+  });
   const hub = await startHub({
     db: ctx.db,
     home: ctx.home,
@@ -1206,6 +1222,9 @@ async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
     admin,
   });
   console.log(`Origin hub listening on ${hub.url} (data: ${ctx.home})`);
+  if (bucket) {
+    console.log(`Sealed frames go to ${bucket.location} at ${bucket.config.endpoint.origin}`);
+  }
   if (listTokens(ctx.db).every((t) => t.revokedAt !== null)) {
     console.log('No active tokens yet. Create one with: origin token create <name>');
   }
@@ -1368,6 +1387,47 @@ async function cmdAdmin(ctx: Ctx, args: string[]): Promise<number> {
   }
   console.error(ADMIN_USAGE);
   return 2;
+}
+
+/**
+ * `origin raw upload`: move the sealed frames a hub still keeps on disk to its bucket, verifying
+ * each, and with --remove delete the `.zst` files whose frames are all verified there.
+ */
+function cmdRaw(ctx: Ctx, args: string[]): number {
+  const [action, ...rest] = args;
+  if (action !== 'upload') {
+    console.error(
+      'Usage: origin raw upload [--remove] [--raw-s3-endpoint <url> --raw-s3-bucket <name> …]',
+    );
+    return 2;
+  }
+  const { values } = parseArgs({
+    args: rest,
+    options: { remove: { type: 'boolean', default: false }, ...BUCKET_OPTIONS },
+  });
+  const bucket = setUpFrames(ctx.db, ctx.home, {
+    command: 'upload',
+    flags: values,
+    env: process.env,
+  }) as NonNullable<ReturnType<typeof setUpFrames>>;
+  const r = uploadFrames(ctx.db, ctx.home, {
+    remove: values.remove,
+    log: (m) => console.error(m),
+  });
+  const removableBytes = r.removable.reduce((n, f) => n + f.bytes, 0);
+  console.log(
+    `Verified ${count(r.frames, 'sealed frame')} of ${count(r.mirrors, 'mirror')} in ${bucket.location}; uploaded ${count(r.uploaded, 'frame')} (${fmtBytes(r.uploadedBytes)}).`,
+  );
+  if (values.remove) {
+    console.log(
+      `Removed ${count(r.removed, 'local .zst file')}${r.removed < r.removable.length ? ` of ${r.removable.length}` : ''}.`,
+    );
+  } else if (r.removable.length > 0) {
+    console.log(
+      `Local .zst files holding only frames verified in the bucket: ${r.removable.length} (${fmtBytes(removableBytes)}). Run again with --remove to remove them.`,
+    );
+  }
+  return r.mirrors > r.removable.length ? 1 : 0;
 }
 
 async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {

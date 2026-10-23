@@ -6,6 +6,10 @@
 #   docker exec -it origin-hub origin admin password
 # (or set the password with -e ORIGIN_ADMIN_PASSWORD=...). Behind a proxy or CDN, also set
 # ORIGIN_CLIENT_IP_HEADER to its client-address header.
+# Sealed frames of raw mirrors in an S3-compatible bucket (off by default): set ORIGIN_RAW_S3_ENDPOINT,
+#   ORIGIN_RAW_S3_BUCKET, ORIGIN_RAW_S3_PREFIX, and the keys (ORIGIN_RAW_S3_ACCESS_KEY_ID[_FILE],
+#   ORIGIN_RAW_S3_SECRET_ACCESS_KEY[_FILE]); see https://origin.openlinkos.com/guide/hub
+#   (keep raw mirrors in a bucket).
 FROM node:24-alpine AS build
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /src

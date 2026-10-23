@@ -121,6 +121,84 @@ Forgetting through the hub works as on one machine (see [Privacy and your data](
 
 The hub can serve an [admin UI](./admin.md) for you: an overview of your devices and storage, your sessions and entries, search, correcting and forgetting, tokens, and an audit log. It is off by default; enable it with `origin serve --admin` (or `ORIGIN_ADMIN=on`) and sign in with the password the hub prints to its log on that first start, or one you set with `origin admin password` or `ORIGIN_ADMIN_PASSWORD`.
 
+## Keep raw mirrors in a bucket
+
+Raw mirrors take most of a hub's space, and their sealed frames, compressed blocks of lines, are written once and never change. A hub can keep them in an S3-compatible bucket instead of its disk, such as one on a MinIO server you run. The newest lines of each mirror (under 1 MiB per file) and the database stay on the hub's disk. Without a bucket, nothing changes.
+
+Configure the bucket with flags of `origin serve` or with environment variables:
+
+| Variable | Flag | Default | Purpose |
+|---|---|---|---|
+| `ORIGIN_RAW_S3_ENDPOINT` | `--raw-s3-endpoint` | — | The store's address, such as `http://minio:9000` |
+| `ORIGIN_RAW_S3_BUCKET` | `--raw-s3-bucket` | — | The bucket |
+| `ORIGIN_RAW_S3_PREFIX` | `--raw-s3-prefix` | none | Put before every key; give each hub its own |
+| `ORIGIN_RAW_S3_REGION` | `--raw-s3-region` | `us-east-1` | The region requests are signed for; MinIO accepts the default |
+| `ORIGIN_RAW_S3_ADDRESSING` | `--raw-s3-addressing` | `path` | `path` for `<endpoint>/<bucket>/<key>` (MinIO's default), `virtual` for `<bucket>.<host>/<key>` |
+| `ORIGIN_RAW_S3_ACCESS_KEY_ID` | — | — | The access key; or `ORIGIN_RAW_S3_ACCESS_KEY_ID_FILE`, a file that holds it |
+| `ORIGIN_RAW_S3_SECRET_ACCESS_KEY` | — | — | The secret key; or `ORIGIN_RAW_S3_SECRET_ACCESS_KEY_FILE`, a file that holds it |
+| `ORIGIN_RAW_S3_TIMEOUT_MS` | — | `30000` | How long one request may take |
+
+The keys come only from the environment or from files, never from flags, so they do not show in process lists, and Origin never prints them. They need `s3:PutObject` and `s3:GetObject` on the prefix, and `s3:ListBucket` on the bucket, without which a store reports a missing object as access denied; Origin never lists or deletes objects. Reach the bucket over https unless it is on the hub's own private network: the frames hold your sessions.
+
+With Docker:
+
+```bash
+docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data \
+  -e ORIGIN_RAW_S3_ENDPOINT=http://minio:9000 -e ORIGIN_RAW_S3_BUCKET=origin -e ORIGIN_RAW_S3_PREFIX=hub \
+  --env-file origin-s3.env ghcr.io/openlinkos/origin
+```
+
+where `origin-s3.env` holds `ORIGIN_RAW_S3_ACCESS_KEY_ID=…` and `ORIGIN_RAW_S3_SECRET_ACCESS_KEY=…`. On Kubernetes, keep the keys in a Secret and mount it as files:
+
+```yaml
+# The bucket's keys:
+apiVersion: v1
+kind: Secret
+metadata:
+  name: origin-raw-s3
+stringData:
+  access-key-id: origin-hub
+  secret-access-key: change-me
+---
+# In the hub's StatefulSet or Deployment, under spec.template.spec:
+containers:
+  - name: origin
+    image: ghcr.io/openlinkos/origin
+    env:
+      - name: ORIGIN_RAW_S3_ENDPOINT
+        value: http://minio.minio.svc.cluster.local:9000
+      - name: ORIGIN_RAW_S3_BUCKET
+        value: origin
+      - name: ORIGIN_RAW_S3_PREFIX
+        value: hub
+      - name: ORIGIN_RAW_S3_ACCESS_KEY_ID_FILE
+        value: /run/secrets/origin-raw-s3/access-key-id
+      - name: ORIGIN_RAW_S3_SECRET_ACCESS_KEY_FILE
+        value: /run/secrets/origin-raw-s3/secret-access-key
+    volumeMounts:
+      - name: origin-raw-s3
+        mountPath: /run/secrets/origin-raw-s3
+        readOnly: true
+volumes:
+  - name: origin-raw-s3
+    secret:
+      secretName: origin-raw-s3
+```
+
+- **Starting.** The hub writes one small object, `<prefix>/.origin-check`, reads it back, and refuses to start if it cannot. From then on the store remembers the bucket and the prefix: the hub refuses to start without them or with others, and other commands run on the hub, such as `origin backup` or `origin show`, reach the bucket through the same variables. The endpoint may change.
+- **Frames.** Each new frame is one object, `<prefix>/<mirror>.zst/<offset>`, and objects are never changed or deleted. Frames sealed before the hub had a bucket stay on its disk, and are read from there until you move them. On the hub, even while it serves:
+
+  ```bash
+  origin raw upload            # upload and verify them, and list the .zst files that may go
+  origin raw upload --remove   # the same, then remove those files
+  ```
+
+  It is safe to run again: frames already in the bucket are only verified. A file is removed only once every frame in it has been read back from the bucket and matches.
+- **Waiting for the bucket.** The hub waits for each frame it sends to or reads from the bucket, and serves nothing else meanwhile, so keep the bucket close: on a LAN a frame takes a few milliseconds. A bucket that cannot be reached holds each request up to `ORIGIN_RAW_S3_TIMEOUT_MS`, and pushes that need it fail until it is back; nothing is lost, and devices push again on their next sync.
+- **Backups.** `origin backup` on the hub copies the frames from the bucket into the backup, so a backup needs no bucket to restore (see [Backing up](./privacy.md#backing-up)).
+
+The design is in [Architecture](../architecture.md#frame-stores).
+
 ## Limitations
 
 - CLI curation commands (`entries`, `show`, `correct`, `forget`, …) act on the device's own store, then sync. To see and curate the entries of every device, use your agents or the hub's [admin UI](./admin.md).

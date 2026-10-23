@@ -17,6 +17,8 @@ origin ui        [--port 7079] [--no-open]             Browse and curate this st
 
 origin serve     [--host 127.0.0.1] [--port 7077]      Run this store as a personal hub (MCP over HTTP)
                  [--admin | --admin-listen <host:port>] [--public-url <url>]   Also serve the admin UI
+                 [--raw-s3-endpoint <url> --raw-s3-bucket <name> [--raw-s3-prefix <p>]]   Keep sealed frames in a bucket
+origin raw       upload [--remove]                      Move sealed frames still on the hub's disk to its bucket (run on the hub)
 origin token     create <name> | list | revoke <name>  Manage the hub's access tokens (run on the hub)
 origin admin     password [--generate]                 Set the admin UI password; signs out every session (run on the hub)
 origin admin     sessions [--revoke-all] | audit [--limit 50]       Admin UI sessions and the audit log
@@ -94,6 +96,7 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 - Curation commands (`entries`, `show`, `correct`, `forget`, …) act on the device's own store. On a connected device, `correct` and `forget` then sync with the hub; if the hub cannot be reached, the change stays on the device until the next sync.
 - `origin hub connect … --relay` makes an empty store a [relay](./hub.md#run-a-device-as-a-relay), which keeps no sessions or entries of its own; a store that holds any is refused. On a relay, `origin sync` sends the agents' new log lines straight to the hub (`--local` does not apply), `origin status` shows per source the files and bytes still to send, `origin mcp` hands every tool call to the hub, and `search`, `timeline`, `show`, `entries`, `correct`, and `forget` ask the hub; `entries --history` and `projects` are not available. `origin hub status` shows the mode.
 - `origin serve --admin` also serves the [admin UI](./admin.md) at `/admin`, and `--admin-listen <host:port>` serves it on a separate listener instead. Behind TLS, pass the hub's https address with `--public-url`; the hub refuses to serve the UI over plain HTTP beyond loopback.
+- `origin serve --raw-s3-endpoint <url> --raw-s3-bucket <name>`, or the `ORIGIN_RAW_S3_*` variables, keeps the hub's sealed frames, most of its raw mirrors, in an S3-compatible bucket such as MinIO; the keys are read only from the environment. `origin raw upload` moves the frames sealed before to the bucket, verifying each, and `--remove` then removes the local files that held them. See [Keep raw mirrors in a bucket](./hub.md#keep-raw-mirrors-in-a-bucket).
 - `origin admin password` sets the admin UI's password: it asks twice on a terminal, without showing what you type, and otherwise reads one line from standard input; `--generate` picks a random one and prints it once. The password needs at least 10 characters, and setting it signs out every admin session. On its first start with the admin UI enabled, the hub generates a password and prints it to its log once. `origin admin sessions --revoke-all` signs out every session, and `origin admin audit` prints the audit log. Token and password changes made with the CLI are recorded there too.
 
 ## Environment variables
@@ -114,3 +117,9 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 | `ORIGIN_PUBLIC_URL` | — | The hub's public https URL (`--public-url`) |
 | `ORIGIN_CLIENT_IP_HEADER` | — | Header with the client address set by your proxy; trusted only when set, and needed behind a proxy or CDN |
 | `ORIGIN_ADMIN_PASSWORD` | — | The admin UI's password (at least 10 characters); when set, it takes the place of the one set with `origin admin password` |
+| `ORIGIN_RAW_S3_ENDPOINT`, `ORIGIN_RAW_S3_BUCKET` | — | Keep the hub's sealed frames in this S3-compatible bucket (`--raw-s3-endpoint`, `--raw-s3-bucket`) |
+| `ORIGIN_RAW_S3_PREFIX` | none | The prefix of the bucket's keys (`--raw-s3-prefix`) |
+| `ORIGIN_RAW_S3_REGION` | `us-east-1` | The region requests to the bucket are signed for (`--raw-s3-region`) |
+| `ORIGIN_RAW_S3_ADDRESSING` | `path` | `path` or `virtual`: how the bucket is addressed (`--raw-s3-addressing`) |
+| `ORIGIN_RAW_S3_ACCESS_KEY_ID`, `ORIGIN_RAW_S3_SECRET_ACCESS_KEY` | — | The bucket's keys, or with `_FILE`, files that hold them |
+| `ORIGIN_RAW_S3_TIMEOUT_MS` | `30000` | How long one request to the bucket may take |

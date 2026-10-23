@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-43386b8e
+sourceHash: sha256-79db3e17
 ---
 
 # 个人中枢
@@ -124,6 +124,84 @@ codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var OR
 ## 在浏览器中管理 {#manage-it-in-a-browser}
 
 中枢可以为你提供一个[管理界面](./admin.md)：设备和存储的概览、你的会话和条目、检索、纠正和遗忘、令牌，以及审计日志。它默认关闭；用 `origin serve --admin`（或 `ORIGIN_ADMIN=on`）启用，并用中枢第一次启动时打印在日志里的密码登录，或者用你通过 `origin admin password` 或 `ORIGIN_ADMIN_PASSWORD` 设置的密码登录。
+
+## 把原始镜像放进存储桶 {#keep-raw-mirrors-in-a-bucket}
+
+原始镜像占据中枢的大部分空间，而其中已封存的帧（一块块压缩后的行）只写一次、永不改变。中枢可以把它们保存在兼容 S3 的存储桶中，而不是自己的磁盘上，例如你自己运行的 MinIO 服务器上的存储桶。每个镜像最新的若干行（每个文件不到 1 MiB）和数据库仍留在中枢的磁盘上。不配置存储桶时，一切照旧。
+
+用 `origin serve` 的参数或环境变量配置存储桶：
+
+| 变量 | 参数 | 默认值 | 用途 |
+|---|---|---|---|
+| `ORIGIN_RAW_S3_ENDPOINT` | `--raw-s3-endpoint` | — | 存储服务的地址，例如 `http://minio:9000` |
+| `ORIGIN_RAW_S3_BUCKET` | `--raw-s3-bucket` | — | 存储桶 |
+| `ORIGIN_RAW_S3_PREFIX` | `--raw-s3-prefix` | 无 | 加在每个键前面；每个中枢请使用各自的前缀 |
+| `ORIGIN_RAW_S3_REGION` | `--raw-s3-region` | `us-east-1` | 请求签名所用的区域；MinIO 接受默认值 |
+| `ORIGIN_RAW_S3_ADDRESSING` | `--raw-s3-addressing` | `path` | `path` 表示 `<endpoint>/<bucket>/<key>`（MinIO 的默认方式），`virtual` 表示 `<bucket>.<host>/<key>` |
+| `ORIGIN_RAW_S3_ACCESS_KEY_ID` | — | — | 访问密钥 ID；或用 `ORIGIN_RAW_S3_ACCESS_KEY_ID_FILE` 指定存放它的文件 |
+| `ORIGIN_RAW_S3_SECRET_ACCESS_KEY` | — | — | 私有访问密钥；或用 `ORIGIN_RAW_S3_SECRET_ACCESS_KEY_FILE` 指定存放它的文件 |
+| `ORIGIN_RAW_S3_TIMEOUT_MS` | — | `30000` | 单个请求最长可用的时间 |
+
+密钥只从环境变量或文件读取，从不通过参数传入，所以不会出现在进程列表里，Origin 也从不打印它们。它们需要对该前缀的 `s3:PutObject` 和 `s3:GetObject` 权限，以及对存储桶的 `s3:ListBucket` 权限——没有后者，存储服务会把不存在的对象报告为拒绝访问；Origin 从不列出或删除对象。除非存储桶就在中枢所在的私有网络中，否则请通过 https 访问它：帧里保存着你的会话。
+
+用 Docker：
+
+```bash
+docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data \
+  -e ORIGIN_RAW_S3_ENDPOINT=http://minio:9000 -e ORIGIN_RAW_S3_BUCKET=origin -e ORIGIN_RAW_S3_PREFIX=hub \
+  --env-file origin-s3.env ghcr.io/openlinkos/origin
+```
+
+其中 `origin-s3.env` 包含 `ORIGIN_RAW_S3_ACCESS_KEY_ID=…` 和 `ORIGIN_RAW_S3_SECRET_ACCESS_KEY=…`。在 Kubernetes 上，把密钥放在 Secret 中，并以文件形式挂载：
+
+```yaml
+# 存储桶的密钥：
+apiVersion: v1
+kind: Secret
+metadata:
+  name: origin-raw-s3
+stringData:
+  access-key-id: origin-hub
+  secret-access-key: change-me
+---
+# 在中枢的 StatefulSet 或 Deployment 中，位于 spec.template.spec 之下：
+containers:
+  - name: origin
+    image: ghcr.io/openlinkos/origin
+    env:
+      - name: ORIGIN_RAW_S3_ENDPOINT
+        value: http://minio.minio.svc.cluster.local:9000
+      - name: ORIGIN_RAW_S3_BUCKET
+        value: origin
+      - name: ORIGIN_RAW_S3_PREFIX
+        value: hub
+      - name: ORIGIN_RAW_S3_ACCESS_KEY_ID_FILE
+        value: /run/secrets/origin-raw-s3/access-key-id
+      - name: ORIGIN_RAW_S3_SECRET_ACCESS_KEY_FILE
+        value: /run/secrets/origin-raw-s3/secret-access-key
+    volumeMounts:
+      - name: origin-raw-s3
+        mountPath: /run/secrets/origin-raw-s3
+        readOnly: true
+volumes:
+  - name: origin-raw-s3
+    secret:
+      secretName: origin-raw-s3
+```
+
+- **启动。** 中枢写入一个小对象 `<prefix>/.origin-check` 并读回；如果做不到，就拒绝启动。从此以后，库会记住这个存储桶和前缀：没有它们、或换成别的，中枢都会拒绝启动；在中枢上运行的其他命令，例如 `origin backup` 或 `origin show`，通过同样的环境变量访问存储桶。端点可以改变。
+- **帧。** 每个新的帧是一个对象 `<prefix>/<mirror>.zst/<offset>`，对象永远不会被修改或删除。中枢有存储桶之前封存的帧仍留在它的磁盘上，并从那里读取，直到你把它们移走。在中枢上运行（中枢运行期间也可以）：
+
+  ```bash
+  origin raw upload            # 上传并校验这些帧，列出可以删除的 .zst 文件
+  origin raw upload --remove   # 同上，然后删除这些文件
+  ```
+
+  它可以安全地重复运行：已在存储桶中的帧只会被校验。只有一个文件中的每一帧都已从存储桶读回并核对一致，这个文件才会被删除。
+- **等待存储桶。** 中枢向存储桶发送或从中读取每一帧时都会等待，期间不处理其他任何请求，所以请让存储桶离中枢近一些：在局域网中一帧只需几毫秒。无法连接的存储桶会让每个请求最多等待 `ORIGIN_RAW_S3_TIMEOUT_MS`，需要它的推送在它恢复之前都会失败；不会丢失任何东西，设备会在下一次同步时重新推送。
+- **备份。** 在中枢上运行 `origin backup` 会把存储桶中的帧复制进备份，所以恢复备份不需要存储桶（见[备份](./privacy.md#backing-up)）。
+
+设计细节见[架构](../architecture.md#frame-stores)。
 
 ## 限制 {#limitations}
 
