@@ -490,21 +490,45 @@ export interface RelayPending {
   pendingFiles: number;
   /** Bytes not acknowledged by the hub, a trailing partial line included. */
   pendingBytes: number;
+  /**
+   * The modification time of the oldest file with complete lines not sent yet, or null if there
+   * is none. Agents that delete old logs go by that time (Claude Code, after `cleanupPeriodDays`),
+   * so it tells how close the oldest unsent session is to being lost, as a relay keeps no copy.
+   */
+  oldestPendingMtimeMs: number | null;
 }
 
 export async function relayPending(db: Database, adapter: SourceAdapter): Promise<RelayPending> {
-  const pending: RelayPending = { source: adapter.id, files: 0, pendingFiles: 0, pendingBytes: 0 };
+  const pending: RelayPending = {
+    source: adapter.id,
+    files: 0,
+    pendingFiles: 0,
+    pendingBytes: 0,
+    oldestPendingMtimeMs: null,
+  };
   for (const file of await adapter.discover()) {
     pending.files++;
     let bytes = 0;
+    let complete = false;
+    let mtimeMs = 0;
     try {
-      bytes = openRelayFile(file, relayCursor(db, adapter.id, file.absPath), null)?.pending() ?? 0;
+      const rf = openRelayFile(file, relayCursor(db, adapter.id, file.absPath), null);
+      bytes = rf?.pending() ?? 0;
+      // A trailing partial line is pending too, but cannot be sent until the agent ends it.
+      complete = rf !== null && bytes > 0 && rf.next(1) !== null;
+      mtimeMs = rf?.mtimeMs ?? 0;
     } catch {
       bytes = 0; // unreadable now; a sync reports it
     }
     if (bytes > 0) {
       pending.pendingFiles++;
       pending.pendingBytes += bytes;
+    }
+    if (
+      complete &&
+      (pending.oldestPendingMtimeMs === null || mtimeMs < pending.oldestPendingMtimeMs)
+    ) {
+      pending.oldestPendingMtimeMs = mtimeMs;
     }
   }
   return pending;

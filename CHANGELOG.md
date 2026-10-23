@@ -20,6 +20,7 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 - Relay mode for machines with little disk: `origin hub connect … --relay` makes an empty store a relay, which keeps only cursors, sends its agents' logs to the hub straight from the logs, and answers every MCP tool and CLI query through the hub.
 - A hub can keep the sealed frames of its raw mirrors in an S3-compatible bucket such as MinIO (`origin serve --raw-s3-endpoint … --raw-s3-bucket …`, or `ORIGIN_RAW_S3_*`, with `*_FILE` for keys mounted from a Secret); `origin raw upload` moves the frames already on disk, verified, 8 at a time (`--concurrency`), and `origin backup` copies them back into the backup.
 - `origin status` and `origin hub status` show when the device last finished a sync with its hub, and the error of the last sync if it failed since.
+- A relay warns before agents delete logs it has not sent: `origin status`, `origin sync`, and `origin mcp` (in its log and in the errors of tools the hub cannot answer) say when unsent sessions near Claude Code's `cleanupPeriodDays` (30 days unless set), or, for other agents, have waited a week with nothing sent.
 
 ## [0.1.0] - 2026-10-23
 

@@ -35,6 +35,11 @@ export interface RelayServerOptions {
   watchIntervalMs?: number;
   /** Whether the logs changed since the last sync, cheaply; without it, every look syncs. */
   changed?: () => Promise<boolean>;
+  /**
+   * A warning to add when a tool fails because the hub cannot be reached, such as sessions not sent
+   * yet that their agent will soon delete; null for none.
+   */
+  warning?: () => string | null;
   /** How long the last sync on disconnect may take (default 5 s). */
   closeTimeoutMs?: number;
   /** How long a read waits for new log lines to reach the hub before asking it (default 2 s). */
@@ -107,10 +112,13 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     fetch: opts.fetch,
   });
 
-  const unavailable = (name: ToolName, reason: string): string =>
-    WRITES.has(name)
+  const unavailable = (name: ToolName, reason: string): string => {
+    const message = WRITES.has(name)
       ? `This device is an Origin relay: it keeps no memory of its own, so \`${name}\` is done on its hub, but ${reason}. Nothing was changed; try again once the hub is reachable.`
       : `This device is an Origin relay: it keeps no memory of its own and answers only through its hub, but ${reason}. Try again once the hub is reachable; until then, new sessions wait in the agents' own logs.`;
+    const warning = opts.warning?.();
+    return warning ? `${message} Warning: ${warning}` : message;
+  };
 
   const forward = (name: ToolName) => (args: unknown) =>
     run(async (): Promise<CallToolResult> => {

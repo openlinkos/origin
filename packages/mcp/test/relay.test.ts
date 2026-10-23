@@ -124,6 +124,21 @@ describe('origin mcp on a relay', () => {
     });
     expect(write.isError).toBe(true);
     expect(write.text).toMatch(/`remember` is done on its hub, but .*Nothing was changed/);
+    expect(read.text).not.toMatch(/Warning/);
+  });
+
+  it('adds the warning it is given about unsent sessions when the hub is unreachable', async () => {
+    let warning: string | null =
+      'Claude Code sessions not sent to the hub yet were last written 25 days ago.';
+    await connect({ answerTimeoutMs: 3000, warning: () => warning });
+    await hub.stop();
+    const read = await call('search', { query: 'token' });
+    expect(read.isError).toBe(true);
+    expect(read.text).toMatch(
+      /try again once the hub is reachable; .* Warning: Claude Code sessions not sent to the hub yet were last written 25 days ago\.$/i,
+    );
+    warning = null;
+    expect((await call('search', { query: 'token' })).text).not.toMatch(/Warning/);
   });
 
   it('says when the hub rejects the token', async () => {

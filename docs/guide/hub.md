@@ -98,6 +98,7 @@ origin status
 - Agents keep their registrations, but on a relay `origin mcp` answers every tool from the hub: it first sends the hub what was just written, so that agents can find and cite it, then hands the call to the hub. What agents save is written on the hub, recorded as `claude-code@vps`. If the hub cannot be reached, tools fail with a message saying that the relay cannot answer offline.
 - `origin search`, `timeline`, `show`, `entries`, `correct`, and `forget` ask the hub too, and `correct` records `user@vps`. A relay cannot list beforehand what `origin forget` will forget, so it says what the rules will forget, and needs `--yes` as always. `entries --history` and `projects` are not available on a relay; use the hub's [admin UI](./admin.md).
 - While the hub cannot be reached, nothing is sent, and new sessions exist only in the agents' own logs. Some agents delete old logs, Claude Code after 30 days by default (`cleanupPeriodDays`), so make sure a relay reaches its hub regularly; if agents that do not use Origin run on it, schedule `origin sync`.
+- Before that happens, the relay warns: `origin status`, and `origin sync` when it could not send everything, say when sessions not sent yet are within a week of the age at which Claude Code deletes them (`cleanupPeriodDays` in `~/.claude/settings.json`, or 30 days), and, for other agents, when they have waited a week with nothing sent. While the hub cannot be reached, the agents' tools that fail say so too.
 
 The design is in [Relays](../architecture.md#relays).
 

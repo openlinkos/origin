@@ -343,16 +343,34 @@ describe('relay mode', () => {
     const adapter = fakeAdapter(src);
     const { hub } = testHub(adapter);
     makeRelay(db);
+    const old = Date.now() - 20 * 86_400_000;
+    fs.utimesSync(file, new Date(old), new Date(old));
+    const newer = path.join(src, 's2.jsonl');
+    fs.writeFileSync(newer, line('e2', 's2', 2000, 'user', 'second'));
     expect(await relayPending(db, adapter)).toEqual({
       source: 'fake',
-      files: 1,
-      pendingFiles: 1,
-      pendingBytes: Buffer.byteLength(first),
+      files: 2,
+      pendingFiles: 2,
+      pendingBytes:
+        Buffer.byteLength(first) + Buffer.byteLength(line('e2', 's2', 2000, 'user', 'second')),
+      oldestPendingMtimeMs: fs.statSync(file).mtimeMs,
     });
     await relay(adapter, hub);
-    expect(await relayPending(db, adapter)).toMatchObject({ pendingFiles: 0, pendingBytes: 0 });
+    expect(await relayPending(db, adapter)).toMatchObject({
+      pendingFiles: 0,
+      pendingBytes: 0,
+      oldestPendingMtimeMs: null,
+    });
+    // A partial line is pending, but cannot be sent yet: it does not count as the oldest.
     fs.appendFileSync(file, 'partial');
-    expect(await relayPending(db, adapter)).toMatchObject({ pendingFiles: 1, pendingBytes: 7 });
+    fs.utimesSync(file, new Date(old), new Date(old));
+    expect(await relayPending(db, adapter)).toMatchObject({
+      pendingFiles: 1,
+      pendingBytes: 7,
+      oldestPendingMtimeMs: null,
+    });
+    fs.appendFileSync(newer, line('e3', 's2', 3000, 'user', 'third'));
+    expect((await relayPending(db, adapter)).oldestPendingMtimeMs).toBe(fs.statSync(newer).mtimeMs);
   });
 
   it('becomes a relay only while it holds nothing, and a relay mirrors nothing', async () => {

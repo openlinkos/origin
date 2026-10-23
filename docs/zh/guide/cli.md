@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-e5a8282d
+sourceHash: sha256-4404e5f2
 ---
 
 # 命令参考
@@ -99,7 +99,7 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 - 在设备上，`origin hub connect` 保存中枢地址和令牌；中枢以设备的库名称来识别它，这个名称必须与令牌名相同。`origin hub connect` 和 `origin hub status` 会向中枢核对，不一致时说明如何解决。此后 `origin sync` 也会与中枢同步：发送新的原始镜像字节，以及在本设备上写下的条目和遗忘记录，再应用中枢的遗忘记录。可以随时重跑，每次都会从上次停下的位置继续。`--local` 会跳过中枢。`origin status` 和 `origin hub status` 会显示这台设备上一次与中枢同步完成的时间（无论由哪个命令或 Agent 发起），如果此后有一次同步失败，还会显示它的错误。
 - 设备接入后，`origin mcp` 根据设备的库作答，并合并中枢的回答，等待中枢最多 2 秒；Agent 保存的内容写在设备上，然后再同步。
 - 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct` 和 `forget` 之后会与中枢同步；如果连不上中枢，改动会留在设备上，直到下一次同步。
-- `origin hub connect … --relay` 把一个空库变成[中继](./hub.md#run-a-device-as-a-relay)，它不保有自己的会话或条目；已经保存了这些内容的库会被拒绝。在中继上，`origin sync` 直接把 Agent 新增的记录行发送给中枢（`--local` 不适用），`origin status` 按来源显示尚未发送的文件和字节，`origin mcp` 把每一次工具调用都交给中枢，`search`、`timeline`、`show`、`entries`、`correct` 和 `forget` 都会询问中枢；`entries --history` 和 `projects` 不可用。`origin hub status` 会显示模式。
+- `origin hub connect … --relay` 把一个空库变成[中继](./hub.md#run-a-device-as-a-relay)，它不保有自己的会话或条目；已经保存了这些内容的库会被拒绝。在中继上，`origin sync` 直接把 Agent 新增的记录行发送给中枢（`--local` 不适用），`origin status` 按来源显示尚未发送的文件和字节，并在尚未发送的会话临近被 Agent 删除的年龄时发出警告，`origin mcp` 把每一次工具调用都交给中枢，`search`、`timeline`、`show`、`entries`、`correct` 和 `forget` 都会询问中枢；`entries --history` 和 `projects` 不可用。`origin hub status` 会显示模式。
 - `origin serve --admin` 会同时在 `/admin` 下提供[管理界面](./admin.md)；`--admin-listen <host:port>` 则改为在单独的监听地址上提供。在 TLS 之后时，用 `--public-url` 传入中枢的 https 地址；中枢拒绝在回环地址之外通过明文 HTTP 提供管理界面。
 - `origin serve --raw-s3-endpoint <url> --raw-s3-bucket <name>`，或 `ORIGIN_RAW_S3_*` 环境变量，会把中枢已封存的帧——原始镜像的大部分——保存在兼容 S3 的存储桶中，例如 MinIO；密钥只从环境变量读取。`origin raw upload` 把此前封存的帧移入存储桶并逐帧校验，默认一次 8 帧（可用 `--concurrency` 调整），`--remove` 随后删除原先存放它们的本地文件。见[把原始镜像放进存储桶](./hub.md#keep-raw-mirrors-in-a-bucket)。
 - `origin admin password` 设置管理界面的密码：在终端中询问两次，不显示你输入的内容；没有终端时从标准输入读取一行。`--generate` 随机生成一个密码，只打印一次。密码至少需要 10 个字符，设置后所有管理会话都会退出登录。中枢第一次在启用管理界面的情况下启动时，会生成一个密码，并在日志中打印一次。`origin admin sessions --revoke-all` 让所有会话退出登录，`origin admin audit` 打印审计日志。用 CLI 进行的令牌和密码变更也会记录在其中。

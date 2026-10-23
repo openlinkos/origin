@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-47a1e960
+sourceHash: sha256-0f290cc4
 ---
 
 # 个人中枢
@@ -102,6 +102,7 @@ origin status
 - Agent 的注册都不用改，但在中继上，`origin mcp` 的每个工具都由中枢作答：它先把刚刚写下的内容发送给中枢，让 Agent 能找到并引用它，再把调用交给中枢。Agent 保存的内容写在中枢上，作者记为 `claude-code@vps`。连不上中枢时，工具会失败，并说明中继离线时无法作答。
 - `origin search`、`timeline`、`show`、`entries`、`correct` 和 `forget` 也会询问中枢，`correct` 记为 `user@vps`。中继无法事先列出 `origin forget` 将遗忘的内容，所以它会说明按规则将遗忘什么，并照常需要 `--yes`。`entries --history` 和 `projects` 在中继上不可用；请使用中枢的[管理界面](./admin.md)。
 - 连不上中枢时，什么也不会发送，新的会话只存在于 Agent 自己的记录文件中。有些 Agent 会删除旧的记录，Claude Code 默认在 30 天后删除（`cleanupPeriodDays`），所以请确保中继定期连上它的中枢；如果上面运行着不使用 Origin 的 Agent，请定时运行 `origin sync`。
+- 在那之前，中继会发出警告：尚未发送的会话距离 Claude Code 删除它们的年龄（`~/.claude/settings.json` 中的 `cleanupPeriodDays`，或 30 天）不到一周时，以及其他 Agent 的会话已等待一周仍未发送时，`origin status` 会说明，`origin sync` 在没能发送全部内容时也会说明。连不上中枢期间，Agent 的工具失败时也会提到这一点。
 
 设计细节见[中继](../architecture.md#relays)。
 

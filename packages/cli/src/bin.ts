@@ -91,6 +91,7 @@ import {
 import { checkHub } from './hub/connect.js';
 import { type RelaySyncResult, relayWithHub } from './hub/relay.js';
 import { askHub } from './hub/remote.js';
+import { RetentionWatch, retentionWarning, retentionWarnings } from './hub/retention.js';
 import { type HubAdminOptions, startHub } from './hub/serve.js';
 import { type HubSyncResult, lastHubSync, syncWithHub } from './hub/sync.js';
 import { readNewPassword } from './password.js';
@@ -368,6 +369,7 @@ async function relaySync(
     console.error(
       `Not sent to the hub: ${(err as Error).message}\nWhat was not sent waits in the agents' own logs until the next sync.`,
     );
+    await warnOfCleanup(ctx, adapters);
     return 1;
   }
   console.log(
@@ -389,7 +391,17 @@ async function relaySync(
     `\nRelayed to hub ${hub.url} (as ${hub.device}): sent ${count(r.files, 'file')} (${fmtBytes(r.bytes)}, ${count(r.eventsAdded, 'new event')}).`,
   );
   for (const f of r.failed) console.error(`Not sent: ${f.path} (${f.source}): ${f.reason}`);
+  if (r.failed.length > 0) await warnOfCleanup(ctx, adapters);
   return r.failed.length > 0 ? 1 : 0;
+}
+
+/** On a relay that could not send everything: warn of unsent logs their agents may soon delete. */
+async function warnOfCleanup(ctx: Ctx, adapters: SourceAdapter[]): Promise<void> {
+  try {
+    for (const w of await retentionWarnings(ctx.db, adapters)) console.error(`\nWarning: ${w}`);
+  } catch {
+    // Only a warning: what failed has been said already.
+  }
 }
 
 async function cmdStatus(ctx: Ctx): Promise<number> {
@@ -457,6 +469,7 @@ async function relayStatus(ctx: Ctx): Promise<number> {
       : RELAY_UNCONNECTED,
   );
   const rows: string[][] = [];
+  const warnings: string[] = [];
   for (const adapter of allAdapters()) {
     const p = await relayPending(ctx.db, adapter);
     if (p.files === 0) continue;
@@ -468,12 +481,16 @@ async function relayStatus(ctx: Ctx): Promise<number> {
       fmtBytes(p.pendingBytes),
       last ? `${fmtDateTime(last.at)} (+${last.eventsAdded})` : '—',
     ]);
+    const lastSyncAt = last?.at ?? null;
+    const warning = retentionWarning({ agent: adapter.displayName, pending: p, lastSyncAt });
+    if (warning) warnings.push(warning);
   }
   console.log(
     rows.length === 0
       ? '\nNo agent sessions on this machine yet.'
       : `\n${table(rows, ['source', 'files', 'pending files', 'pending', 'last sync'])}`,
   );
+  for (const w of warnings) console.log(`\nWarning: ${w}`);
   if (hub) {
     console.log('');
     printLastSync(ctx, hub);
@@ -1048,6 +1065,8 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
   if (isRelay(ctx.db)) {
     // Every tool is the hub's; the agents' new log lines go to the hub first (see relay.ts).
     if (!hub) throw new OriginError(RELAY_UNCONNECTED);
+    // While the hub cannot be reached, warn of unsent logs that their agents may soon delete.
+    const cleanup = new RetentionWatch(() => retentionWarnings(ctx.db, adapters), log);
     await serveRelay({
       device,
       hub: { url: hub.url, token: hub.token },
@@ -1055,9 +1074,16 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
       log,
       sync: async () => {
         const before = await fingerprint();
-        await relayWithHub({ db: ctx.db, home: ctx.home, hub, adapters, log });
+        try {
+          await relayWithHub({ db: ctx.db, home: ctx.home, hub, adapters, log });
+        } catch (err) {
+          void cleanup.check();
+          throw err;
+        }
+        cleanup.reset();
         ingested = before;
       },
+      warning: () => cleanup.current,
       changed,
       hubTimeoutMs: hubTimeoutMs(),
       watchIntervalMs,
