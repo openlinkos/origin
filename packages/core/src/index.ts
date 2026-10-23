@@ -203,6 +203,8 @@ export {
   listEvents,
   listProjects,
   listSessions,
+  PROMPT_TITLE_MAX,
+  promptTitle,
   type RawLocator,
   rawLocator,
   readRawLine,

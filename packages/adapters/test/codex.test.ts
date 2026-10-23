@@ -170,6 +170,11 @@ describe('codex adapter', () => {
         .map((s) => s.project)
         .sort(),
     ).toEqual(['billing', 'demo-app']);
+    // Codex titles nothing: a session is named by its first prompt, after the injected context.
+    expect(listSessions(db).find((s) => s.sessionId === SESSION)).toMatchObject({
+      title: null,
+      prompt: 'Raise the login API timeout to 30 seconds.',
+    });
     const again = await syncSource({ db, home: originHome }, adapter);
     expect(again).toMatchObject({ filesChanged: 0, eventsAdded: 0 });
     db.close();

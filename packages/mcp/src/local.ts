@@ -80,6 +80,11 @@ export interface SessionView {
   source: string;
   project: string | null;
   title: string | null;
+  /**
+   * For a session without a title, its first prompt, cut short: a provisional name. A hub of an
+   * earlier version leaves it out.
+   */
+  prompt?: string | null;
   started: string | null;
   ended: string | null;
   events: number;
@@ -237,6 +242,7 @@ export function timelineOf(db: Database, args: ToolArgs<'timeline'>): TimelineRe
       source: s.source,
       project: s.project,
       title: s.title,
+      prompt: s.prompt,
       started: s.startedAt === null ? null : isoLocal(s.startedAt),
       ended: s.endedAt === null ? null : isoLocal(s.endedAt),
       events: s.eventCount,

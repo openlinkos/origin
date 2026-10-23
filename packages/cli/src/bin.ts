@@ -430,12 +430,13 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
         r.source,
         String(r.files),
         String(r.sessions),
+        String(r.titled),
         String(r.events),
         fmtDate(r.firstTs),
         fmtDateTime(r.lastTs),
         r.lastSyncAt ? `${fmtDateTime(r.lastSyncAt)} (+${r.lastSyncEventsAdded ?? 0})` : '—',
       ]),
-      ['source', 'files', 'sessions', 'events', 'first', 'latest event', 'last sync'],
+      ['source', 'files', 'sessions', 'titled', 'events', 'first', 'latest event', 'last sync'],
     ),
   );
   console.log(`\n${entries}\nData directory: ${ctx.home}`);
@@ -513,7 +514,7 @@ async function relayStatus(ctx: Ctx): Promise<number> {
 /** A session as the CLI lists it, from this store or from the hub. */
 type ShownSession = Pick<
   SessionRow,
-  'sessionId' | 'source' | 'project' | 'title' | 'startedAt' | 'endedAt' | 'eventCount'
+  'sessionId' | 'source' | 'project' | 'title' | 'prompt' | 'startedAt' | 'endedAt' | 'eventCount'
 >;
 
 /** An event as the CLI lists it. `cwd` is undefined when the hub's answer does not carry it. */
@@ -541,6 +542,7 @@ const fromSessionView = (v: SessionView): ShownSession => ({
   source: v.source,
   project: v.project,
   title: v.title,
+  prompt: v.prompt ?? null,
   startedAt: parseIso(v.started),
   endedAt: parseIso(v.ended),
   eventCount: v.events,
@@ -600,8 +602,10 @@ function printSessions(sessions: ShownSession[]): number {
       day = d;
       console.log(`\n${day}`);
     }
+    // A session without a title is named by its first prompt, in quotes: the user's words.
+    const name = s.title ?? (s.prompt ? `“${s.prompt}”` : '');
     console.log(
-      `  ${fmtTime(s.startedAt)}–${fmtTime(s.endedAt)}  ${s.source.padEnd(11)} ${(s.project ?? '—').padEnd(24)} ${String(s.eventCount).padStart(5)} events  ${oneLine(s.title ?? '', 60)}`,
+      `  ${fmtTime(s.startedAt)}–${fmtTime(s.endedAt)}  ${s.source.padEnd(11)} ${(s.project ?? '—').padEnd(24)} ${String(s.eventCount).padStart(5)} events  ${oneLine(name, 60)}`,
     );
     console.log(`           ↳ ${s.sessionId}`);
   }

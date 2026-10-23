@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-8eda83a2
+sourceHash: sha256-454471ab
 ---
 
 # 架构
@@ -310,6 +310,8 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 
 时间线按时间列出会话，或按顺序列出单个会话的事件（工具事件默认隐藏，除非请求显示）。
 
+**会话的名称。** 会话的 `title` 是它的 Agent 给它的标题，或用户通过 Agent 给它的标题（见各来源的映射）；Codex 不给任何标题，其他 Agent 也并不总是给。没有标题的会话改为带有一个 `prompt`：它的第一条提示，作为一个临时的名称，界面可以把它作为临时名称显示。它是该会话中最早的、属于用户亲手输入的提示的那个可见的用户 `message` 事件的文本：消息开头的 XML 风格元素（`<tag …>…</tag>`）是 Agent 作为上下文或命令回显添加的，例如 Claude Code 的 `<command-name>`、`<local-command-stdout>` 和 `<local-command-caveat>`，或 Codex 的 `<environment_context>`，它们会被跳过，其后的内容才算数；去掉这些之后为空、或只剩一个方括号提示（例如 `[Request interrupted by user]`）的消息会被略过。适配器标记为 `meta` 的事件（注入的上下文、合成的提示）不是消息。提示中的空白会被合并，并截断到 80 个字符。它在每次读取会话时（`listSessions`、`getSession`）通过 `(source, session_id, ts)` 索引从事件中计算得出，因此会随遗忘而变化（不变量 2）；不保存任何东西。MCP 的 `timeline`、`origin timeline`（放在引号中）以及管理服务的会话列表都在标题旁边带上它。
+
 ## MCP server {#mcp-server}
 
 `origin mcp` 通过 stdio 提供以下工具。结果是 JSON 文本，时间戳为本地时间的 ISO 8601 格式，精确到毫秒。
@@ -317,7 +319,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 | 工具 | 用途 |
 |---|---|
 | `search` | 对条目和事件做全文检索；不带查询词时列出最近的条目。过滤条件：范围、类型、时间段、来源、项目、工具事件 |
-| `timeline` | 某个时间段内的会话（默认 7 天），或单个会话的事件 |
+| `timeline` | 某个时间段内的会话（默认 7 天），每个会话带有它的标题，没有标题时带有它的第一条提示（见[会话的名称](#search-and-timeline)）；或单个会话的事件 |
 | `get` | 条目及其来源和版本历史，或事件及其完整正文 |
 | `sources` | 条目或事件对应的原始记录行：文件、镜像、行号、原始文本 |
 | `remember` | 写入一个条目，包括类型、正文、置信度和来源 |

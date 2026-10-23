@@ -68,7 +68,17 @@ describe('origin MCP server', () => {
     const r = await call('search', { query: 'watcher' });
     expect(r.json.events.map((e: { id: string }) => e.id)).toEqual(['fake:e3']);
     const t = await call('timeline', { since: '1970-01-01' });
-    expect(t.json.sessions[0]).toMatchObject({ session: 's1', events: 3 });
+    // Without a title, a session is named by its first prompt, kept apart from the title.
+    expect(t.json.sessions[0]).toEqual({
+      session: 's1',
+      source: 'fake',
+      project: 'demo',
+      title: null,
+      prompt: 'Store everything in SQLite so it stays local.',
+      started: expect.any(String),
+      ended: expect.any(String),
+      events: 3,
+    });
   });
 
   it('remembers, explains, corrects, and forgets', async () => {

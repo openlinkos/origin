@@ -306,6 +306,8 @@ Event search covers `message` events unless tool events are requested (`--all` /
 
 The timeline lists sessions by time, or the events of one session in order (tool events are hidden unless requested).
 
+**Session names.** A session's `title` is the one its agent gave it, or the user through the agent (see each source's mapping); Codex gives none, and the others not always. A session without a title has a `prompt` instead: its first prompt, as a provisional name that UIs can show as such. It is the text of the earliest visible user `message` event of the session that is a prompt the user typed: the XML-style elements a message starts with (`<tag …>…</tag>`), which agents add as context or command echoes, such as Claude Code's `<command-name>`, `<local-command-stdout>`, and `<local-command-caveat>`, or Codex's `<environment_context>`, are skipped and what follows them counts, and a message left empty, or holding only a bracketed notice such as `[Request interrupted by user]`, is passed over. Events adapters mark as `meta` (injected context, synthetic prompts) are not messages. The prompt has its whitespace collapsed and is cut to 80 characters. It is computed from the events whenever sessions are read (`listSessions`, `getSession`), through the `(source, session_id, ts)` index, so that it follows forgetting (invariant 2); nothing is stored. The MCP `timeline`, `origin timeline` (in quotes), and the admin service's sessions carry it next to the title.
+
 ## MCP server
 
 `origin mcp` serves these tools over stdio. Results are JSON text with local ISO 8601 timestamps, to the millisecond.
@@ -313,7 +315,7 @@ The timeline lists sessions by time, or the events of one session in order (tool
 | Tool | Purpose |
 |---|---|
 | `search` | Full-text search over entries and events; without a query, lists recent entries. Filters: scope, kind, time range, source, project, tool events |
-| `timeline` | Sessions in a time range (default 7 days), or the events of one session |
+| `timeline` | Sessions in a time range (default 7 days), each with its title or, without one, its first prompt (see [Session names](#search-and-timeline)); or the events of one session |
 | `get` | An entry with its sources and version history, or an event with its full text |
 | `sources` | Original log lines for an entry or event: file, mirror, line number, raw text |
 | `remember` | Write an entry with kind, text, confidence, and sources |

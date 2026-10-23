@@ -10,7 +10,7 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 - Archives ZCode sessions (source id `zcode`) from its SQLite database, `~/.zcode/cli/db/db.sqlite`, opened read-only: each message once it has settled, with its parts, as one mirrored line.
 - Archives Cursor sessions (source id `cursor`): the conversations of the editor, from its `state.vscdb` opened read-only, and the transcripts under `~/.cursor/projects/`.
 - Adapters can generate the lines of a source that is not a log file, such as a database; Origin mirrors and ingests them like a file's.
-- Sessions get their titles again from Claude Code 2.1, which writes `ai-title` lines, and a name given with `/rename` takes precedence over the generated title; upgrading a store titles the Claude Code sessions it already holds, on devices and hubs. Grok Build sessions are titled from their `summary.json`.
+- Sessions get their titles again from Claude Code 2.1, which writes `ai-title` lines, and a name given with `/rename` takes precedence over the generated title; upgrading a store titles the Claude Code sessions it already holds, on devices and hubs. Grok Build sessions are titled from their `summary.json`. A session without a title, such as every Codex session, has its first prompt as a provisional name (`prompt`, next to `title`, in the MCP `timeline` and `origin timeline`), and `origin status` counts the titled sessions.
 
 ### Admin UI
 

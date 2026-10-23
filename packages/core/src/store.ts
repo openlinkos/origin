@@ -135,7 +135,71 @@ export function listSessions(
        ORDER BY COALESCE(ended_at, 0) DESC LIMIT ? OFFSET ?`,
     )
     .all(...(params as never[])) as unknown as SessionRecord[];
-  return rows.map(toSessionRow);
+  const prompt = promptFinder(db);
+  return rows.map((r) => toSessionRow(r, prompt));
+}
+
+/** At most this many characters of a prompt stand in for the name of a session without a title. */
+export const PROMPT_TITLE_MAX = 80;
+
+/** Text this long is no lone bracketed notice, and only its start can become a name. */
+const PROMPT_HEAD = 1000;
+
+/**
+ * A user message as a provisional name for a session without a title, or null if it is not a
+ * prompt the user typed. Agents add context and echo commands as user messages made of XML-style
+ * elements (`<tag …>…</tag>`), such as Claude Code's `<command-name>`, `<local-command-stdout>`,
+ * and `<local-command-caveat>`, or Codex's `<environment_context>`: the elements a message starts
+ * with are skipped, and what follows them is the prompt. Nothing left, or only a bracketed notice
+ * such as `[Request interrupted by user]`, is no prompt. Whitespace is collapsed, and the prompt cut
+ * to PROMPT_TITLE_MAX characters.
+ */
+export function promptTitle(text: string): string | null {
+  let rest = text;
+  for (;;) {
+    rest = rest.trimStart();
+    const open = /^<([A-Za-z][\w.:-]*)(?:\s[^<>]*)?\/?>/.exec(rest);
+    if (!open) break;
+    const [tag, name = ''] = open;
+    if (tag.endsWith('/>')) {
+      rest = rest.slice(tag.length);
+      continue;
+    }
+    const close = rest.indexOf(`</${name}>`, tag.length);
+    if (close < 0) break; // not an element: a prompt that starts with `<`
+    rest = rest.slice(close + name.length + 3);
+  }
+  const long = rest.length > PROMPT_HEAD;
+  const prompt = (long ? rest.slice(0, PROMPT_HEAD) : rest).replace(/\s+/g, ' ').trim();
+  if (prompt.length === 0 || (!long && /^\[[^\]]*\]$/.test(prompt))) return null;
+  const chars = [...prompt];
+  if (chars.length <= PROMPT_TITLE_MAX) return prompt;
+  return `${chars
+    .slice(0, PROMPT_TITLE_MAX - 1)
+    .join('')
+    .trimEnd()}…`;
+}
+
+/**
+ * The first prompt of a session (see promptTitle), from its visible user messages in time order:
+ * computed when sessions are read, so that forgetting the event it came from drops it too
+ * (invariant 2).
+ */
+function promptFinder(db: Database): (source: string, sessionId: string) => string | null {
+  let stmt: ReturnType<Database['prepare']> | null = null;
+  return (source, sessionId) => {
+    stmt ??= db.prepare(
+      `SELECT e.text FROM event e
+        WHERE e.source = ? AND e.session_id = ? AND e.role = 'user' AND e.kind = 'message'
+          AND ${VISIBLE_EVENT}
+        ORDER BY e.ts, e.seq`,
+    );
+    for (const row of stmt.iterate(source, sessionId) as Iterable<{ text: string }>) {
+      const prompt = promptTitle(row.text);
+      if (prompt !== null) return prompt;
+    }
+    return null;
+  };
 }
 
 const SESSION_COLUMNS =
@@ -152,13 +216,17 @@ interface SessionRecord {
   event_count: number;
 }
 
-function toSessionRow(r: SessionRecord): SessionRow {
+function toSessionRow(
+  r: SessionRecord,
+  prompt: (source: string, sessionId: string) => string | null,
+): SessionRow {
   return {
     source: r.source,
     sessionId: r.session_id,
     project: r.project,
     cwd: r.cwd,
     title: r.title,
+    prompt: r.title === null ? prompt(r.source, r.session_id) : null,
     startedAt: r.started_at,
     endedAt: r.ended_at,
     eventCount: r.event_count,
@@ -173,7 +241,7 @@ export function getSession(db: Database, source: string, sessionId: string): Ses
        WHERE source = ? AND session_id = ? AND event_count > 0`,
     )
     .get(source, sessionId) as SessionRecord | undefined;
-  return row ? toSessionRow(row) : null;
+  return row ? toSessionRow(row, promptFinder(db)) : null;
 }
 
 /** List events in chronological order. */
@@ -259,6 +327,8 @@ export function readRawLine(db: Database, home: string, locator: RawLocator): st
 export interface SourceStats {
   source: string;
   sessions: number;
+  /** Sessions with a title of their own. */
+  titled: number;
   events: number;
   firstTs: number | null;
   lastTs: number | null;
@@ -276,6 +346,7 @@ export function stats(db: Database): SourceStats[] {
     .prepare(
       `SELECT s.source AS source,
               COUNT(*) AS sessions,
+              COUNT(s.title) AS titled,
               SUM(s.event_count) AS events,
               MIN(s.started_at) AS first_ts,
               MAX(s.ended_at) AS last_ts,
@@ -287,6 +358,7 @@ export function stats(db: Database): SourceStats[] {
     .all() as unknown as Array<{
     source: string;
     sessions: number;
+    titled: number;
     events: number;
     first_ts: number | null;
     last_ts: number | null;
@@ -297,6 +369,7 @@ export function stats(db: Database): SourceStats[] {
   return rows.map((r) => ({
     source: r.source,
     sessions: r.sessions,
+    titled: r.titled,
     events: r.events,
     firstTs: r.first_ts,
     lastTs: r.last_ts,

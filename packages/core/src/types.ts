@@ -127,7 +127,14 @@ export interface SessionRow {
   sessionId: string;
   project: string | null;
   cwd: string | null;
+  /** The title the agent, or the user through the agent, gave the session; null if none. */
   title: string | null;
+  /**
+   * For a session without a title, the first prompt the user typed in it, cut short (see
+   * promptTitle in store.ts): a provisional name, not a title. Null for a session with a title, or
+   * without such a prompt.
+   */
+  prompt: string | null;
   startedAt: number | null;
   endedAt: number | null;
   eventCount: number;

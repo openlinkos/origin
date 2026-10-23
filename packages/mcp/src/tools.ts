@@ -57,7 +57,7 @@ export const TOOL_SPECS = {
   timeline: {
     title: 'Timeline',
     description:
-      'Sessions in a time range (newest first), or the events of one session in order when `session` is given.',
+      'Sessions in a time range (newest first), each with its title or, when it has none, its first prompt; or the events of one session in order when `session` is given.',
     inputSchema: {
       since: time.describe('Start of the range (default 7d)'),
       until: time,
