@@ -31,7 +31,7 @@ import type { HubConfig } from '../src/hub/config.js';
 import { relayWithHub } from '../src/hub/relay.js';
 import { askHub } from '../src/hub/remote.js';
 import { createHubServer } from '../src/hub/server.js';
-import { pulledKey, syncWithHub } from '../src/hub/sync.js';
+import { lastHubSync, pulledKey, syncWithHub } from '../src/hub/sync.js';
 
 const fixtures = fileURLToPath(
   new URL('../../adapters/test/fixtures/claude-code/', import.meta.url),
@@ -182,6 +182,11 @@ describe('relay mode', () => {
     };
     await expect(sync({ fetch: offline })).rejects.toThrow(/Cannot reach the hub/);
     expect(relayCursor(relayDb, 'claude-code', logFile)).toBeNull();
+    // Recorded as a device's sync is, for origin status and origin hub status.
+    expect(lastHubSync(relayDb, hub)).toMatchObject({
+      at: null,
+      failure: { error: /Cannot reach the hub/ },
+    });
 
     // A token of another device, then a revoked one: refused, and nothing moves.
     const desk = createToken(main.db, 'desk');
@@ -209,6 +214,7 @@ describe('relay mode', () => {
     expect(relayCursor(relayDb, 'claude-code', second)).toBeNull();
     expect(await sync()).toMatchObject({ files: 1, eventsAdded: 1 });
     expect(getEvent(main.db, NEW_EVENT)?.text).toBe('Second session.');
+    expect(lastHubSync(relayDb, hub)).toMatchObject({ at: expect.any(Number), failure: null });
   });
 
   it('sends a rewritten log as a new generation', async () => {

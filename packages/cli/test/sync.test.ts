@@ -22,13 +22,14 @@ import {
   localRawFiles,
   openDatabase,
   remember,
+  setSetting,
   syncSource,
   tombstoneFeed,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HubConfig } from '../src/hub/config.js';
 import { createHubServer } from '../src/hub/server.js';
-import { pushedKey, syncWithHub } from '../src/hub/sync.js';
+import { lastHubSync, pushedKey, syncFailedKey, syncWithHub } from '../src/hub/sync.js';
 
 const fixtures = fileURLToPath(
   new URL('../../adapters/test/fixtures/claude-code/', import.meta.url),
@@ -397,6 +398,41 @@ describe('device to hub replication', () => {
     ).toBe(409);
     expect(getEvent(hubDb, USER_EVENT)).toBeNull();
     expect(isEntryForgotten(hubDb, a.id)).toBe(true);
+  });
+});
+
+describe('the last sync', () => {
+  it('records when a sync finished, and why a later one failed, until one succeeds', async () => {
+    expect(lastHubSync(deviceDb, hub)).toEqual({ at: null, failure: null });
+    await expect(sync(offline)).rejects.toThrow(/ECONNREFUSED/);
+    const failed = lastHubSync(deviceDb, hub);
+    expect(failed.at).toBeNull();
+    expect(failed.failure?.error).toMatch(/Cannot reach the hub at .*ECONNREFUSED/);
+
+    const before = Date.now();
+    await sync();
+    const ok = lastHubSync(deviceDb, hub);
+    expect(ok.at).toBeGreaterThanOrEqual(before);
+    expect(ok.failure).toBeNull();
+
+    // A failure after it is shown; it still says when the last sync finished.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await expect(sync(offline)).rejects.toThrow();
+    expect(lastHubSync(deviceDb, hub)).toMatchObject({
+      at: ok.at,
+      failure: { error: /ECONNREFUSED/ },
+    });
+    // Kept per hub: another hub has its own.
+    expect(lastHubSync(deviceDb, { ...hub, url: 'http://127.0.0.1:1' })).toEqual({
+      at: null,
+      failure: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await sync();
+    expect(lastHubSync(deviceDb, hub).failure).toBeNull();
+    // An unreadable record is as good as none.
+    setSetting(deviceDb, syncFailedKey(hub), '{not json');
+    expect(lastHubSync(deviceDb, hub).failure).toBeNull();
   });
 });
 

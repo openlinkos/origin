@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-50a4b9d3
+sourceHash: sha256-edd8ec4c
 ---
 
 # 架构
@@ -368,7 +368,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 
 设备以两种模式之一使用中枢，在接入时选定。默认情况下，它是一个**完整的库**：像没有中枢时一样保有自己的记忆，并按上文所述与中枢复制。加上 `--relay` 时，它是一个**中继**：除了游标什么也不保存，直接把 Agent 的记录发送给中枢，所有问题都通过中枢回答（见[中继](#relays)）。除非另有说明，本节其余部分说的都是完整的库。
 
-- `origin hub connect <url> --token <token> [--device <name>] [--relay]` 把连接信息保存在 `<ORIGIN_HOME>/hub.json` 中。设备名就是它的库的名称（见[存储](#storage)），而且必须是这台设备的令牌名：这个命令会向中枢询问令牌属于哪台设备（`GET /v1/device`），如果不是这个库，就拒绝接入并说明如何解决。`--device` 可以给一个还没有写入任何条目或遗忘记录的库改名。`origin hub status` 也做同样的检查。`ORIGIN_HUB_URL` 和 `ORIGIN_HUB_TOKEN` 会覆盖保存的连接信息。
+- `origin hub connect <url> --token <token> [--device <name>] [--relay]` 把连接信息保存在 `<ORIGIN_HOME>/hub.json` 中。设备名就是它的库的名称（见[存储](#storage)），而且必须是这台设备的令牌名：这个命令会向中枢询问令牌属于哪台设备（`GET /v1/device`），如果不是这个库，就拒绝接入并说明如何解决。`--device` 可以给一个还没有写入任何条目或遗忘记录的库改名。`origin hub status` 也做同样的检查。每一次与中枢的同步，无论由哪个命令或 Agent 发起，都会在 `setting` 中记下它完成的时间，失败时则记下时间和原因；`origin status` 和 `origin hub status` 显示上一次同步完成的时间，以及此后失败的那一次同步的错误。`ORIGIN_HUB_URL` 和 `ORIGIN_HUB_TOKEN` 会覆盖保存的连接信息。
 - 配置了中枢之后，`origin mcp` 仍然根据设备自己的库提供服务，并合并中枢的回答（见 [MCP server](#mcp-server)）。它在运行中与中枢同步：读取类工具之前最多每 10 秒一次，每次写入后立即同步，记录文件有变化时每分钟同步一次，Agent 离开时再同步一次；等待中枢的时间不会超过超时时限。Agent 的注册无需改动，Agent 也仍然能引用刚刚说过的内容。
 - 没有本地记录的云端 Agent 直接用 bearer 令牌注册中枢的 `/mcp` URL。
 - CLI 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct` 和 `forget` 之后会与中枢同步，所以改动会到达中枢；如果是遗忘，还会到达其他每台设备。`origin ui` 同样作用于设备自己的库，并在每次写入后在后台与中枢同步。中枢的管理界面会显示所有设备的条目。

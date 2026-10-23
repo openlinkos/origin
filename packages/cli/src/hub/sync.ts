@@ -49,32 +49,92 @@ export interface HubSyncResult {
 /** Settings keys of a device's cursors for one hub. */
 export const pushedKey = (hub: HubConfig) => `hub.pushed:${hub.url}`;
 export const pulledKey = (hub: HubConfig) => `hub.pulled:${hub.url}`;
-/** When the last sync with this hub finished, in milliseconds, for `origin ui`. */
+/** When the last sync with this hub finished, in milliseconds, for `origin ui` and `origin status`. */
 export const syncedKey = (hub: HubConfig) => `hub.synced:${hub.url}`;
+/** The last sync with this hub that failed: `{ at, error }`, as JSON. */
+export const syncFailedKey = (hub: HubConfig) => `hub.sync-failed:${hub.url}`;
+
+/** How the syncs of this device with a hub went lately, from any process. */
+export interface LastHubSync {
+  /** When the last sync finished, or null if none has. */
+  at: number | null;
+  /** The last sync that failed, if it failed after the last one finished: when, and why. */
+  failure: { at: number; error: string } | null;
+}
+
+export function lastHubSync(db: Database, hub: HubConfig): LastHubSync {
+  const synced = Number(getSetting(db, syncedKey(hub)));
+  const at = Number.isFinite(synced) && synced > 0 ? synced : null;
+  let failure: LastHubSync['failure'] = null;
+  try {
+    const f = JSON.parse(getSetting(db, syncFailedKey(hub)) ?? 'null') as unknown;
+    if (
+      typeof f === 'object' &&
+      f !== null &&
+      typeof (f as { at?: unknown }).at === 'number' &&
+      typeof (f as { error?: unknown }).error === 'string'
+    ) {
+      failure = f as { at: number; error: string };
+    }
+  } catch {
+    failure = null; // unreadable: as if none were recorded
+  }
+  return { at, failure: failure && (at === null || failure.at > at) ? failure : null };
+}
+
+/** Longest error kept for `origin status`. */
+const MAX_ERROR_CHARS = 500;
+
+/**
+ * Run one sync with the hub, recording when it finished or, if it failed, when and why (see
+ * lastHubSync). Recording a failure must not hide it: a store that cannot be written is ignored.
+ */
+export async function recordHubSync<T>(
+  db: Database,
+  hub: HubConfig,
+  sync: () => Promise<T>,
+): Promise<T> {
+  let result: T;
+  try {
+    result = await sync();
+  } catch (err) {
+    try {
+      const error = (err as Error).message.slice(0, MAX_ERROR_CHARS);
+      setSetting(db, syncFailedKey(hub), JSON.stringify({ at: Date.now(), error }));
+    } catch {
+      // The store cannot be written: the error itself is what matters.
+    }
+    throw err;
+  }
+  setSetting(db, syncedKey(hub), String(Date.now()));
+  return result;
+}
 
 /**
  * Sync this device with its hub (see docs/architecture.md#personal-hub): send the raw mirror bytes
  * the hub does not have yet, then the entries and tombstones written here after the push cursor,
  * then apply the hub's tombstones after the pull cursor (invariant 2, sticky forgetting, across
  * replicas). Each cursor is saved after every successful request, so an interrupted sync resumes
- * where it stopped, and running it again is a no-op.
+ * where it stopped, and running it again is a no-op. When it finished, or why it failed, is recorded
+ * (lastHubSync).
  */
 export async function syncWithHub(opts: HubSyncOptions): Promise<HubSyncResult> {
-  const call = hubClient(opts);
-  const result: HubSyncResult = {
-    files: 0,
-    bytes: 0,
-    eventsAdded: 0,
-    entriesPushed: 0,
-    tombstonesPushed: 0,
-    waiting: null,
-    tombstonesApplied: 0,
-  };
-  await pushMirrors(opts, call, result);
-  await pushChanges(opts, call, result);
-  await pullTombstones(opts, call, result);
-  setSetting(opts.db, syncedKey(opts.hub), String(Date.now()));
-  return result;
+  return recordHubSync(opts.db, opts.hub, async () => {
+    const call = hubClient(opts);
+    const result: HubSyncResult = {
+      files: 0,
+      bytes: 0,
+      eventsAdded: 0,
+      entriesPushed: 0,
+      tombstonesPushed: 0,
+      waiting: null,
+      tombstonesApplied: 0,
+    };
+    await pushMirrors(opts, call, result);
+    await pushChanges(opts, call, result);
+    await pullTombstones(opts, call, result);
+    return result;
+  });
 }
 
 async function pushMirrors(opts: HubSyncOptions, call: Call, result: HubSyncResult) {

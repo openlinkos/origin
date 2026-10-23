@@ -92,7 +92,7 @@ import { checkHub } from './hub/connect.js';
 import { type RelaySyncResult, relayWithHub } from './hub/relay.js';
 import { askHub } from './hub/remote.js';
 import { type HubAdminOptions, startHub } from './hub/serve.js';
-import { type HubSyncResult, syncWithHub } from './hub/sync.js';
+import { type HubSyncResult, lastHubSync, syncWithHub } from './hub/sync.js';
 import { readNewPassword } from './password.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
 import { openInBrowser, startLocalUi, UI_PORT, writeSignInFile } from './ui.js';
@@ -426,8 +426,26 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
     );
   }
   const hub = hubOf(ctx);
-  if (hub) console.log(`\nConnected to hub ${hub.url} as ${hub.device}.`);
+  if (hub) {
+    console.log(`\nConnected to hub ${hub.url} as ${hub.device}.`);
+    printLastSync(ctx, hub);
+  }
   return 0;
+}
+
+/** When this device last synced with its hub, and why the last sync failed if it did since. */
+function lastSync(ctx: Ctx, hub: HubConfig): { synced: string; failed: string | null } {
+  const last = lastHubSync(ctx.db, hub);
+  return {
+    synced: last.at === null ? 'never' : fmtDateTime(last.at),
+    failed: last.failure && `${fmtDateTime(last.failure.at)}: ${last.failure.error}`,
+  };
+}
+
+function printLastSync(ctx: Ctx, hub: HubConfig): void {
+  const last = lastSync(ctx, hub);
+  console.log(`Last sync with the hub: ${last.synced}.`);
+  if (last.failed) console.log(`Last sync failed ${last.failed}`);
 }
 
 /** `origin status` on a relay: what is still to send, per source, from the relay's cursors. */
@@ -456,6 +474,10 @@ async function relayStatus(ctx: Ctx): Promise<number> {
       ? '\nNo agent sessions on this machine yet.'
       : `\n${table(rows, ['source', 'files', 'pending files', 'pending', 'last sync'])}`,
   );
+  if (hub) {
+    console.log('');
+    printLastSync(ctx, hub);
+  }
   console.log(`\nData directory: ${ctx.home}`);
   return 0;
 }
@@ -1519,11 +1541,14 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
       console.log('Not connected to a hub. Connect with: origin hub connect <url> --token <token>');
       return 0;
     }
-    console.log(`Hub     ${hub.url}\nDevice  ${hub.device}`);
+    console.log(`Hub         ${hub.url}\nDevice      ${hub.device}`);
     if (isRelay(ctx.db))
-      console.log('Mode    relay: keeps no sessions here, sends them to the hub');
+      console.log('Mode        relay: keeps no sessions here, sends them to the hub');
+    const last = lastSync(ctx, hub);
+    console.log(`Last sync   ${last.synced}`);
+    if (last.failed) console.log(`Last error  ${last.failed}`);
     await checkHub(hub, { renamable: !isStoreNameFixed(ctx.db) });
-    console.log('Status  reachable, token accepted for this device');
+    console.log('Status      reachable, token accepted for this device');
     return 0;
   }
   if (action === 'disconnect') {

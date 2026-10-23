@@ -13,6 +13,7 @@ import {
   hubRequest,
   pullTombstones,
   pushChanges,
+  recordHubSync,
 } from './sync.js';
 
 export interface RelaySyncOptions extends HubSyncOptions {
@@ -33,9 +34,14 @@ export interface RelaySyncResult extends HubSyncResult {
  * `/v1/ingest` a device pushes its mirrors with; then replicate entries and tombstones as a device
  * does. A relay writes none of its own, and the hub's tombstones find nothing to hide in it, so
  * those two steps only keep the replication cursors moving. Nothing moves while the hub cannot be
- * reached: the lines stay in the agents' logs until the next sync.
+ * reached: the lines stay in the agents' logs until the next sync. When it finished, or why it
+ * failed, is recorded as for a device (lastHubSync).
  */
 export async function relayWithHub(opts: RelaySyncOptions): Promise<RelaySyncResult> {
+  return recordHubSync(opts.db, opts.hub, () => relay(opts));
+}
+
+async function relay(opts: RelaySyncOptions): Promise<RelaySyncResult> {
   const call = hubClient(opts);
   const request = hubRequest(opts);
   const result: RelaySyncResult = {
