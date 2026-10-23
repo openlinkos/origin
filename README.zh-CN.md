@@ -9,7 +9,7 @@
 
 [English](README.md) | 简体中文
 
-各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：目前支持 Claude Code、Codex、Grok Build 与 ZCode，Cursor 即将接入。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。如果你在多台机器上工作，或者使用云端 Agent，可以用自托管的**个人中枢**把它们接入同一份记忆。
+各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：已支持 Claude Code、Codex、Cursor、Grok Build 与 ZCode。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。如果你在多台机器上工作，或者使用云端 Agent，可以用自托管的**个人中枢**把它们接入同一份记忆。
 
 > **状态：早期版本（0.1）。** Claude Code 与 Codex 会话的采集、MCP server、CLI 与个人中枢（含管理界面）已经端到端可用；其余 Agent 的适配器正在开发（见[路线图](#路线图)）。1.0 之前，次版本可能改变存储格式，[更新日志](CHANGELOG.md)会说明需要怎么做。
 
@@ -41,7 +41,7 @@ Origin 以**人**而不是工具为中心：
 |---|---|---|
 | Claude Code | ✅ | ✅ |
 | Codex CLI | ✅ | ✅ |
-| Cursor | 规划中 | ✅ |
+| Cursor | ✅ | ✅ |
 | ZCode | ✅ | ✅ |
 | Grok Build | ✅ | ✅ |
 
@@ -115,13 +115,14 @@ Agent 会话记录里常有源代码、命令输出，以及你在提示词里�
 4. ✅ 个人中枢：自托管、多设备、远程 MCP，附带管理界面
 5. ✅ Grok Build 适配器
 6. ✅ ZCode 适配器，读取它的 SQLite 数据库
-7. Cursor 适配器
+7. ✅ Cursor 适配器：编辑器对话与 CLI 对话记录
 
 **当前已知限制：**
 
 - 很多会话没有标题，因为 Claude Code 只为部分会话写 `summary` 行。
 - 项目名取自工作目录的最后一段，而不是由 git remote 推导。
 - 遗忘只是隐藏，不会从原始镜像文件中物理删除。
+- 对把会话存在数据库里的 Agent（ZCode、Cursor 编辑器），每条消息在稳定后归档一次，之后的修改不会再归档。
 - Origin 不会自行监听文件。Agent 运行期间，它的 MCP server 每分钟检查一次新内容，Agent 退出时再检查一次；其他时候请运行 `origin sync`，它也会与你的中枢同步。
 - 在设备上，CLI 管理命令作用于该设备自己的条目；中枢的管理界面可以查看和管理所有设备的条目。
 

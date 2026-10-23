@@ -8,6 +8,7 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 
 - Archives Grok Build sessions (source id `grok`): the update stream of each session under `~/.grok/sessions/` (or `$GROK_HOME`).
 - Archives ZCode sessions (source id `zcode`) from its SQLite database, `~/.zcode/cli/db/db.sqlite`, opened read-only: each message once it has settled, with its parts, as one mirrored line.
+- Archives Cursor sessions (source id `cursor`): the conversations of the editor, from its `state.vscdb` opened read-only, and the transcripts under `~/.cursor/projects/`.
 - Adapters can generate the lines of a source that is not a log file, such as a database; Origin mirrors and ingests them like a file's.
 
 ## [0.1.0] - 2026-10-23

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-15a160cd
+sourceHash: sha256-4c0a7af9
 ---
 
 # 会话来源
@@ -10,7 +10,7 @@ sourceHash: sha256-15a160cd
 |---|---|---|---|---|
 | `claude-code` | [Claude Code](https://code.claude.com) | **已支持** | `~/.claude/projects/<cwd-slug>/<session-id>.jsonl` | JSONL 事件流 |
 | `codex` | [Codex CLI](https://developers.openai.com/codex) | **已支持** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl[.zst]` | JSONL rollout，首行为 `session_meta` |
-| `cursor` | [Cursor](https://cursor.com) | 规划中 | CLI：`~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`；IDE：`state.vscdb` | JSONL 消息块；SQLite 键值存储 |
+| `cursor` | [Cursor](https://cursor.com) | **已支持** | CLI：`~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`；IDE：`state.vscdb` | JSONL 消息块；SQLite 键值存储 |
 | `zcode` | [ZCode](https://github.com/zai-org/ZCode) | **已支持** | `~/.zcode/cli/db/db.sqlite` | SQLite（关系型） |
 | `grok` | [Grok Build](https://github.com/xai-org/grok-build) | **已支持** | `~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl` | JSONL 格式的 ACP session-update 流 |
 
@@ -47,13 +47,19 @@ sourceHash: sha256-15a160cd
 
 ## Cursor {#cursor}
 
-核对依据：截至 2026 年 10 月的 Cursor CLI 更新日志与编辑器 3.x。文档：[CLI](https://cursor.com/docs/cli/overview)、[hooks](https://cursor.com/docs/hooks)、[CLI 更新日志](https://cursor.com/docs/cli/changelog)。
+核对依据：磁盘上的编辑器 3.25，以及截至 2026 年 10 月的 Cursor CLI 更新日志。文档：[CLI](https://cursor.com/docs/cli/overview)、[hooks](https://cursor.com/docs/hooks)、[CLI 更新日志](https://cursor.com/docs/cli/changelog)。
 
-- **CLI 对话记录：** 官方文档没有指明路径。hooks 会收到 `transcript_path` / `CURSOR_TRANSCRIPT_PATH`。观察到的布局：`~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`。每行是 `{"role":"user"|"assistant","message":{"content":[{"type":"text","text":…}]}}`，用户消息中嵌有 `<timestamp>` 和 `<user_query>` 标签。自 2026 年初起，无头模式的对话记录以与 Claude Code 兼容的 JSONL 写入。
-- **编辑器对话：** 没有文档。在全局存储的 `state.vscdb`（SQLite）中，`cursorDiskKV` 表保存 `composerData:*` 对话正文，`composerHeaders` 保存元数据。该数据库处于 WAL 模式，必须以只读方式打开。
+- **对话记录（transcript）：** 官方文档没有指明路径。hooks 会收到 `transcript_path` / `CURSOR_TRANSCRIPT_PATH`。观察到的布局：`~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`，其中 slug 是把工作目录的分隔符换成 `-` 得到的（因此无法从它还原目录）。每行是带有 `text` 和 `tool_use`（`name`、`input`）块的 `{"role":"user"|"assistant","message":{"content":[…]}}`，或者一个 `{"type":"turn_ended"}` 标记；没有 id，没有工具结果，也没有时间戳，只有用户消息里嵌着的 `<timestamp>`（精确到分钟，带 UTC 偏移）和 `<user_query>` 标签。编辑器里的 Agent 也会以对话的 id 为对话写对话记录。自 2026 年初起，无头模式的对话记录以与 Claude Code 兼容的 JSONL 写入。
+- **编辑器对话：** 没有文档。在编辑器的全局存储中（Windows 上是 `%APPDATA%\Cursor\User\globalStorage\state.vscdb`，macOS 上是 `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`，Linux 上是 `~/.config/Cursor/User/globalStorage/state.vscdb`；SQLite），键值表 `cursorDiskKV` 保存 `composerData:<conversation>`（它的 `name`、`createdAt`、`lastUpdatedAt`、`status`、`generatingBubbleIds`、`workspaceIdentifier.uri.fsPath`，以及 `fullConversationHeadersOnly`，即它显示的消息按顺序排列的 id），每条消息一个 `bubbleId:<conversation>:<bubble>`（`type` 为 1 是用户、为 2 是 Agent，`text`、`createdAt`，以及 `toolFormerData`，带有工具调用的 `name`、`params`、`result`、`status` 和 `error`）。值会被原地改写。这张表里还有对话已不再显示的消息，大多是已显示消息的副本；数据库的其他表里还存着凭据，所以只以只读方式打开，并且只读这些键。
 - **保留期：** 观察到的清理标记（`~/.cursor/projects/.agent-data-cleanup-<date>`）表明 CLI 数据会被定期清除。
 - **命令名：** `agent` 是主要的 CLI 命令（`cursor-agent` 是它的别名）。其他工具可能会在 `PATH` 上安装另一个名为 `agent` 的程序，因此检测时不应只依赖名称。
 - **原生记忆：** 编辑器的 Memories 功能已在 2.1.x 中移除；只有云端 Automations 仍保留一个 `MEMORIES.md`。
+
+**Origin 映射：**
+
+- 每个编辑器对话是一个[生成的来源](architecture.md#ingestion)，命名为 `<database>#<conversation>`。它显示的每条消息按创建顺序、在不再生成时（或者对话一小时没有变化之后）写出一次，写成一行：消息的键和值保持存储时的原样，再加上对话的 `composerId`、`name`、`createdAt`、`lastUpdatedAt` 和 `workspaceIdentifier`。消息的文本变成 `message` 事件；工具调用变成一个 `tool_use` 事件（`<name> <params>`，最多 2,000 个字符）和一个 `tool_result` 事件（它的结果或错误，最多 4,000 个字符），`status` 不是 `completed` 时会记下。事件 id：`cursor:<conversation>:<bubble>`，工具调用加 `#1`，其结果加 `#2`。cwd 是对话的工作区文件夹，标题是对话的名称。
+- 对话在编辑器数据库里的对话记录会被跳过：保留编辑器的记录，它带有工具结果和准确的时间。其他对话记录作为文件采集：文本块变成 `message` 事件（用户消息取 `<user_query>` 里的文本），`tool_use` 块变成 `tool_use` 事件。用户消息的时间是它的 `<timestamp>`，回复的时间取它之前那条提示。事件 id 为 `cursor:<uuid>:L<line>-<hash>`，由行号和该行 SHA-256 的前 8 个十六进制字符组成，工具调用再加 `#<block>`。对话记录没有 cwd，它们的项目是 slug。
+- 行里不带 Cursor 的版本，所以事件记录的是已安装编辑器的版本。
 
 ## ZCode {#zcode}
 

@@ -6,7 +6,7 @@ Where each target agent stores its sessions on disk and what an adapter needs to
 |---|---|---|---|---|
 | `claude-code` | [Claude Code](https://code.claude.com) | **Supported** | `~/.claude/projects/<cwd-slug>/<session-id>.jsonl` | JSONL event stream |
 | `codex` | [Codex CLI](https://developers.openai.com/codex) | **Supported** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl[.zst]` | JSONL rollout, first line `session_meta` |
-| `cursor` | [Cursor](https://cursor.com) | Planned | CLI: `~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`; IDE: `state.vscdb` | JSONL message blocks; SQLite key-value |
+| `cursor` | [Cursor](https://cursor.com) | **Supported** | CLI: `~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`; IDE: `state.vscdb` | JSONL message blocks; SQLite key-value |
 | `zcode` | [ZCode](https://github.com/zai-org/ZCode) | **Supported** | `~/.zcode/cli/db/db.sqlite` | SQLite (relational) |
 | `grok` | [Grok Build](https://github.com/xai-org/grok-build) | **Supported** | `~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl` | JSONL ACP session-update stream |
 
@@ -43,13 +43,19 @@ Checked against codex-cli 0.154 on disk and the `main` source (October 2026). Do
 
 ## Cursor
 
-Checked against Cursor CLI changelog through October 2026 and editor 3.x. Docs: [CLI](https://cursor.com/docs/cli/overview), [hooks](https://cursor.com/docs/hooks), [CLI changelog](https://cursor.com/docs/cli/changelog).
+Checked against editor 3.25 on disk and the Cursor CLI changelog through October 2026. Docs: [CLI](https://cursor.com/docs/cli/overview), [hooks](https://cursor.com/docs/hooks), [CLI changelog](https://cursor.com/docs/cli/changelog).
 
-- **CLI transcripts:** official docs do not specify a path. Hooks receive `transcript_path` / `CURSOR_TRANSCRIPT_PATH`. Observed layout: `~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`. Each line is `{"role":"user"|"assistant","message":{"content":[{"type":"text","text":…}]}}`, and user messages embed `<timestamp>` and `<user_query>` tags. Since early 2026, headless transcripts are written as Claude Code–compatible JSONL.
-- **Editor conversations:** undocumented. In the global storage `state.vscdb` (SQLite), the `cursorDiskKV` table holds `composerData:*` conversation bodies and `composerHeaders` holds metadata. The database is in WAL mode and must be opened read-only.
+- **Transcripts:** official docs do not specify a path. Hooks receive `transcript_path` / `CURSOR_TRANSCRIPT_PATH`. Observed layout: `~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`, where the slug is the working directory with its separators turned into `-` (so the directory cannot be recovered from it). Each line is `{"role":"user"|"assistant","message":{"content":[…]}}` with `text` and `tool_use` (`name`, `input`) blocks, or a `{"type":"turn_ended"}` marker; there are no ids, no tool results, and no timestamps except the `<timestamp>` (to the minute, with its UTC offset) and `<user_query>` tags a user message embeds. The editor's agent writes transcripts of its conversations too, under the conversation's id. Since early 2026, headless transcripts are written as Claude Code–compatible JSONL.
+- **Editor conversations:** undocumented. In the editor's global storage (`%APPDATA%\Cursor\User\globalStorage\state.vscdb` on Windows, `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` on macOS, `~/.config/Cursor/User/globalStorage/state.vscdb` on Linux; SQLite), the key-value table `cursorDiskKV` holds `composerData:<conversation>` (its `name`, `createdAt`, `lastUpdatedAt`, `status`, `generatingBubbleIds`, `workspaceIdentifier.uri.fsPath`, and `fullConversationHeadersOnly`, the ids of the messages it shows, in order) and one `bubbleId:<conversation>:<bubble>` per message (`type` 1 for the user and 2 for the agent, `text`, `createdAt`, and `toolFormerData` with a tool call's `name`, `params`, `result`, `status`, and `error`). Values are rewritten in place. The table also holds messages a conversation no longer shows, mostly copies of shown ones, and the database holds credentials in other tables, so it is opened read-only and only these keys are read.
 - **Retention:** observed cleanup markers (`~/.cursor/projects/.agent-data-cleanup-<date>`) suggest periodic purging of CLI data.
 - **Command name:** `agent` is the primary CLI command (`cursor-agent` is an alias). Other tools may install a different `agent` binary on `PATH`, so detection should not rely on the name alone.
 - **Native memory:** editor Memories were removed in 2.1.x; only cloud Automations keep a `MEMORIES.md`.
+
+**Origin mapping:**
+
+- Each editor conversation is a [generated source](architecture.md#ingestion) named `<database>#<conversation>`. Every message it shows is written out once, in creation order, when it is no longer being generated (or once the conversation has not changed for an hour), as one line holding the message's key and value as stored and the conversation's `composerId`, `name`, `createdAt`, `lastUpdatedAt`, and `workspaceIdentifier`. A message's text becomes a `message` event; a tool call becomes a `tool_use` event (`<name> <params>`, at most 2,000 characters) and a `tool_result` event (its result or error, at most 4,000 characters), noting `status` unless it is `completed`. Event ids: `cursor:<conversation>:<bubble>`, with `#1` for a tool call and `#2` for its result. The cwd is the conversation's workspace folder, and the title its name.
+- A transcript whose conversation is in the editor's database is skipped: the editor's record, with tool results and exact times, is kept. Other transcripts are ingested as files: text blocks become `message` events (for a user message, the text of `<user_query>`) and `tool_use` blocks `tool_use` events. A user message's time is its `<timestamp>`, and a reply's that of the prompt before it. Event ids are `cursor:<uuid>:L<line>-<hash>`, from the line number and the first 8 hex characters of the line's SHA-256, plus `#<block>` for a tool call. Transcripts have no cwd; their project is the slug.
+- Lines carry no Cursor version, so events record the installed editor's version.
 
 ## ZCode
 

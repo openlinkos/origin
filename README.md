@@ -9,7 +9,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Origin archives the sessions your AI agents already write to disk into a single local store. Claude Code, Codex, Grok Build, and ZCode are supported today; Cursor is next. Through one [MCP](https://modelcontextprotocol.io) server, it gives every agent the same memory. Whichever tool you open can look up what you decided last week and why, trace it to the exact original line, and save what it learns for next time. If you work on several machines or with cloud agents, a self-hosted **personal hub** brings them all into the same memory.
+Origin archives the sessions your AI agents already write to disk into a single local store. Claude Code, Codex, Cursor, Grok Build, and ZCode are supported. Through one [MCP](https://modelcontextprotocol.io) server, it gives every agent the same memory. Whichever tool you open can look up what you decided last week and why, trace it to the exact original line, and save what it learns for next time. If you work on several machines or with cloud agents, a self-hosted **personal hub** brings them all into the same memory.
 
 > **Status: early (0.1).** Ingestion of Claude Code and Codex sessions, the MCP server, the CLI, and the personal hub with its admin UI work end to end. The other agents' adapters are in progress (see [Roadmap](#roadmap)). Before 1.0, a minor version may change the store format; the [changelog](CHANGELOG.md) says what to do.
 
@@ -41,7 +41,7 @@ Origin puts **you** at the center instead of the tool:
 |---|---|---|
 | Claude Code | ✅ | ✅ |
 | Codex CLI | ✅ | ✅ |
-| Cursor | Planned | ✅ |
+| Cursor | ✅ | ✅ |
 | ZCode | ✅ | ✅ |
 | Grok Build | ✅ | ✅ |
 
@@ -115,13 +115,14 @@ Delivered as small, runnable increments, each usable on its own:
 4. ✅ Personal hub: self-hosted, multi-device, remote MCP, with an admin UI
 5. ✅ Grok Build adapter
 6. ✅ ZCode adapter, reading its SQLite database
-7. Cursor adapter
+7. ✅ Cursor adapter: editor conversations and CLI transcripts
 
 **Known limitations today:**
 
 - Many sessions have no title, because Claude Code writes `summary` lines for only some sessions.
 - The project name is the last segment of the working directory, not derived from the git remote.
 - Forgetting hides data but does not erase it from the raw mirror files.
+- From agents that keep sessions in a database (ZCode, the Cursor editor), each message is archived once, when it has settled; later changes to it are not.
 - Origin does not watch files on its own. While an agent runs, its MCP server checks for new lines every minute and once more when the agent exits; otherwise run `origin sync`, which also syncs with your hub.
 - On a device, CLI curation commands act on that device's own entries; the hub's admin UI shows and curates the entries of every device.
 

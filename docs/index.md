@@ -19,7 +19,7 @@ hero:
 
 features:
   - title: One memory across agents and machines
-    details: Archives Claude Code, Codex, Grok Build, and ZCode sessions today, with Cursor next. A self-hosted personal hub brings all your machines and cloud agents into one memory.
+    details: Archives the sessions of Claude Code, Codex, Cursor, Grok Build, and ZCode. A self-hosted personal hub brings all your machines and cloud agents into one memory.
   - title: Provenance by default
     details: Every answer traces back to the exact line of the original session log.
   - title: Nothing lost to cleanup

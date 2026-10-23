@@ -1,6 +1,7 @@
 import type { SourceAdapter } from '@openlinkos/origin-core';
 import { CLAUDE_CODE_SOURCE_ID, createClaudeCodeAdapter } from './claude-code.js';
 import { CODEX_SOURCE_ID, createCodexAdapter } from './codex.js';
+import { CURSOR_SOURCE_ID, createCursorAdapter } from './cursor.js';
 import { createGrokAdapter, GROK_SOURCE_ID } from './grok.js';
 import { createZCodeAdapter, ZCODE_SOURCE_ID } from './zcode.js';
 
@@ -20,6 +21,17 @@ export {
   createCodexAdapter,
   parseCodexLine,
 } from './codex.js';
+export {
+  CURSOR_SETTLE_MS,
+  CURSOR_SOURCE_ID,
+  type CursorAdapterOptions,
+  createCursorAdapter,
+  cursorHome,
+  cursorSessionIdFromPath,
+  cursorTimestamp,
+  cursorUserDir,
+  parseCursorEditorLine,
+} from './cursor.js';
 export {
   createGrokAdapter,
   GROK_SOURCE_ID,
@@ -46,6 +58,7 @@ export function allAdapters(): SourceAdapter[] {
     createCodexAdapter(),
     createGrokAdapter(),
     createZCodeAdapter(),
+    createCursorAdapter(),
   ];
 }
 
@@ -58,5 +71,5 @@ export const KNOWN_SOURCE_IDS = [
   CODEX_SOURCE_ID,
   GROK_SOURCE_ID,
   ZCODE_SOURCE_ID,
-  'cursor',
+  CURSOR_SOURCE_ID,
 ] as const;
