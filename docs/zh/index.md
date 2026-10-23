@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-ff4a335a
+sourceHash: sha256-dc0cc29b
 layout: home
 
 hero:
@@ -20,7 +20,7 @@ hero:
 
 features:
   - title: 跨 Agent、跨机器的同一份记忆
-    details: 目前归档 Claude Code、Codex 与 Grok Build 的会话，Cursor、ZCode 即将接入。自托管的个人中枢把你所有的机器和云端 Agent 接入同一份记忆。
+    details: 目前归档 Claude Code、Codex、Grok Build 与 ZCode 的会话，Cursor 即将接入。自托管的个人中枢把你所有的机器和云端 Agent 接入同一份记忆。
   - title: 默认可溯源
     details: 每个回答都能追溯到原始会话记录中的具体一行。
   - title: 不怕清理

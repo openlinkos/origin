@@ -7,7 +7,7 @@ Every agent launches the same stdio server, `origin mcp`, which `npm install -g 
 | Claude Code | ✅ | ✅ | End to end |
 | Codex CLI | ✅ | ✅ | Registration |
 | Cursor | Planned | ✅ | Per Cursor's docs |
-| ZCode | Planned | ✅ | Per ZCode's docs |
+| ZCode | ✅ | ✅ | Per ZCode's docs |
 | Grok Build | ✅ | ✅ | Registration |
 
 ## Claude Code

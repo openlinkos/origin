@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-d5233131
+sourceHash: sha256-15a160cd
 ---
 
 # 会话来源
@@ -11,7 +11,7 @@ sourceHash: sha256-d5233131
 | `claude-code` | [Claude Code](https://code.claude.com) | **已支持** | `~/.claude/projects/<cwd-slug>/<session-id>.jsonl` | JSONL 事件流 |
 | `codex` | [Codex CLI](https://developers.openai.com/codex) | **已支持** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl[.zst]` | JSONL rollout，首行为 `session_meta` |
 | `cursor` | [Cursor](https://cursor.com) | 规划中 | CLI：`~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`；IDE：`state.vscdb` | JSONL 消息块；SQLite 键值存储 |
-| `zcode` | [ZCode](https://github.com/zai-org/ZCode) | 规划中 | `~/.zcode/cli/db/db.sqlite` | SQLite（关系型） |
+| `zcode` | [ZCode](https://github.com/zai-org/ZCode) | **已支持** | `~/.zcode/cli/db/db.sqlite` | SQLite（关系型） |
 | `grok` | [Grok Build](https://github.com/xai-org/grok-build) | **已支持** | `~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl` | JSONL 格式的 ACP session-update 流 |
 
 这五个 Agent 也都维护各自的记忆，范围限定在单个仓库、项目或机器。这些原生记忆没有来源引用，因此 Origin 把它们视为可能的导入对象，而从不把它们当作事实来源。
@@ -57,11 +57,18 @@ sourceHash: sha256-d5233131
 
 ## ZCode {#zcode}
 
-核对版本：v3.1x（2026 年 10 月）。源码：[zai-org/ZCode](https://github.com/zai-org/ZCode)（Apache-2.0）；文档：[zcode.z.ai](https://zcode.z.ai/en/docs/agents)。
+核对依据：磁盘上 3.1x 版应用的数据库，其中的会话由它的 CLI 0.16 写入（2026 年 10 月）。源码：[zai-org/ZCode](https://github.com/zai-org/ZCode)（Apache-2.0）；文档：[zcode.z.ai](https://zcode.z.ai/en/docs/agents)。
 
-- **位置：** `~/.zcode/cli/db/db.sqlite`（以及 `-wal` / `-shm`）。文档称 schema 属于实现细节，因此适配器应当对照源码核对。
-- **格式：** SQLite 表 `session`（`id`、`project_id`、`parent_id`、`directory`、`title`、`version`、…）、`message`（`id`、`session_id`、`data`、`sequence`）和 `part`（`id`、`message_id`、`session_id`、`data`），另有 `todo`、`tool_usage`、`model_usage` 等。`data` 列保存 JSON。原始的模型输入输出还会写入 `~/.zcode/cli/rollout/model-io-*.jsonl`，子 Agent 的输出写入 `~/.zcode/cli/agents/<session>/<agent>/`。
-- **定位：** SQLite 来源没有行号，因此原始定位必须是表名加主键，并以只追加的方式镜像。
+- **位置：** `~/.zcode/cli/db/db.sqlite`，WAL 模式（以及 `-wal` / `-shm`）。文档称 schema 属于实现细节；`schema_migration` 表记录了它的迁移。
+- **格式：** SQLite 表 `session`（`id`、`project_id`、`parent_id`、`directory`、`title`、`version`、`task_type`、…）、`message`（`id`、`session_id`、`sequence`、`time_created`、`time_updated`、`data`）和 `part`（`id`、`message_id`、`session_id`、`sequence`、`time_created`、`time_updated`、`data`），另有 `todo`、`tool_usage`、`model_usage`、工作流相关的表等。`sequence` 给一个会话的消息、一条消息的部件排序。`data` 保存 JSON：消息的 `role`、`time`（`created`，回复结束后还有 `completed`）、`error`、`path.cwd`，以及 `semantics.transcriptVisibility`（ZCode 为模型添加的提醒、通知和摘要为 `hidden`）；部件的 `type`（`text`、`reasoning`、`tool`、`file`、`step-start`、`step-finish`、`timeline`、`compaction`），文本部件带 `text` 和 `synthetic`，工具部件带 `tool`、`callID` 和 `state`（`status`、`input`、`output` 或 `error`、`time`）。子 Agent 和工作流步骤作为独立的会话运行（`task_type`）。原始的模型输入输出还会写入 `~/.zcode/cli/rollout/model-io-*.jsonl`。
+- **行会被原地修改：** 回复流式输出时，它的消息和部件会改变；ZCode 压缩会话时，过了很久的部件也会再变。
+
+**Origin 映射：**
+
+- 每个会话是一个[生成的来源](architecture.md#ingestion)，命名为 `<database>#<session-id>`。每条消息在稳定之后写出一次（用户消息在它的部件写入之后，回复在完成或失败之后，任何消息在会话已经越过它、或者一小时没有变化之后），写成一行：消息的行、它所有部件的行，以及会话的 `id`、`parent_id`、`directory`、`title`、`version` 和 `task_type`，每一列都保持存储时的原样。写出之后消息再有变化，不会再镜像。
+- 文本部件变成 `message` 事件；隐藏消息里的文本，或标记为 `synthetic` 的文本，变成 `meta`。文件部件变成 `[image]` 或 `[file]`。工具部件变成一个 `tool_use` 事件（`<tool> <input>`，最多 2,000 个字符）和一个 `tool_result` 事件（它的输出或错误，最多 4,000 个字符），`status` 不是 `completed` 时会记下。reasoning、步骤标记、时间线通知和压缩标记会被跳过；镜像保留它们。
+- 事件 id：`zcode:<session-id>:<消息 sequence>.<部件 sequence>`，工具的结果加 `#1`。
+- 时间戳取自部件自己的时间，其次是它所在的行。cwd 取自消息的 `path.cwd`，其次是会话的目录；标题和 ZCode 版本取自会话。
 - **原生记忆：** 默认关闭。`~/.zcode/cli/memories/projects/<project>/memory/` 使用与 Claude Code 相同的 `MEMORY.md` 布局。
 
 ## Grok Build {#grok-build}

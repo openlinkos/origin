@@ -7,7 +7,7 @@ Where each target agent stores its sessions on disk and what an adapter needs to
 | `claude-code` | [Claude Code](https://code.claude.com) | **Supported** | `~/.claude/projects/<cwd-slug>/<session-id>.jsonl` | JSONL event stream |
 | `codex` | [Codex CLI](https://developers.openai.com/codex) | **Supported** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl[.zst]` | JSONL rollout, first line `session_meta` |
 | `cursor` | [Cursor](https://cursor.com) | Planned | CLI: `~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`; IDE: `state.vscdb` | JSONL message blocks; SQLite key-value |
-| `zcode` | [ZCode](https://github.com/zai-org/ZCode) | Planned | `~/.zcode/cli/db/db.sqlite` | SQLite (relational) |
+| `zcode` | [ZCode](https://github.com/zai-org/ZCode) | **Supported** | `~/.zcode/cli/db/db.sqlite` | SQLite (relational) |
 | `grok` | [Grok Build](https://github.com/xai-org/grok-build) | **Supported** | `~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl` | JSONL ACP session-update stream |
 
 All five agents also keep their own memory, scoped per repository, project, or machine. These native memories have no source references, so Origin treats them as a possible import target and never as a source of truth.
@@ -53,11 +53,18 @@ Checked against Cursor CLI changelog through October 2026 and editor 3.x. Docs: 
 
 ## ZCode
 
-Checked against v3.1x (October 2026). Source: [zai-org/ZCode](https://github.com/zai-org/ZCode) (Apache-2.0); docs: [zcode.z.ai](https://zcode.z.ai/en/docs/agents).
+Checked against the database of the 3.1x app on disk, sessions written by its CLI 0.16 (October 2026). Source: [zai-org/ZCode](https://github.com/zai-org/ZCode) (Apache-2.0); docs: [zcode.z.ai](https://zcode.z.ai/en/docs/agents).
 
-- **Location:** `~/.zcode/cli/db/db.sqlite` (with `-wal` / `-shm`). The documentation calls the schema an implementation detail, so the adapter should be checked against the source.
-- **Format:** SQLite tables `session` (`id`, `project_id`, `parent_id`, `directory`, `title`, `version`, …), `message` (`id`, `session_id`, `data`, `sequence`), and `part` (`id`, `message_id`, `session_id`, `data`), plus `todo`, `tool_usage`, `model_usage`, and others. `data` columns hold JSON. Raw model I/O is also written to `~/.zcode/cli/rollout/model-io-*.jsonl`, and sub-agent output to `~/.zcode/cli/agents/<session>/<agent>/`.
-- **Locator:** a SQLite source has no line numbers, so the raw locator must be the table plus primary key, mirrored append-only.
+- **Location:** `~/.zcode/cli/db/db.sqlite`, in WAL mode (with `-wal` / `-shm`). The documentation calls the schema an implementation detail; `schema_migration` records its migrations.
+- **Format:** SQLite tables `session` (`id`, `project_id`, `parent_id`, `directory`, `title`, `version`, `task_type`, …), `message` (`id`, `session_id`, `sequence`, `time_created`, `time_updated`, `data`), and `part` (`id`, `message_id`, `session_id`, `sequence`, `time_created`, `time_updated`, `data`), plus `todo`, `tool_usage`, `model_usage`, workflow tables, and others. `sequence` orders the messages of a session and the parts of a message. `data` holds JSON: a message's `role`, `time` (`created`, and `completed` once a reply has finished), `error`, `path.cwd`, and `semantics.transcriptVisibility` (`hidden` for reminders, notifications, and summaries ZCode adds for the model); a part's `type` (`text`, `reasoning`, `tool`, `file`, `step-start`, `step-finish`, `timeline`, `compaction`), with `text` and `synthetic` for text, and `tool`, `callID`, and `state` (`status`, `input`, `output` or `error`, `time`) for a tool. Sub-agents and workflow steps run as sessions of their own (`task_type`). Raw model I/O is also written to `~/.zcode/cli/rollout/model-io-*.jsonl`.
+- **Rows change in place:** a reply's message and parts change while it streams, and parts change again long after, when ZCode compacts a session.
+
+**Origin mapping:**
+
+- Each session is a [generated source](architecture.md#ingestion) named `<database>#<session-id>`. Every message is written out once, when it has settled (a user message once its parts are there, a reply once it has completed or failed, any message once the session has moved past it or has not changed for an hour), as one line holding the message row, its part rows, and the session's `id`, `parent_id`, `directory`, `title`, `version`, and `task_type`, with every column as stored. Later changes to a written-out message are not mirrored.
+- Text parts become `message` events; text in a hidden message, or marked `synthetic`, becomes `meta`. A file part becomes `[image]` or `[file]`. A tool part becomes a `tool_use` event (`<tool> <input>`, at most 2,000 characters) and a `tool_result` event (its output or error, at most 4,000 characters), noting `status` unless it is `completed`. Reasoning, step markers, timeline notices, and compaction markers are skipped; the mirror keeps them.
+- Event id: `zcode:<session-id>:<message sequence>.<part sequence>`, with `#1` for a tool's result.
+- Timestamps come from the part's own times, then its row. The cwd comes from the message's `path.cwd`, then the session's directory; the title and the ZCode version come from the session.
 - **Native memory:** off by default. `~/.zcode/cli/memories/projects/<project>/memory/` uses the same `MEMORY.md` layout as Claude Code.
 
 ## Grok Build

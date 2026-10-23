@@ -9,7 +9,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Origin archives the sessions your AI agents already write to disk into a single local store. Claude Code, Codex, and Grok Build are supported today; Cursor and ZCode are next. Through one [MCP](https://modelcontextprotocol.io) server, it gives every agent the same memory. Whichever tool you open can look up what you decided last week and why, trace it to the exact original line, and save what it learns for next time. If you work on several machines or with cloud agents, a self-hosted **personal hub** brings them all into the same memory.
+Origin archives the sessions your AI agents already write to disk into a single local store. Claude Code, Codex, Grok Build, and ZCode are supported today; Cursor is next. Through one [MCP](https://modelcontextprotocol.io) server, it gives every agent the same memory. Whichever tool you open can look up what you decided last week and why, trace it to the exact original line, and save what it learns for next time. If you work on several machines or with cloud agents, a self-hosted **personal hub** brings them all into the same memory.
 
 > **Status: early (0.1).** Ingestion of Claude Code and Codex sessions, the MCP server, the CLI, and the personal hub with its admin UI work end to end. The other agents' adapters are in progress (see [Roadmap](#roadmap)). Before 1.0, a minor version may change the store format; the [changelog](CHANGELOG.md) says what to do.
 
@@ -42,7 +42,7 @@ Origin puts **you** at the center instead of the tool:
 | Claude Code | ✅ | ✅ |
 | Codex CLI | ✅ | ✅ |
 | Cursor | Planned | ✅ |
-| ZCode | Planned | ✅ |
+| ZCode | ✅ | ✅ |
 | Grok Build | ✅ | ✅ |
 
 Any MCP-capable agent can already query the archive and entries. Archiving an agent's own sessions needs its adapter. To register Origin with each agent, see [Connect your agents](docs/guide/connect-agents.md). Where each agent stores its sessions is documented in [docs/sources.md](docs/sources.md).
@@ -114,7 +114,7 @@ Delivered as small, runnable increments, each usable on its own:
 3. ✅ Codex adapter, including zstd-compressed and archived rollouts
 4. ✅ Personal hub: self-hosted, multi-device, remote MCP, with an admin UI
 5. ✅ Grok Build adapter
-6. ZCode adapter
+6. ✅ ZCode adapter, reading its SQLite database
 7. Cursor adapter
 
 **Known limitations today:**

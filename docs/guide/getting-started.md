@@ -9,7 +9,7 @@ Origin is at 0.1. Until 1.0, a new minor version may change the store format; it
 ## Requirements
 
 - Node.js 22.16 or later (24 LTS recommended)
-- At least one supported agent: Claude Code, Codex CLI, or Grok Build. Cursor and ZCode can already *use* Origin; archiving their own sessions is coming next.
+- At least one supported agent: Claude Code, Codex CLI, Grok Build, or ZCode. Cursor can already *use* Origin; archiving its own sessions is coming next.
 
 ## Install
 

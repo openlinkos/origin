@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-a5aeac7d
+sourceHash: sha256-a701f56d
 ---
 
 # 接入 Agent
@@ -11,7 +11,7 @@ sourceHash: sha256-a5aeac7d
 | Claude Code | ✅ | ✅ | 端到端 |
 | Codex CLI | ✅ | ✅ | 已注册 |
 | Cursor | 规划中 | ✅ | 依据 Cursor 文档 |
-| ZCode | 规划中 | ✅ | 依据 ZCode 文档 |
+| ZCode | ✅ | ✅ | 依据 ZCode 文档 |
 | Grok Build | ✅ | ✅ | 已注册 |
 
 ## Claude Code {#claude-code}

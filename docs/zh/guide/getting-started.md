@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-e35ad877
+sourceHash: sha256-94bcb14b
 ---
 
 # 快速开始
@@ -13,7 +13,7 @@ Origin 目前是 0.1。1.0 之前，新的次版本可能改变存储格式，[�
 ## 环境要求 {#requirements}
 
 - Node.js 22.16 或更高（推荐 24 LTS）
-- 至少一个已支持的 Agent：Claude Code、Codex CLI 或 Grok Build。Cursor、ZCode 现在就能*使用* Origin，归档它们自己的会话即将支持。
+- 至少一个已支持的 Agent：Claude Code、Codex CLI、Grok Build 或 ZCode。Cursor 现在就能*使用* Origin，归档它自己的会话即将支持。
 
 ## 安装 {#install}
 
