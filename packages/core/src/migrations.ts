@@ -1,5 +1,6 @@
 import type { Database } from './db.js';
 import { OriginError } from './errors.js';
+import { reparseTitles } from './reparse.js';
 import { SCHEMA } from './schema.js';
 import type { SourceAdapter } from './types.js';
 
@@ -57,7 +58,22 @@ export interface Migration {
  * Origin's migrations, in order. Version 1 is the schema of 0.1.0, which has none. A migration is
  * never changed once released: a fix is a new migration.
  */
-export const MIGRATIONS: Migration[] = [];
+export const MIGRATIONS: Migration[] = [
+  {
+    version: 2,
+    name: 'remember which session titles the user gave',
+    up: ({ db }) =>
+      db.exec('ALTER TABLE session ADD COLUMN title_manual INTEGER NOT NULL DEFAULT 0'),
+  },
+  {
+    // Claude Code 2.1 writes `ai-title` and, after /rename, `custom-title` lines instead of
+    // `summary` lines. 0.1.0 mirrored them but skipped them, and a sync does not parse old lines
+    // again; only lines that name one of these types are read again.
+    version: 3,
+    name: 'session titles from Claude Code lines that were skipped before',
+    up: (ctx) => reparseTitles(ctx, 'claude-code', ['"ai-title"', '"custom-title"', '"summary"']),
+  },
+];
 
 /** The version of a store created by 0.1.0, the first release, which recorded none. */
 export const FIRST_VERSION = 1;

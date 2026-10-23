@@ -80,7 +80,7 @@ import {
   WATCH_INTERVAL_MS,
 } from '@openlinkos/origin-mcp';
 import { count, oneLine, table } from './format.js';
-import { BUCKET_OPTIONS, setUpFrames } from './hub/bucket.js';
+import { BUCKET_OPTIONS, bucketFlags, setUpFrames } from './hub/bucket.js';
 import {
   type HubConfig,
   normalizeHubUrl,
@@ -170,7 +170,18 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
   const home = originHome();
-  const db = openDatabase(dbPath(home));
+  // Opening the store upgrades an older one. A migration may parse mirrored lines again, with the
+  // adapters, and read their sealed frames, which a hub may keep in a bucket.
+  const db = openDatabase(dbPath(home), {
+    adapters: allAdapters(),
+    beforeMigrate: (db) =>
+      void setUpFrames(db, home, {
+        command: 'other',
+        flags: bucketFlags(command, rest),
+        env: process.env,
+      }),
+    log: (m) => console.error(m),
+  });
   const ctx: Ctx = { db, home };
   try {
     nameStore(db, command);

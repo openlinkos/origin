@@ -303,6 +303,64 @@ export function readMirrorLines(
 }
 
 /**
+ * Call `fn` with each line of a mirror that contains one of `needles`, in order, with its 1-based
+ * line number, for a data migration that parses some lines again (see reparse.ts). Each sealed
+ * frame is decompressed once, and lines without a needle are never decoded. Throws an OriginError
+ * if the mirror's data is missing, and any other error if a frame could not be reached.
+ */
+export function scanMirrorLines(
+  db: Database,
+  home: string,
+  rawFileId: number,
+  needles: string[],
+  fn: (line: string, lineNo: number) => void,
+): void {
+  const st = mirrorState(db, rawFileId);
+  if (!st || st.lines === 0) return;
+  const patterns = needles.map((n) => Buffer.from(n, 'utf8'));
+  const chunks = db
+    .prepare(`SELECT ${CHUNK_COLUMNS} FROM raw_chunk WHERE raw_file_id = ? ORDER BY first_line`)
+    .all(rawFileId) as unknown as Chunk[];
+  for (const c of chunks) {
+    scanLines(readFrame(home, st.mirror, c), c.first_line, patterns, fn);
+  }
+  if (st.bytes > st.sealedBytes) {
+    const tail = readMirror(db, home, rawFileId, st.sealedBytes, st.bytes);
+    scanLines(tail, st.sealedLines + 1, patterns, fn);
+  }
+}
+
+/** The lines of `buf`, complete lines of which the first is line `first`, that hold a pattern. */
+function scanLines(
+  buf: Buffer,
+  first: number,
+  patterns: Buffer[],
+  fn: (line: string, lineNo: number) => void,
+): void {
+  const starts = new Set<number>();
+  for (const p of patterns) {
+    let at = buf.indexOf(p);
+    while (at >= 0) {
+      starts.add(at === 0 ? 0 : buf.lastIndexOf(0x0a, at - 1) + 1);
+      const end = buf.indexOf(0x0a, at);
+      at = end < 0 ? -1 : buf.indexOf(p, end + 1);
+    }
+  }
+  let lineNo = first;
+  let pos = 0;
+  for (const start of [...starts].sort((a, b) => a - b)) {
+    for (let nl = buf.indexOf(0x0a, pos); nl >= 0 && nl < start; nl = buf.indexOf(0x0a, pos)) {
+      lineNo++;
+      pos = nl + 1;
+    }
+    const end = buf.indexOf(0x0a, start);
+    let line = buf.toString('utf8', start, end < 0 ? buf.length : end);
+    if (line.endsWith('\r')) line = line.slice(0, -1);
+    fn(line, lineNo);
+  }
+}
+
+/**
  * Drop bytes past what the database records (left by a write that never committed, or by a crash
  * between sealing the tail and emptying it), so that the next write appends at the right place.
  * Throws if a file holds less than the database records: the mirror lost data, and appending would

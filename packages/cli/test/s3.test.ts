@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClaudeCodeAdapter } from '@openlinkos/origin-adapters';
 import {
+  appendRemote,
   backupStore,
   bucketFrameStore,
   createToken,
@@ -14,6 +15,7 @@ import {
   frameKey,
   getEvent,
   IDLE_SEAL_MS,
+  listSessions,
   openDatabase,
   rawLocator,
   readRawLine,
@@ -26,7 +28,8 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { frameStoreContract } from '../../core/test/frame-contract.js';
 import { fakeAdapter, line, mirrorText } from '../../core/test/helpers.js';
-import { bucketConfig, setUpFrames } from '../src/hub/bucket.js';
+import { downgradeToV1 } from '../../core/test/legacy.js';
+import { bucketConfig, bucketFlags, setUpFrames } from '../src/hub/bucket.js';
 import { ObjectStoreError, PROBE_KEY, S3ObjectStore } from '../src/hub/s3.js';
 import { createHubServer } from '../src/hub/server.js';
 import {
@@ -779,9 +782,10 @@ describe('a hub with an S3 bucket', () => {
   const fixtures = fileURLToPath(
     new URL('../../adapters/test/fixtures/claude-code/', import.meta.url),
   );
-  let server: http.Server;
+  let server: http.Server | undefined;
   afterEach(async () => {
-    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => (server ? server.close(resolve) : resolve(undefined)));
+    server = undefined;
   });
 
   it("keeps the sealed frames of devices' mirrors in the bucket", async () => {
@@ -799,7 +803,7 @@ describe('a hub with an S3 bucket', () => {
         adapters: [createClaudeCodeAdapter({ projectsDir: path.join(hubHome, 'unused') })],
         version: 'test',
       });
-      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
       const hub = {
         url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
         token,
@@ -838,5 +842,71 @@ describe('a hub with an S3 bucket', () => {
       hubDb.close();
       deviceDb.close();
     }
+  });
+
+  it('reads the frames in its bucket when an upgrade parses mirrored lines again', async () => {
+    const hubHome = temp('upgrade');
+    const hubFile = path.join(hubHome, 'origin.db');
+    const hubDb = openDatabase(hubFile);
+    const objects = s3();
+    useObjectStore(hubDb, hubHome, objects);
+    const adapters = [createClaudeCodeAdapter({ projectsDir: path.join(hubHome, 'unused') })];
+    const content = fs.readFileSync(
+      path.join(fixtures, 'D--demo-project/0f1e2d3c-4b5a-4697-8877-665544332211.jsonl'),
+    );
+    appendRemote({ db: hubDb, home: hubHome, frameBytes: 300 }, adapters[0]!, {
+      device: 'laptop',
+      source: 'claude-code',
+      path: '/home/me/.claude/projects/D--demo-project/0f1e2d3c-4b5a-4697-8877-665544332211.jsonl',
+      relPath: 'D--demo-project/0f1e2d3c-4b5a-4697-8877-665544332211.jsonl',
+      generation: 1,
+      offset: 0,
+      data: content,
+    });
+    sealIdleMirrors(hubDb, hubHome, { before: Date.now() + IDLE_SEAL_MS, remote: true });
+    hubDb.close();
+    releaseObjectStore(hubHome);
+    // Every line, the summary line that titles the session included, is in the bucket only.
+    expect(fs.readdirSync(path.join(hubHome, 'raw'), { recursive: true })).not.toContainEqual(
+      expect.stringMatching(/\.zst$/),
+    );
+    downgradeToV1(hubFile);
+
+    const env = {
+      ORIGIN_RAW_S3_ENDPOINT: fake.endpoint.origin,
+      ORIGIN_RAW_S3_BUCKET: BUCKET,
+      ORIGIN_RAW_S3_PREFIX: objects.config.prefix,
+      ORIGIN_RAW_S3_ACCESS_KEY_ID: CREDENTIALS.accessKeyId,
+      ORIGIN_RAW_S3_SECRET_ACCESS_KEY: CREDENTIALS.secretAccessKey,
+    };
+    const open = (vars: Record<string, string>) =>
+      openDatabase(hubFile, {
+        adapters,
+        beforeMigrate: (db) => {
+          const store = setUpFrames(db, hubHome, { command: 'other', env: vars });
+          if (store) stores.push(store);
+        },
+      });
+    // Without the bucket, the migration cannot read the lines, says what to set, and waits.
+    expect(() => open({})).toThrow(
+      /upgraded to version 3 .*keeps its sealed frames in s3:\/\/origin-frames\/.*ORIGIN_RAW_S3_ENDPOINT/,
+    );
+    const upgraded = open(env);
+    expect(listSessions(upgraded)).toMatchObject([{ title: 'Check repository status' }]);
+    upgraded.close();
+  });
+});
+
+describe('bucket flags', () => {
+  it('are read from the arguments of serve and raw upload, and of no other command', () => {
+    const args = ['--port', '7077', '--raw-s3-bucket', 'frames', '--admin', '--raw-s3-prefix=hub'];
+    expect(bucketFlags('serve', args)).toEqual({
+      'raw-s3-bucket': 'frames',
+      'raw-s3-prefix': 'hub',
+    });
+    expect(bucketFlags('raw', ['upload', '--raw-s3-endpoint', 'http://minio:9000'])).toEqual({
+      'raw-s3-endpoint': 'http://minio:9000',
+    });
+    expect(bucketFlags('status', args)).toEqual({});
   });
 });

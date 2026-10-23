@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-21c302aa
+sourceHash: sha256-b5589e5d
 ---
 
 # 架构
@@ -165,7 +165,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 | `event` | 规范化后的事件，以它们到达本库的次序（`seq`）为键 |
 | `event_block` | 每一块 4,096 个连续到达的事件中最晚的时间戳，以及到这一块为止最晚的时间戳（派生数据，由触发器维护） |
 | `message_fts`, `event_fts`, `event_cjk` | 事件的检索索引：`message` 事件的完整 trigram 索引、只记录哪些事件含有每个 trigram 的全部事件索引，以及 CJK 二元组索引（见[检索与时间线](#search-and-timeline)） |
-| `session` | 基于可见事件的逐会话聚合（派生数据，可重建） |
+| `session` | 基于可见事件的逐会话聚合（派生数据，可重建），以及取自带有标题的行的会话标题，并记录它是否由用户给出 |
 | `sync_log` | 每次同步运行一行 |
 | `entry`, `entry_source`, `entry_fts` | 条目、条目引用的事件（含引文），以及条目的 FTS5 索引。每个版本记录它的 `root`（第一个版本，写入时确定）和它的 `origin` |
 | `tombstone`, `forgotten_entry`, `excluded_event` | 遗忘操作，每条都有一个全局 id（`tmb_` 加随机十六进制，与 `ent_` id 相同）和它的 `origin`，以及它们在本库中的影响 |
@@ -224,9 +224,11 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 
 迁移完成之后，schema 中的幂等语句会照常在每次打开时执行，所以新的表、索引、视图或触发器，只要已有数据不需要从中得到什么，就无需迁移即可出现。
 
-| 版本 | 起始版本 | 改动 |
-|---|---|---|
-| 1 | 0.1.0 | 首个版本的 schema，不记录版本 |
+| 版本 | 改动 |
+|---|---|
+| 1 | 首个发布版本 0.1.0 的 schema，不记录版本 |
+| 2 | `session.title_manual`：会话的标题是否由用户给出 |
+| 3 | 数据：Claude Code 会话的标题，取自已经镜像、但 0.1.0 跳过了的 `ai-title`、`custom-title` 和 `summary` 行。只重新解析写明了这几种类型之一的行，在设备和中枢上都是如此（`raw/devices/<device>/claude-code/…`） |
 
 **什么时候需要迁移。** 除了已有数据不需要从中得到什么的新表、索引、视图或触发器之外，对库格式的任何改动都需要迁移：新增、重命名或删除列，修改约束，修改触发器或视图（`IF NOT EXISTS` 会保留旧的），需要为已有数据填写的派生行，或者因为适配器现在能从镜像的行中读出更多内容而需要重新解析这些行。*schema 迁移*就地修改表；*数据迁移*根据库中已有的内容（包括原始镜像）修改或填写行。两者都要保持不变量：原始镜像和事件永远不会被改写（不变量 3），被遗忘的内容保持被遗忘（不变量 2）。`core` 没有适配器，所以对于需要重新解析镜像中的行的数据迁移，由打开库的进程传入适配器；CLI 正是这样做的，并且在它执行第一个迁移之前，还会先设置好库的帧存储，以便中枢读取存储桶中的帧。
 
@@ -240,7 +242,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 2. **改写检测。** 如果文件变小了，或者尾部不再匹配，说明它是被改写而不是被追加。Origin 会开启一个新的*代次*，使用全新的镜像，并保持旧镜像完好无损（不变量 3）。
 3. **只取完整行。** 截至最后一个换行符的字节会被追加到镜像中（见[原始镜像](#raw-mirrors)）；末尾不完整的行留待下一次同步。镜像的内容始终等于其代次已采集的字节，因此被中断的同步遗留在游标之后的字节，会在追加之前被丢弃（不变量 1）。
 4. **解析与插入。** 每一行都经过 `parseLine`；失败只计数，不致命。事件以 `<source>:<native-id>[#<block-index>]` 为 id、用 `INSERT OR IGNORE` 插入，这使同步具有幂等性（不变量 3）。每个事件都保存它的镜像文件和行号（不变量 1）。
-5. **收尾记录。** 受影响的会话被重新聚合，游标在同一个事务中前移，并由一行 `sync_log` 记录这次运行。
+5. **收尾记录。** 受影响的会话被重新聚合，游标在同一个事务中前移，并由一行 `sync_log` 记录这次运行。一行也可能带有它所属会话的标题（`sessionTitle`）：最新的标题替换之前的标题，但 Agent 生成的标题永远不会替换用户给出的标题（`manualTitle`）。
 
 **压缩的来源。** 适配器可以把文件标记为 `compression: 'zstd'`。Origin 随后使用 Node 内置的 zstd，采集并镜像解压后的内容，因此游标、行号和原始行的工作方式与普通文件相同。压缩文件只写入一次，所以自上次采集以来没有变化时会被跳过，并且每个压缩文件都在单个事务中采集。
 
@@ -254,7 +256,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 
 - 文件：`<projects>/<cwd-slug>/<session-id>.jsonl`，以及 `<session-id>/subagents/` 下的子 Agent 记录。`memory/` 和 `tool-results/` 目录会被跳过。
 - `user` / `assistant` 行变成事件。文本块合并为一个 `message` 事件；每个 `tool_use` 和 `tool_result` 块各自成为一个事件（分别截断到 2,000 / 4,000 个字符）。`isMeta` 行变成 `meta` 事件。`thinking` 块不建立索引，但保留在原始镜像中。
-- `summary` 行设置会话标题。
+- 会话自己的记录中（而不是其子 Agent 的记录中）的标题行设置它的标题。每种标题行都会被写入很多次，最新的一行就是当前的标题：`ai-title` 行由 Claude Code 随着对话的进行而生成；`custom-title` 行是用户给出的名称（`/rename`、`--name`），之后的 `ai-title` 行不会替换它；较旧的记录中则是 `summary` 行。`agent-name` 行重复这些标题之一，不会被读取。
 - 项目名取 `cwd` 的最后一段。
 
 其他适配器的映射与各自的格式一起记录在 [sources.md](sources.md) 中（Codex 见 [Codex CLI](sources.md#codex-cli)）。

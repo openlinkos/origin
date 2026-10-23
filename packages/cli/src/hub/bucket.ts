@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { parseArgs } from 'node:util';
 import {
   type Database,
   frameBucket,
@@ -25,6 +26,26 @@ export const BUCKET_OPTIONS = {
 } as const;
 
 export type BucketFlags = { [K in keyof typeof BUCKET_OPTIONS]?: string };
+
+/**
+ * The bucket flags among the arguments of a command that takes them (`serve`, `raw upload`), read
+ * before the command parses its arguments: opening the store may run a migration that reads
+ * sealed frames from the bucket. Other arguments are ignored here.
+ */
+export function bucketFlags(command: string, args: string[]): BucketFlags {
+  if (command !== 'serve' && command !== 'raw') return {};
+  const { values } = parseArgs({
+    args,
+    options: BUCKET_OPTIONS,
+    strict: false,
+    allowPositionals: true,
+  });
+  return Object.fromEntries(
+    Object.keys(BUCKET_OPTIONS)
+      .map((key) => [key, values[key]])
+      .filter(([, value]) => typeof value === 'string'),
+  ) as BucketFlags;
+}
 
 type Env = Record<string, string | undefined>;
 
@@ -161,9 +182,10 @@ function unconfigured(location: string): ObjectStore {
  * - `serve` and `upload` (`origin serve`, `origin raw upload`) take the bucket from flags and the
  *   environment, check it by writing and reading back one small object, and refuse to go on
  *   without the bucket the store records. Without either, `serve` keeps frames on disk.
- * - Any other command takes the bucket from the environment only if the store records one; if it
- *   is not configured, frames in the bucket cannot be read, and sealing fails, with a message that
- *   says so.
+ * - Any other command, and opening the store for a migration (with the flags of `serve` or `raw
+ *   upload`, if given), takes the bucket from the flags and the environment only if the store
+ *   records one, without checking it; if it is not configured, frames in the bucket cannot be
+ *   read, and sealing fails, with a message that says so.
  *
  * Returns the bucket, or null when frames stay on disk.
  */
@@ -174,7 +196,7 @@ export function setUpFrames(
 ): S3ObjectStore | null {
   const recorded = frameBucket(db);
   if (opts.command === 'other' && recorded === null) return null;
-  const config = bucketConfig(opts.command === 'other' ? {} : (opts.flags ?? {}), opts.env);
+  const config = bucketConfig(opts.flags ?? {}, opts.env);
   if (!config) {
     if (recorded !== null && opts.command !== 'other') {
       throw new OriginError(

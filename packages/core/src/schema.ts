@@ -9,7 +9,9 @@
  * - event_block: for each block of 4,096 consecutive arrivals, the latest timestamp in it and up to
  *   its end, kept by a trigger, so that a newest-first query reading an index by arrival knows when
  *   nothing older can follow (see search.ts); derived.
- * - session: derived aggregate per (source, session_id); rebuildable.
+ * - session: aggregate per (source, session_id), derived from its visible events and rebuildable,
+ *   plus its title, from the lines that carry one, and whether the user gave it (title_manual,
+ *   added in version 2).
  * - event_fts, message_fts, event_cjk: the search indexes, all keyed by seq and filled by
  *   triggers; rebuildSearchIndexes() rebuilds them. event_fts is a trigram index of every event
  *   that records only which events contain each trigram (detail=none), message_fts a full trigram
@@ -74,14 +76,15 @@ CREATE TRIGGER IF NOT EXISTS raw_chunk_no_delete BEFORE DELETE ON raw_chunk BEGI
 END;
 
 CREATE TABLE IF NOT EXISTS session (
-  source      TEXT NOT NULL,
-  session_id  TEXT NOT NULL,
-  project     TEXT,
-  cwd         TEXT,
-  title       TEXT,
-  started_at  INTEGER,
-  ended_at    INTEGER,
-  event_count INTEGER NOT NULL DEFAULT 0,
+  source       TEXT NOT NULL,
+  session_id   TEXT NOT NULL,
+  project      TEXT,
+  cwd          TEXT,
+  title        TEXT,
+  started_at   INTEGER,
+  ended_at     INTEGER,
+  event_count  INTEGER NOT NULL DEFAULT 0,
+  title_manual INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (source, session_id)
 );
 

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-4c0a7af9
+sourceHash: sha256-f414ac26
 ---
 
 # 会话来源
@@ -21,7 +21,8 @@ sourceHash: sha256-4c0a7af9
 核对版本：v2.1.x（2026 年 10 月）。文档：[记忆](https://code.claude.com/docs/en/memory)、[`.claude` 目录](https://code.claude.com/docs/en/claude-directory)。
 
 - **位置：** `~/.claude/projects/<cwd-slug>/<session-id>.jsonl`（`CLAUDE_CONFIG_DIR` 可覆盖 `~/.claude`）。子 Agent 记录位于 `<session-id>/subagents/agent-*.jsonl`，较大的工具输出位于 `tool-results/`。
-- **格式：** 每行一个 JSON 对象。`type` 是 `user`、`assistant`、`summary`、`system`、`mode`、`permission-mode`、`file-history-snapshot` 等之一。消息行带有 `uuid`、`parentUuid`、`timestamp`、`cwd`、`gitBranch`、`sessionId`、`version` 和 `message { role, content }`；`content` 是一个字符串，或由 `text` / `tool_use` / `tool_result` / `thinking` / `image` 块组成的数组。
+- **格式：** 每行一个 JSON 对象。`type` 是 `user`、`assistant`、`ai-title`、`custom-title`、`agent-name`、`last-prompt`、`summary`、`system`、`mode`、`permission-mode`、`file-history-snapshot`、`attachment` 等之一。消息行带有 `uuid`、`parentUuid`、`timestamp`、`cwd`、`gitBranch`、`sessionId`、`version` 和 `message { role, content }`；`content` 是一个字符串，或由 `text` / `tool_use` / `tool_result` / `thinking` / `image` 块组成的数组。
+- **标题：** `{ type: "ai-title", aiTitle, sessionId }` 是 Claude Code 生成的标题，大约每一轮都会再写一次，并随着对话的进行而改变；最新的一行就是当前的标题。用户给出的名称（`/rename`、`--name`、hook 的 `sessionTitle`、Agent SDK 的 `renameSession()`）是一行 `{ type: "custom-title", customTitle, sessionId }`，同样会被再次写入，并且优先于 AI 生成的标题，即使它后面还有 `ai-title` 行。`{ type: "agent-name", agentName, sessionId }` 是会话在 Claude Code 的 Agent 视图中的名称；它出现在会话自己的记录中，而不只是子 Agent 的记录中，并且重复 AI 生成的标题或自定义标题。`{ type: "last-prompt", lastPrompt, leafUuid, sessionId }` 记录最近的一条提示。2.1 之前的版本写入的则是 `{ type: "summary", summary, leafUuid }` 行。
 - **保留期：** 会话在 `cleanupPeriodDays`（默认 30）天后被删除。`memory/` 目录不受此限。
 - **原生记忆：** `<cwd-slug>/memory/`——一个 `MEMORY.md` 索引，外加每条记忆一个带 frontmatter 的 Markdown 文件。范围限定在一台机器上的一个 git 仓库。
 

@@ -161,7 +161,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 | `event` | Normalized events, keyed by their order of arrival in this store (`seq`) |
 | `event_block` | For each block of 4,096 consecutive arrivals, the latest timestamp in it and up to it (derived, kept by a trigger) |
 | `message_fts`, `event_fts`, `event_cjk` | The search indexes over events: a full trigram index of `message` events, a trigram index of every event that records only which events contain each trigram, and an index of CJK bigrams (see [Search and timeline](#search-and-timeline)) |
-| `session` | Per-session aggregates over visible events (derived, rebuildable) |
+| `session` | Per-session aggregates over visible events (derived, rebuildable), and the session's title from the lines that carry one, with whether the user gave it |
 | `sync_log` | One row per sync run |
 | `entry`, `entry_source`, `entry_fts` | Entries, the events they cite (with quotes), and their FTS5 index. Each version records its `root` (the first version, fixed when it is written) and its `origin` |
 | `tombstone`, `forgotten_entry`, `excluded_event` | Forget operations, each with a global id (`tmb_` and random hex, like `ent_` ids) and its `origin`, and their effects on this store |
@@ -220,9 +220,11 @@ A store records the version of its format in the database header, `PRAGMA user_v
 
 After the migrations, the schema's idempotent statements run, on every open, so that a new table, index, view, or trigger that existing data needs nothing from appears without a migration.
 
-| Version | Since | Change |
-|---|---|---|
-| 1 | 0.1.0 | The schema of the first release, which records no version |
+| Version | Change |
+|---|---|
+| 1 | The schema of 0.1.0, the first release, which records no version |
+| 2 | `session.title_manual`: whether the user gave the session its title |
+| 3 | Data: the titles of Claude Code sessions, from the `ai-title`, `custom-title`, and `summary` lines already mirrored, which 0.1.0 skipped. Only lines that name one of these types are parsed again, on a device and on a hub alike (`raw/devices/<device>/claude-code/…`) |
 
 **When a change needs one.** Any change to the store's format other than a new table, index, view, or trigger that existing data needs nothing from: a new, renamed, or dropped column, a changed constraint, a changed trigger or view (`IF NOT EXISTS` keeps the old one), derived rows to fill in for existing data, or mirrored lines to parse again because an adapter now reads more from them. A *schema migration* changes tables in place; a *data migration* changes or fills rows from what the store holds, its raw mirrors included. Either keeps the invariants: raw mirrors and events are never rewritten (invariant 3), and what was forgotten stays forgotten (invariant 2). `core` has no adapters, so the process that opens the store passes them in for data migrations that parse mirrored lines; the CLI does, and before the first migration it runs, it also sets up the store's frame store, so that a hub reads the frames in its bucket.
 
@@ -236,7 +238,7 @@ After the migrations, the schema's idempotent statements run, on every open, so 
 2. **Rewrite detection.** If the file shrank or its tail no longer matches, it was rewritten rather than appended. Origin opens a new *generation* with a fresh mirror and keeps the old mirror intact (invariant 3).
 3. **Complete lines only.** Bytes up to the last newline are appended to the mirror (see [Raw mirrors](#raw-mirrors)); a trailing partial line waits for the next sync. A mirror's content always equals the ingested bytes of its generation, so bytes left past the cursor by an interrupted sync are dropped before appending (invariant 1).
 4. **Parse and insert.** Each line goes through `parseLine`; failures are counted, not fatal. Events are inserted with `INSERT OR IGNORE` under the id `<source>:<native-id>[#<block-index>]`, which makes sync idempotent (invariant 3). Each event stores its mirror file and line number (invariant 1).
-5. **Bookkeeping.** Affected sessions are re-aggregated, the cursor advances in the same transaction, and a `sync_log` row records the sync.
+5. **Bookkeeping.** Affected sessions are re-aggregated, the cursor advances in the same transaction, and a `sync_log` row records the sync. A line may also carry its session's title (`sessionTitle`): the latest replaces the one before, except that a title the agent generated never replaces one the user gave (`manualTitle`).
 
 **Compressed sources.** An adapter can mark a file as `compression: 'zstd'`. Origin then ingests and mirrors the decompressed content, using Node's built-in zstd, so cursors, line numbers, and raw lines work as for plain files. Compressed files are written once, so they are skipped when unchanged since their last ingestion, and each is ingested in a single transaction.
 
@@ -250,7 +252,7 @@ After the migrations, the schema's idempotent statements run, on every open, so 
 
 - Files: `<projects>/<cwd-slug>/<session-id>.jsonl`, plus sub-agent logs under `<session-id>/subagents/`. The `memory/` and `tool-results/` directories are skipped.
 - `user` / `assistant` lines become events. Text blocks are joined into one `message` event; each `tool_use` and `tool_result` block becomes its own event (truncated to 2,000 / 4,000 characters). `isMeta` lines become `meta` events. `thinking` blocks are not indexed but remain in the raw mirror.
-- `summary` lines set the session title.
+- Title lines in a session's own log (not its sub-agents') set its title. Each is written many times, and the latest is current: `ai-title` lines, which Claude Code generates as the conversation goes on, and `custom-title` lines, the name the user gave (`/rename`, `--name`), which a later `ai-title` line does not replace; older logs have `summary` lines instead. `agent-name` lines repeat one of these titles and are not read.
 - The project name is the last segment of `cwd`.
 
 The other adapters' mappings are documented next to their formats in [sources.md](sources.md) (Codex: [Codex CLI](sources.md#codex-cli)).

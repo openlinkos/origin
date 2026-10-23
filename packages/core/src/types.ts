@@ -44,10 +44,21 @@ export interface EventRow {
 /** The result of parsing one raw line. */
 export interface ParsedLine {
   events: EventInput[];
-  /** Session title carried by this line (e.g. a Claude Code summary line). */
+  /**
+   * Session title carried by this line (e.g. a Claude Code `ai-title` line). The latest title of a
+   * session replaces the one before, except that a title the agent generated never replaces one the
+   * user gave (`manualTitle`).
+   */
   sessionTitle?: string;
-  /** Session the sessionTitle belongs to; defaults to the session id derived from the file. */
+  /** Session the sessionTitle belongs to. */
   sessionId?: string;
+  /**
+   * The user gave the session this title (Claude Code's `/rename`), so a title the agent generates
+   * later does not replace it; a later title the user gives does. Only for agents whose logs keep
+   * writing generated titles after a rename: where the agent keeps the current title itself, as
+   * Grok Build does, every title is simply the latest.
+   */
+  manualTitle?: boolean;
 }
 
 export interface SourceFile {

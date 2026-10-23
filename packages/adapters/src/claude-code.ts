@@ -14,8 +14,10 @@ import { projectFromCwd, truncate } from './util.js';
 /**
  * Claude Code adapter (format notes: docs/sources.md).
  * Sessions: `~/.claude/projects/<cwd-slug>/<sessionId>.jsonl`; subagents in `<sessionId>/subagents/agent-*.jsonl`.
- * Line format: one JSON event per line, `type` ∈ user / assistant / summary / mode / permission-mode /
- * file-history-snapshot / system / …; only user / assistant / summary carry information.
+ * Line format: one JSON event per line, `type` ∈ user / assistant / ai-title / custom-title /
+ * agent-name / summary / mode / permission-mode / file-history-snapshot / system / …; the messages
+ * (user, assistant) and the session's titles (ai-title, custom-title, and summary in older logs)
+ * carry information.
  */
 export const CLAUDE_CODE_SOURCE_ID = 'claude-code';
 
@@ -111,20 +113,42 @@ interface ClaudeLine {
   entrypoint?: string;
   promptId?: string;
   summary?: string;
+  aiTitle?: string;
+  customTitle?: string;
   leafUuid?: string;
   message?: { role?: string; content?: string | ContentBlock[]; model?: string };
 }
+
+/**
+ * The lines that title a session, each written many times, the latest being current. Claude Code
+ * 2.1 generates `ai-title` lines as the conversation goes on and writes `custom-title` lines for a
+ * name the user gives (`/rename`, `--name`), which a later `ai-title` does not replace; older
+ * versions wrote `summary` lines. `agent-name` lines name the session in Claude Code's agent view
+ * and repeat one of these titles, so they are not read.
+ */
+const TITLES: Record<string, { field: 'aiTitle' | 'customTitle' | 'summary'; manual: boolean }> = {
+  'ai-title': { field: 'aiTitle', manual: false },
+  'custom-title': { field: 'customTitle', manual: true },
+  summary: { field: 'summary', manual: false },
+};
 
 /** Pure function: parse one line. Exported for tests. */
 export function parseClaudeCodeLine(line: string, ctx: ParseContext): ParsedLine | null {
   const obj = JSON.parse(line) as ClaudeLine;
   const fileSession = sessionIdFromPath(ctx.relPath);
 
-  if (obj.type === 'summary') {
-    if (!obj.summary) return null;
-    const sessionId = obj.sessionId ?? fileSession;
-    if (!sessionId) return null;
-    return { events: [], sessionTitle: obj.summary, sessionId };
+  const title = obj.type && Object.hasOwn(TITLES, obj.type) ? TITLES[obj.type] : undefined;
+  if (title) {
+    // A session's titles are in its own log, not in its sub-agents'.
+    const text = obj[title.field];
+    if (!fileSession || typeof text !== 'string' || text.trim().length === 0) return null;
+    const parsed: ParsedLine = {
+      events: [],
+      sessionTitle: text.trim(),
+      sessionId: (obj.sessionId ?? fileSession).toLowerCase(),
+    };
+    if (title.manual) parsed.manualTitle = true;
+    return parsed;
   }
   if (obj.type !== 'user' && obj.type !== 'assistant') return null;
   if (!obj.uuid || !obj.message) return null;

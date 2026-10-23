@@ -54,6 +54,28 @@ export function schemaOf(db: Database): unknown[] {
   });
 }
 
+/**
+ * Turn a store of the latest version, closed, back into the store 0.1.0 would have made of the same
+ * lines: without the columns added since, without a version, and without the titles of Claude Code
+ * sessions, which 0.1.0 did not read from `ai-title` and `custom-title` lines (this drops those
+ * from `summary` lines too, which the migration reads again as well). Throws if the schema is then
+ * not that of 0.1.0, so that a new migration cannot leave this behind unnoticed.
+ */
+export function downgradeToV1(file: string): void {
+  const db = new DatabaseSync(file);
+  try {
+    db.exec('ALTER TABLE session DROP COLUMN title_manual');
+    db.exec("UPDATE session SET title = NULL WHERE source = 'claude-code'");
+    db.exec('PRAGMA user_version = 0');
+    const reference = legacyStore(':memory:');
+    const same = JSON.stringify(schemaOf(db)) === JSON.stringify(schemaOf(reference));
+    reference.close();
+    if (!same) throw new Error('downgradeToV1 must undo every migration since 0.1.0');
+  } finally {
+    db.close();
+  }
+}
+
 export function userVersion(db: Database): number {
   return (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
 }

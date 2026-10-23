@@ -21,6 +21,7 @@ import {
   syncSource,
 } from '../src/index.js';
 import { TRANSACTION_BYTES } from '../src/ingest.js';
+import { scanMirrorLines } from '../src/mirror.js';
 import { VISIBLE_EVENT } from '../src/store.js';
 import { fakeAdapter, line, mirrorText } from './helpers.js';
 
@@ -438,6 +439,33 @@ describe('compressed mirrors', () => {
     }
     expect(listEvents(db, { sessionId: 'z', limit: 1000 })).toHaveLength(count);
   };
+
+  it('finds the lines that hold a needle, in frames and in the tail, with their numbers', async () => {
+    // Some lines hold both needles, and are found once.
+    const text = (i: number) =>
+      i % 7 === 0 ? `title ${i}` : i % 11 === 0 ? `summary "title ${i}" summary` : `plain ${i}`;
+    let content = '';
+    for (let i = 0; i < 60; i++) {
+      const l = line(`z${i}`, 'z', 1000 + i, 'user', text(i));
+      content += i % 5 === 0 ? l.replace('\n', '\r\n') : l;
+    }
+    fs.writeFileSync(file(), content);
+    await syncSource(ctx(), fakeAdapter(src));
+    expect(chunks(rawFileOf()).length).toBeGreaterThan(2);
+    const id = rawFileOf();
+    const st = db.prepare('SELECT lines_ingested AS n FROM raw_file WHERE id = ?').get(id);
+    expect(st).toEqual({ n: 60 });
+
+    const found: Array<[number, string]> = [];
+    scanMirrorLines(db, home, id, ['"title', 'summary'], (l, n) => found.push([n, l]));
+    const expected = content
+      .split('\n')
+      .slice(0, -1)
+      .map((l, i): [number, string] => [i + 1, l.replace(/\r$/, '')])
+      .filter(([, l]) => l.includes('"title') || l.includes('summary'));
+    expect(found).toEqual(expected);
+    expect(found.length).toBeGreaterThan(5);
+  });
 
   it('seals the open tail into zstd frames of complete lines, keeping the content (invariant 3)', async () => {
     // Batches of one to four lines: some stay in the tail, some reach the frame size and seal it.

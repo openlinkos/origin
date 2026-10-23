@@ -18,7 +18,7 @@ import {
   settleMirror,
 } from './mirror.js';
 import { assertComplete } from './mode.js';
-import { parseRawPath, rawDir, remotePath } from './paths.js';
+import { mirrorRelPath, parseRawPath, rawDir, remotePath } from './paths.js';
 import { NAME_RE } from './tokens.js';
 import type {
   EventInput,
@@ -342,9 +342,12 @@ function appendLines(
           raw_file_id, raw_line, agent_version, meta)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
+  // The latest title wins, except that a generated one never replaces one the user gave.
   const setTitle = ctx.db.prepare(
-    `INSERT INTO session (source, session_id, title) VALUES (?, ?, ?)
-       ON CONFLICT (source, session_id) DO UPDATE SET title = excluded.title`,
+    `INSERT INTO session (source, session_id, title, title_manual) VALUES (?, ?, ?, ?)
+       ON CONFLICT (source, session_id) DO UPDATE
+         SET title = excluded.title, title_manual = excluded.title_manual
+         WHERE excluded.title_manual >= session.title_manual`,
   );
   for (let i = 0; i < lines.length; i++) {
     const lineNo = baseLine + i + 1;
@@ -391,7 +394,7 @@ function appendLines(
       }
     }
     if (parsed.sessionTitle && parsed.sessionId) {
-      setTitle.run(adapter.id, parsed.sessionId, parsed.sessionTitle);
+      setTitle.run(adapter.id, parsed.sessionId, parsed.sessionTitle, parsed.manualTitle ? 1 : 0);
       touchedSessions.add(parsed.sessionId);
     }
   }
@@ -600,22 +603,15 @@ export function localRawFiles(db: Database): Array<{
        ORDER BY updated_at, source, path, generation`,
     )
     .all() as unknown as RawFileRow[];
-  return rows.map((r) => {
-    // The mirror is `<source>/<relPath>[.g<generation>]` (see localMirror).
-    let rel = r.mirror.replace(/\\/g, '/');
-    if (rel.startsWith(`${r.source}/`)) rel = rel.slice(r.source.length + 1);
-    const suffix = `.g${r.generation}`;
-    if (r.generation > 1 && rel.endsWith(suffix)) rel = rel.slice(0, -suffix.length);
-    return {
-      id: r.id,
-      source: r.source,
-      path: r.path,
-      relPath: rel,
-      generation: r.generation,
-      bytes: r.bytes_ingested,
-      updatedAt: r.updated_at,
-    };
-  });
+  return rows.map((r) => ({
+    id: r.id,
+    source: r.source,
+    path: r.path,
+    relPath: mirrorRelPath(r),
+    generation: r.generation,
+    bytes: r.bytes_ingested,
+    updatedAt: r.updated_at,
+  }));
 }
 
 /** Devices that have replicated files to this store. */
