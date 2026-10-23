@@ -5,6 +5,7 @@
 export const en = {
   'app.title': 'Origin Admin',
   'app.admin': 'Admin',
+  'app.local': 'Local',
   'app.docs': 'Documentation',
 
   'nav.label': 'Sections',
@@ -53,6 +54,15 @@ export const en = {
     'This action needs the admin password again. You will not be asked again for 10 minutes.',
   'auth.confirm': 'Confirm',
 
+  'local.signInHelp':
+    'When origin ui starts, it prints a sign-in link in its terminal and opens it in your browser. Open that link to sign in.',
+  'local.newLink':
+    'Each link works once, within {min} minutes. For a new one, stop origin ui (Ctrl+C) and start it again:',
+  'local.link.used': 'This sign-in link has already been used. Each link works only once.',
+  'local.link.expired': 'This sign-in link has expired.',
+  'local.link.invalid':
+    'This sign-in link is not valid. It may be from an earlier run of origin ui.',
+
   'error.status': 'Error {status}',
   'error.notFound': 'Not found',
   'error.gone': 'Forgotten',
@@ -68,6 +78,8 @@ export const en = {
   'overview.title': 'Overview',
   'overview.description':
     'What this hub holds, which devices push to it, and whether anything needs attention.',
+  'overview.descriptionLocal':
+    "What this device's store holds, and whether anything needs attention.",
   'overview.countsTitle': 'At a glance',
   'overview.events': 'Events',
   'overview.eventsMeta': 'from {n} {n|source|sources}',
@@ -84,9 +96,12 @@ export const en = {
   'overview.allDevices': 'All devices',
   'overview.sourcesTitle': 'Sources',
   'overview.sourcesHelp': 'The agents whose sessions this hub holds.',
+  'overview.sourcesHelpLocal': 'The agents whose sessions this device has archived.',
   'overview.source': 'Source',
   'overview.latest': 'Latest event',
   'overview.noData': 'Connect a device and send its sessions with origin sync.',
+  'overview.noDataLocal':
+    'Run origin sync to archive the sessions of your agents. Agents that use origin mcp archive them as they go.',
   'overview.healthTitle': 'Health',
   'overview.healthOk': 'OK',
   'overview.healthCheck': 'Needs a look',
@@ -105,6 +120,23 @@ export const en = {
   'overview.mirrorSize': '{stored} ({size} uncompressed)',
   'overview.freeDisk': 'Free disk space',
   'overview.staleDevices': '{n} {n|device has|devices have} sent nothing for more than 24 hours.',
+
+  'hub.title': 'Hub',
+  'hub.connected': 'Connected',
+  'hub.notConnected': 'Not connected',
+  'hub.syncing': 'Syncing',
+  'hub.notSynced': 'Not synced',
+  'hub.none':
+    'This device is not connected to a hub. Its store is complete on its own, and what you change here stays on this device.',
+  'hub.howTo': 'Set up a personal hub',
+  'hub.url': 'Address',
+  'hub.device': 'This device',
+  'hub.lastSync': 'Last sync',
+  'hub.never': 'never',
+  'hub.writes':
+    'Entries you write here and what you forget are sent to the hub in the background right away or, if it cannot be reached, with the next sync.',
+  'hub.syncFailed':
+    'The last sync with the hub failed: {error}. Your changes are saved here and go with the next sync.',
 
   'devices.help':
     'Devices send their raw session mirrors, entries, and tombstones to this hub with origin sync.',
@@ -307,6 +339,12 @@ export const en = {
   'forget.done':
     'Forgot {entries} {entries|entry|entries} and {events} {events|event|events} (tombstone {tombstone}).',
   'forget.propagates': 'Each device applies this on its next sync.',
+  'forget.warningLocal':
+    'Forgetting cannot be undone. The items below disappear from search, timelines, and every agent on this device and, if it is connected to a hub, on the hub and your other devices after the next sync.',
+  'forget.propagatesLocal':
+    'It is being sent to your hub, which passes it on to your other devices. If the hub cannot be reached, it goes with the next sync.',
+  'forget.localOnly':
+    'This device is not connected to a hub. If you connect it to one later, this forget operation goes along with everything else.',
 
   'pager.label': 'Pages',
   'pager.page': 'Page {n}',

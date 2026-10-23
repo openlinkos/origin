@@ -58,15 +58,21 @@ export function sessionsPage(
         ? empty(ctx, {
             icon: 'history',
             title: filtered ? t('sessions.none') : t('overview.noSessions'),
-            text: filtered ? t('sessions.noneFiltered') : t('overview.noData'),
+            text: filtered
+              ? t('sessions.noneFiltered')
+              : ctx.mode === 'local'
+                ? t('overview.noDataLocal')
+                : t('overview.noData'),
             action: filtered
               ? linkButton(ctx, { href: '/admin/sessions', label: t('filter.clear'), size: 'sm' })
-              : linkButton(ctx, {
-                  href: '/admin/connect',
-                  label: t('devices.howToConnect'),
-                  icon: 'plug',
-                  size: 'sm',
-                }),
+              : ctx.mode === 'local'
+                ? ''
+                : linkButton(ctx, {
+                    href: '/admin/connect',
+                    label: t('devices.howToConnect'),
+                    icon: 'plug',
+                    size: 'sm',
+                  }),
           })
         : tableWrap(
             html`<th>${t('sessions.titleColumn')}</th><th>${t('overview.source')}</th><th>${t('filter.project')}</th><th>${t('sessions.ended')}</th><th class="ol-num">${t('overview.events')}</th>`,
@@ -168,7 +174,7 @@ export function eventPage(ctx: Ctx, d: EventDetail): void {
       body: p
         ? html`<div class="ol-stack">
         <dl class="ol-dl">
-          <dt>${t('event.device')}</dt><dd>${p.device ? html`<a href="${href('device', { name: p.device })}">${p.device}</a>` : t('event.thisStore')}</dd>
+          <dt>${t('event.device')}</dt><dd>${p.device ? (ctx.mode === 'local' ? p.device : html`<a href="${href('device', { name: p.device })}">${p.device}</a>`) : t('event.thisStore')}</dd>
           <dt>${t('event.originalFile')}</dt><dd class="ol-mono">${p.originalPath}</dd>
           <dt>${t('event.generation')}</dt><dd>${p.generation}</dd>
           <dt>${t('event.mirrorLine')}</dt><dd class="ol-mono">raw/${p.mirror}:${p.line}</dd>

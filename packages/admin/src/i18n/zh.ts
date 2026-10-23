@@ -4,6 +4,7 @@ import type { Messages } from './en.js';
 export const zh: Messages = {
   'app.title': 'Origin 管理',
   'app.admin': '管理',
+  'app.local': '本机',
   'app.docs': '文档',
 
   'nav.label': '栏目',
@@ -51,6 +52,14 @@ export const zh: Messages = {
   'auth.reauthHelp': '这个操作需要再次输入管理密码。之后 10 分钟内不会再询问。',
   'auth.confirm': '确认',
 
+  'local.signInHelp':
+    'origin ui 启动时会在终端里打印一个登录链接，并在浏览器中打开它。打开这个链接即可登录。',
+  'local.newLink':
+    '每个链接只能使用一次，且须在 {min} 分钟内使用。要获取新链接，先停止 origin ui（Ctrl+C），再重新启动：',
+  'local.link.used': '这个登录链接已经用过了。每个链接只能使用一次。',
+  'local.link.expired': '这个登录链接已经过期。',
+  'local.link.invalid': '这个登录链接无效，可能来自 origin ui 之前的一次运行。',
+
   'error.status': '错误 {status}',
   'error.notFound': '未找到',
   'error.gone': '已遗忘',
@@ -65,6 +74,7 @@ export const zh: Messages = {
 
   'overview.title': '概览',
   'overview.description': '这个中枢保存了什么、哪些设备在向它推送，以及有没有需要留意的地方。',
+  'overview.descriptionLocal': '本机的存储保存了什么，以及有没有需要留意的地方。',
   'overview.countsTitle': '概况',
   'overview.events': '事件',
   'overview.eventsMeta': '来自 {n} 个来源',
@@ -81,9 +91,12 @@ export const zh: Messages = {
   'overview.allDevices': '全部设备',
   'overview.sourcesTitle': '来源',
   'overview.sourcesHelp': '这个中枢保存了哪些 Agent 的会话。',
+  'overview.sourcesHelpLocal': '本机归档了哪些 Agent 的会话。',
   'overview.source': '来源',
   'overview.latest': '最新事件',
   'overview.noData': '接入一台设备，再用 origin sync 发送它的会话。',
+  'overview.noDataLocal':
+    '运行 origin sync，归档 Agent 的会话。通过 origin mcp 使用 Origin 的 Agent 会边用边归档。',
   'overview.healthTitle': '健康状况',
   'overview.healthOk': '正常',
   'overview.healthCheck': '需要留意',
@@ -101,6 +114,21 @@ export const zh: Messages = {
   'overview.mirrorSize': '{stored}（解压后 {size}）',
   'overview.freeDisk': '可用磁盘空间',
   'overview.staleDevices': '有 {n} 台设备超过 24 小时没有发送任何数据。',
+
+  'hub.title': '中枢',
+  'hub.connected': '已连接',
+  'hub.notConnected': '未连接',
+  'hub.syncing': '同步中',
+  'hub.notSynced': '未同步',
+  'hub.none': '本机没有连接中枢。本机的存储自身就是完整的，在这里做的修改只留在本机。',
+  'hub.howTo': '搭建个人中枢',
+  'hub.url': '地址',
+  'hub.device': '本机',
+  'hub.lastSync': '上次同步',
+  'hub.never': '从未同步',
+  'hub.writes':
+    '在这里写入的条目和遗忘操作会立即在后台发送到中枢；连不上中枢时，随下一次同步发送。',
+  'hub.syncFailed': '上次与中枢同步失败：{error}。你的修改已保存在本机，会随下一次同步发送。',
 
   'devices.help': '设备通过 origin sync 把原始会话镜像、条目和遗忘记录发送到这个中枢。',
   'devices.noneTitle': '还没有设备',
@@ -294,6 +322,11 @@ export const zh: Messages = {
   'forget.doneTitle': '已遗忘',
   'forget.done': '已遗忘 {entries} 个条目和 {events} 个事件（遗忘记录 {tombstone}）。',
   'forget.propagates': '每台设备会在下一次同步时应用这次遗忘。',
+  'forget.warningLocal':
+    '遗忘无法撤销。下列内容会从本机的检索、时间线和所有 Agent 中消失；如果本机连接了中枢，下一次同步后也会从中枢和你的其他设备上消失。',
+  'forget.propagatesLocal':
+    '这次遗忘正在发送到你的中枢，再由中枢传给你的其他设备。连不上中枢时，随下一次同步发送。',
+  'forget.localOnly': '本机没有连接中枢。以后连接中枢时，这次遗忘会随其他内容一起发送。',
 
   'pager.label': '分页',
   'pager.page': '第 {n} 页',

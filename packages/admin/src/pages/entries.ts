@@ -292,7 +292,7 @@ export function forgetPage(
               }),
               icon: 'triangle-alert',
               body: html`<div class="ol-stack">
-        <p>${t('forget.warning')}</p>
+        <p>${ctx.mode === 'local' ? t('forget.warningLocal') : t('forget.warning')}</p>
         ${plan.entries.length > 0 ? html`<div><h3 class="ol-heading-sm">${t('forget.entries')}</h3>${idList(plan.entries, 'entry')}</div>` : ''}
         ${plan.events.length > 0 ? html`<div><h3 class="ol-heading-sm">${t('forget.events')}</h3>${idList(plan.events, 'event')}</div>` : ''}
         <form method="post" action="/admin/forget" class="ol-form" data-confirm="${o.id}">
@@ -319,12 +319,18 @@ export function forgetPage(
   });
 }
 
+/** Where a forget operation goes from here: on a hub, to every device; on `origin ui`, to its hub. */
+function propagation(ctx: Ctx): string {
+  if (ctx.mode === 'hub') return ctx.t('forget.propagates');
+  return ctx.service.hub() ? ctx.t('forget.propagatesLocal') : ctx.t('forget.localOnly');
+}
+
 export function forgottenPage(ctx: Ctx, r: ForgetResult): void {
   const t = ctx.t;
   renderPage(ctx, 200, {
     title: t('forget.doneTitle'),
     nav: 'tombstones',
-    body: html`${pageHeader(ctx, { title: t('forget.doneTitle'), description: t('forget.propagates') })}
+    body: html`${pageHeader(ctx, { title: t('forget.doneTitle'), description: propagation(ctx) })}
     <div class="ol-stack">
       ${alert(ctx, 'success', t('forget.done', { entries: fmtNumber(r.entries.length, ctx.lang), events: fmtNumber(r.events.length, ctx.lang), tombstone: r.tombstoneId ?? '—' }))}
       <div class="ol-cluster">

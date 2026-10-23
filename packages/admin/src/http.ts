@@ -167,6 +167,36 @@ export function sessionCookie(value: string, secure: boolean, maxAge?: number): 
       });
 }
 
+/**
+ * The session cookie of `origin ui`, which is plain http on 127.0.0.1 or localhost.
+ *
+ * - Not `Secure`, and so no `__Host-` or `__Secure-` prefix: Chromium and Firefox accept Secure
+ *   cookies from http://localhost and http://127.0.0.1, which are secure contexts, but Safari
+ *   (WebKit) drops them there, prefixed or not, so signing in would loop. Over loopback the cookie
+ *   never leaves the machine, so Secure would add nothing.
+ * - Its own name: browsers keep cookies per host name, not per port, so a hub's admin UI reached
+ *   through a tunnel on the same host name must not overwrite this cookie, or the other way round.
+ *   Each UI reads only its own cookie. For the same reason any other web server on this host name
+ *   receives the cookie for paths under /admin; the session also needs the CSRF token for writes,
+ *   and lives only as long as `origin ui` runs.
+ * - `SameSite=Lax`, not Strict: the browser opens the sign-in link from a local file (so that the
+ *   secret does not appear in the process list), which makes the request cross-site; a Strict
+ *   cookie would not be sent after the redirect to the clean URL. Every GET is read-only, frames
+ *   are refused, and every write needs a same-origin Origin header and the CSRF token.
+ * - HttpOnly, limited to /admin, and without Max-Age, so it ends with the browser session.
+ */
+export const LOCAL_SESSION_COOKIE = 'origin-ui';
+
+export function localSessionCookie(value: string, maxAge?: number): string {
+  return serializeCookie(LOCAL_SESSION_COOKIE, value, {
+    path: '/admin',
+    secure: false,
+    httpOnly: true,
+    sameSite: 'Lax',
+    maxAge,
+  });
+}
+
 /** Constant-time string comparison. */
 export function safeEqual(a: string, b: string): boolean {
   const x = Buffer.from(a);
@@ -216,6 +246,28 @@ export function requestOrigins(req: IncomingMessage, publicUrl: URL | null): Req
     publicSecure: publicUrl?.protocol === 'https:',
     local,
   };
+}
+
+/** The Host header values `origin ui` answers to: 127.0.0.1 and localhost, on its own port. */
+export function localHosts(port: number): Set<string> {
+  const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+  // Browsers leave out the default port.
+  if (port === 80) for (const h of ['127.0.0.1', 'localhost']) hosts.add(h);
+  return hosts;
+}
+
+/**
+ * The origins of `origin ui`: a loopback connection whose Host header is one of `hosts`, exactly.
+ * Any other name, including one that resolves to 127.0.0.1 (DNS rebinding) or another port, gets
+ * no origin, and the request is refused.
+ */
+export function localRequestOrigins(
+  req: IncomingMessage,
+  hosts: ReadonlySet<string>,
+): RequestOrigins {
+  const host = (req.headers.host ?? '').toLowerCase();
+  const ok = hosts.has(host) && isLoopbackAddress(req.socket.localAddress);
+  return { public: null, publicSecure: false, local: ok ? `http://${host}` : null };
 }
 
 /** Reject requests a browser marks as cross-site. */

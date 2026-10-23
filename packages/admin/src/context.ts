@@ -1,13 +1,20 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { ADMIN_OWNER, type AdminSession } from '@openlinkos/origin-core';
+import type { AdminSession } from '@openlinkos/origin-core';
 import type { Assets } from './assets.js';
 import { html, type SafeHtml } from './html.js';
 import type { RequestOrigins } from './http.js';
 import type { Lang, Translate } from './i18n/index.js';
 import type { IconName } from './icons.js';
 import type { Actor, AdminService } from './service.js';
+import { HUB_ACTOR, LOCAL_ACTOR } from './sessions.js';
 
 export type Theme = 'auto' | 'light' | 'dark';
+
+/**
+ * `hub`: the hub's admin UI, behind the admin password. `local`: `origin ui`, the same pages for
+ * a device's own store on 127.0.0.1, signed in with a one-time link and without the hub's pages.
+ */
+export type AdminMode = 'hub' | 'local';
 
 /** Everything a page or API handler needs for one request. */
 export interface Ctx {
@@ -15,6 +22,7 @@ export interface Ctx {
   res: ServerResponse;
   url: URL;
   now: number;
+  mode: AdminMode;
   lang: Lang;
   t: Translate;
   theme: Theme;
@@ -53,7 +61,7 @@ export function pageParam(ctx: Ctx): number {
 
 export function actorOf(ctx: Ctx): Actor {
   return {
-    actor: ctx.session ? ADMIN_OWNER : 'anonymous',
+    actor: ctx.session ? (ctx.mode === 'local' ? LOCAL_ACTOR : HUB_ACTOR) : 'anonymous',
     ip: ctx.ip,
     userAgent: ctx.userAgent,
   };

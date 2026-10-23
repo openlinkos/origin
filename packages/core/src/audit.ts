@@ -11,7 +11,10 @@ export type AuditChannel = 'ui' | 'cli';
 export type AuditDetail = Record<string, string | number | boolean | null | ReadonlyArray<string>>;
 
 export interface AuditInput {
-  /** `owner` for the admin UI, `anonymous` before sign-in, `cli` for the command line, `hub` at startup. */
+  /**
+   * `owner` for the hub's admin UI, `local` for `origin ui`, `anonymous` before sign-in, `cli` for
+   * the command line, `hub` at startup.
+   */
   actor: string;
   channel: AuditChannel;
   /** A dotted action name, e.g. `token.create`, `forget`, `login.failed`. */

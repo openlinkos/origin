@@ -21,6 +21,16 @@ interface NavItem {
   path: string;
   label: MessageKey;
   icon: IconName;
+  /** A page of the hub only, not of `origin ui`. */
+  hubOnly?: boolean;
+}
+
+/** The sidebar of a mode: `origin ui` has no devices, tokens, connection commands, or sign-ins. */
+function navFor(ctx: Ctx): typeof NAV {
+  if (ctx.mode === 'hub') return NAV;
+  return NAV.map((g) => ({ ...g, items: g.items.filter((i) => !i.hubOnly) })).filter(
+    (g) => g.items.length > 0,
+  );
 }
 
 /** The sidebar: groups of pages named by task. */
@@ -37,9 +47,9 @@ const NAV: Array<{ label?: MessageKey; items: NavItem[] }> = [
   {
     label: 'nav.groupConnect',
     items: [
-      { key: 'devices', path: 'devices', label: 'nav.devices', icon: 'laptop' },
-      { key: 'tokens', path: 'tokens', label: 'nav.tokens', icon: 'key-round' },
-      { key: 'connect', path: 'connect', label: 'nav.connect', icon: 'plug' },
+      { key: 'devices', path: 'devices', label: 'nav.devices', icon: 'laptop', hubOnly: true },
+      { key: 'tokens', path: 'tokens', label: 'nav.tokens', icon: 'key-round', hubOnly: true },
+      { key: 'connect', path: 'connect', label: 'nav.connect', icon: 'plug', hubOnly: true },
     ],
   },
   {
@@ -47,7 +57,13 @@ const NAV: Array<{ label?: MessageKey; items: NavItem[] }> = [
     items: [
       { key: 'tombstones', path: 'tombstones', label: 'nav.tombstones', icon: 'eraser' },
       { key: 'audit', path: 'audit', label: 'nav.audit', icon: 'scroll-text' },
-      { key: 'signins', path: 'signins', label: 'nav.signins', icon: 'monitor-check' },
+      {
+        key: 'signins',
+        path: 'signins',
+        label: 'nav.signins',
+        icon: 'monitor-check',
+        hubOnly: true,
+      },
     ],
   },
 ];
@@ -145,11 +161,11 @@ function appShell(ctx: Ctx, o: PageOptions): SafeHtml {
     <input type="checkbox" id="nav-toggle" class="ol-nav-toggle">
     <div class="ol-sidebar-head">
       <a class="ol-brand" href="/admin/">${logo(ctx, 22)}<span>Origin</span></a>
-      <span class="ol-brand-tag">${t('app.admin')}</span>
+      <span class="ol-brand-tag">${ctx.mode === 'local' ? t('app.local') : t('app.admin')}</span>
       <label for="nav-toggle" class="ol-btn ol-btn-ghost ol-btn-icon ol-nav-toggle-button">${icon(ctx, 'menu')}<span class="ol-sr-only">${t('nav.menu')}</span></label>
     </div>
     <nav class="ol-nav" aria-label="${t('nav.label')}">
-      ${NAV.map(
+      ${navFor(ctx).map(
         (group) => html`<div class="ol-nav-group">
         ${group.label ? html`<div class="ol-nav-label">${t(group.label)}</div>` : ''}
         ${group.items.map(

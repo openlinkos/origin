@@ -2,7 +2,7 @@ import type { Ctx } from '../context.js';
 import { fmtBytes, fmtDuration, fmtNumber, time } from '../context.js';
 import { type HtmlValue, href, html, type SafeHtml } from '../html.js';
 import { type IconName, icon } from '../icons.js';
-import type { DeviceDetail, DeviceSummary, Overview, Snippets } from '../service.js';
+import type { DeviceDetail, DeviceSummary, HubLink, Overview, Snippets } from '../service.js';
 import {
   alert,
   badge,
@@ -14,7 +14,7 @@ import {
   snippet,
   tableWrap,
 } from './components.js';
-import { renderPage } from './layout.js';
+import { docsUrl, renderPage } from './layout.js';
 
 function deviceStatus(ctx: Ctx, d: Pick<DeviceSummary, 'stale'>): SafeHtml {
   return d.stale
@@ -51,15 +51,55 @@ function devicesTable(ctx: Ctx, devices: DeviceSummary[]): SafeHtml {
   );
 }
 
+/**
+ * `origin ui`: the hub this device is connected to, and when it last synced. Writes made here are
+ * synced in the background, so the panel also says whether that is running or failed.
+ */
+function hubPanel(ctx: Ctx, hub: HubLink | null): SafeHtml {
+  const t = ctx.t;
+  if (!hub) {
+    return panel(ctx, {
+      tag: 'aside',
+      title: t('hub.title'),
+      icon: 'plug',
+      badge: badge(t('hub.notConnected')),
+      body: html`<p class="ol-muted ol-text-sm">${t('hub.none')}</p>`,
+      footer: html`<a href="${docsUrl(ctx, 'guide/hub')}" rel="noreferrer">${t('hub.howTo')}</a>`,
+    });
+  }
+  return panel(ctx, {
+    tag: 'aside',
+    title: t('hub.title'),
+    icon: 'plug',
+    badge: hub.syncing
+      ? badge(t('hub.syncing'), 'info', { dot: true })
+      : hub.lastError
+        ? badge(t('hub.notSynced'), 'warning', { dot: true })
+        : badge(t('hub.connected'), 'success', { dot: true }),
+    body: html`<div class="ol-stack">
+      ${hub.lastError ? alert(ctx, 'warning', t('hub.syncFailed', { error: hub.lastError })) : ''}
+      <dl class="ol-dl">
+        <dt>${t('hub.url')}</dt><dd class="ol-mono ol-break">${hub.url}</dd>
+        <dt>${t('hub.device')}</dt><dd>${hub.device}</dd>
+        <dt>${t('hub.lastSync')}</dt><dd>${hub.lastSyncAt === null ? t('hub.never') : time(hub.lastSyncAt)}</dd>
+      </dl>
+      <p class="ol-hint">${t('hub.writes')}</p>
+    </div>`,
+  });
+}
+
 export function overviewPage(ctx: Ctx, o: Overview): void {
   const t = ctx.t;
   const n = (v: number) => fmtNumber(v, ctx.lang);
-  const stale = o.devices.filter((d) => d.stale);
+  // `origin ui` shows this device's own store: no devices, tokens, or connection commands.
+  const local = ctx.mode === 'local';
+  const stale = local ? [] : o.devices.filter((d) => d.stale);
   const latest = o.sources.reduce<number | null>(
     (max, s) => (s.lastTs !== null && (max === null || s.lastTs > max) ? s.lastTs : max),
     null,
   );
   const healthy = stale.length === 0 && o.parseErrors.last24h === 0;
+  const remoteMirrors = o.usage.mirrorBytes.remote > 0 || o.usage.mirrorStoredBytes.remote > 0;
   const stat = (
     path: string,
     label: string,
@@ -69,13 +109,44 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
     tone?: 'warning',
   ) =>
     html`<a class="ol-stat" href="${path}"><span class="ol-stat-label"><span class="${tone ? `ol-stat-icon ol-tone-${tone}` : 'ol-stat-icon'}">${icon(ctx, iconName, 'sm')}</span>${label}</span><span class="ol-stat-value">${n(value)}</span><span class="ol-stat-meta">${meta}</span></a>`;
+  const sources = section({
+    title: t('overview.sourcesTitle'),
+    description: local ? t('overview.sourcesHelpLocal') : t('overview.sourcesHelp'),
+    body:
+      o.sources.length === 0
+        ? empty(ctx, {
+            icon: 'history',
+            title: t('overview.noSessions'),
+            text: local ? t('overview.noDataLocal') : t('overview.noData'),
+            action: local
+              ? ''
+              : linkButton(ctx, {
+                  href: '/admin/connect',
+                  label: t('devices.howToConnect'),
+                  icon: 'plug',
+                  size: 'sm',
+                }),
+          })
+        : tableWrap(
+            html`<th>${t('overview.source')}</th><th>${t('overview.latest')}</th><th class="ol-num">${t('overview.sessions')}</th><th class="ol-num">${t('overview.events')}</th>`,
+            o.sources.map(
+              (s) =>
+                html`<tr><td><a class="ol-cell-title" href="${href('sessions', { source: s.source })}">${s.source}</a></td><td class="ol-nowrap">${time(s.lastTs)}</td><td class="ol-num">${n(s.sessions)}</td><td class="ol-num">${n(s.events)}</td></tr>`,
+            ),
+          ),
+  });
+  // On `origin ui` a device's name is plain text: there are no device pages.
+  const deviceName = (name: string) =>
+    local ? html`${name}` : html`<a href="${href('device', { name })}">${name}</a>`;
   renderPage(ctx, 200, {
     title: t('nav.overview'),
     nav: 'overview',
     body: html`${pageHeader(ctx, {
       title: t('overview.title'),
-      description: t('overview.description'),
-      actions: html`${linkButton(ctx, { href: '/admin/connect', label: t('nav.connect'), icon: 'plug' })}${linkButton(ctx, { href: '/admin/tokens/new', label: t('tokens.create'), icon: 'plus', variant: 'primary' })}`,
+      description: local ? t('overview.descriptionLocal') : t('overview.description'),
+      actions: local
+        ? ''
+        : html`${linkButton(ctx, { href: '/admin/connect', label: t('nav.connect'), icon: 'plug' })}${linkButton(ctx, { href: '/admin/tokens/new', label: t('tokens.create'), icon: 'plus', variant: 'primary' })}`,
     })}
     ${
       stale.length > 0 || o.parseErrors.last24h > 0
@@ -91,52 +162,34 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
         ${stat('/admin/sessions', t('overview.events'), 'message-square', o.counts.events, t('overview.eventsMeta', { n: n(o.sources.length) }))}
         ${stat('/admin/sessions', t('overview.sessions'), 'history', o.counts.sessions, latest === null ? t('overview.noSessions') : html`${t('overview.latestActivity')} ${time(latest)}`)}
         ${stat('/admin/entries', t('overview.entries'), 'book-marked', o.counts.entries, t('overview.entriesMeta', { memory: n(o.entries.memory), knowledge: n(o.entries.knowledge), cognition: n(o.entries.cognition) }))}
-        ${stat('/admin/devices', t('overview.devices'), 'laptop', o.counts.devices, t('overview.devicesMeta', { n: n(o.counts.activeTokens) }), stale.length > 0 ? 'warning' : undefined)}
+        ${local ? '' : stat('/admin/devices', t('overview.devices'), 'laptop', o.counts.devices, t('overview.devicesMeta', { n: n(o.counts.activeTokens) }), stale.length > 0 ? 'warning' : undefined)}
         ${stat('/admin/tombstones', t('overview.tombstones'), 'eraser', o.counts.tombstones, t('overview.tombstonesMeta'))}
       </div>
     </section>
     <div class="ol-grid ol-grid-sidebar ol-section">
       <div>
-        ${section({
-          title: t('overview.devicesTitle'),
-          description: t('devices.help'),
-          actions:
-            o.devices.length > 0
-              ? linkButton(ctx, {
-                  href: '/admin/devices',
-                  label: t('overview.allDevices'),
-                  variant: 'ghost',
-                  size: 'sm',
-                })
-              : '',
-          body: devicesTable(ctx, o.devices),
-        })}
-        ${section({
-          title: t('overview.sourcesTitle'),
-          description: t('overview.sourcesHelp'),
-          body:
-            o.sources.length === 0
-              ? empty(ctx, {
-                  icon: 'history',
-                  title: t('overview.noSessions'),
-                  text: t('overview.noData'),
-                  action: linkButton(ctx, {
-                    href: '/admin/connect',
-                    label: t('devices.howToConnect'),
-                    icon: 'plug',
-                    size: 'sm',
-                  }),
-                })
-              : tableWrap(
-                  html`<th>${t('overview.source')}</th><th>${t('overview.latest')}</th><th class="ol-num">${t('overview.sessions')}</th><th class="ol-num">${t('overview.events')}</th>`,
-                  o.sources.map(
-                    (s) =>
-                      html`<tr><td><a class="ol-cell-title" href="${href('sessions', { source: s.source })}">${s.source}</a></td><td class="ol-nowrap">${time(s.lastTs)}</td><td class="ol-num">${n(s.sessions)}</td><td class="ol-num">${n(s.events)}</td></tr>`,
-                  ),
-                ),
-        })}
+        ${
+          local
+            ? ''
+            : section({
+                title: t('overview.devicesTitle'),
+                description: t('devices.help'),
+                actions:
+                  o.devices.length > 0
+                    ? linkButton(ctx, {
+                        href: '/admin/devices',
+                        label: t('overview.allDevices'),
+                        variant: 'ghost',
+                        size: 'sm',
+                      })
+                    : '',
+                body: devicesTable(ctx, o.devices),
+              })
+        }
+        ${sources}
       </div>
       <div class="ol-grid">
+        ${local ? hubPanel(ctx, o.hub) : ''}
         ${panel(ctx, {
           tag: 'aside',
           title: t('overview.healthTitle'),
@@ -149,7 +202,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
             <dd>${t('overview.parseErrorsValue', { day: n(o.parseErrors.last24h), week: n(o.parseErrors.last7d) })}</dd>
             ${o.parseErrors.bySource7d.map(
               (r) =>
-                html`<dt class="ol-dl-sub">${r.source} ${r.device ? html`<a href="${href('device', { name: r.device })}">${r.device}</a>` : html`<span class="ol-subtle">${t('overview.local')}</span>`}</dt><dd>${n(r.parseErrors)}</dd>`,
+                html`<dt class="ol-dl-sub">${r.source} ${r.device ? deviceName(r.device) : html`<span class="ol-subtle">${t('overview.local')}</span>`}</dt><dd>${n(r.parseErrors)}</dd>`,
             )}
             <dt>${t('overview.version')}</dt><dd>${o.version}</dd>
             <dt>${t('overview.uptime')}</dt><dd>${fmtDuration(o.uptimeMs, t)}</dd>
@@ -163,7 +216,11 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
             <dt>${t('overview.database')}</dt><dd>${fmtBytes(o.usage.databaseBytes)}</dd>
             <dt>${t('overview.wal')}</dt><dd>${fmtBytes(o.usage.walBytes)}</dd>
             <dt>${t('overview.mirrorsLocal')}</dt><dd>${t('overview.mirrorSize', { stored: fmtBytes(o.usage.mirrorStoredBytes.local), size: fmtBytes(o.usage.mirrorBytes.local) })}</dd>
-            <dt>${t('overview.mirrorsRemote')}</dt><dd>${t('overview.mirrorSize', { stored: fmtBytes(o.usage.mirrorStoredBytes.remote), size: fmtBytes(o.usage.mirrorBytes.remote) })}</dd>
+            ${
+              local && !remoteMirrors
+                ? ''
+                : html`<dt>${t('overview.mirrorsRemote')}</dt><dd>${t('overview.mirrorSize', { stored: fmtBytes(o.usage.mirrorStoredBytes.remote), size: fmtBytes(o.usage.mirrorBytes.remote) })}</dd>`
+            }
             <dt>${t('overview.freeDisk')}</dt><dd>${fmtBytes(o.usage.freeDiskBytes)}</dd>
           </dl>`,
         })}

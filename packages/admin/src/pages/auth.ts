@@ -1,5 +1,6 @@
 import type { Ctx } from '../context.js';
 import { html } from '../html.js';
+import { SIGN_IN_LINK_MS } from '../sessions.js';
 import { alert, linkButton, pageHeader } from './components.js';
 import { brand, csrfField, renderPage } from './layout.js';
 
@@ -30,6 +31,23 @@ export function loginPage(ctx: Ctx, status: number, o: { next: string; error?: s
         <p class="ol-hint">${t('auth.passwordHint')}</p>
         <div class="ol-code"><pre><code>origin admin password</code></pre></div>
       </details>`,
+  });
+}
+
+/**
+ * `origin ui` signed out: there is no password, only the one-time link that `origin ui` prints and
+ * opens. This page explains where to find it, and why a link did not work.
+ */
+export function localLoginPage(ctx: Ctx, status: number, o: { error?: string }): void {
+  const t = ctx.t;
+  renderPage(ctx, status, {
+    title: t('auth.signIn'),
+    bare: true,
+    body: html`<h1 class="ol-auth-title">${t('auth.signIn')}</h1>
+      ${o.error ? alert(ctx, 'danger', o.error) : ''}
+      <p>${t('local.signInHelp')}</p>
+      <p class="ol-hint">${t('local.newLink', { min: SIGN_IN_LINK_MS / 60_000 })}</p>
+      <div class="ol-code"><pre><code>origin ui</code></pre></div>`,
   });
 }
 

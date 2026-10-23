@@ -1,23 +1,30 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   type AdminCredential,
-  createAdminSession,
   type Database,
-  endAdminSession,
-  getAdminSession,
-  isAdminSessionFresh,
-  markAdminSessionFresh,
   OriginError,
   verifyAdminPassword,
 } from '@openlinkos/origin-core';
 import { Assets } from './assets.js';
-import { actorOf, type Ctx, field, pageParam, query, type Theme } from './context.js';
+import {
+  type AdminMode,
+  actorOf,
+  type Ctx,
+  field,
+  pageParam,
+  query,
+  type Theme,
+} from './context.js';
 import {
   appendCookie,
   CSP,
   checkSameOrigin,
   clientIp as clientIpOf,
   HttpError,
+  LOCAL_SESSION_COOKIE,
+  localHosts,
+  localRequestOrigins,
+  localSessionCookie,
   PLAIN_SESSION_COOKIE,
   parseBody,
   parseCookies,
@@ -37,7 +44,7 @@ import {
   sessionCookie,
 } from './http.js';
 import { negotiateLang, translator } from './i18n/index.js';
-import { errorPage, loginPage, reauthPage } from './pages/auth.js';
+import { errorPage, localLoginPage, loginPage, reauthPage } from './pages/auth.js';
 import { eventPage, eventRawPage, searchPage, sessionPage, sessionsPage } from './pages/browse.js';
 import { beforeParam, beforeTombstone } from './pages/components.js';
 import {
@@ -53,7 +60,8 @@ import { connectPage, devicePage, devicesPage, overviewPage } from './pages/over
 import { auditPage, signinsPage, tombstonesPage } from './pages/records.js';
 import { newTokenPage, revokeTokenPage, tokenCreatedPage, tokensPage } from './pages/tokens.js';
 import { CheckQueue, type LimiterOptions, LOGIN_LIMITS, LoginLimiter } from './ratelimit.js';
-import { AdminService } from './service.js';
+import { AdminService, type HubLink } from './service.js';
+import { MemorySessions, type SessionStore, SignInLink, storedSessions } from './sessions.js';
 
 export interface AdminOptions {
   db: Database;
@@ -82,13 +90,47 @@ export interface AdminOptions {
 /** Handles every request under /admin. Never throws; the caller routes /admin and /admin/* to it. */
 export type AdminHandler = (req: IncomingMessage, res: ServerResponse, url: URL) => Promise<void>;
 
+/**
+ * `origin ui`: the admin UI for a device's own store, on 127.0.0.1 (see
+ * docs/architecture.md#admin-ui). There is no password: the owner signs in with a one-time link
+ * that the CLI prints and opens.
+ */
+export interface LocalAdminOptions {
+  db: Database;
+  home: string;
+  version: string;
+  /** The port `origin ui` listens on: requests must name it, with 127.0.0.1 or localhost, as Host. */
+  port: number;
+  /** The hub this device is connected to, for the overview; null when it is not connected. */
+  hub?: () => HubLink | null;
+  /** Called after an entry is written or something is forgotten, for a sync with the hub. */
+  afterWrite?: () => void;
+  /** Messages for the terminal of `origin ui`: sign-ins, and errors. */
+  log?: (message: string) => void;
+  /** Clock, for tests. */
+  now?: () => number;
+}
+
+export interface LocalAdmin {
+  handler: AdminHandler;
+  /**
+   * Issue the one-time sign-in link: a path with a new secret, which works once, within
+   * SIGN_IN_LINK_MS. An earlier link stops working.
+   */
+  signInPath(): string;
+}
+
 interface State {
+  mode: AdminMode;
   db: Database;
   publicUrl: URL | null;
   clientIpHeader: string | null;
   credential: AdminCredential;
   version: string;
   service: AdminService;
+  sessions: SessionStore;
+  /** `origin ui` only: the Host values it answers to, and its sign-in link. */
+  local: { hosts: ReadonlySet<string>; link: SignInLink; failureLoggedAt: number | null } | null;
   assets: Assets;
   limiter: LoginLimiter;
   checks: CheckQueue;
@@ -109,7 +151,12 @@ interface Route {
   run: (ctx: Ctx, s: State) => Promise<void> | void;
   /** For fresh POSTs from pages: the page to return to after re-authenticating. */
   back?: (ctx: Ctx) => string;
+  /** The modes that have this route; both when absent. */
+  modes?: readonly AdminMode[];
 }
+
+const HUB: readonly AdminMode[] = ['hub'];
+const LOCAL: readonly AdminMode[] = ['local'];
 
 const LANG_COOKIE = 'origin-admin-lang';
 const THEME_COOKIE = 'origin-admin-theme';
@@ -179,13 +226,12 @@ async function checkPassword(
 
 /** Start a new session (never reusing one presented with the request) and set its cookie. */
 function startSession(ctx: Ctx, s: State): string {
-  if (ctx.session) endAdminSession(s.db, ctx.session.idHash, ctx.now);
-  const { id, session } = createAdminSession(
-    s.db,
-    { ip: ctx.ip, userAgent: ctx.userAgent },
-    ctx.now,
+  if (ctx.session) s.sessions.end(ctx.session, ctx.now);
+  const { id, session } = s.sessions.create({ ip: ctx.ip, userAgent: ctx.userAgent }, ctx.now);
+  appendCookie(
+    ctx.res,
+    s.mode === 'local' ? localSessionCookie(id) : sessionCookie(id, ctx.secure),
   );
-  appendCookie(ctx.res, sessionCookie(id, ctx.secure));
   ctx.session = session;
   s.service.recordAuth(actorOf(ctx), 'login');
   return session.csrf;
@@ -194,11 +240,58 @@ function startSession(ctx: Ctx, s: State): string {
 function endSession(ctx: Ctx, s: State): void {
   if (ctx.session) {
     s.service.recordAuth(actorOf(ctx), 'logout');
-    endAdminSession(s.db, ctx.session.idHash, ctx.now);
+    s.sessions.end(ctx.session, ctx.now);
   }
-  appendCookie(ctx.res, sessionCookie('', true, 0));
-  appendCookie(ctx.res, sessionCookie('', false, 0));
+  if (s.mode === 'local') {
+    appendCookie(ctx.res, localSessionCookie('', 0));
+  } else {
+    appendCookie(ctx.res, sessionCookie('', true, 0));
+    appendCookie(ctx.res, sessionCookie('', false, 0));
+  }
   ctx.session = null;
+}
+
+/** Failed sign-in links are written to the audit log at most once per this window. */
+const LINK_FAILURE_LOG_MS = 10 * 60_000;
+
+/**
+ * `origin ui`: exchange the one-time secret of the sign-in link for a session, then redirect to a
+ * clean URL, so that the secret stays neither in the address bar nor in a referrer. The secret is
+ * the only credential and is long and random, so there is nothing to rate-limit; failures are
+ * recorded once per window, so that requests cannot flood the append-only audit log.
+ */
+function redeemLink(ctx: Ctx, s: State): void {
+  const local = s.local;
+  if (!local) throw new HttpError(404, 'Not found.');
+  const next = safeNext(query(ctx, 'next'));
+  const secret = ctx.url.searchParams.get('secret');
+  if (secret === null) {
+    if (ctx.session) redirect(ctx.res, next);
+    else localLoginPage(ctx, 200, {});
+    return;
+  }
+  const result = local.link.redeem(secret, ctx.now);
+  if (result === 'ok') {
+    startSession(ctx, s);
+    s.log('Signed in. The sign-in link no longer works.');
+    redirect(ctx.res, next);
+    return;
+  }
+  // Opening the link again in a browser that is already signed in is harmless.
+  if (result === 'used' && ctx.session) {
+    redirect(ctx.res, next);
+    return;
+  }
+  if (result === 'used') {
+    s.log(
+      'The sign-in link was opened again after it had been used. If you did not sign in yourself, stop origin ui.',
+    );
+  }
+  if (local.failureLoggedAt === null || ctx.now - local.failureLoggedAt >= LINK_FAILURE_LOG_MS) {
+    local.failureLoggedAt = ctx.now;
+    s.service.recordAuth(actorOf(ctx), 'login.failed', { [result]: 1 });
+  }
+  localLoginPage(ctx, 401, { error: ctx.t(`local.link.${result}`) });
 }
 
 function setPref(ctx: Ctx, name: string, value: string | null): void {
@@ -223,23 +316,35 @@ const page = (
   auth: RouteAuth,
   run: Route['run'],
   back?: Route['back'],
+  modes?: readonly AdminMode[],
 ): Route => ({
   method,
   path: `/admin${path}`,
   auth,
   run,
   back,
+  modes,
 });
+
+/** A page of the hub's admin UI only. */
+const hubPage = (
+  method: 'GET' | 'POST',
+  path: string,
+  auth: RouteAuth,
+  run: Route['run'],
+  back?: Route['back'],
+): Route => page(method, path, auth, run, back, HUB);
 
 const PAGES: Route[] = [
   page('GET', '/', 'session', (ctx) => overviewPage(ctx, ctx.service.overview(ctx.now))),
 
-  page('GET', '/login', 'none', (ctx) => {
+  hubPage('GET', '/login', 'none', (ctx) => {
     const next = safeNext(query(ctx, 'next'));
     if (ctx.session) return redirect(ctx.res, next);
     loginPage(ctx, 200, { next });
   }),
-  page('POST', '/login', 'none', async (ctx, s) => {
+  page('GET', '/login', 'none', redeemLink, undefined, LOCAL),
+  hubPage('POST', '/login', 'none', async (ctx, s) => {
     const next = safeNext(field(ctx, 'next'));
     const r = await checkPassword(ctx, s, ctx.body.password, 'login');
     if (!r.ok) return loginPage(ctx, r.status, { next, error: r.message });
@@ -250,14 +355,14 @@ const PAGES: Route[] = [
     endSession(ctx, s);
     redirect(ctx.res, '/admin/login');
   }),
-  page('GET', '/reauth', 'session', (ctx) =>
+  hubPage('GET', '/reauth', 'session', (ctx) =>
     reauthPage(ctx, 200, { next: safeNext(query(ctx, 'next')) }),
   ),
-  page('POST', '/reauth', 'session', async (ctx, s) => {
+  hubPage('POST', '/reauth', 'session', async (ctx, s) => {
     const next = safeNext(field(ctx, 'next'));
     const r = await checkPassword(ctx, s, ctx.body.password, 'reauth');
     if (!r.ok) return reauthPage(ctx, r.status, { next, error: r.message });
-    markAdminSessionFresh(s.db, ctx.session?.idHash ?? '', ctx.now);
+    if (ctx.session) s.sessions.markFresh(ctx.session, ctx.now);
     s.service.recordAuth(actorOf(ctx), 'reauth');
     redirect(ctx.res, next);
   }),
@@ -270,13 +375,13 @@ const PAGES: Route[] = [
     redirect(ctx.res, safeNext(field(ctx, 'next')));
   }),
 
-  page('GET', '/devices', 'session', (ctx) => devicesPage(ctx, ctx.service.devices(ctx.now))),
-  page('GET', '/device', 'session', (ctx) =>
+  hubPage('GET', '/devices', 'session', (ctx) => devicesPage(ctx, ctx.service.devices(ctx.now))),
+  hubPage('GET', '/device', 'session', (ctx) =>
     devicePage(ctx, ctx.service.device(query(ctx, 'name'), ctx.now)),
   ),
-  page('GET', '/connect', 'session', (ctx) => connectPage(ctx, ctx.service.connect())),
+  hubPage('GET', '/connect', 'session', (ctx) => connectPage(ctx, ctx.service.connect())),
 
-  page('GET', '/tokens', 'session', (ctx) => {
+  hubPage('GET', '/tokens', 'session', (ctx) => {
     const revoked = query(ctx, 'revoked');
     tokensPage(
       ctx,
@@ -284,8 +389,8 @@ const PAGES: Route[] = [
       revoked ? ctx.t('tokens.revokedNotice', { name: revoked }) : undefined,
     );
   }),
-  page('GET', '/tokens/new', 'fresh', (ctx) => newTokenPage(ctx, 200, {})),
-  page(
+  hubPage('GET', '/tokens/new', 'fresh', (ctx) => newTokenPage(ctx, 200, {})),
+  hubPage(
     'POST',
     '/tokens',
     'fresh',
@@ -299,10 +404,10 @@ const PAGES: Route[] = [
     },
     () => '/admin/tokens/new',
   ),
-  page('GET', '/tokens/revoke', 'fresh', (ctx) =>
+  hubPage('GET', '/tokens/revoke', 'fresh', (ctx) =>
     revokeTokenPage(ctx, 200, { name: query(ctx, 'name') }),
   ),
-  page(
+  hubPage(
     'POST',
     '/tokens/revoke',
     'fresh',
@@ -447,7 +552,7 @@ const PAGES: Route[] = [
     tombstonesPage(ctx, ctx.service.tombstones(beforeTombstone(ctx))),
   ),
   page('GET', '/audit', 'session', (ctx) => auditPage(ctx, ctx.service.auditLog(beforeParam(ctx)))),
-  page('GET', '/signins', 'session', (ctx) => {
+  hubPage('GET', '/signins', 'session', (ctx) => {
     const n = Number(query(ctx, 'revoked'));
     signinsPage(
       ctx,
@@ -457,7 +562,7 @@ const PAGES: Route[] = [
         : undefined,
     );
   }),
-  page(
+  hubPage(
     'POST',
     '/signins/revoke',
     'fresh',
@@ -476,28 +581,39 @@ const PAGES: Route[] = [
 // ---------------------------------------------------------------------------------------------
 // JSON API: the same service as the pages. Ids go in query parameters (they contain ':' and '#').
 
-const api = (method: 'GET' | 'POST', name: string, auth: RouteAuth, run: Route['run']): Route => ({
+const api = (
+  method: 'GET' | 'POST',
+  name: string,
+  auth: RouteAuth,
+  run: Route['run'],
+  modes?: readonly AdminMode[],
+): Route => ({
   method,
   path: `/admin/api/${name}`,
   auth,
   run,
+  modes,
 });
 
+/** A JSON call of the hub's admin UI only. */
+const hubApi = (method: 'GET' | 'POST', name: string, auth: RouteAuth, run: Route['run']): Route =>
+  api(method, name, auth, run, HUB);
+
 const API: Route[] = [
-  api('GET', 'session', 'none', (ctx) =>
+  api('GET', 'session', 'none', (ctx, s) =>
     json(
       ctx,
       200,
       ctx.session
         ? {
             signedIn: true,
-            fresh: isAdminSessionFresh(ctx.session, ctx.now),
+            fresh: s.sessions.isFresh(ctx.session, ctx.now),
             csrf: ctx.session.csrf,
           }
         : { signedIn: false },
     ),
   ),
-  api('POST', 'login', 'none', async (ctx, s) => {
+  hubApi('POST', 'login', 'none', async (ctx, s) => {
     const r = await checkPassword(ctx, s, ctx.body.password, 'login');
     if (!r.ok) return json(ctx, r.status, { error: r.message, retryAfterSec: r.retryAfterSec });
     const csrf = startSession(ctx, s);
@@ -507,26 +623,26 @@ const API: Route[] = [
     endSession(ctx, s);
     json(ctx, 200, { signedIn: false });
   }),
-  api('POST', 'reauth', 'session', async (ctx, s) => {
+  hubApi('POST', 'reauth', 'session', async (ctx, s) => {
     const r = await checkPassword(ctx, s, ctx.body.password, 'reauth');
     if (!r.ok) return json(ctx, r.status, { error: r.message, retryAfterSec: r.retryAfterSec });
-    markAdminSessionFresh(s.db, ctx.session?.idHash ?? '', ctx.now);
+    if (ctx.session) s.sessions.markFresh(ctx.session, ctx.now);
     s.service.recordAuth(actorOf(ctx), 'reauth');
     json(ctx, 200, { fresh: true });
   }),
 
   api('GET', 'overview', 'session', (ctx) => json(ctx, 200, ctx.service.overview(ctx.now))),
-  api('GET', 'devices', 'session', (ctx) =>
+  hubApi('GET', 'devices', 'session', (ctx) =>
     json(ctx, 200, { devices: ctx.service.devices(ctx.now) }),
   ),
-  api('GET', 'device', 'session', (ctx) =>
+  hubApi('GET', 'device', 'session', (ctx) =>
     json(ctx, 200, ctx.service.device(query(ctx, 'name'), ctx.now)),
   ),
-  api('GET', 'tokens', 'session', (ctx) => json(ctx, 200, { tokens: ctx.service.tokens() })),
-  api('POST', 'tokens', 'fresh', (ctx) =>
+  hubApi('GET', 'tokens', 'session', (ctx) => json(ctx, 200, { tokens: ctx.service.tokens() })),
+  hubApi('POST', 'tokens', 'fresh', (ctx) =>
     json(ctx, 201, ctx.service.createToken(actorOf(ctx), ctx.body.name)),
   ),
-  api('POST', 'token-revoke', 'fresh', (ctx) => {
+  hubApi('POST', 'token-revoke', 'fresh', (ctx) => {
     ctx.service.revokeToken(actorOf(ctx), ctx.body.name);
     json(ctx, 200, { revoked: ctx.body.name });
   }),
@@ -622,14 +738,14 @@ const API: Route[] = [
     json(ctx, 200, ctx.service.tombstones(beforeTombstone(ctx))),
   ),
   api('GET', 'audit', 'session', (ctx) => json(ctx, 200, ctx.service.auditLog(beforeParam(ctx)))),
-  api('GET', 'connect', 'session', (ctx) => json(ctx, 200, ctx.service.connect())),
-  api('GET', 'admin-sessions', 'session', (ctx) =>
+  hubApi('GET', 'connect', 'session', (ctx) => json(ctx, 200, ctx.service.connect())),
+  hubApi('GET', 'admin-sessions', 'session', (ctx) =>
     json(ctx, 200, {
       current: ctx.session?.handle,
       sessions: ctx.service.adminSessions(ctx.now),
     }),
   ),
-  api('POST', 'sessions-revoke', 'fresh', (ctx) =>
+  hubApi('POST', 'sessions-revoke', 'fresh', (ctx) =>
     json(ctx, 200, {
       revoked: ctx.service.revokeSessions(
         actorOf(ctx),
@@ -640,34 +756,53 @@ const API: Route[] = [
   ),
 ];
 
-const ROUTES = [...PAGES, ...API];
+/**
+ * The routes of a mode. `origin ui` has no password to enter again, so its sensitive routes need
+ * only its session (they are `fresh` on a hub).
+ */
+function routesFor(mode: AdminMode): Route[] {
+  return [...PAGES, ...API]
+    .filter((r) => r.modes === undefined || r.modes.includes(mode))
+    .map((r): Route => (mode === 'local' && r.auth === 'fresh' ? { ...r, auth: 'session' } : r));
+}
+
+const ROUTES: Record<AdminMode, Route[]> = { hub: routesFor('hub'), local: routesFor('local') };
+
+type RouteList = ReadonlyArray<{ method: 'GET' | 'POST'; path: string; auth: RouteAuth }>;
+const routeList = (routes: Route[]): RouteList =>
+  routes.map(({ method, path, auth }) => ({ method, path, auth }));
 
 /**
- * Every route of the admin UI: only GET and POST, and every write is a POST. This list is the
+ * Every route of the hub's admin UI: only GET and POST, and every write is a POST. This list is the
  * whole surface; tests pin the writes so that nothing beyond them (editing or deleting events,
  * mirrors, entries, or tombstones; un-forgetting; changing the admin password) can appear unnoticed.
  */
-export const ADMIN_ROUTES: ReadonlyArray<{
-  method: 'GET' | 'POST';
-  path: string;
-  auth: RouteAuth;
-}> = ROUTES.map(({ method, path, auth }) => ({ method, path, auth }));
+export const ADMIN_ROUTES: RouteList = routeList(ROUTES.hub);
+
+/**
+ * Every route of `origin ui`: the hub's, without the password (sign-in and re-authentication),
+ * tokens, devices, connection commands, and admin sessions. Tests pin its writes too.
+ */
+export const LOCAL_ROUTES: RouteList = routeList(ROUTES.local);
 
 // ---------------------------------------------------------------------------------------------
 // Dispatch
 
 function sessionFrom(req: IncomingMessage, s: State, origins: RequestOrigins, now: number) {
   const cookies = parseCookies(req.headers.cookie);
-  // Behind an https public URL, the plain cookie counts only on a loopback tunnel: a sibling
-  // subdomain can plant an ordinary cookie for this host (session fixation), but not a __Host- one.
+  // `origin ui` reads only its own cookie. Behind an https public URL, the plain cookie counts only
+  // on a loopback tunnel: a sibling subdomain can plant an ordinary cookie for this host (session
+  // fixation), but not a __Host- one.
   const names =
-    origins.publicSecure && origins.local === null
-      ? [SECURE_SESSION_COOKIE]
-      : [SECURE_SESSION_COOKIE, PLAIN_SESSION_COOKIE];
+    s.mode === 'local'
+      ? [LOCAL_SESSION_COOKIE]
+      : origins.publicSecure && origins.local === null
+        ? [SECURE_SESSION_COOKIE]
+        : [SECURE_SESSION_COOKIE, PLAIN_SESSION_COOKIE];
   for (const name of names) {
     const value = cookies.get(name);
     if (!value) continue;
-    const session = getAdminSession(s.db, value, { now });
+    const session = s.sessions.get(value, now);
     if (session) return session;
   }
   return null;
@@ -680,17 +815,21 @@ async function dispatch(
   url: URL,
   ctxRef: { ctx?: Ctx },
 ): Promise<void> {
-  const origins = requestOrigins(req, s.publicUrl);
+  const origins = s.local
+    ? localRequestOrigins(req, s.local.hosts)
+    : requestOrigins(req, s.publicUrl);
   for (const [k, v] of Object.entries(securityHeaders(s.publicUrl?.protocol === 'https:'))) {
     res.setHeader(k, v);
   }
   if (origins.public === null && origins.local === null) {
     // No public URL: answer only loopback connections addressed to a loopback name, which also
-    // defeats DNS rebinding.
+    // defeats DNS rebinding. `origin ui` answers only to its own Host values.
     sendText(
       res,
       421,
-      'The admin UI answers only on loopback addresses unless a public URL is configured.',
+      s.local
+        ? `origin ui answers only at ${[...s.local.hosts].map((h) => `http://${h}`).join(' and ')}.`
+        : 'The admin UI answers only on loopback addresses unless a public URL is configured.',
     );
     return;
   }
@@ -705,6 +844,7 @@ async function dispatch(
     res,
     url,
     now,
+    mode: s.mode,
     lang,
     t: translator(lang),
     theme,
@@ -747,9 +887,10 @@ async function dispatch(
     return;
   }
 
-  const route = ROUTES.find((r) => r.path === url.pathname && r.method === method);
+  const routes = ROUTES[s.mode];
+  const route = routes.find((r) => r.path === url.pathname && r.method === method);
   if (!route) {
-    const allowed = ROUTES.filter((r) => r.path === url.pathname).map((r) => r.method);
+    const allowed = routes.filter((r) => r.path === url.pathname).map((r) => r.method);
     if (allowed.length > 0) {
       res.setHeader('Allow', allowed.join(', '));
       throw new HttpError(405, 'Method not allowed.');
@@ -781,7 +922,7 @@ async function dispatch(
         throw new HttpError(403, 'Missing or invalid CSRF token. Reload the page and try again.');
       }
     }
-    if (route.auth === 'fresh' && !isAdminSessionFresh(ctx.session, now)) {
+    if (route.auth === 'fresh' && !s.sessions.isFresh(ctx.session, now)) {
       if (isApi) {
         throw new HttpError(403, 'Enter the admin password again (POST /admin/api/reauth).', {
           reauth: true,
@@ -794,10 +935,12 @@ async function dispatch(
   await route.run(ctx, s);
 }
 
+/** The hub's admin UI. */
 export function createAdminHandler(options: AdminOptions): AdminHandler {
   const now = options.now ?? Date.now;
   const publicUrl = options.publicUrl ?? null;
-  const state: State = {
+  return handlerFor({
+    mode: 'hub',
     db: options.db,
     publicUrl,
     clientIpHeader: options.clientIpHeader?.trim() || null,
@@ -810,12 +953,55 @@ export function createAdminHandler(options: AdminOptions): AdminHandler {
       startedAt: options.startedAt ?? now(),
       publicUrl,
     }),
+    sessions: storedSessions(options.db),
+    local: null,
     assets: new Assets(),
     limiter: new LoginLimiter(options.loginLimits ?? LOGIN_LIMITS),
     checks: new CheckQueue(),
     log: options.log ?? (() => {}),
     now,
+  });
+}
+
+/**
+ * `origin ui`: the admin UI for the local store. Its sessions and its sign-in link live in this
+ * process only (see sessions.ts), and it answers only to 127.0.0.1 and localhost on `port`.
+ */
+export function createLocalAdmin(options: LocalAdminOptions): LocalAdmin {
+  const now = options.now ?? Date.now;
+  const link = new SignInLink();
+  const handler = handlerFor({
+    mode: 'local',
+    db: options.db,
+    publicUrl: null,
+    clientIpHeader: null,
+    // Never checked: `origin ui` has no password routes.
+    credential: { source: 'stored' },
+    version: options.version,
+    service: new AdminService({
+      db: options.db,
+      home: options.home,
+      version: options.version,
+      startedAt: now(),
+      publicUrl: null,
+      hub: options.hub,
+      afterWrite: options.afterWrite,
+    }),
+    sessions: new MemorySessions(),
+    local: { hosts: localHosts(options.port), link, failureLoggedAt: null },
+    assets: new Assets(),
+    limiter: new LoginLimiter(LOGIN_LIMITS),
+    checks: new CheckQueue(),
+    log: options.log ?? (() => {}),
+    now,
+  });
+  return {
+    handler,
+    signInPath: () => `/admin/login?secret=${link.issue(now())}`,
   };
+}
+
+function handlerFor(state: State): AdminHandler {
   return async (req, res, url) => {
     const ref: { ctx?: Ctx } = {};
     try {

@@ -67,7 +67,7 @@ export const PAGE_SIZE = 50;
 
 /** Who is acting, for the audit log. */
 export interface Actor {
-  /** `owner` once signed in, `anonymous` before. */
+  /** `owner` once signed in to a hub, `local` in `origin ui`, `anonymous` before. */
   actor: string;
   ip: string | null;
   userAgent: string | null;
@@ -79,6 +79,22 @@ export interface DeviceSummary {
   bytes: number;
   lastUpdateAt: number;
   stale: boolean;
+}
+
+/**
+ * The hub a device is connected to, as `origin ui` shows it. The CLI reads it from the device's
+ * hub connection; the admin package never talks to a hub itself.
+ */
+export interface HubLink {
+  url: string;
+  /** This device's name on the hub (the store's name). */
+  device: string;
+  /** When this device last finished a sync with the hub, from any process; null if never. */
+  lastSyncAt: number | null;
+  /** Whether `origin ui` is syncing with the hub right now. */
+  syncing: boolean;
+  /** Why the last sync `origin ui` started failed, or null. */
+  lastError: string | null;
 }
 
 export interface Overview {
@@ -97,6 +113,8 @@ export interface Overview {
   devices: DeviceSummary[];
   usage: StoreUsage;
   parseErrors: { last24h: number; last7d: number; bySource7d: IngestHealth[] };
+  /** For `origin ui`: the hub this device is connected to, or null. Always null on a hub. */
+  hub: HubLink | null;
 }
 
 export interface Provenance {
@@ -208,8 +226,26 @@ export class AdminService {
       version: string;
       startedAt: number;
       publicUrl: URL | null;
+      /** For `origin ui`: the hub this device is connected to, if any. */
+      hub?: () => HubLink | null;
+      /** Called after an entry is written or something is forgotten (`origin ui` then syncs). */
+      afterWrite?: () => void;
     },
   ) {}
+
+  /** The hub this device is connected to (`origin ui` only), or null. */
+  hub(): HubLink | null {
+    return this.o.hub?.() ?? null;
+  }
+
+  /** The write has been made; what follows it (a background sync) must not make it look failed. */
+  private written(): void {
+    try {
+      this.o.afterWrite?.();
+    } catch {
+      // The callback reports its own failures.
+    }
+  }
 
   private get db(): Database {
     return this.o.db;
@@ -259,6 +295,7 @@ export class AdminService {
         last7d: sum(week),
         bySource7d: week.filter((r) => r.parseErrors > 0),
       },
+      hub: this.hub(),
     };
   }
 
@@ -484,10 +521,11 @@ export class AdminService {
       entries: result.entries.length,
       events: result.events.length,
     });
+    this.written();
     return result;
   }
 
-  /** Remember an entry citing one event, as the owner (author `user`). */
+  /** Remember an entry citing one event, as the owner (author `user@<store>`). */
   remember(
     who: Actor,
     input: {
@@ -511,6 +549,7 @@ export class AdminService {
       sources: [{ eventId: event.id, quote }],
     });
     this.audit(who, 'entry.remember', entry.id, { source: event.id, kind });
+    this.written();
     return entry;
   }
 
@@ -527,6 +566,7 @@ export class AdminService {
       confidence: parseConfidence(input.confidence),
     });
     this.audit(who, 'entry.correct', id, { newId: entry.id });
+    this.written();
     return entry;
   }
 
