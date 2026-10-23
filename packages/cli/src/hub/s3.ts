@@ -6,8 +6,8 @@ import { type HttpClient, SyncHttp, SyncHttpError, type SyncResponse } from './s
 /**
  * An S3-compatible bucket (MinIO, or any store that speaks the S3 API) as the object store of a
  * hub's sealed frames (see docs/guide/hub.md#keep-raw-mirrors-in-a-bucket). Requests are signed
- * with AWS Signature Version 4 and sent synchronously (see sync-http.ts); only PUT and GET of
- * single objects are used, and objects are never deleted.
+ * with AWS Signature Version 4 and sent synchronously (see sync-http.ts), or without blocking for
+ * `origin raw upload`; only PUT and GET of single objects are used, and objects are never deleted.
  */
 
 export interface S3Config {
@@ -67,16 +67,21 @@ export class S3ObjectStore implements ObjectStore {
   }
 
   put(key: string, data: Buffer): void {
-    const res = this.send('PUT', key, data);
-    if (res.status !== 200) throw this.failure('PUT', key, res);
+    this.stored(key, this.send('PUT', key, data));
   }
 
   get(key: string): Buffer | null {
-    const res = this.send('GET', key);
-    if (res.status === 200) return res.body;
-    // A missing object is null; a missing bucket is an error, never a missing frame.
-    if (res.status === 404 && errorCode(res) !== 'NoSuchBucket') return null;
-    throw this.failure('GET', key, res);
+    return this.found(key, this.send('GET', key));
+  }
+
+  /** put() without blocking, for `origin raw upload` (see uploadFrames). */
+  async putAsync(key: string, data: Buffer): Promise<void> {
+    this.stored(key, await this.sendAsync('PUT', key, data));
+  }
+
+  /** get() without blocking. */
+  async getAsync(key: string): Promise<Buffer | null> {
+    return this.found(key, await this.sendAsync('GET', key));
   }
 
   /** Write a small object and read it back: the bucket exists and the credentials may do both. */
@@ -98,6 +103,17 @@ export class S3ObjectStore implements ObjectStore {
     this.http.close();
   }
 
+  private stored(key: string, res: SyncResponse): void {
+    if (res.status !== 200) throw this.failure('PUT', key, res);
+  }
+
+  private found(key: string, res: SyncResponse): Buffer | null {
+    if (res.status === 200) return res.body;
+    // A missing object is null; a missing bucket is an error, never a missing frame.
+    if (res.status === 404 && errorCode(res) !== 'NoSuchBucket') return null;
+    throw this.failure('GET', key, res);
+  }
+
   /** Send a signed request, trying again while the store is briefly unavailable. */
   private send(method: 'PUT' | 'GET', key: string, body?: Buffer): SyncResponse {
     for (let attempt = 0; ; attempt++) {
@@ -106,18 +122,44 @@ export class S3ObjectStore implements ObjectStore {
       try {
         res = this.http.request(this.sign(method, key, body));
       } catch (err) {
-        // A timeout has waited long enough already; other network errors get another try.
-        const timedOut = err instanceof SyncHttpError && err.timedOut;
-        if (timedOut || delay === undefined) {
-          throw new ObjectStoreError(
-            `S3 ${method} ${this.location}/${key} failed: ${(err as Error).message}`,
-          );
-        }
-        sleep(delay);
+        this.retryAfter(method, key, err, delay);
+        sleep(delay as number);
         continue;
       }
       if (!RETRY_STATUSES.has(res.status) || delay === undefined) return res;
       sleep(delay);
+    }
+  }
+
+  /** send() without blocking, with the same tries. */
+  private async sendAsync(
+    method: 'PUT' | 'GET',
+    key: string,
+    body?: Buffer,
+  ): Promise<SyncResponse> {
+    for (let attempt = 0; ; attempt++) {
+      const delay = this.retryDelaysMs[attempt];
+      let res: SyncResponse;
+      try {
+        res = await this.http.requestAsync(this.sign(method, key, body));
+      } catch (err) {
+        this.retryAfter(method, key, err, delay);
+        await pause(delay as number);
+        continue;
+      }
+      if (!RETRY_STATUSES.has(res.status) || delay === undefined) return res;
+      await pause(delay);
+    }
+  }
+
+  /** Throw for a request that failed without a response, unless it gets another try. */
+  private retryAfter(method: string, key: string, err: unknown, delay: number | undefined): void {
+    // A timeout has waited long enough already; other network errors get another try.
+    const timedOut = err instanceof SyncHttpError && err.timedOut;
+    if (timedOut || delay === undefined) {
+      throw new ObjectStoreError(
+        `S3 ${method} ${this.location}/${key} failed: ${(err as Error).message}`,
+      );
     }
   }
 
@@ -165,4 +207,8 @@ function errorCode(res: SyncResponse): string | null {
 
 function sleep(ms: number): void {
   if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

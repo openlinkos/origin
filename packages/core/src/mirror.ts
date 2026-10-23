@@ -584,6 +584,51 @@ export interface FrameUpload {
   removable: Array<{ mirror: string; bytes: number }>;
   /** Of those, removed this time. */
   removed: number;
+  /** Frames that could not be verified in the bucket, each with why; their files are kept. */
+  failed: Array<{ mirror: string; key: string; reason: string }>;
+  /** Why the run stopped before it had tried every frame (the bucket could not be used), or null. */
+  stopped: string | null;
+}
+
+/** How far uploadFrames is: reported before the first frame and after each one. */
+export interface FrameUploadProgress {
+  /** Frames verified in the bucket so far, of the frames on disk, and the size of all of them. */
+  frames: number;
+  total: number;
+  totalBytes: number;
+  /** Of the frames verified, those uploaded, and their size. */
+  uploaded: number;
+  uploadedBytes: number;
+  failed: number;
+}
+
+export interface FrameUploadOptions {
+  /** Remove each `<mirror>.zst` file once every frame in it is verified in the bucket. */
+  remove?: boolean;
+  /**
+   * Frames moved at once (default UPLOAD_CONCURRENCY). More than one helps only a bucket with
+   * putAsync and getAsync: the others block on each request.
+   */
+  concurrency?: number;
+  log?: (message: string) => void;
+  progress?: (p: FrameUploadProgress) => void;
+}
+
+/** How many frames uploadFrames moves at once, unless told otherwise. */
+export const UPLOAD_CONCURRENCY = 8;
+
+/** A mirror with frames on disk, as uploadFrames moves them. */
+interface FramesOnDisk {
+  mirror: string;
+  file: string;
+  size: number;
+  /** The frames the file holds, one after another from offset 0, as `raw_chunk` records them. */
+  frames: Chunk[];
+  /** Whether those frames are all the file holds of what the database records. */
+  whole: boolean;
+  /** Frames not done yet: neither verified, nor failed, nor skipped. */
+  left: number;
+  failed: boolean;
 }
 
 /**
@@ -594,17 +639,29 @@ export interface FrameUpload {
  * same bytes is not uploaded again. A `<mirror>.zst` file is listed as removable only once every
  * frame in it is verified in the bucket, and removed only with `remove`; frames sealed since the
  * store uses the bucket are never on disk. May run while the hub serves.
+ *
+ * It runs outside transactions, so with a bucket that offers putAsync and getAsync it moves several
+ * frames at once (`concurrency`), each still checked, uploaded, and read back in that order. A frame
+ * that fails a check (damaged on disk, or read back different) is reported in `failed`, its file is
+ * kept, and the other mirrors go on; any other error, such as a bucket that cannot be reached, would
+ * fail every frame, so no frame is started after it (`stopped`) and the run ends once the frames
+ * under way are done. Either way, a later run only verifies the frames already in the bucket.
  */
-export function uploadFrames(
+export async function uploadFrames(
   db: Database,
   home: string,
-  opts: { remove?: boolean; log?: (message: string) => void } = {},
-): FrameUpload {
+  opts: FrameUploadOptions = {},
+): Promise<FrameUpload> {
   const store = frameStore(home);
   if (!(store instanceof BucketFrameStore)) {
     throw new OriginError('This store keeps its sealed frames on disk; give it a bucket first.');
   }
   const objects = store.objects;
+  const put =
+    objects.putAsync?.bind(objects) ??
+    (async (key: string, data: Buffer) => objects.put(key, data));
+  const get = objects.getAsync?.bind(objects) ?? (async (key: string) => objects.get(key));
+  const concurrency = Math.max(1, Math.floor(opts.concurrency ?? UPLOAD_CONCURRENCY));
   const result: FrameUpload = {
     mirrors: 0,
     frames: 0,
@@ -612,55 +669,127 @@ export function uploadFrames(
     uploadedBytes: 0,
     removable: [],
     removed: 0,
+    failed: [],
+    stopped: null,
   };
+
+  // What is on disk. Each `<mirror>.zst` holds the frames sealed before the store used the bucket,
+  // and perhaps bytes past what the database records, left by a write that never committed; those
+  // are not frames.
   const framesOf = db.prepare(
     `SELECT ${CHUNK_COLUMNS} FROM raw_chunk WHERE raw_file_id = ? AND frame_offset < ?
        AND frame_offset + frame_length <= ? ORDER BY frame_offset`,
   );
+  const mirrors: FramesOnDisk[] = [];
+  let total = 0;
+  let totalBytes = 0;
   for (const st of allMirrorStates(db)) {
     const file = framesPath(home, st.mirror);
     const size = fileSize(file);
     if (size === 0) continue;
-    result.mirrors++;
-    // The file holds the frames sealed before the store used the bucket, and perhaps bytes past
-    // what the database records, left by a write that never committed; those are not frames.
     const end = Math.min(size, st.frameBytes);
-    let verified = 0;
+    const frames: Chunk[] = [];
+    let covered = 0;
     for (const c of framesOf.all(st.rawFileId, end, st.frameBytes) as unknown as Chunk[]) {
-      if (c.frame_offset !== verified || c.frame_offset + c.frame_length > end) break;
-      const frame = readRange(file, c.frame_offset, c.frame_offset + c.frame_length);
-      decompressFrame(st.mirror, c, frame);
-      const key = frameKey(st.mirror, c.frame_offset);
-      if (!objects.get(key)?.equals(frame)) {
-        objects.put(key, frame);
-        if (!objects.get(key)?.equals(frame)) {
-          throw new OriginError(
-            `The frame ${key} read back from ${objects.location} differs from what was uploaded.`,
-          );
-        }
-        result.uploaded++;
-        result.uploadedBytes += frame.length;
-      }
-      result.frames++;
-      verified = c.frame_offset + c.frame_length;
-      if (result.frames % 1000 === 0) {
-        opts.log?.(`${result.frames} frames verified, ${result.uploaded} uploaded`);
-      }
+      if (c.frame_offset !== covered || c.frame_offset + c.frame_length > end) break;
+      frames.push(c);
+      covered = c.frame_offset + c.frame_length;
     }
-    if (verified !== end) {
-      opts.log?.(`${st.mirror}.zst does not end at a frame; it is kept`);
-      continue;
+    const whole = covered === end;
+    mirrors.push({
+      mirror: st.mirror,
+      file,
+      size,
+      frames,
+      whole,
+      left: frames.length,
+      failed: false,
+    });
+    total += frames.length;
+    totalBytes += covered;
+  }
+  result.mirrors = mirrors.length;
+  const progress = () =>
+    opts.progress?.({
+      frames: result.frames,
+      total,
+      totalBytes,
+      uploaded: result.uploaded,
+      uploadedBytes: result.uploadedBytes,
+      failed: result.failed.length,
+    });
+
+  /** Once every frame of a mirror is done: list its file as removable, and remove it if asked. */
+  const settle = (m: FramesOnDisk) => {
+    if (m.failed) return;
+    if (!m.whole) {
+      opts.log?.(`${m.mirror}.zst does not end at a frame; it is kept`);
+      return;
     }
-    result.removable.push({ mirror: st.mirror, bytes: size });
-    if (!opts.remove) continue;
+    result.removable.push({ mirror: m.mirror, bytes: m.size });
+    if (!opts.remove) return;
     try {
       // A reader that opens the file meanwhile finds it gone and reads the bucket instead.
-      fs.rmSync(file, { force: true });
+      fs.rmSync(m.file, { force: true });
       result.removed++;
     } catch (err) {
-      opts.log?.(`could not remove ${st.mirror}.zst: ${(err as Error).message}`);
+      opts.log?.(`could not remove ${m.mirror}.zst: ${(err as Error).message}`);
+    }
+  };
+
+  /** Check one frame, upload it unless the bucket holds it already, and read it back. */
+  const move = async (m: FramesOnDisk, c: Chunk): Promise<boolean> => {
+    const frame = readRange(m.file, c.frame_offset, c.frame_offset + c.frame_length);
+    decompressFrame(m.mirror, c, frame);
+    const key = frameKey(m.mirror, c.frame_offset);
+    if ((await get(key))?.equals(frame)) return false;
+    await put(key, frame);
+    if (!(await get(key))?.equals(frame)) {
+      throw new OriginError(
+        `The frame ${key} read back from ${objects.location} differs from what was uploaded.`,
+      );
+    }
+    return true;
+  };
+
+  // The frames in order, mirror by mirror, taken by `concurrency` workers one at a time.
+  function* queue(): Generator<[FramesOnDisk, Chunk]> {
+    for (const m of mirrors) {
+      if (m.frames.length === 0) settle(m);
+      for (const c of m.frames) yield [m, c];
     }
   }
+  const next = queue();
+  const work = async () => {
+    for (;;) {
+      if (result.stopped !== null) return;
+      const item = next.next();
+      if (item.done) return;
+      const [m, c] = item.value;
+      // A mirror with a frame that failed keeps its file, so its other frames need not go now.
+      if (!m.failed) {
+        try {
+          if (await move(m, c)) {
+            result.uploaded++;
+            result.uploadedBytes += c.frame_length;
+          }
+          result.frames++;
+        } catch (err) {
+          const reason = (err as Error).message;
+          m.failed = true;
+          result.failed.push({ mirror: m.mirror, key: frameKey(m.mirror, c.frame_offset), reason });
+          // A failed check concerns its frame; any other error would fail the next frames too.
+          if (!(err instanceof OriginError)) result.stopped ??= reason;
+        }
+        progress();
+      }
+      if (--m.left === 0) settle(m);
+    }
+  };
+  progress();
+  await Promise.all(Array.from({ length: concurrency }, work));
+  const order = new Map(mirrors.map((m, i) => [m.mirror, i]));
+  result.removable.sort((a, b) => (order.get(a.mirror) ?? 0) - (order.get(b.mirror) ?? 0));
   return result;
 }
 

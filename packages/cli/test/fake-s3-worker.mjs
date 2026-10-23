@@ -68,8 +68,14 @@ function serve({ bucket, credentials, region }) {
   const failures = [];
   let delayMs = 0;
   let lastRejection = null;
+  // Requests being answered, and the most at once since `peak` was last asked.
+  let inFlight = 0;
+  let peak = 0;
 
   const server = http.createServer((req, res) => {
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    res.on('close', () => inFlight--);
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
@@ -137,7 +143,10 @@ function serve({ bucket, credentials, region }) {
     else if (op === 'fail') failures.push(...Array(args.count).fill(args.status));
     else if (op === 'delay') delayMs = args.ms;
     else if (op === 'counts') reply = { ...counts };
-    else if (op === 'rejection') reply = lastRejection;
+    else if (op === 'peak') {
+      reply = peak;
+      peak = inFlight;
+    } else if (op === 'rejection') reply = lastRejection;
     else if (op === 'close') {
       server.closeAllConnections();
       server.close(() => parentPort.postMessage({ id, reply: null }));

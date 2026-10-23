@@ -12,6 +12,9 @@ import {
  * `Atomics.wait` until the worker has posted the response and raised a flag, then takes the
  * response with `receiveMessageOnPort` (the technique of the synckit package). The caller's event
  * loop stands still meanwhile: on a hub, no other request is served during a frame's transfer.
+ *
+ * Outside transactions, as `origin raw upload` moves frames, the same requests can also be sent
+ * without blocking (requestAsync), on the calling thread, several at once.
  */
 
 export interface SyncRequest {
@@ -45,7 +48,32 @@ const GRACE_MS = 2000;
 /** What the bucket needs of an HTTP client (tests replace it). */
 export interface HttpClient {
   request(req: SyncRequest): SyncResponse;
+  /** The same request without blocking; it answers and fails as `request` does. */
+  requestAsync(req: SyncRequest): Promise<SyncResponse>;
   close(): void;
+}
+
+/**
+ * Send a request with `fetch` on the calling thread, as the worker does: with its own timeout,
+ * without following redirects, and failing with a SyncHttpError.
+ */
+export async function fetchResponse(req: SyncRequest, timeoutMs: number): Promise<SyncResponse> {
+  try {
+    const res = await fetch(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: req.body,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const body = Buffer.from(await res.arrayBuffer());
+    return { status: res.status, headers: Object.fromEntries(res.headers), body };
+  } catch (err) {
+    const e = err as Error & { cause?: { message?: string } };
+    const timedOut = e?.name === 'TimeoutError' || e?.name === 'AbortError';
+    const cause = e?.cause?.message ? `: ${e.cause.message}` : '';
+    throw new SyncHttpError(timedOut ? 'timed out' : `${e?.message ?? e}${cause}`, timedOut);
+  }
 }
 
 /**
@@ -135,6 +163,11 @@ export class SyncHttp implements HttpClient {
     // No answer even after the worker's own timeout: it is stuck or gone. Start a new one.
     this.close();
     throw new SyncHttpError(`timed out after ${timeoutMs} ms (no answer from the worker)`, true);
+  }
+
+  /** Send a request without blocking, on this thread rather than the worker's. */
+  requestAsync(req: SyncRequest, timeoutMs = this.timeoutMs): Promise<SyncResponse> {
+    return fetchResponse(req, timeoutMs);
   }
 
   /** Stop the worker; the next request starts a new one. */

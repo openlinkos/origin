@@ -98,6 +98,8 @@ export {
 export {
   FRAME_BYTES,
   type FrameUpload,
+  type FrameUploadOptions,
+  type FrameUploadProgress,
   IDLE_SEAL_MS,
   type MirrorState,
   type MirrorUsage,
@@ -107,6 +109,7 @@ export {
   readMirrorLine,
   readMirrorLines,
   sealIdleMirrors,
+  UPLOAD_CONCURRENCY,
   uploadFrames,
 } from './mirror.js';
 export {

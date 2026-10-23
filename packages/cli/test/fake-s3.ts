@@ -23,6 +23,8 @@ export interface FakeS3 {
   /** Answer every request this much later. */
   delay(ms: number): Promise<void>;
   counts(): Promise<{ PUT: number; GET: number; other: number }>;
+  /** The most requests answered at once since the last call. */
+  peak(): Promise<number>;
   /** Why the last request was refused, if one was. */
   rejection(): Promise<string | null>;
   close(): Promise<void>;
@@ -74,6 +76,7 @@ export async function startFakeS3(): Promise<FakeS3> {
     fail: (count, status) => call('fail', { count, status }),
     delay: (ms) => call('delay', { ms }),
     counts: () => call('counts'),
+    peak: () => call('peak'),
     rejection: () => call('rejection'),
     close: async () => {
       await call('close');

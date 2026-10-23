@@ -47,6 +47,12 @@ export interface ObjectStore {
   put(key: string, data: Buffer): void;
   /** The object under `key`, or null if there is none. */
   get(key: string): Buffer | null;
+  /**
+   * The same two operations without blocking, if the store has them. Only uploadFrames uses them:
+   * it runs outside transactions, and moves many frames at once with them.
+   */
+  putAsync?(key: string, data: Buffer): Promise<void>;
+  getAsync?(key: string): Promise<Buffer | null>;
 }
 
 export function framesPath(home: string, mirror: string): string {

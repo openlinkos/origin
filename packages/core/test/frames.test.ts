@@ -256,23 +256,28 @@ describe('a store with a bucket', () => {
     expectIntact(18);
 
     // Moving them: verified, listed as removable, but kept until asked.
-    const first = uploadFrames(db, home);
+    const first = await uploadFrames(db, home);
     expect(first).toMatchObject({
       mirrors: 1,
       frames: sealed.length - inBucket.length,
       uploaded: sealed.length - inBucket.length,
       removed: 0,
+      failed: [],
+      stopped: null,
     });
     expect(first.removable).toEqual([{ mirror: mirrorName(), bytes: onDisk }]);
     expect(objects.objects.size).toBe(sealed.length);
     expect(fs.existsSync(`${mirrorBase()}.zst`)).toBe(true);
     // Running it again uploads nothing, and removes the file now that it is asked to.
     const puts = objects.puts;
-    expect(uploadFrames(db, home, { remove: true })).toMatchObject({ uploaded: 0, removed: 1 });
+    expect(await uploadFrames(db, home, { remove: true })).toMatchObject({
+      uploaded: 0,
+      removed: 1,
+    });
     expect(objects.puts).toBe(puts);
     expect(fs.existsSync(`${mirrorBase()}.zst`)).toBe(false);
     expectIntact(18);
-    expect(uploadFrames(db, home, { remove: true })).toMatchObject({ mirrors: 0, frames: 0 });
+    expect(await uploadFrames(db, home, { remove: true })).toMatchObject({ mirrors: 0, frames: 0 });
 
     // Sealing goes on into the bucket.
     write(18, 27);
@@ -286,9 +291,10 @@ describe('a store with a bucket', () => {
     await syncSource(ctx(), fakeAdapter(src));
     useObjectStore(db, home, objects);
     objects.corrupt = true;
-    expect(() => uploadFrames(db, home, { remove: true })).toThrow(
-      /differs from what was uploaded/,
-    );
+    const wrong = await uploadFrames(db, home, { remove: true });
+    expect(wrong).toMatchObject({ frames: 0, removable: [], removed: 0, stopped: null });
+    expect(wrong.failed.length).toBeGreaterThan(0);
+    for (const f of wrong.failed) expect(f.reason).toMatch(/differs from what was uploaded/);
     expect(fs.existsSync(`${mirrorBase()}.zst`)).toBe(true);
     // A damaged frame on disk is never uploaded.
     objects.corrupt = false;
@@ -297,12 +303,165 @@ describe('a store with a bucket', () => {
     const bytes = fs.readFileSync(zst);
     bytes[bytes.length - 3] = (bytes[bytes.length - 3] as number) ^ 0xff;
     fs.writeFileSync(zst, bytes);
-    expect(() => uploadFrames(db, home, { remove: true })).toThrow(/damaged frame/);
+    const last = chunks().at(-1)!;
+    const damaged = await uploadFrames(db, home, { remove: true });
+    expect(damaged.failed).toEqual([
+      {
+        mirror: mirrorName(),
+        key: frameKey(mirrorName(), last.frame_offset),
+        reason: expect.stringMatching(/damaged frame/),
+      },
+    ]);
+    expect(damaged).toMatchObject({ removable: [], removed: 0, stopped: null });
+    expect(objects.objects.has(frameKey(mirrorName(), last.frame_offset))).toBe(false);
     expect(fs.existsSync(zst)).toBe(true);
   });
 
-  it('needs a bucket to move frames to', () => {
-    expect(() => uploadFrames(db, home)).toThrow(/give it a bucket first/);
+  it('needs a bucket to move frames to', async () => {
+    await expect(uploadFrames(db, home)).rejects.toThrow(/give it a bucket first/);
+  });
+
+  describe('moving frames several at a time', () => {
+    /** Frames on disk in `files` mirrors, sealed before the store used the bucket. */
+    const onDisk = async (files: number) => {
+      for (let f = 0; f < files; f++) {
+        let text = '';
+        for (let i = 0; i < 12; i++)
+          text += line(
+            `m${f}-${i}`,
+            `m${f}`,
+            1000 + i,
+            'user',
+            `${f} ${i} ${'数据'.repeat(i % 9)}`,
+          );
+        fs.writeFileSync(path.join(src, `m${f}.jsonl`), text);
+      }
+      await syncSource(ctx(), fakeAdapter(src));
+      return (db.prepare('SELECT COUNT(*) AS n FROM raw_chunk').get() as { n: number }).n;
+    };
+    /** A bucket whose transfers take a few milliseconds each, without blocking. */
+    const slowBucket = () => {
+      const base = memoryObjects();
+      const bucket = Object.assign(base, {
+        inFlight: 0,
+        maxInFlight: 0,
+        /** Throws for a key, or for any key, as a bucket that fails would. */
+        failPut: null as ((key: string) => Error | null) | null,
+        /** Returns other bytes than were written for this key. */
+        wrongKey: null as string | null,
+        async transfer<T>(run: () => T): Promise<T> {
+          bucket.inFlight++;
+          bucket.maxInFlight = Math.max(bucket.maxInFlight, bucket.inFlight);
+          try {
+            await new Promise((resolve) => setTimeout(resolve, 3));
+            return run();
+          } finally {
+            bucket.inFlight--;
+          }
+        },
+        putAsync(key: string, data: Buffer) {
+          return bucket.transfer(() => {
+            const error = bucket.failPut?.(key);
+            if (error) throw error;
+            base.put(key, data);
+          });
+        },
+        getAsync(key: string) {
+          return bucket.transfer(() => {
+            const data = base.get(key);
+            return data && key === bucket.wrongKey ? Buffer.from('not the frame') : data;
+          });
+        },
+      });
+      return bucket;
+    };
+
+    it('never moves more frames at once than asked, and moves them all', async () => {
+      const total = await onDisk(5);
+      expect(total).toBeGreaterThan(10);
+      const bucket = slowBucket();
+      useObjectStore(db, home, bucket);
+      const seen: number[] = [];
+      const r = await uploadFrames(db, home, {
+        concurrency: 3,
+        remove: true,
+        progress: (p) => seen.push(p.frames),
+      });
+      expect(bucket.maxInFlight).toBe(3);
+      expect(r).toMatchObject({ mirrors: 5, frames: total, uploaded: total, removed: 5 });
+      expect(r.failed).toEqual([]);
+      expect(r.removable.map((f) => f.mirror)).toEqual(
+        [0, 1, 2, 3, 4].map((f) => path.join('fake', `m${f}.jsonl`)),
+      );
+      expect(seen).toEqual(Array.from({ length: total + 1 }, (_, i) => i));
+      expect(bucket.objects.size).toBe(total);
+      for (let f = 0; f < 5; f++)
+        expect(fs.existsSync(path.join(home, 'raw', 'fake', `m${f}.jsonl.zst`))).toBe(false);
+      // Every line reads back from the bucket alone.
+      useObjectStore(db, home, bucket, { cacheBytes: 0 });
+      for (let f = 0; f < 5; f++) {
+        for (let i = 0; i < 12; i++) {
+          const e = getEvent(db, `fake:m${f}-${i}`)!;
+          expect(readRawLine(db, home, rawLocator(db, home, e)!)).toContain(`"${f} ${i} `);
+        }
+      }
+    });
+
+    it('reports a frame that fails, keeps its file, and moves the others', async () => {
+      const total = await onDisk(3);
+      const bucket = slowBucket();
+      useObjectStore(db, home, bucket);
+      const bad = path.join('fake', 'm1.jsonl');
+      bucket.wrongKey = frameKey(bad, 0);
+      const r = await uploadFrames(db, home, { concurrency: 4, remove: true });
+      expect(r.failed).toEqual([
+        { mirror: bad, key: frameKey(bad, 0), reason: expect.stringMatching(/differs from/) },
+      ]);
+      expect(r.stopped).toBeNull();
+      expect(r.removable.map((f) => f.mirror)).toEqual([
+        path.join('fake', 'm0.jsonl'),
+        path.join('fake', 'm2.jsonl'),
+      ]);
+      expect(fs.existsSync(path.join(home, 'raw', `${bad}.zst`))).toBe(true);
+      // The other mirrors' frames are in the bucket, byte for byte, and read from there.
+      useObjectStore(db, home, bucket, { cacheBytes: 0 });
+      for (const f of [0, 2]) {
+        for (let i = 0; i < 12; i++) {
+          const e = getEvent(db, `fake:m${f}-${i}`)!;
+          expect(readRawLine(db, home, rawLocator(db, home, e)!)).toContain(`"${f} ${i} `);
+        }
+      }
+      // Once the bucket behaves, a second run moves only what is left.
+      bucket.wrongKey = null;
+      const puts = bucket.puts;
+      const again = await uploadFrames(db, home, { concurrency: 4, remove: true });
+      expect(again).toMatchObject({ mirrors: 1, failed: [], removed: 1 });
+      expect(bucket.puts - puts).toBe(again.uploaded);
+      expect(again.uploaded).toBeLessThan(total);
+      expect(bucket.objects.size).toBe(total);
+    });
+
+    it('starts no frame after the bucket fails, and goes on from there the next time', async () => {
+      const total = await onDisk(4);
+      const bucket = slowBucket();
+      useObjectStore(db, home, bucket);
+      let puts = 0;
+      bucket.failPut = () => (++puts > 4 ? new Error('connection refused') : null);
+      const r = await uploadFrames(db, home, { concurrency: 2, remove: true });
+      expect(r.stopped).toBe('connection refused');
+      // The frames under way when it failed finished; none was started after.
+      expect(r.frames).toBe(4);
+      expect(r.failed.length).toBeLessThanOrEqual(2);
+      expect(r.frames + r.failed.length).toBeLessThan(total);
+      expect(bucket.objects.size).toBe(4);
+      bucket.failPut = null;
+      const again = await uploadFrames(db, home, { concurrency: 2, remove: true });
+      // Files removed the first time are not counted again; what is left is uploaded once.
+      expect(again).toMatchObject({ uploaded: total - 4, failed: [], stopped: null });
+      expect(again.removed + r.removed).toBe(4);
+      expect(bucket.objects.size).toBe(total);
+      expect(bucket.puts).toBe(total); // each frame written once
+    });
   });
 
   it('backs up the frames from the bucket into a backup that needs no bucket', async () => {
@@ -311,7 +470,7 @@ describe('a store with a bucket', () => {
     useObjectStore(db, home, objects);
     write(6, 14);
     await syncSource(ctx(), fakeAdapter(src)); // and some in the bucket
-    uploadFrames(db, home, { remove: true }); // now all in the bucket
+    await uploadFrames(db, home, { remove: true }); // now all in the bucket
     write(14, 16);
     await syncSource(ctx(), fakeAdapter(src)); // and a tail
     const target = path.join(freshHome(), 'backup');

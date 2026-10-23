@@ -61,6 +61,7 @@ import {
   stats,
   storeName,
   syncSource,
+  UPLOAD_CONCURRENCY,
   uploadFrames,
 } from '@openlinkos/origin-core';
 import {
@@ -119,7 +120,7 @@ Personal hub:
   origin serve     [--host 127.0.0.1] [--port 7077]      Run this store as a personal hub (MCP over HTTP)
                    [--admin | --admin-listen <host:port>] [--public-url <url>]   Also serve the admin UI
                    [--raw-s3-endpoint <url> --raw-s3-bucket <name> [--raw-s3-prefix <p>]]   Keep sealed frames in a bucket
-  origin raw       upload [--remove]                      Move sealed frames still on the hub's disk to its bucket (run on the hub)
+  origin raw       upload [--remove] [--concurrency 8]    Move sealed frames still on the hub's disk to its bucket (run on the hub)
   origin token     create <name> | list | revoke <name>  Manage the hub's access tokens (run on the hub)
   origin admin     password [--generate]                 Set the admin UI password; signs out every session (run on the hub)
   origin admin     sessions [--revoke-all] | audit [--limit 50]       Admin UI sessions and the audit log
@@ -210,7 +211,7 @@ async function main(argv: string[]): Promise<number> {
       case 'hub':
         return await cmdHub(ctx, rest);
       case 'raw':
-        return cmdRaw(ctx, rest);
+        return await cmdRaw(ctx, rest);
       case 'push':
         return await cmdSync(ctx, rest);
       default:
@@ -1391,33 +1392,72 @@ async function cmdAdmin(ctx: Ctx, args: string[]): Promise<number> {
 
 /**
  * `origin raw upload`: move the sealed frames a hub still keeps on disk to its bucket, verifying
- * each, and with --remove delete the `.zst` files whose frames are all verified there.
+ * each, several at a time, and with --remove delete the `.zst` files whose frames are all verified
+ * there.
  */
-function cmdRaw(ctx: Ctx, args: string[]): number {
+async function cmdRaw(ctx: Ctx, args: string[]): Promise<number> {
   const [action, ...rest] = args;
   if (action !== 'upload') {
     console.error(
-      'Usage: origin raw upload [--remove] [--raw-s3-endpoint <url> --raw-s3-bucket <name> …]',
+      'Usage: origin raw upload [--remove] [--concurrency 8] [--raw-s3-endpoint <url> --raw-s3-bucket <name> …]',
     );
     return 2;
   }
   const { values } = parseArgs({
     args: rest,
-    options: { remove: { type: 'boolean', default: false }, ...BUCKET_OPTIONS },
+    options: {
+      remove: { type: 'boolean', default: false },
+      concurrency: { type: 'string', default: String(UPLOAD_CONCURRENCY) },
+      ...BUCKET_OPTIONS,
+    },
   });
+  const concurrency = Number(values.concurrency);
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 64) {
+    throw new OriginError(
+      `--concurrency must be a number from 1 to 64, not "${values.concurrency}".`,
+    );
+  }
   const bucket = setUpFrames(ctx.db, ctx.home, {
     command: 'upload',
     flags: values,
     env: process.env,
   }) as NonNullable<ReturnType<typeof setUpFrames>>;
-  const r = uploadFrames(ctx.db, ctx.home, {
+  let shownAt: number | null = null;
+  const r = await uploadFrames(ctx.db, ctx.home, {
     remove: values.remove,
+    concurrency,
     log: (m) => console.error(m),
+    progress: (p) => {
+      const now = Date.now();
+      if (shownAt === null) {
+        shownAt = now;
+        if (p.total > 0) {
+          console.error(
+            `Moving ${count(p.total, 'sealed frame')} (${fmtBytes(p.totalBytes)}) to ${bucket.location}, ${concurrency} at a time.`,
+          );
+        }
+      } else if (now - shownAt >= 5000 && p.frames + p.failed < p.total) {
+        shownAt = now;
+        console.error(
+          `${p.frames} of ${p.total} frames verified, ${p.uploaded} uploaded (${fmtBytes(p.uploadedBytes)})`,
+        );
+      }
+    },
   });
   const removableBytes = r.removable.reduce((n, f) => n + f.bytes, 0);
   console.log(
     `Verified ${count(r.frames, 'sealed frame')} of ${count(r.mirrors, 'mirror')} in ${bucket.location}; uploaded ${count(r.uploaded, 'frame')} (${fmtBytes(r.uploadedBytes)}).`,
   );
+  for (const f of r.failed.slice(0, 10)) console.error(`Not verified: ${f.key}: ${f.reason}`);
+  if (r.failed.length > 10) console.error(`… and ${r.failed.length - 10} more.`);
+  if (r.failed.length > 0) {
+    console.error('The .zst files that hold these frames are kept.');
+  }
+  if (r.stopped !== null) {
+    console.error(
+      'Stopped early: the next frames would fail the same way. Once that is fixed, run it again; frames already in the bucket are only verified.',
+    );
+  }
   if (values.remove) {
     console.log(
       `Removed ${count(r.removed, 'local .zst file')}${r.removed < r.removable.length ? ` of ${r.removable.length}` : ''}.`,

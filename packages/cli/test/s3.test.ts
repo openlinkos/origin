@@ -337,19 +337,38 @@ describe('S3 object store', () => {
     expect(() => store.get('busy')).toThrow(/503 SlowDown/);
   });
 
+  it('writes and reads without blocking too, with the same tries and errors', async () => {
+    const store = s3();
+    const data = Buffer.from('a sealed frame, sent without blocking');
+    await store.putAsync('claude-code/b.jsonl.zst/000000000000', data);
+    expect(await store.getAsync('claude-code/b.jsonl.zst/000000000000')).toEqual(data);
+    expect(store.get('claude-code/b.jsonl.zst/000000000000')).toEqual(data);
+    expect(await store.getAsync('claude-code/b.jsonl.zst/000000000099')).toBeNull();
+    await fake.fail(2, 503);
+    expect(await store.getAsync('claude-code/b.jsonl.zst/000000000000')).toEqual(data);
+    await fake.fail(3, 503);
+    await expect(store.getAsync('claude-code/b.jsonl.zst/000000000000')).rejects.toThrow(
+      /503 SlowDown/,
+    );
+    await expect(s3({ bucket: 'no-such-bucket' }).getAsync('k')).rejects.toThrow(
+      /404 NoSuchBucket/,
+    );
+    await expect(s3({ secretAccessKey: 'not-the-secret-123' }).putAsync('k', data)).rejects.toThrow(
+      ObjectStoreError,
+    );
+    const unreachable = s3({ endpoint: new URL('http://127.0.0.1:1') });
+    await expect(unreachable.getAsync('k')).rejects.toThrow(/S3 GET .* failed: fetch failed/);
+  });
+
   it('addresses a virtual-hosted bucket, signed for its host name', () => {
     const sent: SyncRequest[] = [];
+    const answer = (req: SyncRequest) => {
+      sent.push(req);
+      return { status: 200, headers: {}, body: Buffer.alloc(0) };
+    };
     const store = new S3ObjectStore(
       fake.config({ addressing: 'virtual', endpoint: new URL('https://s3.example.test') }),
-      {
-        http: {
-          request: (req) => {
-            sent.push(req);
-            return { status: 200, headers: {}, body: Buffer.alloc(0) };
-          },
-          close: () => {},
-        },
-      },
+      { http: { request: answer, requestAsync: async (req) => answer(req), close: () => {} } },
     );
     store.put('a b/c.zst/000000000000', Buffer.from('frame'));
     const req = sent[0] as SyncRequest;
@@ -509,7 +528,7 @@ describe('a store with an S3 bucket', () => {
     useObjectStore(db, home, objects);
     write(12, 24);
     await syncSource(ctx(), fakeAdapter(src));
-    const first = uploadFrames(db, home);
+    const first = await uploadFrames(db, home);
     expect(first.uploaded).toBeGreaterThan(0);
     expect(first.removable).toEqual([{ mirror: mirrorName(), bytes: onDisk }]);
     expect(fs.existsSync(`${mirrorBase()}.zst`)).toBe(true);
@@ -517,7 +536,10 @@ describe('a store with an S3 bucket', () => {
       chunks().map((c) => [frameKey(mirrorName(), c.frame_offset), c.frame_length]),
     );
     const puts = (await fake.counts()).PUT;
-    expect(uploadFrames(db, home, { remove: true })).toMatchObject({ uploaded: 0, removed: 1 });
+    expect(await uploadFrames(db, home, { remove: true })).toMatchObject({
+      uploaded: 0,
+      removed: 1,
+    });
     expect((await fake.counts()).PUT).toBe(puts);
     expect(fs.existsSync(`${mirrorBase()}.zst`)).toBe(false);
     expectIntact(24);
@@ -529,8 +551,47 @@ describe('a store with an S3 bucket', () => {
     useObjectStore(db, home, objects);
     const key = `${objects.config.prefix}/${frameKey(mirrorName(), 0)}`;
     await fake.put(key, Buffer.from('not the frame'));
-    expect(uploadFrames(db, home).uploaded).toBe(chunks().length);
+    expect((await uploadFrames(db, home)).uploaded).toBe(chunks().length);
     expect((await fake.get(key))?.length).toBe(chunks()[0]?.frame_length);
+  });
+
+  it('moves frames over several requests at once, never more than asked', async () => {
+    write(0, 40);
+    await syncSource(ctx(), fakeAdapter(src));
+    const frames = chunks().length;
+    expect(frames).toBeGreaterThan(8);
+    useObjectStore(db, home, objects);
+    await fake.delay(15);
+    try {
+      await fake.peak();
+      const r = await uploadFrames(db, home, { concurrency: 4, remove: true });
+      expect(await fake.peak()).toBe(4);
+      expect(r).toMatchObject({ frames, uploaded: frames, removed: 1, failed: [], stopped: null });
+    } finally {
+      await fake.delay(0);
+    }
+    expect(await inBucket()).toEqual(
+      chunks().map((c) => [frameKey(mirrorName(), c.frame_offset), c.frame_length]),
+    );
+    expectIntact(40);
+  });
+
+  it('stops when the bucket keeps failing, keeps the file, and goes on the next time', async () => {
+    write(0, 12);
+    await syncSource(ctx(), fakeAdapter(src));
+    useObjectStore(db, home, objects);
+    // Every try of the first request: it fails, and no other frame is started.
+    await fake.fail(3, 503);
+    const r = await uploadFrames(db, home, { concurrency: 1, remove: true });
+    expect(r.stopped).toMatch(/503 SlowDown/);
+    expect(r).toMatchObject({ frames: 0, uploaded: 0, removed: 0 });
+    expect(r.failed).toEqual([
+      { mirror: mirrorName(), key: frameKey(mirrorName(), 0), reason: r.stopped },
+    ]);
+    expect(fs.existsSync(`${mirrorBase()}.zst`)).toBe(true);
+    const again = await uploadFrames(db, home, { remove: true });
+    expect(again).toMatchObject({ uploaded: chunks().length, removed: 1, stopped: null });
+    expectIntact(12);
   });
 
   it('backs up frames from the bucket', async () => {

@@ -193,7 +193,7 @@ volumes:
   origin raw upload --remove   # the same, then remove those files
   ```
 
-  It is safe to run again: frames already in the bucket are only verified. A file is removed only once every frame in it has been read back from the bucket and matches.
+  It is safe to run again: frames already in the bucket are only verified. A file is removed only once every frame in it has been read back from the bucket and matches. It moves 8 frames at a time, which matters over a slow or distant link; `--concurrency <n>` (1 to 64) changes that. If a frame fails its check, the file that holds it is kept and the others go on; if the bucket stops answering, it stops, and the next run goes on from there.
 - **Waiting for the bucket.** The hub waits for each frame it sends to or reads from the bucket, and serves nothing else meanwhile, so keep the bucket close: on a LAN a frame takes a few milliseconds. A bucket that cannot be reached holds each request up to `ORIGIN_RAW_S3_TIMEOUT_MS`, and pushes that need it fail until it is back; nothing is lost, and devices push again on their next sync.
 - **Backups.** `origin backup` on the hub copies the frames from the bucket into the backup, so a backup needs no bucket to restore (see [Backing up](./privacy.md#backing-up)).
 
