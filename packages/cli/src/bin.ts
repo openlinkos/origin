@@ -4,7 +4,9 @@ import { parseArgs } from 'node:util';
 import { adapterById, allAdapters, KNOWN_SOURCE_IDS } from '@openlinkos/origin-adapters';
 import { parseListen, parsePublicUrl, SIGN_IN_LINK_MS } from '@openlinkos/origin-admin';
 import {
+  assertComplete,
   backupStore,
+  checkRelayable,
   correct,
   createToken,
   type Database,
@@ -27,7 +29,9 @@ import {
   isEntryForgotten,
   isEntryId,
   isEventForgotten,
+  isRelay,
   isStoreNameFixed,
+  lastRelayed,
   listAdminSessions,
   listAudit,
   listDevices,
@@ -36,6 +40,7 @@ import {
   listProjects,
   listSessions,
   listTokens,
+  makeRelay,
   NAME_RE,
   OriginError,
   openDatabase,
@@ -45,7 +50,10 @@ import {
   rawLocator,
   readRawLine,
   recordAudit,
+  relayPending,
   revokeToken,
+  type SessionRow,
+  type SourceAdapter,
   searchEntries,
   searchEvents,
   setAdminPassword,
@@ -54,7 +62,21 @@ import {
   storeName,
   syncSource,
 } from '@openlinkos/origin-core';
-import { serveReplica, serveStdio, WATCH_INTERVAL_MS } from '@openlinkos/origin-mcp';
+import {
+  type EntryResult,
+  type EntryView,
+  type EventResult,
+  type EventView,
+  type GetResult,
+  type SearchResult,
+  type SessionView,
+  type SourceView,
+  serveRelay,
+  serveReplica,
+  serveStdio,
+  type TimelineResult,
+  WATCH_INTERVAL_MS,
+} from '@openlinkos/origin-mcp';
 import { count, oneLine, table } from './format.js';
 import {
   type HubConfig,
@@ -64,6 +86,8 @@ import {
   writeHubConfig,
 } from './hub/config.js';
 import { checkHub } from './hub/connect.js';
+import { type RelaySyncResult, relayWithHub } from './hub/relay.js';
+import { askHub } from './hub/remote.js';
 import { type HubAdminOptions, startHub } from './hub/serve.js';
 import { type HubSyncResult, syncWithHub } from './hub/sync.js';
 import { readNewPassword } from './password.js';
@@ -95,7 +119,7 @@ Personal hub:
   origin token     create <name> | list | revoke <name>  Manage the hub's access tokens (run on the hub)
   origin admin     password [--generate]                 Set the admin UI password; signs out every session (run on the hub)
   origin admin     sessions [--revoke-all] | audit [--limit 50]       Admin UI sessions and the audit log
-  origin hub       connect <url> --token <token> [--device <name>] | status | disconnect
+  origin hub       connect <url> --token <token> [--device <name>] [--relay] | status | disconnect
   origin push                                            Same as origin sync (kept for existing schedules)
 
 Entry kinds: ${ENTRY_KINDS.join(' · ')}. Time values: 7d / 24h / 30m / 2w or YYYY-MM-DD.
@@ -148,15 +172,15 @@ async function main(argv: string[]): Promise<number> {
       case 'sync':
         return await cmdSync(ctx, rest);
       case 'status':
-        return cmdStatus(ctx);
+        return await cmdStatus(ctx);
       case 'timeline':
-        return cmdTimeline(ctx, rest);
+        return await cmdTimeline(ctx, rest);
       case 'search':
-        return cmdSearch(ctx, rest);
+        return await cmdSearch(ctx, rest);
       case 'show':
-        return cmdShow(ctx, rest);
+        return await cmdShow(ctx, rest);
       case 'entries':
-        return cmdEntries(ctx, rest);
+        return await cmdEntries(ctx, rest);
       case 'correct':
         return await cmdCorrect(ctx, rest);
       case 'forget':
@@ -244,6 +268,7 @@ async function cmdSync(ctx: Ctx, args: string[]): Promise<number> {
     );
     return 2;
   }
+  if (isRelay(ctx.db)) return relaySync(ctx, adapters as SourceAdapter[], values);
   const rows: string[][] = [];
   for (const adapter of adapters as NonNullable<(typeof adapters)[number]>[]) {
     const r = await syncSource(
@@ -294,7 +319,70 @@ async function cmdSync(ctx: Ctx, args: string[]): Promise<number> {
   }
 }
 
-function cmdStatus(ctx: Ctx): number {
+/** What a relay says when it has no hub to send to or to ask. */
+const RELAY_UNCONNECTED =
+  "This store is a relay and is not connected to a hub: it keeps no sessions of its own, and its agents' sessions wait in their own logs. Connect it with: origin hub connect <url> --token <token> --relay";
+
+/** The hub of a relay, which can do nothing without one. */
+function relayHub(ctx: Ctx): HubConfig {
+  const hub = hubOf(ctx);
+  if (!hub) throw new OriginError(RELAY_UNCONNECTED);
+  return hub;
+}
+
+/**
+ * `origin sync` on a relay (see docs/architecture.md#relays): send the agents' new log lines to the
+ * hub, straight from the logs. The counts of lines, events, and parse errors are the hub's.
+ */
+async function relaySync(
+  ctx: Ctx,
+  adapters: SourceAdapter[],
+  values: { verbose: boolean; local: boolean },
+): Promise<number> {
+  if (values.local) {
+    console.error('This store is a relay: it ingests nothing here, so --local has nothing to do.');
+    return 2;
+  }
+  const hub = relayHub(ctx);
+  let r: RelaySyncResult;
+  try {
+    r = await relayWithHub({
+      db: ctx.db,
+      home: ctx.home,
+      hub,
+      adapters,
+      log: values.verbose ? (m) => console.error(`  ${m}`) : undefined,
+    });
+  } catch (err) {
+    console.error(
+      `Not sent to the hub: ${(err as Error).message}\nWhat was not sent waits in the agents' own logs until the next sync.`,
+    );
+    return 1;
+  }
+  console.log(
+    table(
+      r.sources.map((s) => [
+        s.source,
+        String(s.filesSeen),
+        String(s.filesChanged),
+        String(s.linesRead),
+        String(s.eventsAdded),
+        String(s.parseErrors),
+        String(s.newGenerations),
+        fmtDuration(s.durationMs),
+      ]),
+      ['source', 'files', 'sent', 'lines', 'new events', 'parse errors', 'new gens', 'time'],
+    ),
+  );
+  console.log(
+    `\nRelayed to hub ${hub.url} (as ${hub.device}): sent ${count(r.files, 'file')} (${fmtBytes(r.bytes)}, ${count(r.eventsAdded, 'new event')}).`,
+  );
+  for (const f of r.failed) console.error(`Not sent: ${f.path} (${f.source}): ${f.reason}`);
+  return r.failed.length > 0 ? 1 : 0;
+}
+
+async function cmdStatus(ctx: Ctx): Promise<number> {
+  if (isRelay(ctx.db)) return relayStatus(ctx);
   const s = stats(ctx.db);
   const counts = entryCounts(ctx.db);
   const entries = `Entries: ${ENTRY_KINDS.map((k) => `${counts[k]} ${k}`).join(', ')}`;
@@ -331,51 +419,115 @@ function cmdStatus(ctx: Ctx): number {
   return 0;
 }
 
-function cmdTimeline(ctx: Ctx, args: string[]): number {
-  const { values } = parseArgs({
-    args,
-    options: {
-      since: { type: 'string' },
-      until: { type: 'string' },
-      source: { type: 'string' },
-      project: { type: 'string' },
-      session: { type: 'string' },
-      limit: { type: 'string' },
-      all: { type: 'boolean', default: false },
-    },
-  });
-  const limit = values.limit ? Number(values.limit) : undefined;
-  if (values.session) {
-    const events = listEvents(ctx.db, {
-      sessionId: values.session,
-      source: values.source,
-      kinds: values.all ? undefined : ['message', 'meta'],
-      limit: limit ?? 500,
-    });
-    if (events.length === 0) {
-      console.log('No matching events.');
-      return 0;
-    }
-    const first = events[0];
-    console.log(
-      `Session ${values.session}  source ${first?.source}  project ${first?.project ?? '—'}  cwd ${first?.cwd ?? '—'}\n`,
-    );
-    for (const e of events) {
-      const tag = e.kind === 'message' ? e.role : `${e.role}/${e.kind}`;
-      console.log(`[${fmtDateTime(e.ts)}] ${tag.padEnd(20)} ${oneLine(e.text, 160)}`);
-      console.log(`    ↳ ${e.id}`);
-    }
+/** `origin status` on a relay: what is still to send, per source, from the relay's cursors. */
+async function relayStatus(ctx: Ctx): Promise<number> {
+  const hub = hubOf(ctx);
+  console.log(
+    hub
+      ? `Relay of hub ${hub.url}, as ${hub.device}: this store keeps no sessions or entries of its own, and sends its agents' sessions to the hub.`
+      : RELAY_UNCONNECTED,
+  );
+  const rows: string[][] = [];
+  for (const adapter of allAdapters()) {
+    const p = await relayPending(ctx.db, adapter);
+    if (p.files === 0) continue;
+    const last = lastRelayed(ctx.db, adapter.id);
+    rows.push([
+      adapter.id,
+      String(p.files),
+      String(p.pendingFiles),
+      fmtBytes(p.pendingBytes),
+      last ? `${fmtDateTime(last.at)} (+${last.eventsAdded})` : '—',
+    ]);
+  }
+  console.log(
+    rows.length === 0
+      ? '\nNo agent sessions on this machine yet.'
+      : `\n${table(rows, ['source', 'files', 'pending files', 'pending', 'last sync'])}`,
+  );
+  console.log(`\nData directory: ${ctx.home}`);
+  return 0;
+}
+
+/** A session as the CLI lists it, from this store or from the hub. */
+type ShownSession = Pick<
+  SessionRow,
+  'sessionId' | 'source' | 'project' | 'title' | 'startedAt' | 'endedAt' | 'eventCount'
+>;
+
+/** An event as the CLI lists it. `cwd` is undefined when the hub's answer does not carry it. */
+interface ShownEvent {
+  id: string;
+  ts: number;
+  source: string;
+  project: string | null;
+  role: string;
+  kind: string;
+  text: string;
+  cwd?: string | null;
+}
+
+/** An entry as the CLI lists it. */
+type ShownEntry = Pick<Entry, 'id' | 'createdAt' | 'confidence' | 'project' | 'text'> & {
+  kind: string;
+  status: string;
+};
+
+const parseIso = (iso: string | null): number | null => (iso === null ? null : Date.parse(iso));
+
+const fromSessionView = (v: SessionView): ShownSession => ({
+  sessionId: v.session,
+  source: v.source,
+  project: v.project,
+  title: v.title,
+  startedAt: parseIso(v.started),
+  endedAt: parseIso(v.ended),
+  eventCount: v.events,
+});
+
+const fromEventView = (v: EventView): ShownEvent => ({
+  id: v.id,
+  ts: Date.parse(v.time),
+  source: v.source,
+  project: v.project,
+  role: v.role,
+  kind: v.kind,
+  text: v.text,
+});
+
+const fromEntryView = (v: EntryView): ShownEntry => ({
+  id: v.id,
+  createdAt: Date.parse(v.created),
+  kind: v.kind,
+  confidence: v.confidence,
+  project: v.project,
+  status: v.status,
+  text: v.text,
+});
+
+/** The most a hub's tool returns at once (see TOOL_SPECS in the MCP package). */
+const hubLimit = (limit: number | undefined, max: number) =>
+  limit === undefined ? undefined : Math.min(limit, max);
+
+function printSessionEvents(sessionId: string, events: ShownEvent[]): number {
+  if (events.length === 0) {
+    console.log('No matching events.');
     return 0;
   }
-  const since = parseTime(values.since ?? '7d');
-  const until = parseTime(values.until);
-  const sessions = listSessions(ctx.db, {
-    since,
-    until,
-    source: values.source,
-    project: values.project,
-    limit: limit ?? 50,
-  });
+  const first = events[0];
+  const cwd = first?.cwd === undefined ? '' : `  cwd ${first.cwd ?? '—'}`;
+  console.log(
+    `Session ${sessionId}  source ${first?.source}  project ${first?.project ?? '—'}${cwd}\n`,
+  );
+  for (const e of events) {
+    const tag = e.kind === 'message' ? e.role : `${e.role}/${e.kind}`;
+    console.log(`[${fmtDateTime(e.ts)}] ${tag.padEnd(20)} ${oneLine(e.text, 160)}`);
+    console.log(`    ↳ ${e.id}`);
+  }
+  return 0;
+}
+
+function printSessions(sessions: ShownSession[]): number {
   if (sessions.length === 0) {
     console.log('No sessions in this time range. Try --since 30d, or run origin sync first.');
     return 0;
@@ -396,14 +548,63 @@ function cmdTimeline(ctx: Ctx, args: string[]): number {
   return 0;
 }
 
-function printEntryLine(e: Entry): void {
+async function cmdTimeline(ctx: Ctx, args: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      since: { type: 'string' },
+      until: { type: 'string' },
+      source: { type: 'string' },
+      project: { type: 'string' },
+      session: { type: 'string' },
+      limit: { type: 'string' },
+      all: { type: 'boolean', default: false },
+    },
+  });
+  const limit = values.limit ? Number(values.limit) : undefined;
+  if (isRelay(ctx.db)) {
+    const r = (await askHub(relayHub(ctx), 'timeline', {
+      since: values.since,
+      until: values.until,
+      source: values.source,
+      project: values.project,
+      session: values.session,
+      include_tools: values.all,
+      limit: hubLimit(limit ?? (values.session ? 500 : 50), 500),
+    })) as TimelineResult;
+    if ('events' in r) return printSessionEvents(r.session, r.events.map(fromEventView));
+    return printSessions(r.sessions.map(fromSessionView));
+  }
+  if (values.session) {
+    const events = listEvents(ctx.db, {
+      sessionId: values.session,
+      source: values.source,
+      kinds: values.all ? undefined : ['message', 'meta'],
+      limit: limit ?? 500,
+    });
+    return printSessionEvents(values.session, events);
+  }
+  const since = parseTime(values.since ?? '7d');
+  const until = parseTime(values.until);
+  return printSessions(
+    listSessions(ctx.db, {
+      since,
+      until,
+      source: values.source,
+      project: values.project,
+      limit: limit ?? 50,
+    }),
+  );
+}
+
+function printEntryLine(e: ShownEntry): void {
   const tags = [e.kind, `conf ${e.confidence}`, e.project, e.status === 'active' ? null : e.status]
     .filter(Boolean)
     .join(', ');
   console.log(`[${fmtDateTime(e.createdAt)}] ${tags}\n    ${oneLine(e.text, 200)}\n    ↳ ${e.id}`);
 }
 
-function cmdSearch(ctx: Ctx, args: string[]): number {
+async function cmdSearch(ctx: Ctx, args: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
@@ -423,16 +624,35 @@ function cmdSearch(ctx: Ctx, args: string[]): number {
     return 2;
   }
   const limit = values.limit ? Number(values.limit) : 20;
-  const entries = searchEntries(ctx.db, query, { project: values.project, limit });
-  const hits = searchEvents(ctx.db, query, {
-    since: parseTime(values.since),
-    until: parseTime(values.until),
-    source: values.source,
-    project: values.project,
-    kinds: values.all ? undefined : ['message'],
-    order: values.recent ? 'recent' : 'relevance',
-    limit,
-  });
+  let entries: ShownEntry[];
+  let hits: Array<ShownEvent & { snippet: string }>;
+  if (isRelay(ctx.db)) {
+    if (values.recent) {
+      console.error('On a relay, the hub ranks the matches by relevance; --recent does not apply.');
+    }
+    const r = (await askHub(relayHub(ctx), 'search', {
+      query,
+      since: values.since,
+      until: values.until,
+      source: values.source,
+      project: values.project,
+      include_tools: values.all,
+      limit: hubLimit(limit, 100),
+    })) as SearchResult;
+    entries = r.entries.map(fromEntryView);
+    hits = r.events.map((h) => ({ ...fromEventView(h), snippet: h.snippet }));
+  } else {
+    entries = searchEntries(ctx.db, query, { project: values.project, limit });
+    hits = searchEvents(ctx.db, query, {
+      since: parseTime(values.since),
+      until: parseTime(values.until),
+      source: values.source,
+      project: values.project,
+      kinds: values.all ? undefined : ['message'],
+      order: values.recent ? 'recent' : 'relevance',
+      limit,
+    });
+  }
   if (entries.length === 0 && hits.length === 0) {
     console.log('No hits.');
     return 0;
@@ -459,16 +679,22 @@ function notFound(ctx: Ctx, id: string): number {
   return 1;
 }
 
-function cmdShow(ctx: Ctx, args: string[]): number {
-  const id = args[0];
-  if (!id) {
-    console.error('Usage: origin show <id>');
-    return 2;
-  }
-  if (isEntryId(id)) return showEntry(ctx, id);
-  const e = getEvent(ctx.db, id);
-  if (!e) return notFound(ctx, id);
-  const loc = rawLocator(ctx.db, ctx.home, e);
+/** An event in full, as `origin show` prints it. */
+interface ShownEventDetail extends ShownEvent {
+  sessionId: string;
+  agentVersion: string | null;
+  gitBranch: string | null;
+  meta?: Record<string, unknown> | null;
+}
+
+/** Where an event's line is: `mirror` names the mirror and line, as they are to be shown. */
+interface ShownLocator {
+  original: string;
+  generation?: number;
+  mirror: string;
+}
+
+function printEvent(e: ShownEventDetail, loc: ShownLocator | null, raw: string | null): void {
   console.log(`Event    ${e.id}`);
   console.log(`Time     ${fmtDateTime(e.ts)}  (${new Date(e.ts).toISOString()})`);
   console.log(`Source   ${e.source}  session ${e.sessionId}  version ${e.agentVersion ?? '—'}`);
@@ -477,19 +703,25 @@ function cmdShow(ctx: Ctx, args: string[]): number {
   console.log('\nText:\n');
   console.log(e.text);
   if (loc) {
+    const generation = loc.generation === undefined ? '' : ` (generation ${loc.generation})`;
     console.log('\nRaw locator:');
-    console.log(`  original  ${loc.originalPath} (generation ${loc.generation})`);
-    console.log(`  mirror    ${loc.mirrorPath}:${loc.line}`);
-    const raw = readRawLine(ctx.db, ctx.home, loc);
+    console.log(`  original  ${loc.original}${generation}`);
+    console.log(`  mirror    ${loc.mirror}`);
     if (raw) console.log(`\nOriginal line:\n${oneLine(raw, 600)}`);
   }
-  return 0;
 }
 
-function showEntry(ctx: Ctx, id: string): number {
-  const e = getEntry(ctx.db, id);
-  if (!e) return notFound(ctx, id);
-  const history = entryHistory(ctx.db, id).map((v) => (v.id === id ? `${v.id} (this)` : v.id));
+/** An entry in full, as `origin show` prints it. */
+type ShownEntryDetail = ShownEntry &
+  Pick<Entry, 'author' | 'validFrom' | 'validTo' | 'supersededBy' | 'concurrent'>;
+
+/** A source of an entry, as `origin show` prints it. */
+type ShownSource = Pick<ShownEvent, 'ts' | 'source' | 'project' | 'role' | 'kind' | 'text'> & {
+  eventId: string;
+  quote: string | null;
+};
+
+function printEntry(e: ShownEntryDetail, history: string[], sources: ShownSource[]): void {
   console.log(`Entry       ${e.id}  ${e.kind}, ${e.status}`);
   console.log(
     `Created     ${fmtDateTime(e.createdAt)} by ${e.author}  confidence ${e.confidence}  project ${e.project ?? '—'}`,
@@ -501,15 +733,85 @@ function showEntry(ctx: Ctx, id: string): number {
     const why = e.concurrent ? ', after a concurrent correction' : '';
     console.log(`Current     ${e.supersededBy}${why}`);
   }
-  if (history.length > 1) console.log(`History     ${history.join(', ')}`);
+  if (history.length > 1) {
+    console.log(`History     ${history.map((v) => (v === e.id ? `${v} (this)` : v)).join(', ')}`);
+  }
   console.log(`\n${e.text}\n\nSources:`);
-  for (const s of entrySources(ctx.db, id)) {
-    console.log(
-      `  [${fmtDateTime(s.event.ts)}] ${s.event.source} ${s.event.project ?? '—'} ${s.event.role}/${s.event.kind}`,
-    );
-    console.log(`      ${oneLine(s.quote ? `“${s.quote}”` : s.event.text, 200)}`);
+  for (const s of sources) {
+    console.log(`  [${fmtDateTime(s.ts)}] ${s.source} ${s.project ?? '—'} ${s.role}/${s.kind}`);
+    console.log(`      ${oneLine(s.quote ? `“${s.quote}”` : s.text, 200)}`);
     console.log(`      ↳ ${s.eventId}`);
   }
+}
+
+async function cmdShow(ctx: Ctx, args: string[]): Promise<number> {
+  const id = args[0];
+  if (!id) {
+    console.error('Usage: origin show <id>');
+    return 2;
+  }
+  if (isRelay(ctx.db)) return showFromHub(relayHub(ctx), id);
+  if (isEntryId(id)) return showEntry(ctx, id);
+  const e = getEvent(ctx.db, id);
+  if (!e) return notFound(ctx, id);
+  const loc = rawLocator(ctx.db, ctx.home, e);
+  printEvent(
+    e,
+    loc && {
+      original: loc.originalPath,
+      generation: loc.generation,
+      mirror: `${loc.mirrorPath}:${loc.line}`,
+    },
+    loc ? readRawLine(ctx.db, ctx.home, loc) : null,
+  );
+  return 0;
+}
+
+function showEntry(ctx: Ctx, id: string): number {
+  const e = getEntry(ctx.db, id);
+  if (!e) return notFound(ctx, id);
+  printEntry(
+    e,
+    entryHistory(ctx.db, id).map((v) => v.id),
+    entrySources(ctx.db, id).map((s) => ({ ...s.event, eventId: s.eventId, quote: s.quote })),
+  );
+  return 0;
+}
+
+/** `origin show` on a relay: the entry or event as the hub has it, with its line on the hub. */
+async function showFromHub(hub: HubConfig, id: string): Promise<number> {
+  const r = (await askHub(hub, 'get', { id })) as GetResult;
+  if ('entry' in r) {
+    const { entry: v, history, sources } = r as EntryResult;
+    printEntry(
+      {
+        ...fromEntryView(v),
+        author: v.author,
+        validFrom: parseIso(v.valid_from),
+        validTo: parseIso(v.valid_to),
+        supersededBy: v.superseded_by,
+        concurrent: v.concurrent,
+      },
+      history.map((h) => h.id),
+      sources.map((s) => ({ ...fromEventView(s), eventId: s.id, quote: s.quote })),
+    );
+    return 0;
+  }
+  const e = r as EventResult;
+  const [line] = (await askHub(hub, 'sources', { id })) as SourceView[];
+  printEvent(
+    {
+      ...fromEventView(e),
+      cwd: e.cwd,
+      sessionId: e.session,
+      agentVersion: e.agent_version,
+      gitBranch: e.git_branch,
+    },
+    line?.original_file && line.mirror_file && line.line !== null
+      ? { original: line.original_file, mirror: `${line.mirror_file}:${line.line} on the hub` }
+      : null,
+    line?.raw ?? null,
+  );
   return 0;
 }
 
@@ -521,7 +823,7 @@ function parseKind(value: string | undefined): EntryKind | undefined {
   return value as EntryKind;
 }
 
-function cmdEntries(ctx: Ctx, args: string[]): number {
+async function cmdEntries(ctx: Ctx, args: string[]): Promise<number> {
   const { values } = parseArgs({
     args,
     options: {
@@ -531,12 +833,29 @@ function cmdEntries(ctx: Ctx, args: string[]): number {
       limit: { type: 'string' },
     },
   });
-  const entries = listEntries(ctx.db, {
-    kind: parseKind(values.kind),
-    project: values.project,
-    includeSuperseded: values.history,
-    limit: values.limit ? Number(values.limit) : 50,
-  });
+  const limit = values.limit ? Number(values.limit) : 50;
+  let entries: ShownEntry[];
+  if (isRelay(ctx.db)) {
+    if (values.history) {
+      throw new OriginError(
+        'On a relay, entries come from the hub, current versions only; see the versions of one entry with origin show <id>.',
+      );
+    }
+    const r = (await askHub(relayHub(ctx), 'search', {
+      scope: 'entries',
+      kind: parseKind(values.kind),
+      project: values.project,
+      limit: hubLimit(limit, 100),
+    })) as SearchResult;
+    entries = r.entries.map(fromEntryView);
+  } else {
+    entries = listEntries(ctx.db, {
+      kind: parseKind(values.kind),
+      project: values.project,
+      includeSuperseded: values.history,
+      limit,
+    });
+  }
   if (entries.length === 0) {
     console.log('No entries yet. Agents create them through the MCP server (origin mcp).');
     return 0;
@@ -558,12 +877,17 @@ async function cmdCorrect(ctx: Ctx, args: string[]): Promise<number> {
     console.error('Usage: origin correct <entry-id> <text>');
     return 2;
   }
-  const e = correct(ctx.db, id, {
-    text,
-    author: `user@${storeName(ctx.db)}`,
-    kind: parseKind(values.kind),
-    confidence: values.confidence === undefined ? 1 : Number(values.confidence),
-  });
+  const kind = parseKind(values.kind);
+  const confidence = values.confidence === undefined ? 1 : Number(values.confidence);
+  if (isRelay(ctx.db)) {
+    // A relay has no entries: the correction is made on the hub, as user@<device>.
+    const r = (await askHub(relayHub(ctx), 'correct', { id, text, kind, confidence })) as {
+      entry: EntryView;
+    };
+    console.log(`Corrected ${id} → ${r.entry.id} on the hub`);
+    return 0;
+  }
+  const e = correct(ctx.db, id, { text, author: `user@${storeName(ctx.db)}`, kind, confidence });
   console.log(`Corrected ${id} → ${e.id}`);
   await syncAfterChange(ctx);
   return 0;
@@ -580,6 +904,7 @@ async function cmdForget(ctx: Ctx, args: string[]): Promise<number> {
     console.error('Usage: origin forget <id> [--reason <text>] [--yes]');
     return 2;
   }
+  if (isRelay(ctx.db)) return forgetOnHub(relayHub(ctx), id, values);
   const plan = planForget(ctx.db, id);
   if (plan.entries.length === 0 && plan.events.length === 0) {
     console.log(`${id} has already been forgotten.`);
@@ -599,7 +924,47 @@ async function cmdForget(ctx: Ctx, args: string[]): Promise<number> {
   return 0;
 }
 
+/**
+ * `origin forget` on a relay: done on the hub, whose answer names what was forgotten. The relay
+ * cannot list the effects beforehand, so the confirmation says what the rules will forget.
+ */
+async function forgetOnHub(
+  hub: HubConfig,
+  id: string,
+  values: { reason?: string; yes: boolean },
+): Promise<number> {
+  if (!values.yes) {
+    const r = (await askHub(hub, 'get', { id })) as GetResult;
+    const what =
+      'entry' in r
+        ? `the entry ${id}, every version of it, and the events they cite`
+        : `the event ${id} and every entry that cites it`;
+    console.log(
+      `On the hub, this will forget ${what}, on every store.\n\nForgetting cannot be undone. Re-run with --yes to confirm.`,
+    );
+    return 1;
+  }
+  const r = (await askHub(hub, 'forget', { id, reason: values.reason })) as {
+    tombstone: string | null;
+    forgotten_entries: string[];
+    excluded_events: number;
+  };
+  if (r.tombstone === null) {
+    console.log(`${id} has already been forgotten.`);
+    return 0;
+  }
+  console.log(
+    `Forgot ${count(r.forgotten_entries.length, 'entry', 'entries')} and ${count(r.excluded_events, 'event')} on the hub (tombstone ${r.tombstone}).`,
+  );
+  return 0;
+}
+
 function cmdProjects(ctx: Ctx): number {
+  if (isRelay(ctx.db)) {
+    throw new OriginError(
+      'This store is a relay and keeps no sessions of its own; run origin projects on the hub, or open its admin UI.',
+    );
+  }
   const rows = listProjects(ctx.db);
   if (rows.length === 0) {
     console.log('No projects yet.');
@@ -647,6 +1012,25 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
     const now = await fingerprint();
     return now === null || now !== ingested;
   };
+  if (isRelay(ctx.db)) {
+    // Every tool is the hub's; the agents' new log lines go to the hub first (see relay.ts).
+    if (!hub) throw new OriginError(RELAY_UNCONNECTED);
+    await serveRelay({
+      device,
+      hub: { url: hub.url, token: hub.token },
+      version: VERSION,
+      log,
+      sync: async () => {
+        const before = await fingerprint();
+        await relayWithHub({ db: ctx.db, home: ctx.home, hub, adapters, log });
+        ingested = before;
+      },
+      changed,
+      hubTimeoutMs: hubTimeoutMs(),
+      watchIntervalMs,
+    });
+    return 0;
+  }
   if (hub) {
     // Answer from this device's store, merged with the hub's answers; sync up after writes.
     await serveReplica({
@@ -802,6 +1186,7 @@ async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
       'public-url': { type: 'string' },
     },
   });
+  assertComplete(ctx.db, 'serve as a hub');
   const port = Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new OriginError(`Invalid port: ${values.port}`);
@@ -988,13 +1373,19 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
     const { values, positionals } = parseArgs({
       args: rest,
       allowPositionals: true,
-      options: { token: { type: 'string' }, device: { type: 'string' } },
+      options: {
+        token: { type: 'string' },
+        device: { type: 'string' },
+        relay: { type: 'boolean', default: false },
+      },
     });
     const url = positionals[0];
     if (!url || !values.token) {
-      console.error('Usage: origin hub connect <url> --token <token> [--device <name>]');
+      console.error('Usage: origin hub connect <url> --token <token> [--device <name>] [--relay]');
       return 2;
     }
+    // A relay keeps nothing but cursors, so only an empty store becomes one (see core's mode.ts).
+    if (values.relay) checkRelayable(ctx.db);
     // The device is known to its hub by the store's name, and its token must be named after it
     // (see docs/architecture.md#access). --device names a store that has not written anything yet.
     const current = storeName(ctx.db);
@@ -1010,9 +1401,12 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
     const hub = { url: normalizeHubUrl(url), token: values.token, device };
     await checkHub(hub, { renamable: !isStoreNameFixed(ctx.db) });
     if (device !== current) setStoreName(ctx.db, device);
+    if (values.relay) makeRelay(ctx.db);
     writeHubConfig(ctx.home, hub);
     console.log(
-      `Connected to ${hub.url} as ${hub.device}. Run "origin sync" to send this device's sessions and entries.`,
+      isRelay(ctx.db)
+        ? `Connected to ${hub.url} as ${hub.device}, as a relay: this store keeps no sessions or entries of its own, and agents' tools are answered by the hub. Run "origin sync" to send this device's sessions to the hub straight from the agents' logs; origin mcp also sends them while agents run.`
+        : `Connected to ${hub.url} as ${hub.device}. Run "origin sync" to send this device's sessions and entries.`,
     );
     return 0;
   }
@@ -1023,6 +1417,8 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
       return 0;
     }
     console.log(`Hub     ${hub.url}\nDevice  ${hub.device}`);
+    if (isRelay(ctx.db))
+      console.log('Mode    relay: keeps no sessions here, sends them to the hub');
     await checkHub(hub, { renamable: !isStoreNameFixed(ctx.db) });
     console.log('Status  reachable, token accepted for this device');
     return 0;
@@ -1031,10 +1427,15 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
     console.log(
       removeHubConfig(ctx.home) ? 'Disconnected from the hub.' : 'Not connected to a hub.',
     );
+    if (isRelay(ctx.db)) {
+      console.log(
+        "This store is still a relay: until it is connected again, its agents' sessions wait in their own logs, and nothing answers their tools.",
+      );
+    }
     return 0;
   }
   console.error(
-    'Usage: origin hub connect <url> --token <token> [--device <name>] | status | disconnect',
+    'Usage: origin hub connect <url> --token <token> [--device <name>] [--relay] | status | disconnect',
   );
   return 2;
 }

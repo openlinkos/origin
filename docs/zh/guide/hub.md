@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-0af6b6c0
+sourceHash: sha256-43386b8e
 ---
 
 # 个人中枢
@@ -19,6 +19,7 @@ sourceHash: sha256-0af6b6c0
 - **中枢**运行 `origin serve`。它用同样的适配器解析推送来的镜像，所以每个回答仍能追溯到原文行；它保存每台设备发来的内容，在那里能找到一切。
 - 在设备上，`origin mcp` 仍然根据设备自己的库作答，所以离线时照常可用，同时补充中枢知道的内容：其他设备的会话和条目，以及云端 Agent 写下的条目。云端 Agent 直接连接中枢的 MCP 端点。
 - 设备之间从不互相下载数据。从中枢下行的只有遗忘，这样你在任何地方遗忘的内容，在所有地方都会被隐藏。
+- 磁盘空间不多的机器可以作为**中继**，而不是完整的设备：它除了游标什么也不保存，直接把 Agent 的记录发送给中枢，并通过中枢回答它的 Agent（见[把设备作为中继运行](#run-a-device-as-a-relay)）。
 
 设计细节见[架构](../architecture.md#personal-hub)。
 
@@ -84,6 +85,26 @@ origin sync
 
 Agent 运行期间，它的 `origin mcp` 也会在后台同步：记录文件有变化时每分钟一次，Agent 退出时再同步一次，所以设备不需要定时同步。不使用 Origin 的 Agent 的会话，会在下一次有使用 Origin 的 Agent 运行时，或者运行 `origin sync` 时被收取；只有在某台设备上只运行这类 Agent 时，才需要定时运行 `origin sync`（例如用 cron，`*/10 * * * * origin sync`，或 Windows 任务计划程序）。
 
+## 把设备作为中继运行 {#run-a-device-as-a-relay}
+
+设备通常保有一份完整的、属于自己的记忆，其中包括它归档过的每份会话记录的压缩副本。在磁盘空间不多的机器上，例如一台小 VPS，可以改为把它作为**中继**运行：它不保留副本，也不保有自己的记忆，只为每个记录文件保存一个游标，直接从 Agent 自己的记录文件把新的会话发送给中枢。
+
+用 `--relay` 接入一个空库：
+
+```bash
+origin hub connect https://hub.example.com --token ogn_… --device vps --relay
+origin sync
+origin status
+```
+
+- 只有还没有保存任何内容的库才能成为中继。如果这台机器上已经有一个保存了会话或条目的库，Origin 会拒绝，并且不做任何改动；请把 `ORIGIN_HOME` 设为一个新目录，再接入那个库。中继会一直是中继；要在这台机器上重新保有完整的库，请再使用一个新的 `ORIGIN_HOME`。
+- `origin sync` 把每份会话记录新增的完整行发送给中枢，中枢像收到设备自己的副本一样归档并解析它们；`origin status` 按来源显示还有多少文件和字节尚未发送。和其他设备一样，Agent 的 `origin mcp` 在运行中也会发送新的行。
+- Agent 的注册都不用改，但在中继上，`origin mcp` 的每个工具都由中枢作答：它先把刚刚写下的内容发送给中枢，让 Agent 能找到并引用它，再把调用交给中枢。Agent 保存的内容写在中枢上，作者记为 `claude-code@vps`。连不上中枢时，工具会失败，并说明中继离线时无法作答。
+- `origin search`、`timeline`、`show`、`entries`、`correct` 和 `forget` 也会询问中枢，`correct` 记为 `user@vps`。中继无法事先列出 `origin forget` 将遗忘的内容，所以它会说明按规则将遗忘什么，并照常需要 `--yes`。`entries --history` 和 `projects` 在中继上不可用；请使用中枢的[管理界面](./admin.md)。
+- 连不上中枢时，什么也不会发送，新的会话只存在于 Agent 自己的记录文件中。有些 Agent 会删除旧的记录，Claude Code 默认在 30 天后删除（`cleanupPeriodDays`），所以请确保中继定期连上它的中枢；如果上面运行着不使用 Origin 的 Agent，请定时运行 `origin sync`。
+
+设计细节见[中继](../architecture.md#relays)。
+
 ## 接入云端 Agent {#connect-a-cloud-agent}
 
 云端 Agent 没有本地会话记录，所以直接连接中枢，各用自己的令牌：
@@ -108,4 +129,5 @@ codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var OR
 
 - 命令行的管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库，之后再同步。要查看和管理所有设备的条目，请通过 Agent 或中枢的[管理界面](./admin.md)。
 - 设备不会下载其他设备的数据，所以没有中枢时，它只能回答关于自己的问题。
+- 中继没有自己的记忆：连不上中枢时，它的 Agent 既不能读取也不能写入记忆，而尚未发送的内容只存在于 Agent 的记录文件中。
 - 中枢只为一个人提供一个库，不支持多用户，不支持多个中枢之间的同步，也不支持不经过中枢的设备间同步。

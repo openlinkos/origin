@@ -15,6 +15,10 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 
 - `origin ui` serves the admin UI for the store on your own machine, on 127.0.0.1 only: it signs your browser in with a one-time link instead of a password, leaves out what only a hub has, and on a device connected to a hub syncs what you write and forget there in the background.
 
+### Personal hub
+
+- Relay mode for machines with little disk: `origin hub connect … --relay` makes an empty store a relay, which keeps only cursors, sends its agents' logs to the hub straight from the logs, and answers every MCP tool and CLI query through the hub.
+
 ## [0.1.0] - 2026-10-23
 
 The first release.

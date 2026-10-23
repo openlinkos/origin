@@ -20,7 +20,7 @@ origin serve     [--host 127.0.0.1] [--port 7077]      Run this store as a perso
 origin token     create <name> | list | revoke <name>  Manage the hub's access tokens (run on the hub)
 origin admin     password [--generate]                 Set the admin UI password; signs out every session (run on the hub)
 origin admin     sessions [--revoke-all] | audit [--limit 50]       Admin UI sessions and the audit log
-origin hub       connect <url> --token <token> [--device <name>] | status | disconnect
+origin hub       connect <url> --token <token> [--device <name>] [--relay] | status | disconnect
 origin push                                            Same as origin sync (kept for existing schedules)
 ```
 
@@ -92,6 +92,7 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 - On a device, `origin hub connect` saves the hub's URL and a token; the hub knows the device by its store's name, which must be the token's name. `origin hub connect` and `origin hub status` check this with the hub and say how to fix a mismatch. From then on, `origin sync` also syncs with the hub: it sends new raw mirror bytes and the entries and tombstones written on the device, then applies the tombstones of the hub. It can be re-run at any time, and each run resumes where the previous one stopped. `--local` skips the hub.
 - Once a device is connected, `origin mcp` answers from the device's store and merges in the hub's answers, waiting for the hub at most 2 seconds; what agents save is written on the device and then synced.
 - Curation commands (`entries`, `show`, `correct`, `forget`, …) act on the device's own store. On a connected device, `correct` and `forget` then sync with the hub; if the hub cannot be reached, the change stays on the device until the next sync.
+- `origin hub connect … --relay` makes an empty store a [relay](./hub.md#run-a-device-as-a-relay), which keeps no sessions or entries of its own; a store that holds any is refused. On a relay, `origin sync` sends the agents' new log lines straight to the hub (`--local` does not apply), `origin status` shows per source the files and bytes still to send, `origin mcp` hands every tool call to the hub, and `search`, `timeline`, `show`, `entries`, `correct`, and `forget` ask the hub; `entries --history` and `projects` are not available. `origin hub status` shows the mode.
 - `origin serve --admin` also serves the [admin UI](./admin.md) at `/admin`, and `--admin-listen <host:port>` serves it on a separate listener instead. Behind TLS, pass the hub's https address with `--public-url`; the hub refuses to serve the UI over plain HTTP beyond loopback.
 - `origin admin password` sets the admin UI's password: it asks twice on a terminal, without showing what you type, and otherwise reads one line from standard input; `--generate` picks a random one and prints it once. The password needs at least 10 characters, and setting it signs out every admin session. On its first start with the admin UI enabled, the hub generates a password and prints it to its log once. `origin admin sessions --revoke-all` signs out every session, and `origin admin audit` prints the audit log. Token and password changes made with the CLI are recorded there too.
 

@@ -32,7 +32,7 @@ Origin puts **you** at the center instead of the tool:
 - **Relevance-ranked full-text search** across sessions and entries, including CJK substring search (SQLite FTS5 trigram).
 - **Incremental, idempotent ingestion.** Only new bytes are read, rewritten files are kept as a new generation, compressed logs (zstd) are read transparently, and concurrent syncs are safe.
 - **A CLI** to browse the timeline, inspect any entry or event down to its original line, correct entries, and forget.
-- **A personal hub** (`origin serve`, or the `ghcr.io/openlinkos/origin` image) that you host yourself. Every device keeps a complete memory of its own and sends the hub what it writes with `origin sync`; agents on a device read from both through their local `origin mcp`, and cloud agents connect over HTTP with a token.
+- **A personal hub** (`origin serve`, or the `ghcr.io/openlinkos/origin` image) that you host yourself. Every device keeps a complete memory of its own and sends the hub what it writes with `origin sync`; agents on a device read from both through their local `origin mcp`, and cloud agents connect over HTTP with a token. A machine with little disk can run as a relay that keeps no memory of its own and sends its agents' logs straight to the hub.
 - **An admin UI for your hub** (`origin serve --admin`), off by default: an overview of devices and storage, your sessions and entries, search, correcting, and forgetting with a preview, tokens with ready-made connection commands, and an audit log. Pages are rendered on the hub, and you sign in with the hub's admin password. On any machine, `origin ui` opens the same pages for its own store, on `127.0.0.1`, with a one-time sign-in link.
 
 ## Supported agents

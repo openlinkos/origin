@@ -135,7 +135,7 @@ function runs(changes: OwnChange[]): OwnChange[][] {
  * are never sent. When the hub cannot take an entry yet, the cursor stops before it and later
  * entries wait too (they may depend on it), but tombstones keep going out: forgetting must not wait.
  */
-async function pushChanges(opts: HubSyncOptions, call: Call, result: HubSyncResult) {
+export async function pushChanges(opts: HubSyncOptions, call: Call, result: HubSyncResult) {
   const key = pushedKey(opts.hub);
   let scanned = Number(getSetting(opts.db, key) ?? '0');
   let blocked = false;
@@ -182,7 +182,7 @@ async function pushChanges(opts: HubSyncOptions, call: Call, result: HubSyncResu
   }
 }
 
-async function pullTombstones(opts: HubSyncOptions, call: Call, result: HubSyncResult) {
+export async function pullTombstones(opts: HubSyncOptions, call: Call, result: HubSyncResult) {
   // Rule 3 is left to the hub for entries it already has (see unpushedOnly).
   const judge = unpushedOnly(opts.db, Number(getSetting(opts.db, pushedKey(opts.hub)) ?? '0'));
   const key = pulledKey(opts.hub);
@@ -210,16 +210,23 @@ async function pullTombstones(opts: HubSyncOptions, call: Call, result: HubSyncR
   }
 }
 
-type Call = (
+export type Call = (
   method: string,
   path: string,
   body?: unknown,
   okStatuses?: number[],
 ) => Promise<unknown>;
 
-function hubClient(opts: HubSyncOptions): Call {
+/** One request to the hub, with its status and body text. Throws when the hub cannot be reached. */
+export type HubRequest = (
+  method: string,
+  path: string,
+  body?: unknown,
+) => Promise<{ status: number; text: string }>;
+
+export function hubRequest(opts: HubSyncOptions): HubRequest {
   const doFetch = opts.fetch ?? fetch;
-  return async (method, path, body, okStatuses = []) => {
+  return async (method, path, body) => {
     const headers: Record<string, string> = { Authorization: `Bearer ${opts.hub.token}` };
     let payload: Buffer | undefined;
     if (body !== undefined) {
@@ -234,15 +241,25 @@ function hubClient(opts: HubSyncOptions): Call {
       throw new Error(`Cannot reach the hub at ${opts.hub.url}: ${(err as Error).message}`);
     }
     if (res.status === 401) throw new Error(`The hub at ${opts.hub.url} rejected the token.`);
-    const text = await res.text();
-    if (!res.ok && !okStatuses.includes(res.status)) {
-      let message = text;
-      try {
-        message = (JSON.parse(text) as { error?: string }).error ?? text;
-      } catch {
-        // not JSON
-      }
-      throw new Error(`Hub request ${method} ${path} failed (${res.status}): ${message}`);
+    return { status: res.status, text: await res.text() };
+  };
+}
+
+/** The `error` of a JSON error body, or the body itself. */
+export function errorMessage(text: string): string {
+  try {
+    return (JSON.parse(text) as { error?: string }).error ?? text;
+  } catch {
+    return text; // not JSON
+  }
+}
+
+export function hubClient(opts: HubSyncOptions): Call {
+  const request = hubRequest(opts);
+  return async (method, path, body, okStatuses = []) => {
+    const { status, text } = await request(method, path, body);
+    if (!(status >= 200 && status < 300) && !okStatuses.includes(status)) {
+      throw new Error(`Hub request ${method} ${path} failed (${status}): ${errorMessage(text)}`);
     }
     return JSON.parse(text);
   };

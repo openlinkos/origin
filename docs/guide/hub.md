@@ -15,6 +15,7 @@ If all your agents run on one machine, you do not need a hub.
 - The **hub** runs `origin serve`. It parses the pushed mirrors with the same adapters, so every answer still traces back to the original line, and it holds what every device has sent: it is where everything can be found.
 - On a device, `origin mcp` keeps answering from the device's own store, so it keeps working offline, and adds what the hub knows: other devices' sessions and entries, and entries written by cloud agents. Cloud agents connect to the hub's MCP endpoint directly.
 - Devices never download each other's data. Only forgetting travels down from the hub, so that what you forget anywhere is hidden everywhere.
+- A machine with little disk can be a **relay** instead of a complete device: it keeps nothing but cursors, sends its agents' logs straight to the hub, and answers its agents through the hub (see [Run a device as a relay](#run-a-device-as-a-relay)).
 
 The design is in [Architecture](../architecture.md#personal-hub).
 
@@ -80,6 +81,26 @@ Once the device is connected, the agent registrations you already have stay the 
 
 While an agent runs, its `origin mcp` also syncs in the background: every minute when log files have changed, and once more when the agent exits, so a device needs no scheduled sync. Sessions of agents that do not use Origin are picked up the next time one that does runs, or by `origin sync`; schedule `origin sync` (for example with cron, `*/10 * * * * origin sync`, or the Windows Task Scheduler) only on a device where such agents run alone.
 
+## Run a device as a relay
+
+A device normally keeps a complete memory of its own, including a compressed copy of every session log it has archived. On a machine with little disk, such as a small VPS, run it as a **relay** instead: it keeps no copy and no memory of its own, only a cursor per log file, and sends new sessions to the hub straight from the agents' own logs.
+
+Connect an empty store with `--relay`:
+
+```bash
+origin hub connect https://hub.example.com --token ogn_… --device vps --relay
+origin sync
+origin status
+```
+
+- Only a store that holds nothing yet can become a relay. If this machine already has a store with sessions or entries, Origin refuses and changes nothing; set `ORIGIN_HOME` to a new directory and connect that one. A relay stays a relay; to keep a complete store on the machine again, use another new `ORIGIN_HOME`.
+- `origin sync` sends the new complete lines of every session log to the hub, which archives and parses them as if the device had sent its own copy, and `origin status` shows, for each source, how many files and bytes are still to send. Agents' `origin mcp` sends new lines as they run, as on any device.
+- Agents keep their registrations, but on a relay `origin mcp` answers every tool from the hub: it first sends the hub what was just written, so that agents can find and cite it, then hands the call to the hub. What agents save is written on the hub, recorded as `claude-code@vps`. If the hub cannot be reached, tools fail with a message saying that the relay cannot answer offline.
+- `origin search`, `timeline`, `show`, `entries`, `correct`, and `forget` ask the hub too, and `correct` records `user@vps`. A relay cannot list beforehand what `origin forget` will forget, so it says what the rules will forget, and needs `--yes` as always. `entries --history` and `projects` are not available on a relay; use the hub's [admin UI](./admin.md).
+- While the hub cannot be reached, nothing is sent, and new sessions exist only in the agents' own logs. Some agents delete old logs, Claude Code after 30 days by default (`cleanupPeriodDays`), so make sure a relay reaches its hub regularly; if agents that do not use Origin run on it, schedule `origin sync`.
+
+The design is in [Relays](../architecture.md#relays).
+
 ## Connect a cloud agent
 
 Cloud agents have no local session logs, so they talk to the hub directly, each with its own token:
@@ -104,4 +125,5 @@ The hub can serve an [admin UI](./admin.md) for you: an overview of your devices
 
 - CLI curation commands (`entries`, `show`, `correct`, `forget`, …) act on the device's own store, then sync. To see and curate the entries of every device, use your agents or the hub's [admin UI](./admin.md).
 - A device does not download other devices' data, so without the hub it can only answer about itself.
+- A relay has no memory of its own: while its hub cannot be reached, its agents can neither read nor write memory, and what it has not sent yet exists only in the agents' logs.
 - The hub is one store for one person. It does not support multiple users, sync between hubs, or sync between devices without a hub.
