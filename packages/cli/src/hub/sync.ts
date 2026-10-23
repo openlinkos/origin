@@ -11,6 +11,7 @@ import {
   parseTombstoneRecord,
   type ReplicaEntry,
   readMirrorLines,
+  recordedAgentVersion,
   setSetting,
   shouldSendEntry,
   type TombstoneRecord,
@@ -88,6 +89,7 @@ async function pushMirrors(opts: HubSyncOptions, call: Call, result: HubSyncResu
     if (offset >= file.bytes) continue;
     result.files++;
     let conflicts = 0;
+    const agentVersion = recordedAgentVersion(opts.db, file.id);
     while (offset < file.bytes) {
       // Offsets are in the mirror's uncompressed content; the hub compresses what it stores.
       const data = readMirrorLines(opts.db, opts.home, file.id, offset, CHUNK_BYTES);
@@ -100,6 +102,7 @@ async function pushMirrors(opts: HubSyncOptions, call: Call, result: HubSyncResu
         generation: file.generation,
         offset,
         mtimeMs: file.updatedAt,
+        agentVersion,
         data: data.toString('base64'),
       };
       const reply = (await call('POST', '/v1/ingest', body, [409])) as {

@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createClaudeCodeAdapter } from '@openlinkos/origin-adapters';
+import { createClaudeCodeAdapter, createGrokAdapter } from '@openlinkos/origin-adapters';
 import {
   correct,
   createToken,
@@ -397,5 +397,42 @@ describe('device to hub replication', () => {
     ).toBe(409);
     expect(getEvent(hubDb, USER_EVENT)).toBeNull();
     expect(isEntryForgotten(hubDb, a.id)).toBe(true);
+  });
+});
+
+describe('agent versions', () => {
+  it('sends the version the device recorded, for sources whose lines carry none', async () => {
+    // Grok Build lines carry no version: the device records the one installed when it ingested
+    // them, and the hub, which has no Grok of its own, must record the same.
+    const grokHome = path.join(tmp, 'grok');
+    fs.cpSync(
+      fileURLToPath(new URL('../../adapters/test/fixtures/grok/', import.meta.url)),
+      grokHome,
+      {
+        recursive: true,
+      },
+    );
+    await syncSource({ db: deviceDb, home: deviceHome }, createGrokAdapter({ home: grokHome }));
+    const grokHub = createHubServer({
+      db: hubDb,
+      home: path.join(tmp, 'hub'),
+      adapters: [
+        createClaudeCodeAdapter({ projectsDir: path.join(tmp, 'unused') }),
+        createGrokAdapter({ home: path.join(tmp, 'no-grok-here') }),
+      ],
+      version: 'test',
+    });
+    await new Promise<void>((resolve) => grokHub.listen(0, '127.0.0.1', resolve));
+    try {
+      const url = `http://127.0.0.1:${(grokHub.address() as AddressInfo).port}`;
+      await syncWithHub({ db: deviceDb, home: deviceHome, hub: { ...hub, url } });
+      const versions = (db: Database) => [
+        ...new Set(listEvents(db, { source: 'grok' }).map((e) => e.agentVersion)),
+      ];
+      expect(versions(deviceDb)).toEqual(['1.0.41']);
+      expect(versions(hubDb)).toEqual(['1.0.41']);
+    } finally {
+      await new Promise((resolve) => grokHub.close(resolve));
+    }
   });
 });

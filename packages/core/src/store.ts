@@ -216,6 +216,21 @@ export interface RawLocator {
   line: number;
 }
 
+/**
+ * The agent version recorded for the latest event parsed from a raw file, or null. A device sends
+ * it with the file's lines, so that a hub records the same version for events whose lines carry
+ * none (the adapter's version at the time, see SourceAdapter.version).
+ */
+export function recordedAgentVersion(db: Database, rawFileId: number): string | null {
+  const row = db
+    .prepare(
+      `SELECT agent_version AS v FROM event
+         WHERE raw_file_id = ? AND agent_version IS NOT NULL ORDER BY seq DESC LIMIT 1`,
+    )
+    .get(rawFileId) as { v: string } | undefined;
+  return row?.v ?? null;
+}
+
 /** Raw locator for an event (invariant 1, provenance: expandable to the original text). */
 export function rawLocator(db: Database, home: string, event: EventRow): RawLocator | null {
   const row = db

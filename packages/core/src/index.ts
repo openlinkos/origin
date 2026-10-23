@@ -174,6 +174,7 @@ export {
   type RawLocator,
   rawLocator,
   readRawLine,
+  recordedAgentVersion,
   type SearchHit,
   type SearchOptions,
   type SourceStats,

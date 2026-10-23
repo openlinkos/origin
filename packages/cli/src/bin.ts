@@ -1079,8 +1079,11 @@ async function cmdUi(ctx: Ctx, args: string[]): Promise<number> {
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new OriginError(`Invalid port: ${values.port}`);
   }
-  // Every store holds its own data today. A store that kept none (a relay, should one exist) would
-  // have nothing to show here, and would be refused at this point.
+  if (isRelay(ctx.db)) {
+    throw new OriginError(
+      'This store is a relay and keeps no sessions of its own; open the admin UI of its hub instead.',
+    );
+  }
   const ui = await startLocalUi({
     db: ctx.db,
     home: ctx.home,
