@@ -1,13 +1,41 @@
 /**
  * Origin MCP (see docs/architecture.md): the seven tools (search · timeline · get · sources ·
- * remember · correct · forget) served over stdio, over stateless HTTP for a hub, or over stdio on a
- * device connected to a hub, from its own store merged with the hub's answers.
+ * remember · correct · forget) served over stdio, over stateless HTTP for a hub, over stdio on a
+ * device connected to a hub, from its own store merged with the hub's answers, or over stdio on a
+ * relay, forwarded to its hub.
  */
+
 export { handleMcpHttp, type McpHttpOptions } from './http.js';
 export {
   CLIENT_HEADER,
-  createReplicaServer,
+  createHubLink,
   DEVICE_HEADER,
+  type HubAnswer,
+  type HubLink,
+  type HubLinkOptions,
+} from './hub-link.js';
+export type {
+  EntryResult,
+  EntryView,
+  EventResult,
+  EventView,
+  GetResult,
+  SearchHitView,
+  SearchResult,
+  SessionView,
+  SourceOfEntry,
+  SourceView,
+  TimelineResult,
+  VersionView,
+} from './local.js';
+export {
+  createRelayServer,
+  type RelayServer,
+  type RelayServerOptions,
+  serveRelay,
+} from './relay.js';
+export {
+  createReplicaServer,
   type ReplicaOptions,
   type ReplicaServer,
   serveReplica,

@@ -1,11 +1,6 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import {
-  StreamableHTTPClientTransport,
-  StreamableHTTPError,
-} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { type CallToolResult, McpError } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   type Database,
   entryHistory,
@@ -14,6 +9,7 @@ import {
   isoLocal,
   OriginError,
 } from '@openlinkos/origin-core';
+import { createHubLink, type HubAnswer } from './hub-link.js';
 import {
   correctIn,
   forgetIn,
@@ -34,7 +30,6 @@ import { agentName, run } from './server.js';
 import {
   CLOSE_TIMEOUT_MS,
   INSTRUCTIONS,
-  isTimeout,
   onDisconnect,
   refreshGate,
   registerOriginTools,
@@ -46,7 +41,6 @@ import {
   toolResult,
   upTo,
   WATCH_INTERVAL_MS,
-  within,
 } from './tools.js';
 
 export interface ReplicaOptions {
@@ -106,25 +100,6 @@ export interface ReplicaServer {
   close(): Promise<void>;
 }
 
-/** Header carrying the name of the agent behind a device, recorded in the entry author. */
-export const CLIENT_HEADER = 'X-Origin-Client';
-/**
- * Header carrying the device's name. The hub records its token's name as the device; it refuses a
- * request whose header names another device, so a misconfigured device fails visibly.
- */
-export const DEVICE_HEADER = 'X-Origin-Device';
-
-/** HTTP header values must be visible ASCII. */
-function headerValue(s: string): string {
-  return s.replace(/[^\x20-\x7e]/g, '?').slice(0, 100) || 'mcp';
-}
-
-/** The hub's answer to a tool call, or why it was not consulted. */
-type HubAnswer =
-  | { ok: true; value: unknown }
-  | { ok: true; error: string }
-  | { ok: false; reason: string };
-
 /**
  * The stdio MCP server of a device connected to a hub (see docs/architecture.md#mcp-server). It
  * serves the seven tools from the device's own store, as without a hub, and completes read tools
@@ -158,73 +133,16 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
     { name: 'origin', version: opts.version ?? '0.0.0' },
     { instructions: INSTRUCTIONS },
   );
-  const endpoint = new URL('/mcp', opts.hub.url);
-
-  let client: Client | null = null;
-  let connecting: Promise<Client> | null = null;
-  const connect = (): Promise<Client> => {
-    if (client) return Promise.resolve(client);
-    connecting ??= (async () => {
-      const c = new Client({ name: 'origin-device', version: opts.version ?? '0.0.0' });
-      const transport = new StreamableHTTPClientTransport(endpoint, {
-        requestInit: {
-          headers: {
-            Authorization: `Bearer ${opts.hub.token}`,
-            [CLIENT_HEADER]: headerValue(agentName(mcp)),
-            [DEVICE_HEADER]: headerValue(opts.device),
-          },
-        },
-        fetch: opts.fetch,
-      });
-      await c.connect(transport);
-      client = c;
-      return c;
-    })().finally(() => {
-      connecting = null;
-    });
-    return connecting;
-  };
-  const disconnect = async (): Promise<void> => {
-    const c = client;
-    client = null;
-    await c?.close().catch(() => {});
-  };
-
-  const unreachable = (err: unknown): string => {
-    const message = (err as Error)?.message ?? String(err);
-    if ((err instanceof StreamableHTTPError && err.code === 401) || /\b401\b/.test(message)) {
-      return `the hub at ${opts.hub.url} rejected the token (HTTP 401); check it with \`origin hub status\``;
-    }
-    if ((err instanceof StreamableHTTPError && err.code === 403) || /\b403\b/.test(message)) {
-      // A hub token works only for the device it is named after (see docs/architecture.md#access).
-      return `the hub at ${opts.hub.url} refused this device's token (HTTP 403): it belongs to another device; check it with \`origin hub status\``;
-    }
-    return `the hub at ${opts.hub.url} is unreachable: ${message}`;
-  };
-
-  /** Ask the hub, giving up after `ms`. Never throws. */
-  const askHub = async (name: ToolName, args: unknown, ms: number): Promise<HubAnswer> => {
-    const started = Date.now();
-    try {
-      const c = await within(connect(), ms);
-      const r = (await c.callTool({ name, arguments: args as Record<string, unknown> }, undefined, {
-        timeout: Math.max(1, ms - (Date.now() - started)),
-      })) as CallToolResult;
-      const text = r.content?.[0]?.type === 'text' ? r.content[0].text : '';
-      if (r.isError) return { ok: true, error: text };
-      return { ok: true, value: JSON.parse(text) };
-    } catch (err) {
-      if (isTimeout(err) || (err instanceof McpError && err.code === -32001)) {
-        return { ok: false, reason: `no answer within ${ms / 1000} s` };
-      }
-      // A JSON-RPC error from the hub is not a transport failure: keep the connection.
-      if (err instanceof McpError) return { ok: false, reason: `the hub failed: ${err.message}` };
-      await disconnect();
-      const reason = unreachable(err);
-      opts.log?.(reason);
-      return { ok: false, reason };
-    }
-  };
+  const hub = createHubLink({
+    url: opts.hub.url,
+    token: opts.hub.token,
+    device: opts.device,
+    agent: () => agentName(mcp),
+    version: opts.version,
+    log: opts.log,
+    fetch: opts.fetch,
+  });
+  const askHub = hub.ask;
 
   const facts: LocalFacts = {
     known: (id) => isKnown(db, id),
@@ -402,14 +320,7 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
       await ingest(force);
       await sync(force);
     },
-    warm: async () => {
-      await connect().then(
-        () => undefined,
-        (err: unknown) => {
-          opts.log?.(unreachable(err));
-        },
-      );
-    },
+    warm: hub.warm,
     start: () => {
       unwatch();
       unwatch = startWatch(
@@ -433,7 +344,7 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
       })();
       await upTo(last, Date.now() + (opts.closeTimeoutMs ?? CLOSE_TIMEOUT_MS));
     },
-    close: disconnect,
+    close: hub.close,
   };
 }
 
