@@ -110,8 +110,11 @@ async function pushMirrors(opts: HubSyncOptions, call: Call, result: HubSyncResu
         eventsAdded?: number;
       };
       if (reply.eventsAdded === undefined) {
-        // Offset mismatch: continue from the hub's cursor.
-        if (++conflicts > 3) throw new Error(`hub keeps rejecting ${file.path}`);
+        // Offset mismatch: continue from the hub's cursor. Another process pushing the same file
+        // moves it on; only a hub that answers without moving on, again and again, is an error.
+        if (reply.bytes <= offset && ++conflicts > 3) {
+          throw new Error(`hub keeps rejecting ${file.path}`);
+        }
         offset = reply.bytes;
         continue;
       }

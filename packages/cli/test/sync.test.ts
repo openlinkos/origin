@@ -436,3 +436,44 @@ describe('agent versions', () => {
     }
   });
 });
+
+describe('concurrent pushes', () => {
+  it('goes on while another process pushes the same file, from where the hub stands', async () => {
+    // A long session: several chunks. Another process (say, an agent's origin mcp) pushes each
+    // chunk first, so every request of this sync meets a hub that has already moved on.
+    const projects = path.join(tmp, 'long');
+    const session = '33333333-3333-4333-8333-333333333333';
+    fs.mkdirSync(path.join(projects, 'D--long'), { recursive: true });
+    const lines = Array.from({ length: 6000 }, (_, i) =>
+      JSON.stringify({
+        type: 'user',
+        uuid: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        sessionId: session,
+        timestamp: new Date(Date.UTC(2026, 9, 20, 1, 0, i)).toISOString(),
+        cwd: '/home/dev/long',
+        message: { role: 'user', content: `line ${i} ${'x'.repeat(1000)}` },
+      }),
+    );
+    fs.writeFileSync(path.join(projects, 'D--long', `${session}.jsonl`), `${lines.join('\n')}\n`);
+    await syncSource(
+      { db: deviceDb, home: deviceHome },
+      createClaudeCodeAdapter({ projectsDir: projects }),
+    );
+
+    let raced = 0;
+    const racing: typeof fetch = async (input, init) => {
+      const res = await fetch(input, init);
+      if (!String(input).endsWith('/v1/ingest') || res.status !== 200 || raced >= 5) return res;
+      // The hub took these bytes; answer as if the other process had sent them just before.
+      raced++;
+      const { bytes } = (await res.json()) as { bytes: number };
+      return new Response(JSON.stringify({ bytes }), {
+        status: 409,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    await sync(racing);
+    expect(raced).toBe(5);
+    expect(listEvents(hubDb, { sessionId: session, limit: 10_000 })).toHaveLength(6000);
+  });
+});

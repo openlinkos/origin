@@ -245,6 +245,31 @@ describe('relay mode', () => {
     expect(count(db, 'event')).toBe(0);
   });
 
+  it('goes on while another process sends the same log, however often it is first', async () => {
+    const file = path.join(src, 's1.jsonl');
+    const lines = Array.from({ length: 8 }, (_, i) =>
+      line(`e${i}`, 's1', 1000 + i, 'user', `n${i}`),
+    );
+    fs.writeFileSync(file, lines.join(''));
+    const adapter = fakeAdapter(src);
+    const { hub } = testHub(adapter);
+    // Each of the first five chunks is taken by the hub, and reported as sent by another process.
+    let raced = 0;
+    const racing: RelayHub = {
+      holds: hub.holds,
+      async send(chunk) {
+        const answer = await hub.send(chunk);
+        if (answer.status !== 'accepted' || raced >= 5) return answer;
+        raced++;
+        return { status: 'conflict', bytes: chunk.offset + chunk.data.length };
+      },
+    };
+    makeRelay(db);
+    expect(await relaySource({ db, chunkBytes: 1 }, adapter, racing)).toMatchObject({ failed: [] });
+    expect(raced).toBe(5);
+    expect(mirrorText(hubDb, hubHome, 1)).toBe(lines.join(''));
+  });
+
   it('goes on from where the hub stands', async () => {
     const file = path.join(src, 's1.jsonl');
     const one = line('e1', 's1', 1000, 'user', 'one');

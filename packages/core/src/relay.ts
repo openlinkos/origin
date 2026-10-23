@@ -432,7 +432,9 @@ export async function relaySource(
         // this relay knew: go on from where the hub stands.
         let aligned = false;
         try {
-          aligned = ++conflicts <= 3 && rf.align(answer.bytes);
+          // Another process sending the same file moves the hub on; only answers that do not
+          // move it on count against the limit.
+          aligned = (answer.bytes > offset || ++conflicts <= 3) && rf.align(answer.bytes);
         } catch {
           aligned = false;
         }
