@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   type AdminSessionInfo,
   type AuditRecord,
+  activeProjects,
   createToken as coreCreateToken,
   correct,
   type Database,
@@ -18,6 +19,7 @@ import {
   entryCounts,
   entryHistory,
   entrySources,
+  eventActivity,
   type ForgetResult,
   forget,
   getEntry,
@@ -30,12 +32,14 @@ import {
   ingestHealth,
   isEntryForgotten,
   isEventForgotten,
+  latestAgentVersions,
   listAdminSessions,
   listAudit,
   listDevices,
   listEntries,
   listEvents,
   listProjects,
+  listSessionEvents,
   listSessions,
   listTokens,
   listTombstones,
@@ -52,11 +56,13 @@ import {
   restore,
   revokeToken,
   type SearchHit,
+  type SessionPrompt,
   type SessionRow,
   type SourceStats,
   type StoreUsage,
   searchEntries,
   searchEvents,
+  sessionPrompts,
   stats,
   storeName,
   storeUsage,
@@ -65,6 +71,7 @@ import {
   tombstoneCount,
 } from '@openlinkos/origin-core';
 import { HttpError } from './http.js';
+import { dayIndex, dayKey, groupTurns, type SessionDay, type Turn } from './turns.js';
 
 /** Raw lines are shown truncated to this many characters. */
 export const RAW_LINE_MAX = 4000;
@@ -73,6 +80,17 @@ export const STALE_DEVICE_MS = 24 * 3_600_000;
 export const PAGE_SIZE = 50;
 /** At most this many hidden entries, and as many hidden events, on a forget's page. */
 export const HIDDEN_LIMIT = 200;
+/** A session's page shows this many turns, */
+export const TURNS_PER_PAGE = 20;
+/**
+ * … and at most this many events: a page stops before the turn that would pass it, and a turn
+ * longer than that is shown in parts.
+ */
+export const TURN_EVENT_BUDGET = 1500;
+/** The overview's chart covers this many days, today included. */
+export const ACTIVITY_DAYS = 30;
+/** Storage on disk is measured again after this long (it stats every mirror with a bucket). */
+const STORAGE_TTL_MS = 60_000;
 
 /** Who is acting, for the audit log. */
 export interface Actor {
@@ -106,6 +124,27 @@ export interface HubLink {
   lastError: string | null;
 }
 
+/** A source on the overview: its totals, with its agent's latest version and recent parse errors. */
+export interface SourceOverview extends SourceStats {
+  agentVersion: string | null;
+  parseErrors7d: number;
+}
+
+/** One day of the overview's chart: visible events per source. */
+export interface ActivityDay {
+  /** `YYYY-MM-DD`, in the server's time zone. */
+  day: string;
+  /** Local midnight that starts it. */
+  start: number;
+  events: number;
+  bySource: Record<string, number>;
+}
+
+/** A session in a list: with the number of its turns (its prompts). */
+export interface SessionListRow extends SessionRow {
+  turns: number;
+}
+
 export interface Overview {
   version: string;
   uptimeMs: number;
@@ -118,12 +157,39 @@ export interface Overview {
     activeTokens: number;
   };
   entries: Record<EntryKind, number>;
-  sources: SourceStats[];
+  sources: SourceOverview[];
   devices: DeviceSummary[];
   usage: StoreUsage;
   parseErrors: { last24h: number; last7d: number; bySource7d: IngestHealth[] };
   /** For `origin ui`: the hub this device is connected to, or null. Always null on a hub. */
   hub: HubLink | null;
+  /** Visible events per day over the last ACTIVITY_DAYS days, oldest first. */
+  activity: ActivityDay[];
+  /** The most recently active sessions. */
+  recent: SessionRow[];
+  /** Projects by their events over the last ACTIVITY_DAYS days, busiest first. */
+  projects: Array<{ project: string; events: number; sessions: number; lastAt: number }>;
+  latestEntries: Entry[];
+  /** The latest forgets and restores (ids, reasons, and counts; never what they hide). */
+  latestTombstones: TombstoneSummary[];
+}
+
+/** A page of a session's turns (see AdminService.sessionTurns). */
+export interface SessionTurns {
+  session: SessionRow;
+  /** How many turns the session has: its prompts, and what came before the first, if anything. */
+  total: number;
+  /** Whether events precede the first prompt (turn 0). */
+  preamble: boolean;
+  /** The first turn of the page, and for a turn shown in parts, the part. */
+  turn: number;
+  part: number;
+  turns: Turn[];
+  /** The last turn on the page goes on in the next part. */
+  continues: boolean;
+  next: { turn: number; part: number } | null;
+  previous: { turn: number; part: number } | null;
+  days: SessionDay[];
 }
 
 export interface Provenance {
@@ -295,6 +361,19 @@ export class AdminService {
     });
   }
 
+  private storage: { at: number; usage: StoreUsage } | null = null;
+
+  /**
+   * Disk usage of the store. With a bucket, measuring it stats every mirror's frame file, so it is
+   * measured at most once a minute; without one, it is read from the database every time.
+   */
+  private usage(now: number): StoreUsage {
+    if (this.storage && now - this.storage.at < STORAGE_TTL_MS) return this.storage.usage;
+    const usage = storeUsage(this.db, this.o.home);
+    this.storage = usage.bucket ? { at: now, usage } : null;
+    return usage;
+  }
+
   overview(now: number): Overview {
     const sources = stats(this.db);
     const entries = entryCounts(this.db);
@@ -302,6 +381,10 @@ export class AdminService {
     const week = ingestHealth(this.db, { since: now - 7 * 86_400_000 });
     const day = ingestHealth(this.db, { since: now - 86_400_000 });
     const sum = (rows: IngestHealth[]) => rows.reduce((n, r) => n + r.parseErrors, 0);
+    const versions = latestAgentVersions(this.db);
+    const errors = new Map<string, number>();
+    for (const r of week) errors.set(r.source, (errors.get(r.source) ?? 0) + r.parseErrors);
+    const activity = this.activity(now, sources);
     return {
       version: this.o.version,
       uptimeMs: now - this.o.startedAt,
@@ -314,16 +397,75 @@ export class AdminService {
         activeTokens: listTokens(this.db).filter((t) => t.revokedAt === null).length,
       },
       entries,
-      sources,
+      sources: sources.map((s) => ({
+        ...s,
+        agentVersion: versions.get(s.source) ?? null,
+        parseErrors7d: errors.get(s.source) ?? 0,
+      })),
       devices,
-      usage: storeUsage(this.db, this.o.home),
+      usage: this.usage(now),
       parseErrors: {
         last24h: sum(day),
         last7d: sum(week),
         bySource7d: week.filter((r) => r.parseErrors > 0),
       },
       hub: this.hub(),
+      activity: activity.days,
+      recent: listSessions(this.db, { limit: 6 }),
+      projects: activity.projects,
+      latestEntries: listEntries(this.db, { limit: 5 }),
+      latestTombstones: listTombstones(this.db, { limit: 5 }),
     };
+  }
+
+  private activityCache: {
+    key: string;
+    value: { days: ActivityDay[]; projects: Overview['projects'] };
+  } | null = null;
+
+  /**
+   * Events per day over the last ACTIVITY_DAYS days, by source, and the busiest projects then.
+   * Days are those of the server's time zone, like the times the pages show. Counting reads an
+   * index entry per event of those days, so the result is kept while the day and every source's
+   * visible totals stay the same, which an arriving or forgotten event changes.
+   */
+  private activity(
+    now: number,
+    sources: SourceStats[],
+  ): { days: ActivityDay[]; projects: Overview['projects'] } {
+    const key = JSON.stringify([
+      dayKey(now),
+      sources.map((s) => [s.source, s.sessions, s.events, s.firstTs, s.lastTs]),
+    ]);
+    if (this.activityCache?.key === key) return this.activityCache.value;
+    const value = this.countActivity(now);
+    this.activityCache = { key, value };
+    return value;
+  }
+
+  private countActivity(now: number): { days: ActivityDay[]; projects: Overview['projects'] } {
+    const today = new Date(now);
+    const days: ActivityDay[] = [];
+    for (let k = ACTIVITY_DAYS - 1; k >= 0; k--) {
+      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - k);
+      days.push({ day: dayKey(d.getTime()), start: d.getTime(), events: 0, bySource: {} });
+    }
+    const since = days[0]?.start ?? now;
+    const byDay = new Map(days.map((d) => [d.day, d]));
+    const byProject = new Map<string, number>();
+    for (const r of eventActivity(this.db, { since, until: now + 1 })) {
+      const d = byDay.get(dayKey(r.start));
+      if (d) {
+        d.events += r.events;
+        d.bySource[r.source] = (d.bySource[r.source] ?? 0) + r.events;
+      }
+      if (r.project !== null) byProject.set(r.project, (byProject.get(r.project) ?? 0) + r.events);
+    }
+    const projects = activeProjects(this.db, { since })
+      .map((p) => ({ ...p, events: byProject.get(p.project) ?? 0 }))
+      .sort((a, b) => b.events - a.events || b.sessions - a.sessions || b.lastAt - a.lastAt)
+      .slice(0, 6);
+    return { days, projects };
   }
 
   devices(now: number): DeviceSummary[] {
@@ -385,8 +527,14 @@ export class AdminService {
     return stats(this.db).map((s) => s.source);
   }
 
-  sessions(filter: { source?: string; project?: string; since?: number; page?: number }): {
-    sessions: SessionRow[];
+  sessions(filter: {
+    source?: string;
+    project?: string;
+    q?: string;
+    since?: number;
+    page?: number;
+  }): {
+    sessions: SessionListRow[];
     page: number;
     more: boolean;
   } {
@@ -394,11 +542,27 @@ export class AdminService {
     const rows = listSessions(this.db, {
       source: filter.source || undefined,
       project: filter.project || undefined,
+      match: filter.q?.trim().slice(0, 200) || undefined,
       since: filter.since,
       limit: PAGE_SIZE + 1,
       offset: page * PAGE_SIZE,
     });
-    return { sessions: rows.slice(0, PAGE_SIZE), page, more: rows.length > PAGE_SIZE };
+    return {
+      sessions: rows.slice(0, PAGE_SIZE).map((s) => ({
+        ...s,
+        turns: sessionPrompts(this.db, s.source, s.sessionId).length,
+      })),
+      page,
+      more: rows.length > PAGE_SIZE,
+    };
+  }
+
+  private session(source: unknown, id: unknown): SessionRow {
+    const src = checkId(source, 'source');
+    const sessionId = checkId(id, 'session id');
+    const session = getSession(this.db, src, sessionId);
+    if (!session) throw new HttpError(404, `Unknown session ${sessionId}.`);
+    return session;
   }
 
   sessionEvents(
@@ -406,20 +570,112 @@ export class AdminService {
     id: unknown,
     opts: { tools?: boolean; page?: number } = {},
   ): { session: SessionRow; events: EventRow[]; page: number; more: boolean } {
-    const src = checkId(source, 'source');
-    const sessionId = checkId(id, 'session id');
-    const session = getSession(this.db, src, sessionId);
-    if (!session) throw new HttpError(404, `Unknown session ${sessionId}.`);
+    const session = this.session(source, id);
     const page = Math.max(0, opts.page ?? 0);
     const size = 200;
     const rows = listEvents(this.db, {
-      source: src,
-      sessionId,
+      source: session.source,
+      sessionId: session.sessionId,
       kinds: opts.tools ? undefined : ['message', 'meta'],
       limit: size + 1,
       offset: page * size,
     });
     return { session, events: rows.slice(0, size), page, more: rows.length > size };
+  }
+
+  /**
+   * A page of a session by turns: TURNS_PER_PAGE turns from `turn` on, or fewer if they hold more
+   * than TURN_EVENT_BUDGET events; a single turn longer than that comes in parts. The turns are
+   * found from the session's prompts alone (see sessionPrompts), and only the events of the turns
+   * on the page are read.
+   */
+  sessionTurns(
+    source: unknown,
+    id: unknown,
+    opts: { turn?: number; part?: number; at?: string } = {},
+  ): SessionTurns {
+    const session = this.session(source, id);
+    const key = { source: session.source, sessionId: session.sessionId };
+    const prompts: SessionPrompt[] = sessionPrompts(this.db, key.source, key.sessionId);
+    const first = prompts[0];
+    const preamble = first
+      ? listSessionEvents(this.db, { ...key, to: first, limit: 1 }).length > 0
+      : session.eventCount > 0;
+    const lowest = preamble ? 0 : 1;
+    const highest = Math.max(lowest, prompts.length);
+    // `at`: the turn that holds an event of this session, by its time.
+    const at = opts.at && opts.turn === undefined ? getEvent(this.db, opts.at) : null;
+    const atTurn =
+      at && at.source === key.source && at.sessionId === key.sessionId
+        ? prompts.filter((p) => p.ts <= at.ts).length
+        : undefined;
+    const turn = Math.min(Math.max(opts.turn ?? atTurn ?? lowest, lowest), highest);
+    const part = turn === opts.turn ? Math.max(0, opts.part ?? 0) : 0;
+    const from = turn === 0 ? null : (prompts[turn - 1] ?? null);
+    const base = {
+      session,
+      total: prompts.length + (preamble ? 1 : 0),
+      preamble,
+      turn,
+      part,
+      days: dayIndex(prompts),
+    };
+
+    if (part > 0) {
+      const rows = listSessionEvents(this.db, {
+        ...key,
+        from,
+        to: prompts[turn] ?? null,
+        limit: TURN_EVENT_BUDGET + 1,
+        offset: part * TURN_EVENT_BUDGET,
+      });
+      const continues = rows.length > TURN_EVENT_BUDGET;
+      return {
+        ...base,
+        turns: groupTurns(rows.slice(0, TURN_EVENT_BUDGET), [], turn + 1),
+        continues,
+        next: continues
+          ? { turn, part: part + 1 }
+          : turn < prompts.length
+            ? { turn: turn + 1, part: 0 }
+            : null,
+        previous: { turn, part: part - 1 },
+      };
+    }
+
+    const end = turn + TURNS_PER_PAGE; // the first turn of the next page
+    const rows = listSessionEvents(this.db, {
+      ...key,
+      from,
+      to: end <= prompts.length ? (prompts[end - 1] ?? null) : null,
+      limit: TURN_EVENT_BUDGET + 1,
+    });
+    const firstNumber = Math.max(turn, 1);
+    let turns = groupTurns(
+      rows.slice(0, TURN_EVENT_BUDGET),
+      prompts.slice(firstNumber - 1, end - 1),
+      firstNumber,
+    );
+    let continues = false;
+    let next: SessionTurns['next'] = end <= prompts.length ? { turn: end, part: 0 } : null;
+    if (rows.length > TURN_EVENT_BUDGET) {
+      const cut = turns.at(-1);
+      if (cut && turns.length > 1) {
+        // The last turn does not fit: the next page starts with it.
+        turns = turns.slice(0, -1);
+        next = { turn: cut.number, part: 0 };
+      } else {
+        continues = true;
+        next = { turn, part: 1 };
+      }
+    }
+    return {
+      ...base,
+      turns,
+      continues,
+      next,
+      previous: turn > lowest ? { turn: Math.max(lowest, turn - TURNS_PER_PAGE), part: 0 } : null,
+    };
   }
 
   private visibleEvent(id: unknown): EventRow {

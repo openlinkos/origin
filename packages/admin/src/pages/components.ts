@@ -6,6 +6,7 @@ import {
   type Entry,
   type EntryKind,
   type EventRow,
+  type SessionRow,
   TOMBSTONE_ID_RE,
 } from '@openlinkos/origin-core';
 import type { Ctx } from '../context.js';
@@ -230,6 +231,60 @@ export function snippet(ctx: Ctx, id: string, label: string, code: string): Safe
       <pre id="${id}"><code>${code}</code></pre>
       ${copyButton(ctx, id)}
     </div>`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sessions
+
+/** The agent a session or event comes from, as a small tag that never wraps. */
+export function sourceBadge(source: string): SafeHtml {
+  return html`<span class="ol-badge ol-badge-outline admin-source">${source}</span>`;
+}
+
+/** Where a session's page is. */
+export function sessionHref(
+  s: Pick<SessionRow, 'source' | 'sessionId'>,
+  params: Record<string, string | number | boolean | null | undefined> = {},
+): string {
+  return href('session', { source: s.source, id: s.sessionId, ...params });
+}
+
+/**
+ * A session's name: its title, or else its provisional name (its first prompt), set apart as such,
+ * or else "Untitled session".
+ */
+export function sessionName(ctx: Ctx, s: Pick<SessionRow, 'title' | 'prompt'>, max = 80): SafeHtml {
+  if (s.title) return html`${clip(s.title, max)}`;
+  if (s.prompt) {
+    return html`<span class="admin-provisional" title="${ctx.t('sessions.provisional')}"><span class="ol-sr-only">${ctx.t('sessions.provisional')}: </span>${clip(s.prompt, max)}</span>`;
+  }
+  return html`<span class="admin-provisional">${ctx.t('sessions.untitled')}</span>`;
+}
+
+/**
+ * Chips: small, muted notes in a flow of content, such as a command an agent ran or context it
+ * injected. With a detail, the chip opens to show it.
+ */
+export function chip(
+  ctx: Ctx,
+  o: {
+    icon: IconName;
+    label: HtmlValue;
+    detail?: string | null;
+    extra?: HtmlValue;
+    tone?: 'danger';
+  },
+): SafeHtml {
+  const cls = `admin-chip${o.tone ? ` admin-chip-${o.tone}` : ''}`;
+  const head = html`${icon(ctx, o.icon, 'sm')}<span class="admin-chip-label">${o.label}</span>`;
+  return o.detail
+    ? html`<details class="${cls}"><summary>${head}</summary><pre class="admin-chip-detail">${o.detail}</pre>${o.extra ?? ''}</details>`
+    : html`<span class="${cls}">${head}${o.extra ?? ''}</span>`;
+}
+
+/** A small link to an event's page, its provenance included: an icon, with the id as its title. */
+export function eventLink(ctx: Ctx, id: string): SafeHtml {
+  return html`<a class="admin-event-link" href="${href('event', { id })}" title="${id}" aria-label="${ctx.t('event.open', { id })}">${icon(ctx, 'link', 'sm')}</a>`;
 }
 
 // ---------------------------------------------------------------------------------------------

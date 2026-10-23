@@ -1,9 +1,10 @@
-import type { Entry, EventRow, SearchHit, SessionRow } from '@openlinkos/origin-core';
+import type { Entry, EventRow, SearchHit } from '@openlinkos/origin-core';
 import type { Ctx } from '../context.js';
-import { clip, fmtNumber, time } from '../context.js';
+import { clip, clock, dayLabel, fmtNumber, fmtSpan, time } from '../context.js';
 import { href, html, type SafeHtml } from '../html.js';
 import { icon } from '../icons.js';
-import type { EventDetail } from '../service.js';
+import type { EventDetail, SessionListRow } from '../service.js';
+import { dayKey } from '../turns.js';
 import {
   alert,
   empty,
@@ -15,34 +16,51 @@ import {
   pager,
   panel,
   section,
-  tableWrap,
+  sessionHref,
+  sessionName,
+  sourceBadge,
 } from './components.js';
 import { renderPage } from './layout.js';
 
-function sessionHref(s: Pick<SessionRow, 'source' | 'sessionId'>): string {
-  return href('session', { source: s.source, id: s.sessionId });
+/** Rows of a list by the day of their time, newest day first, as they come (newest first). */
+function byDay<T>(rows: T[], ts: (row: T) => number | null): Array<{ day: string; rows: T[] }> {
+  const days: Array<{ day: string; rows: T[] }> = [];
+  for (const row of rows) {
+    const t = ts(row);
+    const day = t === null ? '' : dayKey(t);
+    const last = days.at(-1);
+    if (last && last.day === day) last.rows.push(row);
+    else days.push({ day, rows: [row] });
+  }
+  return days;
 }
 
 export function sessionsPage(
   ctx: Ctx,
   o: {
-    sessions: SessionRow[];
+    sessions: SessionListRow[];
     page: number;
     more: boolean;
     sources: string[];
     projects: string[];
-    filter: { source: string; project: string };
+    filter: { source: string; project: string; q: string };
   },
 ): void {
   const t = ctx.t;
+  const n = (v: number) => fmtNumber(v, ctx.lang);
   const option = (value: string, current: string) =>
     html`<option value="${value}"${value === current ? html` selected` : ''}>${value}</option>`;
-  const filtered = o.filter.source !== '' || o.filter.project !== '';
+  const filtered = o.filter.source !== '' || o.filter.project !== '' || o.filter.q !== '';
+  const columns = 7;
   renderPage(ctx, 200, {
     title: t('nav.sessions'),
     nav: 'sessions',
     body: html`${pageHeader(ctx, { title: t('sessions.title'), description: t('sessions.help') })}
-    <form method="get" action="/admin/sessions" class="ol-toolbar">
+    <form method="get" action="/admin/sessions" class="ol-toolbar" role="search">
+      <div class="ol-field ol-grow">
+        <label class="ol-label" for="f-q">${t('filter.name')}</label>
+        <div class="ol-search">${icon(ctx, 'search')}<input class="ol-input" type="search" id="f-q" name="q" value="${o.filter.q}" placeholder="${t('filter.namePlaceholder')}" maxlength="200"></div>
+      </div>
       <div class="ol-field">
         <label class="ol-label" for="f-source">${t('filter.source')}</label>
         <select class="ol-select" id="f-source" name="source"><option value="">${t('filter.all')}</option>${o.sources.map((s) => option(s, o.filter.source))}</select>
@@ -52,6 +70,7 @@ export function sessionsPage(
         <select class="ol-select" id="f-project" name="project"><option value="">${t('filter.all')}</option>${o.projects.map((p) => option(p, o.filter.project))}</select>
       </div>
       <button type="submit" class="ol-btn ol-btn-secondary">${icon(ctx, 'filter')}${t('filter.apply')}</button>
+      ${filtered ? linkButton(ctx, { href: '/admin/sessions', label: t('filter.clear'), variant: 'ghost' }) : ''}
     </form>
     ${
       o.sessions.length === 0
@@ -74,60 +93,27 @@ export function sessionsPage(
                     size: 'sm',
                   }),
           })
-        : tableWrap(
-            html`<th>${t('sessions.titleColumn')}</th><th>${t('overview.source')}</th><th>${t('filter.project')}</th><th>${t('sessions.ended')}</th><th class="ol-num">${t('overview.events')}</th>`,
-            o.sessions.map(
-              (s) => html`<tr>
-          <td><a class="ol-cell-title" href="${sessionHref(s)}">${s.title ? clip(s.title, 80) : t('sessions.untitled')}</a><span class="ol-cell-sub ol-mono">${s.sessionId}</span></td>
-          <td>${s.source}</td>
-          <td>${s.project ?? html`<span class="ol-subtle">—</span>`}</td>
-          <td class="ol-nowrap">${time(s.endedAt)}</td>
-          <td class="ol-num">${fmtNumber(s.eventCount, ctx.lang)}</td>
+        : html`<div class="ol-table-wrap"><table class="ol-table admin-timeline">
+      <thead><tr><th class="admin-col-time">${t('sessions.time')}</th><th>${t('sessions.titleColumn')}</th><th>${t('overview.source')}</th><th>${t('filter.project')}</th><th class="ol-num">${t('sessions.duration')}</th><th class="ol-num">${t('sessions.turns')}</th><th class="ol-num">${t('overview.events')}</th></tr></thead>
+      ${byDay(o.sessions, (s) => s.endedAt).map(
+        (g) => html`<tbody>
+        <tr class="admin-day-row"><th colspan="${columns}" scope="colgroup">${g.day ? dayLabel(ctx, g.day) : '—'}</th></tr>
+        ${g.rows.map(
+          (s) => html`<tr>
+          <td class="ol-nowrap ol-subtle">${s.endedAt === null ? '—' : clock(s.endedAt)}</td>
+          <td class="admin-col-name"><a class="ol-cell-title" href="${sessionHref(s)}">${sessionName(ctx, s)}</a></td>
+          <td>${sourceBadge(s.source)}</td>
+          <td class="ol-nowrap">${s.project ?? html`<span class="ol-subtle">—</span>`}</td>
+          <td class="ol-num">${s.startedAt === null || s.endedAt === null ? '—' : fmtSpan(s.endedAt - s.startedAt, t)}</td>
+          <td class="ol-num">${s.turns === 0 ? html`<span class="ol-subtle">0</span>` : n(s.turns)}</td>
+          <td class="ol-num">${n(s.eventCount)}</td>
         </tr>`,
-            ),
-          )
+        )}
+      </tbody>`,
+      )}
+    </table></div>`
     }
     ${pager(ctx, o.page, o.more)}`,
-  });
-}
-
-export function sessionPage(
-  ctx: Ctx,
-  o: { session: SessionRow; events: EventRow[]; page: number; more: boolean; tools: boolean },
-): void {
-  const t = ctx.t;
-  const s = o.session;
-  const tab = (tools: boolean, label: string, iconName: 'message-square' | 'wrench') =>
-    html`<a class="ol-tab" href="${href('session', { source: s.source, id: s.sessionId, tools })}"${o.tools === tools ? html` aria-current="page"` : ''}>${icon(ctx, iconName, 'sm')}${label}</a>`;
-  renderPage(ctx, 200, {
-    title: s.title ?? t('sessions.untitled'),
-    nav: 'sessions',
-    crumbs: [{ label: t('nav.sessions'), href: '/admin/sessions' }],
-    body: html`${pageHeader(ctx, {
-      title: s.title ?? t('sessions.untitled'),
-      meta: [
-        html`${icon(ctx, 'bot', 'sm')}${s.source}`,
-        s.project ? html`${icon(ctx, 'folder', 'sm')}${s.project}` : '',
-        html`${icon(ctx, 'clock', 'sm')}${time(s.startedAt)} – ${time(s.endedAt)}`,
-        html`${icon(ctx, 'message-square', 'sm')}${t('sessions.eventCount', { n: fmtNumber(s.eventCount, ctx.lang) })}`,
-      ],
-    })}
-    <dl class="ol-dl ol-section">
-      <dt>${t('sessions.id')}</dt><dd class="ol-mono">${s.sessionId}</dd>
-      <dt>${t('sessions.cwd')}</dt><dd class="ol-mono">${s.cwd ?? '—'}</dd>
-    </dl>
-    <section class="ol-section">
-      <nav class="ol-tabs" aria-label="${t('sessions.view')}">
-        ${tab(false, t('sessions.conversation'), 'message-square')}
-        ${tab(true, t('sessions.withTools'), 'wrench')}
-      </nav>
-      ${
-        o.events.length === 0
-          ? html`<p class="ol-muted ol-text-sm">${t('sessions.noEvents')}</p>`
-          : html`<ol class="ol-feed">${o.events.map((e) => feedItem(ctx, e, { body: clip(e.text, 2000) }))}</ol>`
-      }
-      ${pager(ctx, o.page, o.more)}
-    </section>`,
   });
 }
 
@@ -140,7 +126,10 @@ export function eventPage(ctx: Ctx, d: EventDetail): void {
     nav: 'sessions',
     crumbs: [
       { label: t('nav.sessions'), href: '/admin/sessions' },
-      { label: t('event.session'), href: href('session', { source: e.source, id: e.sessionId }) },
+      {
+        label: t('event.session'),
+        href: href('session', { source: e.source, id: e.sessionId, at: e.id }),
+      },
     ],
     body: html`${pageHeader(ctx, {
       title: html`<span class="ol-mono">${e.id}</span>`,
@@ -164,7 +153,7 @@ export function eventPage(ctx: Ctx, d: EventDetail): void {
           <dt>${t('overview.source')}</dt><dd>${e.source}${e.agentVersion ? html` <span class="ol-subtle">${e.agentVersion}</span>` : ''}</dd>
           <dt>${t('sessions.cwd')}</dt><dd class="ol-mono">${e.cwd ?? '—'}</dd>
           <dt>${t('event.branch')}</dt><dd>${e.gitBranch ?? '—'}</dd>
-          <dt>${t('event.session')}</dt><dd><a class="ol-mono" href="${href('session', { source: e.source, id: e.sessionId })}">${e.sessionId}</a></dd>
+          <dt>${t('event.session')}</dt><dd><a class="ol-mono" href="${href('session', { source: e.source, id: e.sessionId, at: e.id })}">${e.sessionId}</a></dd>
         </dl>`,
       })}
     </div>
@@ -237,7 +226,7 @@ function searchEvents(ctx: Ctx, hits: SearchHit[]): SafeHtml {
   return html`<ol class="ol-feed">${hits.map((h) =>
     feedItem(ctx, h, {
       body: h.snippet,
-      meta: html`<span>${h.project ?? h.source}</span><a href="${href('session', { source: h.source, id: h.sessionId })}">${t('event.session')}</a>`,
+      meta: html`<span>${h.project ?? h.source}</span><a href="${href('session', { source: h.source, id: h.sessionId, at: h.id })}">${t('event.session')}</a>`,
     }),
   )}</ol>`;
 }

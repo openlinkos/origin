@@ -80,6 +80,53 @@ export function time(ts: number | null | undefined): SafeHtml {
   return html`<time datetime="${new Date(ts).toISOString()}">${fmtDateTime(ts)}</time>`;
 }
 
+/**
+ * The time of day alone, for lists grouped by day (in the server's time zone, as their days are):
+ * the browser script leaves it as it is.
+ */
+export function clock(ts: number): SafeHtml {
+  const d = new Date(ts);
+  return html`<time datetime="${d.toISOString()}" data-format="time">${pad(d.getHours())}:${pad(d.getMinutes())}</time>`;
+}
+
+/**
+ * A day as a heading: today, yesterday, or its weekday and date, with the year when it is not
+ * this one. `day` is `YYYY-MM-DD` in the server's time zone.
+ */
+export function dayLabel(ctx: Ctx, day: string, o: { weekday?: boolean } = {}): string {
+  const [y = 1970, m = 1, d = 1] = day.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  const now = new Date(ctx.now);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const days = Math.round((today.getTime() - date.getTime()) / 86_400_000);
+  const locale = ctx.lang === 'zh' ? 'zh-CN' : 'en-US';
+  const text = new Intl.DateTimeFormat(locale, {
+    weekday: o.weekday === false ? undefined : 'long',
+    month: o.weekday === false ? 'short' : 'long',
+    day: 'numeric',
+    year: y === now.getFullYear() ? undefined : 'numeric',
+  }).format(date);
+  if (o.weekday === false) return text;
+  if (days === 0) return `${ctx.t('day.today')} · ${text}`;
+  if (days === 1) return `${ctx.t('day.yesterday')} · ${text}`;
+  return text;
+}
+
+/** A short span of time: seconds under a minute, then as fmtDuration. */
+export function fmtSpan(ms: number, t: Translate): string {
+  if (ms < 1000) return t('duration.underSecond');
+  if (ms < 60_000) return t('duration.seconds', { s: Math.floor(ms / 1000) });
+  return fmtDuration(ms, t);
+}
+
+/** A number in a few characters: 950, 1.2K, 34K, 1.5M. */
+export function fmtCompact(n: number, lang: Lang): string {
+  return new Intl.NumberFormat(lang === 'zh' ? 'zh-CN' : 'en-US', {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(n);
+}
+
 export function fmtBytes(n: number | null | undefined): string {
   if (n === null || n === undefined) return '—';
   if (n < 1024) return `${n} B`;

@@ -6,9 +6,14 @@
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
-/** Show times in the browser's time zone. */
+/**
+ * Show times in the browser's time zone. Times of day under a day's heading (data-format) stay in
+ * the server's time zone, which their headings are in.
+ */
 function localTimes(): void {
-  for (const el of document.querySelectorAll<HTMLTimeElement>('time[datetime]')) {
+  for (const el of document.querySelectorAll<HTMLTimeElement>(
+    'time[datetime]:not([data-format])',
+  )) {
     const d = new Date(el.dateTime);
     if (Number.isNaN(d.getTime())) continue;
     el.textContent = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;

@@ -45,7 +45,7 @@ import {
 } from './http.js';
 import { negotiateLang, translator } from './i18n/index.js';
 import { errorPage, localLoginPage, loginPage, reauthPage } from './pages/auth.js';
-import { eventPage, eventRawPage, searchPage, sessionPage, sessionsPage } from './pages/browse.js';
+import { eventPage, eventRawPage, searchPage, sessionsPage } from './pages/browse.js';
 import { beforeParam, beforeTombstone } from './pages/components.js';
 import {
   correctPage,
@@ -59,6 +59,7 @@ import {
 import { here } from './pages/layout.js';
 import { connectPage, devicePage, devicesPage, overviewPage } from './pages/overview.js';
 import { auditPage, signinsPage, tombstonePage, tombstonesPage } from './pages/records.js';
+import { sessionPage } from './pages/session.js';
 import { newTokenPage, revokeTokenPage, tokenCreatedPage, tokensPage } from './pages/tokens.js';
 import { CheckQueue, type LimiterOptions, LOGIN_LIMITS, LoginLimiter } from './ratelimit.js';
 import { AdminService, type HubLink } from './service.js';
@@ -168,6 +169,19 @@ function json(ctx: Ctx, status: number, value: unknown): void {
 }
 
 const flag = (v: unknown) => v === '1' || v === 'true' || v === true;
+
+/** A turn or part number from the query, or undefined. */
+function turnParam(ctx: Ctx, name: 'turn' | 'part'): number | undefined {
+  const value = query(ctx, name);
+  const n = Number(value);
+  return value !== '' && Number.isInteger(n) && n >= 0 && n < 10_000_000 ? n : undefined;
+}
+
+const turnOptions = (ctx: Ctx) => ({
+  turn: turnParam(ctx, 'turn'),
+  part: turnParam(ctx, 'part'),
+  at: query(ctx, 'at').slice(0, 512) || undefined,
+});
 
 // ---------------------------------------------------------------------------------------------
 // Authentication
@@ -426,7 +440,11 @@ const PAGES: Route[] = [
   ),
 
   page('GET', '/sessions', 'session', (ctx) => {
-    const filter = { source: query(ctx, 'source'), project: query(ctx, 'project') };
+    const filter = {
+      source: query(ctx, 'source'),
+      project: query(ctx, 'project'),
+      q: query(ctx, 'q').trim().slice(0, 200),
+    };
     const r = ctx.service.sessions({ ...filter, page: pageParam(ctx) });
     sessionsPage(ctx, {
       ...r,
@@ -436,12 +454,8 @@ const PAGES: Route[] = [
     });
   }),
   page('GET', '/session', 'session', (ctx) => {
-    const tools = flag(query(ctx, 'tools'));
-    const r = ctx.service.sessionEvents(query(ctx, 'source'), query(ctx, 'id'), {
-      tools,
-      page: pageParam(ctx),
-    });
-    sessionPage(ctx, { ...r, tools });
+    const r = ctx.service.sessionTurns(query(ctx, 'source'), query(ctx, 'id'), turnOptions(ctx));
+    sessionPage(ctx, { ...r, open: flag(query(ctx, 'tools')) });
   }),
   page('GET', '/event', 'session', (ctx) => eventPage(ctx, ctx.service.event(query(ctx, 'id')))),
   page('GET', '/event-raw', 'session', (ctx) =>
@@ -660,6 +674,7 @@ const API: Route[] = [
       ctx.service.sessions({
         source: query(ctx, 'source'),
         project: query(ctx, 'project'),
+        q: query(ctx, 'q'),
         page: pageParam(ctx),
       }),
     ),
@@ -672,6 +687,13 @@ const API: Route[] = [
         tools: flag(query(ctx, 'tools')),
         page: pageParam(ctx),
       }),
+    ),
+  ),
+  api('GET', 'session-turns', 'session', (ctx) =>
+    json(
+      ctx,
+      200,
+      ctx.service.sessionTurns(query(ctx, 'source'), query(ctx, 'id'), turnOptions(ctx)),
     ),
   ),
   api('GET', 'event', 'session', (ctx) => json(ctx, 200, ctx.service.event(query(ctx, 'id')))),

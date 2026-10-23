@@ -378,6 +378,37 @@ describe('origin ui: pages', () => {
     expect(api.hub).toBeNull();
     const session = await b.get(`/admin/session?source=fake&id=${SESSION}`);
     expect(session.text).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    // The session by turns: the prompt, and the agent's reply rendered as Markdown, as text.
+    expect(session.text).toContain('<li class="admin-turn" id="turn-1">');
+    expect(session.text).toContain('<div class="admin-prompt-text">Keep the schema simple.</div>');
+    expect(session.text).toMatch(
+      /<div class="admin-md"><p>&lt;img src=x onerror=alert\(1\)&gt;<\/p><\/div>/,
+    );
+    expect(session.text).toContain(`href="/admin/event?id=${encodeURIComponent(EVENT)}"`);
+    for (const p of [`&turn=1&tools=1`, `&turn=99&part=3`, `&turn=x`]) {
+      const res = await b.get(`/admin/session?source=fake&id=${SESSION}${p}`);
+      expect(res.status, p).toBe(200);
+      expect(pageProblems(res.text), p).toEqual([]);
+    }
+    const turns = (await b.api('GET', `session-turns?source=fake&id=${SESSION}`)).json();
+    expect(turns).toMatchObject({ total: 1, preamble: false, turn: 1, next: null });
+    expect(turns.turns[0]).toMatchObject({
+      number: 1,
+      events: 2,
+      reply: { id: 'fake:evt-asst-1' },
+    });
+    // The overview's activity (its chart is tested on its own), recent sessions, and records.
+    expect(overview).toContain('Activity, last 30 days');
+    expect(overview).toContain('Recent sessions');
+    expect(overview).toContain('Latest forgets and restores');
+    // The timeline by day, filtered by name.
+    const timeline = (await b.get('/admin/sessions?q=SCHEMA')).text;
+    expect(timeline).toContain('class="admin-day-row"');
+    expect(timeline).toContain('Keep the schema simple.');
+    expect((await b.get('/admin/sessions?q=nothing-like-it')).text).toContain('No sessions match');
+    expect((await b.api('GET', 'sessions?q=schema')).json().sessions).toMatchObject([
+      { sessionId: SESSION, prompt: 'Keep the schema simple.', turns: 1 },
+    ]);
     const zh = await b.get('/admin/', { 'Accept-Language': 'zh-CN' });
     expect(zh.text).toContain('<span class="ol-brand-tag">本机</span>');
   });
