@@ -1,6 +1,6 @@
 # Connect your agents
 
-Every agent launches the same stdio server, `origin mcp`, which `npm install -g @openlinkos/origin` puts on your `PATH`. On Windows, npm installs `origin` as a `.cmd` script that agents cannot start directly; register `cmd /c origin mcp` instead, for example `claude mcp add --scope user origin -- cmd /c origin mcp`. Register Origin globally, not per project, so that all projects share one memory.
+Every agent launches the same stdio server, `origin mcp`, which `npm install -g @openlinkos/origin` puts on your `PATH`. On Windows, npm installs `origin` as a `.cmd` script that agents cannot start directly; register `cmd /c origin mcp` instead, for example `claude mcp add --scope user origin -- cmd /c origin mcp` (in Git Bash, prefix it with `MSYS_NO_PATHCONV=1`, or Git Bash turns `/c` into `C:/`). Register Origin globally, not per project, so that all projects share one memory.
 
 | Agent | Sessions archived | Can use Origin over MCP | Setup verified |
 |---|---|---|---|

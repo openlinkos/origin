@@ -1,10 +1,10 @@
 ---
-sourceHash: sha256-5a888887
+sourceHash: sha256-fd394e4b
 ---
 
 # 接入 Agent
 
-所有 Agent 启动的都是同一个 stdio server：`origin mcp`，`npm install -g @openlinkos/origin` 会把它放到你的 `PATH` 里。在 Windows 上，npm 把 `origin` 装成一个 `.cmd` 脚本，Agent 无法直接启动它，请改为注册 `cmd /c origin mcp`，例如 `claude mcp add --scope user origin -- cmd /c origin mcp`。请在全局（而不是单个项目）注册，让所有项目共享同一份记忆。
+所有 Agent 启动的都是同一个 stdio server：`origin mcp`，`npm install -g @openlinkos/origin` 会把它放到你的 `PATH` 里。在 Windows 上，npm 把 `origin` 装成一个 `.cmd` 脚本，Agent 无法直接启动它，请改为注册 `cmd /c origin mcp`，例如 `claude mcp add --scope user origin -- cmd /c origin mcp`（在 Git Bash 里要在前面加上 `MSYS_NO_PATHCONV=1`，否则 Git Bash 会把 `/c` 改写成 `C:/`）。请在全局（而不是单个项目）注册，让所有项目共享同一份记忆。
 
 | Agent | 会话归档 | 通过 MCP 使用 Origin | 接入验证 |
 |---|---|---|---|
