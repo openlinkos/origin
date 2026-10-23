@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-d5bfc851
+sourceHash: sha256-48280ade
 ---
 
 # 架构
@@ -62,7 +62,7 @@ Origin 区分三类持久条目。每个条目都带有自己的来源，并且�
 | 对象 | 含义 | 关键字段 |
 |---|---|---|
 | **Source**（来源） | 某个 Agent 的适配器：`claude-code`、`codex`、`cursor`、`zcode`、`grok` | id、Agent 版本、发现根目录 |
-| **Raw**（原始镜像） | 原始记录文件的只追加镜像，以 zstd 帧存储 | 来源、原始路径、代次、字节 / 行游标、尾部哈希、已封存的帧 |
+| **Raw**（原始镜像） | 原始记录文件的只追加镜像，或适配器从数据库写出的记录的只追加镜像，以 zstd 帧存储 | 来源、原始路径、代次、字节 / 行游标、尾部哈希（生成的来源存的是它的令牌）、已封存的帧 |
 | **Event**（事件） | 规范化后的对话事件：用户消息、助手消息、工具调用、工具结果 | id、来源、会话、时间戳、项目、cwd、git 分支、角色、类型、正文、原始定位 |
 | **Entry**（条目） | 一条持久的 `memory` / `knowledge` / `cognition` 陈述 | id（`ent_…`）、类型、正文、置信度、作者、项目、来源（事件 id + 引文）、supersedes、root（它的第一个版本）、valid_from / valid_to、created_at、origin（写入它的库）；状态（`active` / `superseded` / `forgotten`）由推导得出，从不存储 |
 | **Tombstone**（遗忘记录） | 一次遗忘操作的记录 | id（`tmb_…`）、目标 id、原因、时间、origin（创建它的库）；它在每个库中遗忘的条目和排除的事件 |
@@ -129,11 +129,13 @@ interface SourceAdapter {
   id: string; // 'claude-code' | 'codex' | 'cursor' | 'zcode' | 'grok'
   displayName: string;
   version(): string | null; // agent version, if known
-  discover(): Promise<SourceFile[]>; // { absPath, relPath, compression?: 'zstd' }
+  discover(): Promise<SourceFile[]>; // { absPath, relPath, compression?: 'zstd', generated? }
   parseLine(line: string, ctx: ParseContext): ParsedLine | null; // deterministic; throws on malformed input
 }
 // ctx: { absPath, relPath, lineNo, fileMtimeMs, readLine(n) }; readLine returns an earlier line of
 // the same file as ingested, for an adapter that needs, say, a file's first line on a hub.
+// generated: { token, mtimeMs, next(last, maxBytes) } for a source that is not a log file, such as
+// a database: the adapter writes the lines (see Generated sources).
 ```
 
 ## 存储 {#storage}
@@ -172,7 +174,7 @@ interface SourceAdapter {
 
 ### 原始镜像 {#raw-mirrors}
 
-镜像保存一个文件某一代次已采集的字节，即它的*内容*，而且只包含完整的行。它以压缩形式存储在两个以镜像命名的文件中：
+镜像保存一个文件某一代次已采集的字节（对生成的来源，是它的适配器写出的行），即它的*内容*，而且只包含完整的行。它以压缩形式存储在两个以镜像命名的文件中：
 
 - `<mirror>.zst`：**已封存的帧**，彼此独立的 zstd 帧（级别 3，带校验和），每帧包含若干完整的行，依次追加。`raw_chunk` 记录每一帧：首行行号、行数、在内容中的偏移量和长度，以及在文件中的偏移量和长度。读取一行只需解压包含它的那一帧。
 - `<mirror>.tail`：**开放尾部**，最新的若干行，未压缩。
@@ -195,6 +197,8 @@ interface SourceAdapter {
 5. **收尾记录。** 受影响的会话被重新聚合，游标在同一个事务中前移，并由一行 `sync_log` 记录这次运行。
 
 **压缩的来源。** 适配器可以把文件标记为 `compression: 'zstd'`。Origin 随后使用 Node 内置的 zstd，采集并镜像解压后的内容，因此游标、行号和原始行的工作方式与普通文件相同。压缩文件只写入一次，所以自上次采集以来没有变化时会被跳过，并且每个压缩文件都在单个事务中采集。
+
+**生成的来源。** 有些 Agent 把会话存在数据库里，并且原地修改其中的行：回复流式输出时会改，过了很久也还会改。对这样的来源，适配器把它的每一路内容（例如一个会话）标记为 `generated`：Origin 不读文件，而是向适配器要已镜像的最后一行之后的行，每次最多约一个事务的量，一直要到没有为止，然后像文件的行一样镜像和采集它们。适配器在一条记录不会再变时（例如一条消息完成之后）才把它写出，而且只写一次，所以内容只会增长（不变量 3），也不需要检测改写；已镜像的最后一行告诉适配器从哪里接着写，它自己不保存任何状态。写出之后又改变的记录不会再写一次：它被镜像的那一行，就是它的事件所来自的版本（不变量 1）。每一路内容还有一个令牌，可能有新行时就会改变；令牌和游标存在一起，占用文件尾部哈希的位置，令牌没变的内容会被直接跳过，不去问适配器。中枢像接收其他镜像一样接收这些镜像，并用同一个适配器解析。
 
 **多个进程。** CLI 和每个 Agent 会话各一个的 MCP server 可能同时使用同一个库。读操作从不等待写操作（WAL）。写操作最多等待写锁 10 秒（busy timeout）；由于同步只为有变化的文件获取写锁，并且每次只持有一个有上限的事务，所以即使另一个进程正在导入大量积压数据，一次同步或一次 `remember` 最多也只需等待大约一个这样的事务。每次检查点之后，预写日志会被截断到 64 MiB（`journal_size_limit`），所以大量导入不会留下几个 GB 的日志。
 

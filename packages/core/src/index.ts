@@ -177,6 +177,7 @@ export type {
   EventInput,
   EventKind,
   EventRow,
+  GeneratedSource,
   ParseContext,
   ParsedLine,
   Role,

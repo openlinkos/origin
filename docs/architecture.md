@@ -58,7 +58,7 @@ Origin distinguishes three kinds of durable entries. Every entry carries its sou
 | Object | Meaning | Key fields |
 |---|---|---|
 | **Source** | An adapter for one agent: `claude-code`, `codex`, `cursor`, `zcode`, `grok` | id, agent version, discovery root |
-| **Raw** | Append-only mirror of an original log file, stored in zstd frames | source, original path, generation, byte/line cursor, tail hash, sealed frames |
+| **Raw** | Append-only mirror of an original log file, or of the records an adapter writes out of a database, stored in zstd frames | source, original path, generation, byte/line cursor, tail hash (for a generated source, its token), sealed frames |
 | **Event** | A normalized conversation event: user message, assistant message, tool call, tool result | id, source, session, timestamp, project, cwd, git branch, role, kind, text, raw locator |
 | **Entry** | A durable `memory` / `knowledge` / `cognition` statement | id (`ent_…`), kind, text, confidence, author, project, sources (event ids + quotes), supersedes, root (its first version), valid_from / valid_to, created_at, origin (the store that wrote it); status (`active` / `superseded` / `forgotten`) is derived, never stored |
 | **Tombstone** | Record of a forget operation | id (`tmb_…`), target id, reason, time, origin (the store that created it); the entries it forgot and the events it excluded on each store |
@@ -125,11 +125,13 @@ interface SourceAdapter {
   id: string; // 'claude-code' | 'codex' | 'cursor' | 'zcode' | 'grok'
   displayName: string;
   version(): string | null; // agent version, if known
-  discover(): Promise<SourceFile[]>; // { absPath, relPath, compression?: 'zstd' }
+  discover(): Promise<SourceFile[]>; // { absPath, relPath, compression?: 'zstd', generated? }
   parseLine(line: string, ctx: ParseContext): ParsedLine | null; // deterministic; throws on malformed input
 }
 // ctx: { absPath, relPath, lineNo, fileMtimeMs, readLine(n) }; readLine returns an earlier line of
 // the same file as ingested, for an adapter that needs, say, a file's first line on a hub.
+// generated: { token, mtimeMs, next(last, maxBytes) } for a source that is not a log file, such as
+// a database: the adapter writes the lines (see Generated sources).
 ```
 
 ## Storage
@@ -168,7 +170,7 @@ interface SourceAdapter {
 
 ### Raw mirrors
 
-A mirror holds the ingested bytes of one generation of a file: its *content*, complete lines only. It is stored compressed, in two files named after it:
+A mirror holds the ingested bytes of one generation of a file (for a generated source, the lines its adapter wrote out): its *content*, complete lines only. It is stored compressed, in two files named after it:
 
 - `<mirror>.zst`: the **sealed frames**, independent zstd frames (level 3, with checksums), each holding complete lines, appended one after another. `raw_chunk` records each frame: its first line, its line count, its offset and length in the content, and its offset and length in the file. Reading a line decompresses only the frame that holds it.
 - `<mirror>.tail`: the **open tail**, the newest lines, uncompressed.
@@ -191,6 +193,8 @@ The content is the frames, decompressed, followed by the tail, each up to what t
 5. **Bookkeeping.** Affected sessions are re-aggregated, the cursor advances in the same transaction, and a `sync_log` row records the sync.
 
 **Compressed sources.** An adapter can mark a file as `compression: 'zstd'`. Origin then ingests and mirrors the decompressed content, using Node's built-in zstd, so cursors, line numbers, and raw lines work as for plain files. Compressed files are written once, so they are skipped when unchanged since their last ingestion, and each is ingested in a single transaction.
+
+**Generated sources.** Some agents keep their sessions in a database and change its rows in place, while a reply streams and again long after. For such a source the adapter marks each of its streams (say, one session) as `generated`: rather than reading a file, Origin asks the adapter for the lines that follow the last line it mirrored, at most about one transaction's worth at a time and again until there are none, and mirrors and ingests them like the lines of a file. The adapter writes each record out once, when it will no longer change (a message once it has completed), so the content only grows (invariant 3) and is never checked for a rewrite; the last mirrored line tells it where to go on, so it keeps no state of its own. A record that changes after it was written out is not written again: its mirrored line is the version its events come from (invariant 1). Each stream also has a token that changes whenever there may be new lines; it is kept with the cursor, in place of a file's tail hash, and a stream whose token has not changed is skipped without asking the adapter. A hub receives these mirrors like any other and parses them with the same adapter.
 
 **Several processes.** The CLI and one MCP server per agent session may use the same store at once. Readers never wait for writers (WAL). A writer waits up to 10 seconds for the write lock (the busy timeout); since syncs take the lock only for changed files and only for one bounded transaction at a time, a sync or a `remember` waits at most about one such transaction, even while another process imports a large backlog. After each checkpoint, the write-ahead log is truncated to 64 MiB (`journal_size_limit`), so a large import does not leave a log of gigabytes behind.
 

@@ -51,15 +51,39 @@ export interface ParsedLine {
 }
 
 export interface SourceFile {
+  /** The original file; for a generated source, a path that names it (e.g. `<database>#<id>`). */
   absPath: string;
   /** Path relative to the adapter root, `/`-separated; used to name the mirror. */
   relPath: string;
   /** Set for compressed files: Origin ingests and mirrors the decompressed content. */
   compression?: 'zstd';
+  /** Set for a source that is not a log file, such as a database: the adapter writes its lines. */
+  generated?: GeneratedSource;
+}
+
+/**
+ * The content of a generated source: lines the adapter writes, which only ever grow (a database row
+ * that changes after it was written out is not written again). Origin mirrors and ingests them like
+ * the lines of a file.
+ */
+export interface GeneratedSource {
+  /** Differs from the token at the last ingestion whenever there may be new lines. */
+  token: string;
+  /** When the source last changed (epoch ms), to ingest older sources first. */
+  mtimeMs: number;
+  /**
+   * The lines that follow `last`, the last line written so far (null for none): at least one if
+   * there are any, and about `maxBytes` at most. Origin asks again until none are left. Each is one
+   * line of text, without a line break.
+   */
+  next(last: string | null, maxBytes: number): string[];
 }
 
 export interface ParseContext {
-  /** The original file; on a hub, which has no original, the path of its mirror. */
+  /**
+   * The original file (for a generated source, the path that names it); on a hub, which has no
+   * original, the path of its mirror.
+   */
   absPath: string;
   relPath: string;
   /** 1-based line number (in the mirror, equal to the line number in this generation of the source file). */

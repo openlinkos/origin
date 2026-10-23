@@ -19,7 +19,13 @@ import {
 } from './mirror.js';
 import { parseRawPath, rawDir, remotePath } from './paths.js';
 import { NAME_RE } from './tokens.js';
-import type { EventInput, SourceAdapter, SourceFile, SyncResult } from './types.js';
+import type {
+  EventInput,
+  GeneratedSource,
+  SourceAdapter,
+  SourceFile,
+  SyncResult,
+} from './types.js';
 
 const TAIL_WINDOW = 4096;
 
@@ -139,16 +145,19 @@ const YIELD_EVERY_MS = 20;
 export async function fingerprintSources(adapters: SourceAdapter[]): Promise<string> {
   const hash = createHash('sha256');
   for (const adapter of adapters) {
-    const files = (await adapter.discover()).map((f) => f.absPath).sort();
+    const files = (await adapter.discover()).sort((a, b) => a.absPath.localeCompare(b.absPath));
     for (const file of files) {
       let state = 'missing';
-      try {
-        const st = fs.statSync(file);
-        state = `${st.size}:${st.mtimeMs}`;
-      } catch {
-        // deleted since discovery
+      if (file.generated) state = `generated:${file.generated.token}`;
+      else {
+        try {
+          const st = fs.statSync(file.absPath);
+          state = `${st.size}:${st.mtimeMs}`;
+        } catch {
+          // deleted since discovery
+        }
       }
-      hash.update(`${adapter.id}\0${file}\0${state}\n`);
+      hash.update(`${adapter.id}\0${file.absPath}\0${state}\n`);
     }
   }
   return hash.digest('hex');
@@ -162,6 +171,10 @@ export async function fingerprintSources(adapters: SourceAdapter[]): Promise<str
 function oldestFirst(files: SourceFile[]): SourceFile[] {
   const mtime = new Map<SourceFile, number>();
   for (const f of files) {
+    if (f.generated) {
+      mtime.set(f, f.generated.mtimeMs);
+      continue;
+    }
     try {
       mtime.set(f, fs.statSync(f.absPath).mtimeMs);
     } catch {
@@ -186,6 +199,8 @@ export const TRANSACTION_BYTES = 1024 * 1024;
 function isUnchanged(ctx: IngestContext, source: string, file: SourceFile): boolean {
   const raw = latestRawFile(ctx.db, source, file.absPath);
   if (!raw) return false;
+  // A generated source keeps its token where a file keeps the hash of its tail.
+  if (file.generated) return raw.tail_hash === file.generated.token;
   let st: fs.Stats;
   try {
     st = fs.statSync(file.absPath);
@@ -217,9 +232,10 @@ function ingestFile(
   result: SyncResult,
 ): Step {
   let raw = latestRawFile(ctx.db, adapter.id, file.absPath);
-  const content = openContent(file, raw);
+  const content = openContent(ctx, file, raw);
   if (!content) return NOTHING;
-  if (raw && (content.size < raw.bytes_ingested || !tailMatches(content, raw))) {
+  // Generated content only grows, by construction, so it is never rewritten.
+  if (raw && !file.generated && (content.size < raw.bytes_ingested || !tailMatches(content, raw))) {
     ctx.log?.(`rewrite detected, new generation: ${file.relPath}`);
     const generation = raw.generation + 1;
     raw = createRawFile(
@@ -240,10 +256,21 @@ function ingestFile(
       1,
     );
   }
-  if (content.size === raw.bytes_ingested) return NOTHING;
+  if (content.size === raw.bytes_ingested) {
+    // Nothing new: keep the token, so that the source is not asked again until it changes.
+    if (file.generated && raw.tail_hash !== file.generated.token) {
+      ctx.db
+        .prepare('UPDATE raw_file SET tail_hash = ? WHERE id = ?')
+        .run(file.generated.token, raw.id);
+    }
+    return NOTHING;
+  }
 
   const start = raw.bytes_ingested;
-  let end = file.compression ? content.size : Math.min(content.size, start + TRANSACTION_BYTES);
+  let end =
+    file.compression || file.generated
+      ? content.size
+      : Math.min(content.size, start + TRANSACTION_BYTES);
   let chunk = content.read(start, end);
   let lastNl = chunk.lastIndexOf(0x0a);
   while (lastNl < 0 && end < content.size) {
@@ -261,11 +288,15 @@ function ingestFile(
     raw,
     chunk,
     { absPath: file.absPath, relPath: file.relPath, fileMtimeMs: content.mtimeMs, agentVersion },
-    tailHash(content, start + chunk.length),
+    file.generated
+      ? content.more
+        ? ''
+        : file.generated.token
+      : tailHash(content, start + chunk.length),
     result,
   );
   return {
-    status: start + chunk.length < content.size ? 'more' : 'done',
+    status: start + chunk.length < content.size || content.more ? 'more' : 'done',
     sealed: sealed ? raw.id : null,
   };
 }
@@ -603,6 +634,8 @@ interface Content {
   size: number;
   mtimeMs: number;
   read(start: number, end: number): Buffer;
+  /** Generated content only: the adapter may have more lines than it wrote this time. */
+  more?: boolean;
 }
 
 function fileContent(file: string): Content {
@@ -610,7 +643,8 @@ function fileContent(file: string): Content {
   return { size: st.size, mtimeMs: st.mtimeMs, read: (a, b) => readRange(file, a, b) };
 }
 
-function openContent(file: SourceFile, raw: RawFileRow | null): Content | null {
+function openContent(ctx: IngestContext, file: SourceFile, raw: RawFileRow | null): Content | null {
+  if (file.generated) return generatedContent(ctx, file.generated, raw);
   let st: fs.Stats;
   try {
     st = fs.statSync(file.absPath);
@@ -624,6 +658,35 @@ function openContent(file: SourceFile, raw: RawFileRow | null): Content | null {
   if (raw && st.mtimeMs <= raw.updated_at) return null;
   const data = zlib.zstdDecompressSync(fs.readFileSync(file.absPath));
   return { size: data.length, mtimeMs: st.mtimeMs, read: (a, b) => data.subarray(a, b) };
+}
+
+/**
+ * The next lines of a generated source, after those already ingested, as content that continues
+ * the mirror. Nothing below `bytes_ingested` is ever read from it, since generated content is not
+ * checked for a rewrite.
+ */
+function generatedContent(
+  ctx: IngestContext,
+  source: GeneratedSource,
+  raw: RawFileRow | null,
+): Content {
+  const start = raw?.bytes_ingested ?? 0;
+  const last =
+    raw && raw.lines_ingested > 0
+      ? readMirrorLine(ctx.db, ctx.home, raw.id, raw.lines_ingested)
+      : null;
+  const lines = source.next(last, TRANSACTION_BYTES);
+  if (lines.some((line) => line.includes('\n'))) {
+    throw new OriginError('A generated line contains a line break.');
+  }
+  const data = Buffer.from(lines.length > 0 ? `${lines.join('\n')}\n` : '');
+  return {
+    size: start + data.length,
+    mtimeMs: source.mtimeMs,
+    read: (a, b) => data.subarray(a - start, b - start),
+    // Asked again until it has nothing more: a batch may have been cut at maxBytes.
+    more: lines.length > 0,
+  };
 }
 
 /**
