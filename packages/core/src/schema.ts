@@ -33,9 +33,12 @@
  * - audit_log: append-only record of administrative actions with ids and counts only, never
  *   content; triggers reject every UPDATE and DELETE.
  *
- * Pre-release: there are no migrations. Every statement is idempotent and runs on each open, so
- * new tables and indexes appear in existing databases; any other change requires a fresh
- * ORIGIN_HOME.
+ * This is the schema of the latest format version: a new store is created with it. Every statement
+ * is idempotent and runs on each open, after the migrations, so a new table, index, view, or
+ * trigger that existing data needs nothing from appears in existing stores without a migration.
+ * Any other change, such as a new column or a changed definition (`IF NOT EXISTS` keeps an old
+ * one), needs a migration in migrations.ts as well as the change here, so that an upgraded store
+ * and a new one end up the same (see docs/architecture.md#migrations).
  */
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS raw_file (

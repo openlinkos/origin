@@ -22,7 +22,13 @@ export {
   recordAudit,
 } from './audit.js';
 export { type BackupResult, backupStore } from './backup.js';
-export { type Database, openDatabase, openMemoryDatabase, transaction } from './db.js';
+export {
+  type Database,
+  type OpenOptions,
+  openDatabase,
+  openMemoryDatabase,
+  transaction,
+} from './db.js';
 export {
   type CorrectInput,
   CURRENT_VERSION,
@@ -95,6 +101,13 @@ export {
   remoteCursors,
   syncSource,
 } from './ingest.js';
+export {
+  FIRST_VERSION,
+  type Migration,
+  type MigrationContext,
+  STORE_VERSION,
+  storeVersion,
+} from './migrations.js';
 export {
   FRAME_BYTES,
   type FrameUpload,

@@ -5,7 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 import zlib from 'node:zlib';
 import { cjkIndexText } from './cjk.js';
 import { OriginError } from './errors.js';
-import { SCHEMA } from './schema.js';
+import { type Migration, migrate, refuseNewerStore } from './migrations.js';
+import type { SourceAdapter } from './types.js';
 
 export type Database = DatabaseSync;
 
@@ -41,31 +42,58 @@ function registerFunctions(db: Database): void {
   );
 }
 
-/** Open (creating if needed) the database and apply the schema. */
-export function openDatabase(file: string): Database {
+export interface OpenOptions {
+  /**
+   * The source adapters, for a migration that parses mirrored lines again (see migrations.ts).
+   * Opening a store that needs one without them fails at that migration.
+   */
+  adapters?: SourceAdapter[];
+  /**
+   * Called before the first migration this process runs, if any: set up what migrations read,
+   * such as the frame store of a hub that keeps its sealed frames in a bucket.
+   */
+  beforeMigrate?: (db: Database) => void;
+  /** Where to say that a migration runs (the CLI: standard error). */
+  log?: (message: string) => void;
+  /** The migrations to run (tests); Origin's by default. */
+  migrations?: Migration[];
+}
+
+/**
+ * Open (creating if needed) the database of the store whose ORIGIN_HOME is the file's directory,
+ * and bring it to the latest format version (see migrations.ts). A store written by a newer Origin
+ * is refused, unchanged.
+ */
+export function openDatabase(file: string, opts: OpenOptions = {}): Database {
   checkRuntime();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
-  registerFunctions(db);
-  db.exec('PRAGMA journal_mode = WAL;');
-  db.exec('PRAGMA foreign_keys = ON;');
-  db.exec('PRAGMA synchronous = NORMAL;');
-  // Several processes (CLI, one MCP server per agent session) may share the database. Writes are
-  // short (see TRANSACTION_BYTES), so waiting up to 10 s for the write lock is plenty.
-  db.exec('PRAGMA busy_timeout = 10000;');
-  // A large import grows the write-ahead log; truncate it back to 64 MiB after each checkpoint.
-  db.exec(`PRAGMA journal_size_limit = ${JOURNAL_SIZE_LIMIT};`);
-  db.exec(SCHEMA);
+  try {
+    registerFunctions(db);
+    // Several processes (CLI, one MCP server per agent session) may share the database. Writes are
+    // short (see TRANSACTION_BYTES), so waiting up to 10 s for the write lock is plenty.
+    db.exec('PRAGMA busy_timeout = 10000;');
+    refuseNewerStore(db, { file, migrations: opts.migrations });
+    db.exec('PRAGMA journal_mode = WAL;');
+    db.exec('PRAGMA foreign_keys = ON;');
+    db.exec('PRAGMA synchronous = NORMAL;');
+    // A large import grows the write-ahead log; truncate it back to 64 MiB after each checkpoint.
+    db.exec(`PRAGMA journal_size_limit = ${JOURNAL_SIZE_LIMIT};`);
+    migrate(db, { ...opts, home: path.dirname(path.resolve(file)), file });
+  } catch (err) {
+    db.close();
+    throw err;
+  }
   return db;
 }
 
-/** In-memory database for tests and one-off analysis. */
+/** In-memory database for tests and one-off analysis, at the latest format version. */
 export function openMemoryDatabase(): Database {
   checkRuntime();
   const db = new DatabaseSync(':memory:');
   registerFunctions(db);
   db.exec('PRAGMA foreign_keys = ON;');
-  db.exec(SCHEMA);
+  migrate(db, { home: '' });
   return db;
 }
 

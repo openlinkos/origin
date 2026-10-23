@@ -32,7 +32,7 @@ When running the CLI, always point `ORIGIN_HOME` at a fresh temporary directory.
 - **Preserve the invariants** in `docs/architecture.md`: provenance, sticky forgetting, append-only storage, local-first data, and a single entry point. Changes that touch them need tests.
 - **No network and no model calls** in `core` or `adapters`.
 - **Keep adapters deterministic and tolerant**: pure parsing, stable event ids, the agent version recorded, and parse errors counted rather than fatal.
-- **No migrations before the first release.** Edit the schema in `packages/core/src/schema.ts` in place; do not add schema versions or migration code.
+- **Migrate the store format; never ask for a fresh `ORIGIN_HOME`.** `packages/core/src/schema.ts` is the latest format, and its idempotent statements run on every open. A new table, index, view, or trigger that existing data needs nothing from goes there alone; any other change (a column, a constraint, a changed trigger or view, rows to fill in, mirrored lines to parse again) also needs a migration with the next version in `packages/core/src/migrations.ts`, so that an upgraded store ends up the same as a new one. A released migration is never changed. Test each migration on a store of the version before it (see "Migrations" in `docs/architecture.md`).
 - **Respect dependency direction**: `core` depends on no workspace package; `adapters`, `mcp`, and `admin` depend only on `core`; only `cli` brings them together.
 - **Ask before adding runtime dependencies.** `core`, `adapters`, and `admin` use only Node built-ins; `mcp` uses the MCP SDK and zod. Pin all dependencies to exact versions.
 - **Keep the admin UI conservative.** `packages/admin` renders every page on the server with the escaping `html` template (`raw()` only for static markup written in the package), uses no inline scripts or styles, loads nothing from third parties, and writes only through core operations. Never add routes that edit or delete events, mirrors, entries, or tombstones, un-forget, show forgotten text, re-show a token, or change the admin password; the write routes are pinned by a test.
@@ -49,7 +49,7 @@ When running the CLI, always point `ORIGIN_HOME` at a fresh temporary directory.
 
 ## Releases
 
-The five packages share one version and are published to npm by `.github/workflows/release.yml`; the same tag adds version tags to the `ghcr.io/openlinkos/origin` image. To release, add the version's section to `CHANGELOG.md` (it becomes the GitHub release notes), bump `version` in every `packages/*/package.json`, commit, then tag `v<version>` and push the tag. A maintainer approves the run in the `npm` environment; npm trusted publishing attaches provenance. Never publish from a workstation. After the first release, a change to the store format needs a migration, not a fresh `ORIGIN_HOME`.
+The five packages share one version and are published to npm by `.github/workflows/release.yml`; the same tag adds version tags to the `ghcr.io/openlinkos/origin` image. To release, add the version's section to `CHANGELOG.md` (it becomes the GitHub release notes), bump `version` in every `packages/*/package.json`, commit, then tag `v<version>` and push the tag. A maintainer approves the run in the `npm` environment; npm trusted publishing attaches provenance. Never publish from a workstation. A change to the store format needs a migration (see Rules), not a fresh `ORIGIN_HOME`.
 
 ## Git
 

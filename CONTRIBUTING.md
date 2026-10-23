@@ -33,7 +33,7 @@ pnpm test
 | `pnpm docs:build` | Build the documentation site; fails on dead links |
 | `pnpm origin <cmd>` | Run the built CLI |
 
-Always test against a fresh, temporary data directory, never your real `~/.origin`. Before the first release the database schema is edited in place without migrations, so an old data directory may not match the current code:
+Always test against a fresh, temporary data directory, never your real `~/.origin`: code with a newer store format upgrades a store it opens in place (see [Migrations](docs/architecture.md#migrations)), and the Origin you have installed may then no longer open it:
 
 ```bash
 ORIGIN_HOME=/tmp/origin-dev ORIGIN_CLAUDE_PROJECTS=packages/adapters/test/fixtures/claude-code pnpm origin sync

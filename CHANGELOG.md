@@ -23,6 +23,10 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 - `origin status` and `origin hub status` show when the device last finished a sync with its hub, and the error of the last sync if it failed since.
 - A relay warns before agents delete logs it has not sent: `origin status`, `origin sync`, and `origin mcp` (in its log and in the errors of tools the hub cannot answer) say when unsent sessions near Claude Code's `cleanupPeriodDays` (30 days unless set), or, for other agents, have waited a week with nothing sent.
 
+### Tooling
+
+- Stores record their format version and are upgraded in place, once, when a newer Origin opens them, stores of 0.1.0 included; Origin refuses a store whose format is newer than it knows.
+
 ## [0.1.0] - 2026-10-23
 
 The first release.
