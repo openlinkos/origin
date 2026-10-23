@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-d0264f33
+sourceHash: sha256-a9493518
 ---
 
 # 接入 Agent
@@ -67,7 +67,7 @@ Grok 会读取 `~/.claude.json`，所以完成上面的 Claude Code 注册后会
 | `correct` | 用纠正后的版本替换条目 |
 | `forget` | 永久遗忘条目或事件；只有你明确要求时 Agent 才会使用 |
 
-server 会告诉 Agent 如何使用这些工具，你只需用自然语言提问。它在回答前会同步新的会话记录，所以 Agent 甚至能引用你一分钟前说的话。工具的完整说明见[架构](../architecture.md#mcp-server)。
+server 会告诉 Agent 如何使用这些工具，你只需用自然语言提问。它在回答前会同步新的会话记录，所以 Agent 甚至能引用你一分钟前说的话。Agent 运行期间，Origin 还会在后台每分钟收取一次新的记录行，并在 Agent 退出时再收取一次。工具的完整说明见[架构](../architecture.md#mcp-server)。
 
 ## 使用个人中枢 {#using-a-personal-hub}
 

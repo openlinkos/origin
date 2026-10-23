@@ -157,9 +157,10 @@ export function toolError(message: string): CallToolResult {
 
 /**
  * Coalesce refreshes: at most one in flight, and reads skip it when the last one finished less
- * than `intervalMs` ago. A forced refresh (after or before a write) asked for while one is in
- * flight runs once more after it, so that it covers what was just written; forced requests that
- * arrive meanwhile share that run. Failures are logged, never thrown.
+ * than `intervalMs` ago, even while another (a background one) is running. A read that needs a
+ * refresh shares the one in flight. A forced refresh (after or before a write) asked for while one
+ * is in flight runs once more after it, so that it covers what was just written; forced requests
+ * that arrive meanwhile share that run. Failures are logged, never thrown.
  */
 export function refreshGate(
   fn: (() => Promise<void>) | undefined,
@@ -183,12 +184,82 @@ export function refreshGate(
   };
   return async (force = false) => {
     if (!fn) return;
+    if (!force && Date.now() - last < intervalMs) return;
     if (inflight) {
       if (!force) return inflight;
       queued ??= inflight.then(run);
       return queued;
     }
-    if (!force && Date.now() - last < intervalMs) return;
     return run();
   };
+}
+
+/** How often a server looks for new log lines while it runs (ORIGIN_WATCH_INTERVAL_MS). */
+export const WATCH_INTERVAL_MS = 60_000;
+/** How long a server waits for its last sync when the agent disconnects. */
+export const CLOSE_TIMEOUT_MS = 5_000;
+
+/**
+ * Run `tick` every `intervalMs` in the background, one at a time (the next is scheduled once the
+ * last has finished), until the returned function is called. `tick` refreshes through the refresh
+ * gates, so it never overlaps another refresh, and tool calls never wait for the timer. Failures
+ * are logged, never thrown. An interval of 0 or less runs nothing.
+ */
+export function startWatch(
+  intervalMs: number,
+  tick: () => Promise<void>,
+  log?: (message: string) => void,
+): () => void {
+  if (!(intervalMs > 0)) return () => {};
+  let stopped = false;
+  let timer: NodeJS.Timeout | undefined;
+  const schedule = () => {
+    timer = setTimeout(() => {
+      tick()
+        .catch((err: unknown) => log?.(`background sync failed: ${(err as Error).message}`))
+        .finally(() => {
+          if (!stopped) schedule();
+        });
+    }, intervalMs);
+    // The transport keeps the process alive, not the timer.
+    timer.unref?.();
+  };
+  schedule();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+  };
+}
+
+class Timeout extends Error {}
+
+/** Settle with `promise`, or reject with a Timeout after `ms`. */
+export function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Timeout()), Math.max(0, ms));
+  });
+  return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
+}
+
+export function isTimeout(err: unknown): boolean {
+  return err instanceof Timeout;
+}
+
+/** Wait for `promise` at most until `deadline`; never throws. */
+export async function upTo(promise: Promise<unknown>, deadline: number): Promise<void> {
+  try {
+    await within(promise, deadline - Date.now());
+  } catch {
+    // slower than the deadline, or failed: it keeps running, or was logged, by its owner
+  }
+}
+
+/**
+ * Call `close` once the agent is gone: when standard input ends, or on a termination signal (a
+ * second signal ends the process as usual).
+ */
+export function onDisconnect(close: () => void): void {
+  process.stdin.once('end', close);
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.once(signal, close);
 }

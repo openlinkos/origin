@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { JOURNAL_SIZE_LIMIT } from '../src/db.js';
 import {
   type Database,
+  fingerprintSources,
   forget,
   getEvent,
   IDLE_SEAL_MS,
@@ -256,6 +257,35 @@ describe('write transactions', () => {
     );
     expect(mirrorText(db, home, events[0]!.rawFileId)).toBe(content);
     expect(listSessions(db)[0]?.eventCount).toBe(1500);
+  });
+
+  it('lets other work run during a long sync', async () => {
+    const pad = 'x'.repeat(2000);
+    let content = '';
+    for (let i = 0; i < 1500; i++) content += line(`y${i}`, 'big', 1000 + i, 'user', `${i} ${pad}`);
+    fs.writeFileSync(path.join(src, 'big.jsonl'), content);
+    // An MCP server answers tool calls while it ingests in the background.
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 1);
+    try {
+      await syncSource({ db, home }, fakeAdapter(src));
+    } finally {
+      clearInterval(timer);
+    }
+    expect(ticks).toBeGreaterThan(0);
+    expect(getEvent(db, 'fake:y1499')).not.toBeNull();
+  });
+
+  it('fingerprints source files by size and time, without reading them', async () => {
+    const adapter = fakeAdapter(src);
+    fs.writeFileSync(path.join(src, 'f.jsonl'), line('f1', 'f', 1000, 'user', 'one'));
+    const first = await fingerprintSources([adapter]);
+    expect(await fingerprintSources([adapter])).toBe(first);
+    fs.appendFileSync(path.join(src, 'f.jsonl'), line('f2', 'f', 2000, 'user', 'two'));
+    const appended = await fingerprintSources([adapter]);
+    expect(appended).not.toBe(first);
+    fs.writeFileSync(path.join(src, 'g.jsonl'), line('g1', 'g', 1000, 'user', 'new file'));
+    expect(await fingerprintSources([adapter])).not.toBe(appended);
   });
 
   it('takes a line longer than the bound whole', async () => {

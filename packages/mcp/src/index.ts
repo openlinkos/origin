@@ -19,10 +19,12 @@ export {
   serveStdio,
 } from './server.js';
 export {
+  CLOSE_TIMEOUT_MS,
   INSTRUCTIONS,
   registerOriginTools,
   TOOL_NAMES,
   type ToolArgs,
   type ToolHandlers,
   type ToolName,
+  WATCH_INTERVAL_MS,
 } from './tools.js';

@@ -12,12 +12,17 @@ import {
   timelineOf,
 } from './local.js';
 import {
+  CLOSE_TIMEOUT_MS,
   INSTRUCTIONS,
+  onDisconnect,
   refreshGate,
   registerOriginTools,
+  startWatch,
   type ToolHandlers,
   toolError,
   toolResult,
+  upTo,
+  WATCH_INTERVAL_MS,
 } from './tools.js';
 
 export interface OriginServerOptions {
@@ -27,6 +32,15 @@ export interface OriginServerOptions {
   sync?: () => Promise<void>;
   /** Minimum time between syncs triggered by read tools (default 10 s). */
   syncIntervalMs?: number;
+  /**
+   * How often to look for new log lines while serving, in the background, and ingest them
+   * (default 60 s; 0 turns it off). See start().
+   */
+  watchIntervalMs?: number;
+  /** Whether the logs changed since the last ingestion, cheaply; without it, every look ingests. */
+  changed?: () => Promise<boolean>;
+  /** How long the last ingestion on disconnect may take (default 5 s). See stop(). */
+  closeTimeoutMs?: number;
   version?: string;
   /** Diagnostics. Never write to stdout: it carries the protocol. */
   log?: (message: string) => void;
@@ -43,6 +57,10 @@ export interface OriginServer {
   mcp: McpServer;
   /** Bring the archive up to date; `force` ignores the minimum interval. */
   refresh(force?: boolean): Promise<void>;
+  /** Look for new log lines every watchIntervalMs in the background, and ingest them. */
+  start(): void;
+  /** Stop looking, and ingest one last time, waiting at most closeTimeoutMs. Never throws. */
+  stop(): Promise<void>;
 }
 
 /** Run a tool body; caller errors (bad ids, bad input) come back as tool errors, not crashes. */
@@ -104,17 +122,40 @@ export function createOriginServer(opts: OriginServerOptions): OriginServer {
   const author =
     opts.author ?? (() => (opts.device ? `${agentName(mcp)}@${opts.device}` : agentName(mcp)));
   registerOriginTools(mcp, localHandlers(opts.db, opts.home, refresh, author));
-  return { mcp, refresh };
+  let unwatch = () => {};
+  return {
+    mcp,
+    refresh,
+    start: () => {
+      unwatch();
+      unwatch = startWatch(
+        opts.watchIntervalMs ?? WATCH_INTERVAL_MS,
+        async () => {
+          if (!opts.changed || (await opts.changed())) await refresh(true);
+        },
+        opts.log,
+      );
+    },
+    stop: async () => {
+      unwatch();
+      await upTo(refresh(true), Date.now() + (opts.closeTimeoutMs ?? CLOSE_TIMEOUT_MS));
+    },
+  };
 }
 
-/** Serve over stdio until the client disconnects. */
+/**
+ * Serve over stdio until the client disconnects; meanwhile, look for new log lines in the
+ * background, and ingest one last time when the agent leaves.
+ */
 export async function serveStdio(opts: OriginServerOptions): Promise<void> {
   const server = createOriginServer(opts);
   const closed = new Promise<void>((resolve) => {
     server.mcp.server.onclose = () => resolve();
   });
   await server.mcp.connect(new StdioServerTransport());
-  process.stdin.once('end', () => void server.mcp.close());
+  onDisconnect(() => void server.mcp.close());
   void server.refresh(true);
+  server.start();
   await closed;
+  await server.stop();
 }

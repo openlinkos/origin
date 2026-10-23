@@ -5,7 +5,7 @@ A [personal hub](./hub.md) can serve a web interface for you, its owner. From a 
 ## What you can do
 
 - **Overview**: counts of events, sessions, entries, devices, tokens, and tombstones; each device with the last time it sent data (flagged after 24 hours); storage use and free disk space; parse errors in the last 24 hours and 7 days; the version and uptime.
-- **Tokens**: create a token for a device (named after the device, since a device's token works only for it) or a cloud agent, shown once together with ready-to-paste commands for `origin hub connect`, Claude Code, Codex, and a sync schedule; revoke a token.
+- **Tokens**: create a token for a device (named after the device, since a device's token works only for it) or a cloud agent, shown once together with ready-to-paste commands for `origin hub connect`, Claude Code, Codex, and an optional sync schedule; revoke a token.
 - **Devices** and the files each one has pushed, and a **Connect** page with the commands to connect a new device or agent.
 - **Timeline and sessions**: every session, and the events of one session in order. Tool calls and results are hidden unless you ask for them.
 - **Events** with their provenance: the device, the original file, the generation, and the mirror line. The original raw line is shown only when you ask for it, shortened to 4,000 characters.

@@ -78,7 +78,7 @@ origin sync
 
 Once the device is connected, the agent registrations you already have stay the same. `origin mcp` answers from the device's store and asks the hub at the same time, then merges both answers; each result says whether it was found on this device (`local`) or on the hub (`hub`). If the hub does not answer within 2 seconds (`ORIGIN_HUB_TIMEOUT_MS`), the agent gets this device's answer with a note that the hub was not consulted. What agents save lands on the device first and is synced to the hub right away, or on the next sync if the hub cannot be reached. Correcting or forgetting something that only the hub has is done on the hub, so it needs the hub to be reachable.
 
-Agents sync only when they are used. To keep the hub current from a device whose agents are idle, schedule `origin sync`, for example with cron (`*/10 * * * * origin sync`) or the Windows Task Scheduler.
+While an agent runs, its `origin mcp` also syncs in the background: every minute when log files have changed, and once more when the agent exits, so a device needs no scheduled sync. Sessions of agents that do not use Origin are picked up the next time one that does runs, or by `origin sync`; schedule `origin sync` (for example with cron, `*/10 * * * * origin sync`, or the Windows Task Scheduler) only on a device where such agents run alone.
 
 ## Connect a cloud agent
 

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-eda32189
+sourceHash: sha256-d0e0a113
 ---
 
 # 个人中枢
@@ -82,7 +82,7 @@ origin sync
 
 设备接入后，你已有的 Agent 注册都不用改。`origin mcp` 根据设备的库作答，同时询问中枢，再把两边的回答合并；每条结果都会说明它是在本设备上（`local`）还是在中枢上（`hub`）找到的。如果中枢在 2 秒内（`ORIGIN_HUB_TIMEOUT_MS`）没有回应，Agent 会得到本设备的回答，并附带一条说明：这次没有询问中枢。Agent 保存的内容先落到设备上，并立即同步到中枢；连不上中枢时，则在下一次同步时发送。纠正或遗忘只有中枢才有的内容会在中枢上执行，因此需要能连上中枢。
 
-只有 Agent 被调用时才会同步。如果某台设备上的 Agent 闲置，又想让中枢保持最新，可以定时运行 `origin sync`，例如用 cron（`*/10 * * * * origin sync`）或 Windows 任务计划程序。
+Agent 运行期间，它的 `origin mcp` 也会在后台同步：记录文件有变化时每分钟一次，Agent 退出时再同步一次，所以设备不需要定时同步。不使用 Origin 的 Agent 的会话，会在下一次有使用 Origin 的 Agent 运行时，或者运行 `origin sync` 时被收取；只有在某台设备上只运行这类 Agent 时，才需要定时运行 `origin sync`（例如用 cron，`*/10 * * * * origin sync`，或 Windows 任务计划程序）。
 
 ## 接入云端 Agent {#connect-a-cloud-agent}
 

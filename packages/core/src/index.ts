@@ -72,6 +72,7 @@ export {
 export {
   type AppendResult,
   appendRemote,
+  fingerprintSources,
   type IngestContext,
   listDevices,
   localRawFiles,

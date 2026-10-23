@@ -138,9 +138,10 @@ export const en = {
     'No public URL is configured, so the commands show https://hub.example.com. Replace it with the address of this hub, or start the hub with --public-url.',
   'connect.device': 'A device with agent sessions',
   'connect.deviceHelp':
-    'On each machine where agents run: connect once, under the name of its token, then sync. origin mcp on that machine then answers from its own store and from this hub.',
+    'On each machine where agents run: connect once, under the name of its token, then sync. origin mcp on that machine then answers from its own store and from this hub, and syncs while agents run.',
   'connect.deviceLabel': 'Connect and sync',
-  'connect.cronLabel': 'Sync every 10 minutes (crontab)',
+  'connect.cronLabel':
+    'Optional: also sync every 10 minutes, for agents that do not use Origin (crontab)',
   'connect.agents': 'Cloud agents',
   'connect.agentsHelp': 'Agents without local session logs talk to the hub directly over MCP.',
 

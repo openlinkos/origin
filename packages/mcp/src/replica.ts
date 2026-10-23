@@ -32,14 +32,21 @@ import {
 import { type LocalFacts, mergeGet, mergeSearch, mergeSources, mergeTimeline } from './merge.js';
 import { agentName, run } from './server.js';
 import {
+  CLOSE_TIMEOUT_MS,
   INSTRUCTIONS,
+  isTimeout,
+  onDisconnect,
   refreshGate,
   registerOriginTools,
+  startWatch,
   type ToolArgs,
   type ToolHandlers,
   type ToolName,
   toolError,
   toolResult,
+  upTo,
+  WATCH_INTERVAL_MS,
+  within,
 } from './tools.js';
 
 export interface ReplicaOptions {
@@ -55,6 +62,15 @@ export interface ReplicaOptions {
   sync?: () => Promise<void>;
   /** Minimum time between refreshes triggered by read tools (default 10 s); writes always refresh. */
   syncIntervalMs?: number;
+  /**
+   * How often to look for new log lines while serving, in the background, and ingest and sync
+   * them (default 60 s; 0 turns it off). See start().
+   */
+  watchIntervalMs?: number;
+  /** Whether the logs changed since the last ingestion, cheaply; without it, every look ingests. */
+  changed?: () => Promise<boolean>;
+  /** How long the last ingestion and sync on disconnect may take (default 5 s). See stop(). */
+  closeTimeoutMs?: number;
   /** How long a tool waits for the hub before answering from this device alone (default 2 s). */
   hubTimeoutMs?: number;
   /** How long a write that only the hub can do waits for it (default 15 s). */
@@ -76,6 +92,16 @@ export interface ReplicaServer {
    * carries the agent's name. Never throws; a failure is retried on the next read.
    */
   warm(): Promise<void>;
+  /**
+   * Look for new log lines every watchIntervalMs in the background: when the logs changed, ingest
+   * them and sync with the hub; when they did not, retry a sync with the hub that failed.
+   */
+  start(): void;
+  /**
+   * Stop looking, then ingest and sync with the hub one last time, waiting at most closeTimeoutMs
+   * (the agent is leaving). Never throws.
+   */
+  stop(): Promise<void>;
   /** Disconnect from the hub. */
   close(): Promise<void>;
 }
@@ -99,26 +125,6 @@ type HubAnswer =
   | { ok: true; error: string }
   | { ok: false; reason: string };
 
-class Timeout extends Error {}
-
-/** Settle with `promise`, or reject with Timeout after `ms`. */
-function within<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Timeout()), Math.max(0, ms));
-  });
-  return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
-}
-
-/** Wait for `promise` at most until `deadline`; never throws. */
-async function upTo(promise: Promise<unknown>, deadline: number): Promise<void> {
-  try {
-    await within(promise, deadline - Date.now());
-  } catch {
-    // slower than the deadline, or failed: it keeps running, or was logged, by its owner
-  }
-}
-
 /**
  * The stdio MCP server of a device connected to a hub (see docs/architecture.md#mcp-server). It
  * serves the seven tools from the device's own store, as without a hub, and completes read tools
@@ -133,7 +139,21 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
   const hubTimeout = opts.hubTimeoutMs ?? 2_000;
   const writeTimeout = opts.writeTimeoutMs ?? 15_000;
   const ingest = refreshGate(opts.ingest, interval, opts.log, 'ingest');
-  const sync = refreshGate(opts.sync, interval, opts.log, 'hub sync');
+  // Whether a sync with the hub has started and not succeeded since: the next look retries it.
+  let syncOwed = false;
+  const syncWithHub = opts.sync;
+  const sync = refreshGate(
+    syncWithHub &&
+      (async () => {
+        syncOwed = true;
+        await syncWithHub();
+        syncOwed = false;
+      }),
+    interval,
+    opts.log,
+    'hub sync',
+  );
+  let unwatch = () => {};
   const mcp = new McpServer(
     { name: 'origin', version: opts.version ?? '0.0.0' },
     { instructions: INSTRUCTIONS },
@@ -194,7 +214,7 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
       if (r.isError) return { ok: true, error: text };
       return { ok: true, value: JSON.parse(text) };
     } catch (err) {
-      if (err instanceof Timeout || (err instanceof McpError && err.code === -32001)) {
+      if (isTimeout(err) || (err instanceof McpError && err.code === -32001)) {
         return { ok: false, reason: `no answer within ${ms / 1000} s` };
       }
       // A JSON-RPC error from the hub is not a transport failure: keep the connection.
@@ -390,11 +410,37 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
         },
       );
     },
+    start: () => {
+      unwatch();
+      unwatch = startWatch(
+        opts.watchIntervalMs ?? WATCH_INTERVAL_MS,
+        async () => {
+          if (!opts.changed || (await opts.changed())) {
+            await ingest(true);
+            await sync(true);
+          } else if (syncOwed) {
+            await sync(true);
+          }
+        },
+        opts.log,
+      );
+    },
+    stop: async () => {
+      unwatch();
+      const last = (async () => {
+        await ingest(true);
+        await sync(true);
+      })();
+      await upTo(last, Date.now() + (opts.closeTimeoutMs ?? CLOSE_TIMEOUT_MS));
+    },
     close: disconnect,
   };
 }
 
-/** Serve a connected device over stdio until the client disconnects. */
+/**
+ * Serve a connected device over stdio until the client disconnects; meanwhile, look for new log
+ * lines in the background, and sync one last time when the agent leaves.
+ */
 export async function serveReplica(opts: ReplicaOptions): Promise<void> {
   const server = createReplicaServer(opts);
   const closed = new Promise<void>((resolve) => {
@@ -403,8 +449,10 @@ export async function serveReplica(opts: ReplicaOptions): Promise<void> {
   // Connect to the hub as soon as the agent has introduced itself, before its first read.
   server.mcp.server.oninitialized = () => void server.warm();
   await server.mcp.connect(new StdioServerTransport());
-  process.stdin.once('end', () => void server.mcp.close());
+  onDisconnect(() => void server.mcp.close());
   void server.refresh(true);
+  server.start();
   await closed;
+  await server.stop();
   await server.close();
 }

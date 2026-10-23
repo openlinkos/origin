@@ -17,6 +17,7 @@ import {
   entryCounts,
   entryHistory,
   entrySources,
+  fingerprintSources,
   forget,
   generateAdminPassword,
   getEntry,
@@ -53,7 +54,7 @@ import {
   storeName,
   syncSource,
 } from '@openlinkos/origin-core';
-import { serveReplica, serveStdio } from '@openlinkos/origin-mcp';
+import { serveReplica, serveStdio, WATCH_INTERVAL_MS } from '@openlinkos/origin-mcp';
 import { count, oneLine, table } from './format.js';
 import {
   type HubConfig,
@@ -627,6 +628,21 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
   const log = (m: string) => console.error(`origin: ${m}`);
   const hub = hubOf(ctx);
   const device = storeName(ctx.db);
+  const watchIntervalMs = watchInterval();
+  // What the log files looked like when they were last ingested: the background checks compare it
+  // with what they look like now, without reading them (see fingerprintSources).
+  const adapters = allAdapters();
+  let ingested: string | null = null;
+  const fingerprint = () => fingerprintSources(adapters).catch(() => null);
+  const ingest = async () => {
+    const before = await fingerprint();
+    await syncAll(ctx);
+    ingested = before;
+  };
+  const changed = async () => {
+    const now = await fingerprint();
+    return now === null || now !== ingested;
+  };
   if (hub) {
     // Answer from this device's store, merged with the hub's answers; sync up after writes.
     await serveReplica({
@@ -636,11 +652,13 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
       hub: { url: hub.url, token: hub.token },
       version: VERSION,
       log,
-      ingest: () => syncAll(ctx),
+      ingest,
+      changed,
       sync: async () => {
         await syncWithHub({ db: ctx.db, home: ctx.home, hub });
       },
       hubTimeoutMs: hubTimeoutMs(),
+      watchIntervalMs,
     });
     return 0;
   }
@@ -649,10 +667,25 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
     home: ctx.home,
     device,
     version: VERSION,
-    sync: () => syncAll(ctx),
+    sync: ingest,
+    changed,
     log,
+    watchIntervalMs,
   });
   return 0;
+}
+
+/** How often `origin mcp` looks for new log lines: ORIGIN_WATCH_INTERVAL_MS, default 60 s, 0 off. */
+function watchInterval(): number {
+  const value = process.env.ORIGIN_WATCH_INTERVAL_MS;
+  if (value === undefined || value === '') return WATCH_INTERVAL_MS;
+  const ms = Number(value);
+  if (!Number.isInteger(ms) || (ms !== 0 && (ms < 1000 || ms > 86_400_000))) {
+    throw new OriginError(
+      `ORIGIN_WATCH_INTERVAL_MS must be 0 (off) or a number of milliseconds from 1000, not "${value}".`,
+    );
+  }
+  return ms;
 }
 
 /** How long `origin mcp` waits for the hub: ORIGIN_HUB_TIMEOUT_MS, default 2000. */

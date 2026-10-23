@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-15201047
+sourceHash: sha256-d3fb6228
 ---
 
 # 命令参考
@@ -107,6 +107,7 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 | `ORIGIN_HUB_TOKEN` | — | 中枢令牌，覆盖 `origin hub connect` 的配置 |
 | `ORIGIN_DEVICE` | 主机名 | 新库使用的名称：也就是本设备在中枢上的名称，以及它写入的内容所记录的来源库（origin） |
 | `ORIGIN_HUB_TIMEOUT_MS` | `2000` | 已接入中枢的设备上，`origin mcp` 等待中枢多久，超时后不再等待中枢直接作答 |
+| `ORIGIN_WATCH_INTERVAL_MS` | `60000` | Agent 运行期间，`origin mcp` 多久查看一次新的记录行（已接入中枢时一并同步）；设为 `0` 则关闭 |
 | `ORIGIN_ADMIN` | `off` | 设为 `on` 时在 `/admin` 下提供管理界面（`origin serve --admin`） |
 | `ORIGIN_ADMIN_LISTEN` | — | 改为在这个 `host:port` 上提供管理界面（`--admin-listen`） |
 | `ORIGIN_PUBLIC_URL` | — | 中枢的公开 https URL（`--public-url`） |

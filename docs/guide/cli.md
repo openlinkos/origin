@@ -102,6 +102,7 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 | `ORIGIN_HUB_TOKEN` | — | Hub token; overrides `origin hub connect` |
 | `ORIGIN_DEVICE` | host name | The name a new store takes: this device's name on the hub, and the origin recorded on what it writes |
 | `ORIGIN_HUB_TIMEOUT_MS` | `2000` | How long `origin mcp` on a connected device waits for the hub before answering without it |
+| `ORIGIN_WATCH_INTERVAL_MS` | `60000` | How often `origin mcp` looks for new log lines while an agent runs (and syncs them with the hub when connected); `0` turns it off |
 | `ORIGIN_ADMIN` | `off` | `on` serves the admin UI at `/admin` (`origin serve --admin`) |
 | `ORIGIN_ADMIN_LISTEN` | — | Serve the admin UI on this `host:port` instead (`--admin-listen`) |
 | `ORIGIN_PUBLIC_URL` | — | The hub's public https URL (`--public-url`) |

@@ -79,8 +79,17 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
   const files = oldestFirst(await adapter.discover());
   result.filesSeen = files.length;
   const agentVersion = adapter.version();
+  // Between write transactions, let the process do other work now and then: an MCP server keeps
+  // answering tool calls while it ingests in the background.
+  let ranSince = Date.now();
+  const breathe = async () => {
+    if (Date.now() - ranSince < YIELD_EVERY_MS) return;
+    await new Promise((resolve) => setImmediate(resolve));
+    ranSince = Date.now();
+  };
 
   for (const file of files) {
+    await breathe();
     // Most files have not changed since the last sync; that needs no write lock.
     if (isUnchanged(ctx, adapter.id, file)) continue;
     // New lines go in write transactions of at most TRANSACTION_BYTES each, so that other processes
@@ -89,6 +98,7 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
     // twice.
     let changed = false;
     for (;;) {
+      await breathe();
       const step = transaction(ctx.db, () => ingestFile(ctx, adapter, file, agentVersion, result), {
         immediate: true,
       });
@@ -116,6 +126,32 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
     note: result.newGenerations > 0 ? `new generations: ${result.newGenerations}` : null,
   });
   return result;
+}
+
+/** A sync lets other work run at least this often (see syncSource). */
+const YIELD_EVERY_MS = 20;
+
+/**
+ * What the adapters' files look like now, as one digest of each file's path, size, and
+ * modification time. It reads no file contents, so comparing it with the one taken before the
+ * last sync tells cheaply whether there may be anything new to ingest.
+ */
+export async function fingerprintSources(adapters: SourceAdapter[]): Promise<string> {
+  const hash = createHash('sha256');
+  for (const adapter of adapters) {
+    const files = (await adapter.discover()).map((f) => f.absPath).sort();
+    for (const file of files) {
+      let state = 'missing';
+      try {
+        const st = fs.statSync(file);
+        state = `${st.size}:${st.mtimeMs}`;
+      } catch {
+        // deleted since discovery
+      }
+      hash.update(`${adapter.id}\0${file}\0${state}\n`);
+    }
+  }
+  return hash.digest('hex');
 }
 
 /**

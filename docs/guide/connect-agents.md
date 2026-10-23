@@ -63,7 +63,7 @@ Grok reads `~/.claude.json`, so the Claude Code registration above is picked up 
 | `correct` | Replace an entry with a corrected version |
 | `forget` | Forget an entry or event for good; agents only use it when you ask |
 
-The server tells agents how to use these tools, so you can simply ask questions in plain language. It syncs new session lines before answering, so an agent can even cite what you said a minute ago. The tools are specified in [Architecture](../architecture.md#mcp-server).
+The server tells agents how to use these tools, so you can simply ask questions in plain language. It syncs new session lines before answering, so an agent can even cite what you said a minute ago. While an agent runs, Origin also picks up new lines every minute in the background, and once more when the agent exits. The tools are specified in [Architecture](../architecture.md#mcp-server).
 
 ## Using a personal hub
 
