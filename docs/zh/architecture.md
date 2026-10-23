@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-454471ab
+sourceHash: sha256-2461c7d3
 ---
 
 # 架构
@@ -228,7 +228,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 |---|---|
 | 1 | 首个发布版本 0.1.0 的 schema，不记录版本 |
 | 2 | `session.title_manual`：会话的标题是否由用户给出 |
-| 3 | 数据：Claude Code 会话的标题，取自已经镜像、但 0.1.0 跳过了的 `ai-title`、`custom-title` 和 `summary` 行。只重新解析写明了这几种类型之一的行，在设备和中枢上都是如此（`raw/devices/<device>/claude-code/…`） |
+| 3 | 数据：Claude Code 会话的标题，取自已经镜像、但 0.1.0 跳过了的 `ai-title`、`custom-title` 和 `summary` 行。只重新解析含有这几个名称之一（`"ai-title"`、`"custom-title"`、`"summary"`）的行，在设备和中枢上都是如此（`raw/devices/<device>/claude-code/…`） |
 
 **什么时候需要迁移。** 除了已有数据不需要从中得到什么的新表、索引、视图或触发器之外，对库格式的任何改动都需要迁移：新增、重命名或删除列，修改约束，修改触发器或视图（`IF NOT EXISTS` 会保留旧的），需要为已有数据填写的派生行，或者因为适配器现在能从镜像的行中读出更多内容而需要重新解析这些行。*schema 迁移*就地修改表；*数据迁移*根据库中已有的内容（包括原始镜像）修改或填写行。两者都要保持不变量：原始镜像和事件永远不会被改写（不变量 3），被遗忘的内容保持被遗忘（不变量 2）。`core` 没有适配器，所以对于需要重新解析镜像中的行的数据迁移，由打开库的进程传入适配器；CLI 正是这样做的，并且在它执行第一个迁移之前，还会先设置好库的帧存储，以便中枢读取存储桶中的帧。
 
