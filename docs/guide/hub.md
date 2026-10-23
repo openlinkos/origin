@@ -29,7 +29,7 @@ curl http://localhost:7077/healthz
 
 Inside the container, `ORIGIN_HOME` is `/data`, and the hub listens on `0.0.0.0:7077`. Keep the `/data` volume, because it holds the whole store; to back it up, see [Backing up](./privacy.md#backing-up).
 
-From source, on any machine with Origin installed:
+Without Docker, on any machine with Origin installed (`npm install -g @openlinkos/origin`):
 
 ```bash
 origin serve --host 127.0.0.1 --port 7077

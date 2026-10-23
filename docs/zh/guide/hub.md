@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-d0e0a113
+sourceHash: sha256-0af6b6c0
 ---
 
 # 个人中枢
@@ -33,7 +33,7 @@ curl http://localhost:7077/healthz
 
 容器内的 `ORIGIN_HOME` 是 `/data`，中枢监听 `0.0.0.0:7077`。请保留 `/data` 卷，整个库都在里面；备份方法见[备份](./privacy.md#backing-up)。
 
-从源码运行，在任何装有 Origin 的机器上：
+不用 Docker 时，在任何装有 Origin 的机器上（`npm install -g @openlinkos/origin`）：
 
 ```bash
 origin serve --host 127.0.0.1 --port 7077

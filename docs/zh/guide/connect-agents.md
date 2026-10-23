@@ -1,10 +1,10 @@
 ---
-sourceHash: sha256-a9493518
+sourceHash: sha256-5a888887
 ---
 
 # 接入 Agent
 
-所有 Agent 启动的都是同一个 stdio server：`node <仓库>/packages/cli/dist/bin.js mcp`。把下文的 `/path/to/origin` 换成你本地仓库的绝对路径。请在全局（而不是单个项目）注册，让所有项目共享同一份记忆。
+所有 Agent 启动的都是同一个 stdio server：`origin mcp`，`npm install -g @openlinkos/origin` 会把它放到你的 `PATH` 里。在 Windows 上，npm 把 `origin` 装成一个 `.cmd` 脚本，Agent 无法直接启动它，请改为注册 `cmd /c origin mcp`，例如 `claude mcp add --scope user origin -- cmd /c origin mcp`。请在全局（而不是单个项目）注册，让所有项目共享同一份记忆。
 
 | Agent | 会话归档 | 通过 MCP 使用 Origin | 接入验证 |
 |---|---|---|---|
@@ -17,22 +17,22 @@ sourceHash: sha256-a9493518
 ## Claude Code {#claude-code}
 
 ```bash
-claude mcp add --scope user origin -- node /path/to/origin/packages/cli/dist/bin.js mcp
+claude mcp add --scope user origin -- origin mcp
 claude mcp list
 ```
 
 ## Codex CLI {#codex-cli}
 
 ```bash
-codex mcp add origin -- node /path/to/origin/packages/cli/dist/bin.js mcp
+codex mcp add origin -- origin mcp
 ```
 
 它会在 `~/.codex/config.toml` 中写入：
 
 ```toml
 [mcp_servers.origin]
-command = "node"
-args = ["/path/to/origin/packages/cli/dist/bin.js", "mcp"]
+command = "origin"
+args = ["mcp"]
 ```
 
 ## Cursor {#cursor}
@@ -42,7 +42,7 @@ args = ["/path/to/origin/packages/cli/dist/bin.js", "mcp"]
 ```json
 {
   "mcpServers": {
-    "origin": { "command": "node", "args": ["/path/to/origin/packages/cli/dist/bin.js", "mcp"] }
+    "origin": { "command": "origin", "args": ["mcp"] }
   }
 }
 ```
@@ -78,4 +78,4 @@ server 会告诉 Agent 如何使用这些工具，你只需用自然语言提问
 
 ## 更新 Origin 之后 {#after-updating-origin}
 
-Agent 从你的本地仓库启动 server。拉取新代码并运行 `pnpm build` 后，请重启正在运行的 Agent 会话，以加载新版本。
+Agent 启动的是已安装的 `origin`。运行 `npm install -g @openlinkos/origin@latest` 之后，请重启正在运行的 Agent 会话，以加载新版本。如果你从本地仓库运行 Origin，则在 `pnpm build` 之后重启。

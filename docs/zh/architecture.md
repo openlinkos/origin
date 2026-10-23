@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-842d66b8
+sourceHash: sha256-d5bfc851
 ---
 
 # 架构
@@ -119,6 +119,8 @@ pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.16（�
 | `@openlinkos/origin-mcp` | `packages/mcp` | MCP 工具；基于 stdio 和无状态 HTTP 的 server，以及已接入中枢的设备上的 server，它把中枢的回答合并进自己的回答 | core |
 | `@openlinkos/origin-admin` | `packages/admin` | 中枢的管理界面：服务器端渲染的页面、JSON API 及其静态资源 | core |
 | `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢），以及设备与中枢之间的同步 | core, adapters, mcp, admin |
+
+五个包以同一个版本号一起发布到 npm；用户安装 `@openlinkos/origin`，其余几个随之安装。1.0 之前，另外四个包属于内部实现，它们的 API 可能在任何版本中改变。
 
 `core` 不得依赖任何其他包，`mcp` 和 `admin` 都不得依赖 `adapters`：CLI 以回调的形式把采集注入各个 server，中枢的 HTTP server 位于 CLI 中，并由它挂载管理界面的请求处理函数。适配器实现 `core` 中的 `SourceAdapter` 接口：
 

@@ -1,31 +1,28 @@
 ---
-sourceHash: sha256-ab5f2595
+sourceHash: sha256-e5792ada
 ---
 
 # 快速开始
 
 Origin 运行在你的机器上：读取各 AI Agent 本来就写在磁盘上的会话记录，归档到 `~/.origin`，再通过同一个 [MCP](https://modelcontextprotocol.io) server 提供给所有 Agent。如果你在多台机器上使用 Agent，之后可以用自托管的[个人中枢](./hub.md)把它们连在一起。
 
-::: warning 早期开发
-Origin 尚未发布到 npm，请按下面的方式从源码安装。
+::: warning 早期版本
+Origin 目前是 0.1。1.0 之前，新的次版本可能改变存储格式，[发布说明](https://github.com/openlinkos/origin/blob/master/CHANGELOG.md)会说明需要怎么做。
 :::
 
 ## 环境要求 {#requirements}
 
 - Node.js 22.16 或更高（推荐 24 LTS）
-- pnpm（`corepack enable` 会安装仓库锁定的版本）
 - 至少一个已支持的 Agent：Claude Code 或 Codex CLI。Cursor、ZCode、Grok Build 现在就能*使用* Origin，归档它们自己的会话即将支持。
 
 ## 安装 {#install}
 
 ```bash
-git clone https://github.com/openlinkos/origin.git
-cd origin
-pnpm install
-pnpm build
+npm install -g @openlinkos/origin
+origin --version
 ```
 
-`origin` 命令即 `node packages/cli/dist/bin.js`。在仓库目录下也可以用 `pnpm origin <命令>`，或者把完整路径设为 `origin` 别名。
+这会把 `origin` 命令放到你的 `PATH` 里。如果要参与开发 Origin 本身，请按 [CONTRIBUTING.md](https://github.com/openlinkos/origin/blob/master/CONTRIBUTING.md) 从源码构建。
 
 ## 归档会话 {#archive-your-sessions}
 
@@ -42,9 +39,11 @@ origin timeline  # 最近 7 天的会话
 在用户级注册一次，所有项目共享同一份记忆。以 Claude Code 为例：
 
 ```bash
-claude mcp add --scope user origin -- node /path/to/origin/packages/cli/dist/bin.js mcp
+claude mcp add --scope user origin -- origin mcp
 claude mcp list   # origin: … ✔ Connected
 ```
+
+在 Windows 上，npm 把 `origin` 装成一个 `.cmd` 脚本，Agent 无法直接启动它，请改为注册 `cmd /c origin mcp`，例如 `claude mcp add --scope user origin -- cmd /c origin mcp`。
 
 其他 Agent 见[接入 Agent](./connect-agents.md)。
 

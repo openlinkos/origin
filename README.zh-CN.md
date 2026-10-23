@@ -11,7 +11,7 @@
 
 各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：目前支持 Claude Code 与 Codex，Cursor、ZCode、Grok Build 将陆续接入。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。如果你在多台机器上工作，或者使用云端 Agent，可以用自托管的**个人中枢**把它们接入同一份记忆。
 
-> **状态：早期开发。** Claude Code 与 Codex 会话的采集、MCP server、CLI 与个人中枢（含管理界面）已经端到端可用；其余 Agent 的适配器正在开发（见[路线图](#路线图)）。各包尚未发布到 npm，请从源码安装。
+> **状态：早期版本（0.1）。** Claude Code 与 Codex 会话的采集、MCP server、CLI 与个人中枢（含管理界面）已经端到端可用；其余 Agent 的适配器正在开发（见[路线图](#路线图)）。1.0 之前，次版本可能改变存储格式，[更新日志](CHANGELOG.md)会说明需要怎么做。
 
 ## 为什么
 
@@ -49,28 +49,27 @@ Origin 以**人**而不是工具为中心：
 
 ## 快速开始
 
-**环境要求：** Node.js 22.16 或更高（推荐 24 LTS），以及 pnpm（`corepack enable` 会安装锁定的版本）。
+**环境要求：** Node.js 22.16 或更高（推荐 24 LTS）。
 
 ```bash
-git clone https://github.com/openlinkos/origin.git
-cd origin
-pnpm install
-pnpm build
+npm install -g @openlinkos/origin
 
-pnpm origin sync        # 把本机 Agent 会话采集到 ~/.origin
-pnpm origin status      # 查看已采集的内容
+origin sync        # 把本机 Agent 会话采集到 ~/.origin
+origin status      # 查看已采集的内容
 ```
 
-`pnpm origin <命令>` 等价于 `node packages/cli/dist/bin.js <命令>`，可以把后者设为 `origin` 别名。
+如果要参与开发 Origin 本身，请按 [CONTRIBUTING.md](CONTRIBUTING.md) 从源码构建。
 
 ### 接入 Claude Code
 
 在用户级注册一次，所有项目共享同一份记忆：
 
 ```bash
-claude mcp add --scope user origin -- node /absolute/path/to/origin/packages/cli/dist/bin.js mcp
+claude mcp add --scope user origin -- origin mcp
 claude mcp list         # origin: … ✔ Connected
 ```
+
+在 Windows 上，npm 把 `origin` 装成一个 `.cmd` 脚本，Agent 无法直接启动它，请改为注册 `cmd /c origin mcp`，例如 `claude mcp add --scope user origin -- cmd /c origin mcp`。
 
 之后在任意会话里直接问，例如：*「上周在 origin 项目里，关于 schema 迁移我是怎么决定的？为什么？请给出来源。」* Agent 会检索 Origin 并附上事件 id 作答，你可以用 `origin show <id>` 打开原文。遇到值得保留的内容，它会用 `remember` 存成条目。
 
@@ -123,7 +122,7 @@ Agent 会话记录里常有源代码、命令输出，以及你在提示词里�
 - 很多会话没有标题，因为 Claude Code 只为部分会话写 `summary` 行。
 - 项目名取自工作目录的最后一段，而不是由 git remote 推导。
 - 遗忘只是隐藏，不会从原始镜像文件中物理删除。
-- 没有后台文件监听：MCP server 按需同步，其他时候需要运行 `origin sync`，它也会与你的中枢同步。
+- Origin 不会自行监听文件。Agent 运行期间，它的 MCP server 每分钟检查一次新内容，Agent 退出时再检查一次；其他时候请运行 `origin sync`，它也会与你的中枢同步。
 - 在设备上，CLI 管理命令作用于该设备自己的条目；中枢的管理界面可以查看和管理所有设备的条目。
 
 ## 目录结构

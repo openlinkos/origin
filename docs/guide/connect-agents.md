@@ -1,6 +1,6 @@
 # Connect your agents
 
-Every agent launches the same stdio server, `node <repo>/packages/cli/dist/bin.js mcp`. Replace `/path/to/origin` below with the absolute path of your checkout. Register Origin globally, not per project, so that all projects share one memory.
+Every agent launches the same stdio server, `origin mcp`, which `npm install -g @openlinkos/origin` puts on your `PATH`. On Windows, npm installs `origin` as a `.cmd` script that agents cannot start directly; register `cmd /c origin mcp` instead, for example `claude mcp add --scope user origin -- cmd /c origin mcp`. Register Origin globally, not per project, so that all projects share one memory.
 
 | Agent | Sessions archived | Can use Origin over MCP | Setup verified |
 |---|---|---|---|
@@ -13,22 +13,22 @@ Every agent launches the same stdio server, `node <repo>/packages/cli/dist/bin.j
 ## Claude Code
 
 ```bash
-claude mcp add --scope user origin -- node /path/to/origin/packages/cli/dist/bin.js mcp
+claude mcp add --scope user origin -- origin mcp
 claude mcp list
 ```
 
 ## Codex CLI
 
 ```bash
-codex mcp add origin -- node /path/to/origin/packages/cli/dist/bin.js mcp
+codex mcp add origin -- origin mcp
 ```
 
 This writes the following to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.origin]
-command = "node"
-args = ["/path/to/origin/packages/cli/dist/bin.js", "mcp"]
+command = "origin"
+args = ["mcp"]
 ```
 
 ## Cursor
@@ -38,7 +38,7 @@ args = ["/path/to/origin/packages/cli/dist/bin.js", "mcp"]
 ```json
 {
   "mcpServers": {
-    "origin": { "command": "node", "args": ["/path/to/origin/packages/cli/dist/bin.js", "mcp"] }
+    "origin": { "command": "origin", "args": ["mcp"] }
   }
 }
 ```
@@ -74,4 +74,4 @@ If you use agents on several machines, or cloud agents, you can run a [personal 
 
 ## After updating Origin
 
-Agents start the server from your checkout. After you pull and run `pnpm build`, restart running agent sessions so that they pick up the new version.
+Agents start the installed `origin`. After `npm install -g @openlinkos/origin@latest`, restart running agent sessions so that they pick up the new version. If you run Origin from a checkout instead, restart them after `pnpm build`.

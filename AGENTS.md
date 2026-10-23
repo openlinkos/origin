@@ -47,6 +47,10 @@ When running the CLI, always point `ORIGIN_HOME` at a fresh temporary directory.
 - Never commit real session logs, the contents of `~/.origin`, secrets, tokens, or `.env` files.
 - Test fixtures must be synthetic or thoroughly scrubbed (names, paths, repository URLs, prompts, outputs).
 
+## Releases
+
+The five packages share one version and are published to npm by `.github/workflows/release.yml`; the same tag adds version tags to the `ghcr.io/openlinkos/origin` image. To release, add the version's section to `CHANGELOG.md` (it becomes the GitHub release notes), bump `version` in every `packages/*/package.json`, commit, then tag `v<version>` and push the tag. A maintainer approves the run in the `npm` environment; npm trusted publishing attaches provenance. Never publish from a workstation. After the first release, a change to the store format needs a migration, not a fresh `ORIGIN_HOME`.
+
 ## Git
 
 - Maintainers commit directly to `master`. External contributions come in through pull requests.

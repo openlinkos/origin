@@ -2,26 +2,23 @@
 
 Origin runs on your machine. It reads the session logs your AI agents already write to disk, archives them in `~/.origin`, and serves them to every agent through one [MCP](https://modelcontextprotocol.io) server. If you use agents on several machines, a self-hosted [personal hub](./hub.md) can bring them together later.
 
-::: warning Early development
-Origin is not yet published to npm. Install it from source as shown below.
+::: warning Early version
+Origin is at 0.1. Until 1.0, a new minor version may change the store format; its [release notes](https://github.com/openlinkos/origin/blob/master/CHANGELOG.md) say what to do.
 :::
 
 ## Requirements
 
 - Node.js 22.16 or later (24 LTS recommended)
-- pnpm (`corepack enable` installs the version pinned by the repository)
 - At least one supported agent: Claude Code or Codex CLI. Cursor, ZCode, and Grok Build can already *use* Origin; archiving their own sessions is coming next.
 
 ## Install
 
 ```bash
-git clone https://github.com/openlinkos/origin.git
-cd origin
-pnpm install
-pnpm build
+npm install -g @openlinkos/origin
+origin --version
 ```
 
-The `origin` command is `node packages/cli/dist/bin.js`. From the repository you can also run `pnpm origin <command>`, or alias the full path as `origin`.
+This puts the `origin` command on your `PATH`. To work on Origin itself, build it from source as described in [CONTRIBUTING.md](https://github.com/openlinkos/origin/blob/master/CONTRIBUTING.md).
 
 ## Archive your sessions
 
@@ -38,9 +35,11 @@ origin timeline  # sessions from the last 7 days
 Register Origin once, at user scope, so that every project shares the same memory. For Claude Code:
 
 ```bash
-claude mcp add --scope user origin -- node /path/to/origin/packages/cli/dist/bin.js mcp
+claude mcp add --scope user origin -- origin mcp
 claude mcp list   # origin: … ✔ Connected
 ```
+
+On Windows, npm installs `origin` as a `.cmd` script that agents cannot start directly; register `cmd /c origin mcp` instead, for example `claude mcp add --scope user origin -- cmd /c origin mcp`.
 
 Other agents are covered in [Connect your agents](./connect-agents.md).
 

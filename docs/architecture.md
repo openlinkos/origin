@@ -116,6 +116,8 @@ pnpm workspace, TypeScript (strict, ESM, NodeNext), Node.js ≥ 22.16 (for zstd 
 | `@openlinkos/origin-admin` | `packages/admin` | The hub's admin UI: server-rendered pages, a JSON API, and its static assets | core |
 | `@openlinkos/origin` | `packages/cli` | The `origin` command, including `origin mcp`, `origin serve` (the hub), and a device's sync with its hub | core, adapters, mcp, admin |
 
+All five packages are published to npm together under one version; people install `@openlinkos/origin`, which brings the others along. Before 1.0 the other four are internal: their APIs may change in any release.
+
 `core` must not depend on any other package, and neither `mcp` nor `admin` may depend on `adapters`: the CLI injects ingestion into the servers as callbacks, and the hub's HTTP server lives in the CLI, which mounts the admin UI's request handler. Adapters implement the `SourceAdapter` interface from `core`:
 
 ```ts

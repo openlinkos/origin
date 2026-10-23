@@ -11,7 +11,7 @@ English | [简体中文](README.zh-CN.md)
 
 Origin archives the sessions your AI agents already write to disk into a single local store. Claude Code and Codex are supported today; Cursor, ZCode, and Grok Build are next. Through one [MCP](https://modelcontextprotocol.io) server, it gives every agent the same memory. Whichever tool you open can look up what you decided last week and why, trace it to the exact original line, and save what it learns for next time. If you work on several machines or with cloud agents, a self-hosted **personal hub** brings them all into the same memory.
 
-> **Status: early development.** Ingestion of Claude Code and Codex sessions, the MCP server, the CLI, and the personal hub with its admin UI work end to end. The other agents' adapters are in progress (see [Roadmap](#roadmap)). Packages are not yet published to npm; install from source.
+> **Status: early (0.1).** Ingestion of Claude Code and Codex sessions, the MCP server, the CLI, and the personal hub with its admin UI work end to end. The other agents' adapters are in progress (see [Roadmap](#roadmap)). Before 1.0, a minor version may change the store format; the [changelog](CHANGELOG.md) says what to do.
 
 ## Why
 
@@ -49,28 +49,27 @@ Any MCP-capable agent can already query the archive and entries. Archiving an ag
 
 ## Getting started
 
-**Requirements:** Node.js 22.16 or later (24 LTS recommended) and pnpm (`corepack enable` installs the pinned version).
+**Requirements:** Node.js 22.16 or later (24 LTS recommended).
 
 ```bash
-git clone https://github.com/openlinkos/origin.git
-cd origin
-pnpm install
-pnpm build
+npm install -g @openlinkos/origin
 
-pnpm origin sync        # ingest local agent sessions into ~/.origin
-pnpm origin status      # what has been ingested so far
+origin sync        # ingest local agent sessions into ~/.origin
+origin status      # what has been ingested so far
 ```
 
-`pnpm origin <command>` runs `node packages/cli/dist/bin.js <command>`; you can alias the latter as `origin`.
+To work on Origin itself, build it from source as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Connect Claude Code
 
 Register the server once at user scope, so that every project shares the same memory:
 
 ```bash
-claude mcp add --scope user origin -- node /absolute/path/to/origin/packages/cli/dist/bin.js mcp
+claude mcp add --scope user origin -- origin mcp
 claude mcp list         # origin: … ✔ Connected
 ```
+
+On Windows, npm installs `origin` as a `.cmd` script that agents cannot start directly; register `cmd /c origin mcp` instead, for example `claude mcp add --scope user origin -- cmd /c origin mcp`.
 
 Then ask in any session, for example: *"What did I decide about schema migrations in the origin project last week, and why? Cite your sources."* The agent searches Origin and answers with event ids, which you can open with `origin show <id>`. When it learns something worth keeping, it saves an entry with `remember`.
 
@@ -123,7 +122,7 @@ Delivered as small, runnable increments, each usable on its own:
 - Many sessions have no title, because Claude Code writes `summary` lines for only some sessions.
 - The project name is the last segment of the working directory, not derived from the git remote.
 - Forgetting hides data but does not erase it from the raw mirror files.
-- There is no background file watching. The MCP server syncs on demand; otherwise run `origin sync`, which also syncs with your hub.
+- Origin does not watch files on its own. While an agent runs, its MCP server checks for new lines every minute and once more when the agent exits; otherwise run `origin sync`, which also syncs with your hub.
 - On a device, CLI curation commands act on that device's own entries; the hub's admin UI shows and curates the entries of every device.
 
 ## Project layout
