@@ -39,6 +39,12 @@ function wroteAs(db: Database, name: string): boolean {
   return db.prepare('SELECT 1 FROM change_log WHERE origin = ? LIMIT 1').get(name) !== undefined;
 }
 
+/** Whether the store keeps its name for good: it has written entries or tombstones under it. */
+export function isStoreNameFixed(db: Database): boolean {
+  const current = getSetting(db, STORE_NAME);
+  return current !== null && wroteAs(db, current);
+}
+
 /**
  * Name or rename the store. A store that has already written entries or tombstones under its name
  * keeps it: they carry the name, and replication relies on it.

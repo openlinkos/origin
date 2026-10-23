@@ -311,7 +311,7 @@ describe('tokens', () => {
       { name: 'laptop', createdAt: 1000, lastUsedAt: 2000, revokedAt: null },
     ]);
 
-    expect(() => createToken(db, 'laptop')).toThrow(/choose another name/);
+    expect(() => createToken(db, 'laptop')).toThrow(/is active; revoke it first/);
     expect(() => createToken(db, 'Bad Name')).toThrow(OriginError);
     expect(() => createToken(db, '-dash')).toThrow(OriginError);
     expect(() => createToken(db, 'a'.repeat(64))).toThrow(OriginError);
@@ -320,8 +320,17 @@ describe('tokens', () => {
     expect(revokeToken(db, 'laptop', 3000)).toBe(false);
     expect(revokeToken(db, 'nobody')).toBe(false);
     expect(verifyToken(db, token)).toBeNull();
-    expect(() => createToken(db, 'laptop')).toThrow(/choose another name/);
     expect(listTokens(db)[0]?.revokedAt).toBe(3000);
+
+    // A token is bound to the device it is named after, so a device that lost its token gets a
+    // new one under the same name; the revoked token stays invalid.
+    const renewed = createToken(db, 'laptop', 4000);
+    expect(renewed).not.toBe(token);
+    expect(verifyToken(db, token, 5000)).toBeNull();
+    expect(verifyToken(db, renewed, 5000)).toEqual({ name: 'laptop' });
+    expect(listTokens(db)).toEqual([
+      { name: 'laptop', createdAt: 4000, lastUsedAt: 5000, revokedAt: null },
+    ]);
   });
 
   it('records use at most once a minute', () => {

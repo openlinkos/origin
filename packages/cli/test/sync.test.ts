@@ -325,14 +325,21 @@ describe('device to hub replication', () => {
       { ...entry, supersedes: 'ent_0123456789ab' },
       { ...entry, validFrom: 5, validTo: 1 },
       { ...entry, createdAt: 'yesterday' },
-      { ...entry, origin: 'desk' }, // not the device's own
       { ...entry, sources: [] },
       { ...entry, sources: [{ eventId: USER_EVENT }, { eventId: USER_EVENT }] },
     ];
     for (const e of bad) {
       expect((await post('/v1/entries', { device: 'laptop', entries: [e] })).status).toBe(400);
     }
-    expect((await post('/v1/entries', { device: 'hub', entries: [entry] })).status).toBe(400);
+    // The token of laptop sends only what laptop wrote, and only as laptop.
+    const foreign = await post('/v1/entries', {
+      device: 'laptop',
+      entries: [{ ...entry, origin: 'desk' }],
+    });
+    expect(foreign.status).toBe(403);
+    expect(await foreign.json()).toMatchObject({ error: expect.stringMatching(/written by desk/) });
+    expect((await post('/v1/entries', { device: 'desk', entries: [] })).status).toBe(403);
+    expect((await post('/v1/entries', { device: 'hub', entries: [entry] })).status).toBe(403);
     expect((await post('/v1/entries', { device: 'laptop', entries: 'x' })).status).toBe(400);
 
     const missing = { ...entry, sources: [{ eventId: 'claude-code:nope', quote: null }] };
@@ -372,7 +379,7 @@ describe('device to hub replication', () => {
           tombstones: [{ ...tombstone, origin: 'desk' }],
         })
       ).status,
-    ).toBe(400);
+    ).toBe(403);
     expect(
       (await post('/v1/tombstones', { device: 'laptop', tombstones: [{ ...tombstone, id: 'x' }] }))
         .status,

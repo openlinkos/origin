@@ -28,7 +28,7 @@ Forgetting **hides**; it does not erase. The raw mirror files under `~/.origin/r
 A [personal hub](./hub.md) changes where your data lives:
 
 - **A server you control.** The hub holds a full copy of every connected device's sessions and all your entries. Run it only on a machine you control, and protect its data directory like `~/.origin`.
-- **TLS and tokens.** The hub speaks plain HTTP, so put it behind TLS before exposing it. Every request except `/healthz` needs a token. The hub stores only hashes of tokens, and you can revoke a token when a device is lost or retired.
+- **TLS and tokens.** The hub speaks plain HTTP, so put it behind TLS before exposing it. Every request except `/healthz` needs a token. The hub stores only hashes of tokens, and you can revoke a token when a device is lost or retired. A device's token works only for that device, so it can never write as another one.
 - **Forgetting reaches every device.** Forget anywhere, on a device or on the hub, and the hub and then every device apply the same tombstone on their next sync. Forgotten events stay hidden even if a device pushes them again.
 - **What each device keeps.** Each device keeps its own sessions and entries, and sends them to the hub; it never receives other devices' sessions or entries. Forgetting hides data on every store, but as everywhere, the raw mirror files still contain the original lines.
 - **The admin UI shows your sessions.** If you enable the hub's [admin UI](./admin.md), anyone who knows the admin password can read your archived sessions and entries in a browser. Guard the password like the hub itself. The UI never shows the text of forgotten entries or events.

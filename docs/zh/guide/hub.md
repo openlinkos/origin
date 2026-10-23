@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-e2cf105f
+sourceHash: sha256-eda32189
 ---
 
 # 个人中枢
@@ -52,7 +52,7 @@ origin serve --host 127.0.0.1 --port 7077
 
 ## 创建令牌 {#create-tokens}
 
-除 `/healthz` 外，每个请求都需要 bearer 令牌。在中枢上为每台设备或每个云端 Agent 各建一个令牌：
+除 `/healthz` 外，每个请求都需要 bearer 令牌。在中枢上为每台设备或每个云端 Agent 各建一个令牌，设备的令牌以设备命名：
 
 ```bash
 origin token create laptop          # 令牌只显示一次，以 ogn_ 开头
@@ -62,7 +62,9 @@ origin token revoke laptop
 
 使用 Docker 时，通过 `docker exec` 运行同样的命令，例如 `docker exec origin-hub origin token create laptop`。如果启用了[管理界面](./admin.md)，也可以在那里创建和吊销令牌，每个新令牌的接入命令都已准备好，可以直接复制。
 
-中枢只保存令牌的哈希，所以请在令牌显示时复制下来。令牌丢失或设备退役时，请吊销对应的令牌。条目会把 Agent 和设备记为作者，例如 `claude-code@laptop`；直接连接中枢的 Agent 则改用令牌名记录，例如 `claude-code@ci`。
+令牌名就是设备名：令牌 `laptop` 只能为设备 `laptop` 发送和接收会话、条目和遗忘记录，中枢不接受它代表其他任何设备。所以即使令牌被盗，也无法冒充另一台设备写入。
+
+中枢只保存令牌的哈希，所以请在令牌显示时复制下来。令牌丢失时，请吊销它，再用同一个名称新建一个；设备保留原来的名称，用新令牌重新接入即可。设备退役时，请吊销它的令牌。条目会把 Agent 和设备记为作者，例如 `claude-code@laptop`；直接连接中枢的 Agent 则记为它的令牌名，例如 `ci`。
 
 ## 接入设备 {#connect-a-device}
 
@@ -74,7 +76,7 @@ origin hub status
 origin sync
 ```
 
-- 中枢以设备的库名称来识别设备：也就是库第一次使用时的 `ORIGIN_DEVICE` 或主机名。`--device` 可以给一个还没有保存过条目、也没有遗忘过任何内容的库改名；此后库会一直保持这个名称。`origin hub disconnect` 用于断开连接。
+- 中枢以设备的库名称来识别设备：也就是库第一次使用时的 `ORIGIN_DEVICE` 或主机名。这个名称必须与设备的令牌名相同；`origin hub connect` 和 `origin hub status` 会向中枢核对，不一致时拒绝并说明如何解决。`--device` 可以给一个还没有保存过条目、也没有遗忘过任何内容的库改名；此后库会一直保持这个名称，它的令牌也必须以这个名称创建。`origin hub disconnect` 用于断开连接。
 - 环境变量 `ORIGIN_HUB_URL`、`ORIGIN_HUB_TOKEN` 会覆盖保存的连接配置。
 - `origin sync` 会采集本机会话，发送原始镜像以及在本机写下的条目和遗忘记录，再应用中枢的遗忘记录。可以随时重跑：同步会从上次停下的位置继续。`origin push` 的作用相同。
 

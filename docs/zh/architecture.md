@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-00715967
+sourceHash: sha256-5115eaa8
 ---
 
 # 架构
@@ -151,7 +151,7 @@ interface SourceAdapter {
 | `entry`, `entry_source`, `entry_fts` | 条目、条目引用的事件（含引文），以及条目的 FTS5 索引。每个版本记录它的 `root`（第一个版本，写入时确定）和它的 `origin` |
 | `tombstone`, `forgotten_entry`, `excluded_event` | 遗忘操作，每条都有一个全局 id（`tmb_` 加随机十六进制，与 `ent_` id 相同）和它的 `origin`，以及它们在本库中的影响 |
 | `change_log` | 本库写入或收到的条目和遗忘记录的只追加序列（序号、类型、id、origin、时间），由触发器填写；触发器拒绝任何更新和删除。复制游标指向这个序列 |
-| `api_token` | 中枢访问令牌：名称和 SHA-256 哈希，从不保存令牌本身 |
+| `api_token` | 中枢访问令牌：名称（设备的令牌即设备名）和 SHA-256 哈希，从不保存令牌本身 |
 | `setting` | 少量键值状态，只属于各自的库，从不复制：库的名称、设备的复制游标，以及中枢上管理密码的 scrypt 哈希 |
 | `admin_session` | 管理界面的会话：会话 id 的哈希、它的 CSRF 令牌和各个时间戳 |
 | `audit_log` | 管理操作的只追加记录，只含 id 和数量，从不包含内容；触发器拒绝任何更新和删除 |
@@ -285,8 +285,9 @@ interface SourceAdapter {
 ### 访问 {#access}
 
 - 发往 `/mcp` 和 `/v1/*` 的每个请求都需要 `Authorization: Bearer <token>`；`/admin` 下的管理界面有自己的登录（见[管理界面](#admin-ui)）。令牌在中枢上创建（`origin token create <name>`），只显示一次，只以 SHA-256 哈希的形式存储，并且可以吊销。每台设备或每个云端 Agent 各用自己的令牌。
+- **每个令牌绑定一台设备，即与它同名的设备。** 在复制接口上，令牌只能为这台设备发送和接收数据：它推送的内容都记在令牌名下，请求里指明了其他设备（请求体或查询参数中的 `device`）时会被拒绝并返回 `403`，`origin` 不是这台设备的记录同样会被拒绝。因此设备的库必须与它的令牌同名，`origin hub connect` 会检查这一点（见[从设备使用中枢](#using-a-hub-from-a-device)）。与中枢自身同名的令牌不服务于任何设备；只用于 `/mcp` 的令牌（例如云端 Agent 的令牌）不需要对应设备。被吊销的令牌可以用同一个名称新建一个来替换，所以丢失令牌的设备仍能保留它的名称；有效的令牌必须先吊销。
 - 中枢使用明文 HTTP。在 localhost 之外开放之前，请把它放在 TLS（反向代理或 CDN）之后。
-- 设备推送上来的条目保留写入时的作者。通过中枢的 `/mcp` 写入的条目，如果是设备上的 `origin mcp` 报上了它的 Agent 和它自己（请求头 `X-Origin-Client` 和 `X-Origin-Device`），作者记为 `<agent>@<device>`；否则记为 Agent 加令牌名称，例如云端 Agent 的 `claude-code@ci`。
+- 设备推送上来的条目保留写入时的作者。通过中枢的 `/mcp` 写入的条目，如果调用方在 `X-Origin-Client` 中报上了它的 Agent（设备上的 `origin mcp` 就会这样做），作者记为 `<agent>@<令牌名>`（如 `claude-code@laptop`）；否则只记令牌名（例如云端 Agent 的令牌 `ci`），因为无状态请求不携带 MCP 客户端的名称。作者中的设备部分始终是令牌名：设备上的 `origin mcp` 还会在 `X-Origin-Device` 中报上自己的名称，如果这个请求头指明的是另一台设备，中枢会拒绝请求（`403`），所以任何令牌都不能以另一台设备的身份写入，库名与令牌不一致的设备也会明显地报错。
 
 ### HTTP 接口 {#http-interface}
 
@@ -294,19 +295,20 @@ interface SourceAdapter {
 |---|---|
 | `GET /healthz` | `{ "ok": true, "version": … }`，无需鉴权 |
 | `POST /mcp` | MCP Streamable HTTP，无状态，JSON 响应；与 stdio server 相同的七个工具 |
-| `GET /v1/cursors?device=<name>` | 该设备每个文件在中枢上的字节游标 |
+| `GET /v1/device` | `{ device, hub }`：令牌所属的设备（即令牌名）和中枢的名称 |
+| `GET /v1/cursors?device=<name>` | 令牌所属设备的每个文件在中枢上的字节游标 |
 | `POST /v1/ingest` | 追加一个块：JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }`，其中 `data` 为 base64；请求体可以使用 gzip 编码。返回 `200 { bytes, eventsAdded, … }`，偏移量不匹配时返回 `409 { bytes }` |
-| `POST /v1/entries` | `{ device, entries }`，最多 1,000 个条目，每个为 `{ id, kind, text, confidence, author, project, supersedes, validFrom, validTo, createdAt, origin, sources: [{ eventId, quote }] }`，其 `origin` 必须等于 `device`。按顺序保存；返回 `200 { applied, pending }`，其中 `pending` 为 null，或者是第一个所引用事件或所取代版本尚不在中枢上的条目的 `{ id, missing }`（它之后的条目都不会被保存）。同一个 id 下内容不同时返回 `409` |
-| `POST /v1/tombstones` | `{ device, tombstones }`，最多 1,000 条遗忘记录，每条为 `{ id, target, reason, createdAt, origin, entries, events }`，附带它在设备上的影响，其 `origin` 必须等于 `device`。按[遗忘](#forgetting)中的规则应用；返回 `200 { applied }`，同一个 id 下内容不同时返回 `409` |
-| `GET /v1/tombstones?after=<seq>&device=<name>` | `{ tombstones, next, more }`：中枢变更日志中序号大于 `after` 的遗忘记录，不含该设备自己创建的，每条都附带 id、目标、原因、`createdAt`、origin，以及它在中枢上遗忘的条目和排除的事件。`more` 为 true 时，用 `after=<next>` 继续 |
+| `POST /v1/entries` | `{ device, entries }`，最多 1,000 个条目，每个为 `{ id, kind, text, confidence, author, project, supersedes, validFrom, validTo, createdAt, origin, sources: [{ eventId, quote }] }`，其 `origin` 必须是令牌所属的设备。按顺序保存；返回 `200 { applied, pending }`，其中 `pending` 为 null，或者是第一个所引用事件或所取代版本尚不在中枢上的条目的 `{ id, missing }`（它之后的条目都不会被保存）。同一个 id 下内容不同时返回 `409` |
+| `POST /v1/tombstones` | `{ device, tombstones }`，最多 1,000 条遗忘记录，每条为 `{ id, target, reason, createdAt, origin, entries, events }`，附带它在设备上的影响，其 `origin` 必须是令牌所属的设备。按[遗忘](#forgetting)中的规则应用；返回 `200 { applied }`，同一个 id 下内容不同时返回 `409` |
+| `GET /v1/tombstones?after=<seq>&device=<name>` | `{ tombstones, next, more }`：中枢变更日志中序号大于 `after` 的遗忘记录，不含令牌所属设备自己创建的，每条都附带 id、目标、原因、`createdAt`、origin，以及它在中枢上遗忘的条目和排除的事件。`more` 为 true 时，用 `after=<next>` 继续 |
 | `GET`, `POST /admin/…` | 启用时的管理界面：需要管理员登录的服务器端渲染页面。未启用时返回 404 |
 | `GET`, `POST /admin/api/…` | 管理界面的 JSON API：与页面相同的操作、会话和检查 |
 
-中枢会校验每个字段：设备名必须匹配 `[a-z0-9][a-z0-9._-]{0,62}`，并且不能是中枢自己的名称，来源必须是已知的适配器，`relPath` 必须是相对路径且不含 `..` 段，因此设备永远无法写到它的镜像目录之外。
+中枢会校验每个字段。复制请求总是代表令牌所属的设备：`device` 可以省略，如果请求指明的是另一台设备，会被拒绝并返回 `403`，响应体中附带令牌所属的设备（`{ error, device }`）。设备名必须匹配 `[a-z0-9][a-z0-9._-]{0,62}`，并且不能是中枢自己的名称，来源必须是已知的适配器，`relPath` 必须是相对路径且不含 `..` 段，因此设备永远无法写到它自己的镜像目录之外。
 
 ### 从设备使用中枢 {#using-a-hub-from-a-device}
 
-- `origin hub connect <url> --token <token> [--device <name>]` 把连接信息保存在 `<ORIGIN_HOME>/hub.json` 中。设备名就是它的库的名称（见[存储](#storage)）；`--device` 可以给一个还没有写入任何条目或遗忘记录的库改名。`ORIGIN_HUB_URL` 和 `ORIGIN_HUB_TOKEN` 会覆盖保存的连接信息。
+- `origin hub connect <url> --token <token> [--device <name>]` 把连接信息保存在 `<ORIGIN_HOME>/hub.json` 中。设备名就是它的库的名称（见[存储](#storage)），而且必须是这台设备的令牌名：这个命令会向中枢询问令牌属于哪台设备（`GET /v1/device`），如果不是这个库，就拒绝接入并说明如何解决。`--device` 可以给一个还没有写入任何条目或遗忘记录的库改名。`origin hub status` 也做同样的检查。`ORIGIN_HUB_URL` 和 `ORIGIN_HUB_TOKEN` 会覆盖保存的连接信息。
 - 配置了中枢之后，`origin mcp` 仍然根据设备自己的库提供服务，并合并中枢的回答（见 [MCP server](#mcp-server)）。它在运行中与中枢同步：读取类工具之前最多每 10 秒一次，每次写入后立即同步，而且等待中枢的时间不会超过超时时限。Agent 的注册无需改动，Agent 也仍然能引用刚刚说过的内容。
 - 没有本地记录的云端 Agent 直接用 bearer 令牌注册中枢的 `/mcp` URL。
 - CLI 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct` 和 `forget` 之后会与中枢同步，所以改动会到达中枢；如果是遗忘，还会到达其他每台设备。中枢的管理界面会显示所有设备的条目。

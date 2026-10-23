@@ -118,7 +118,7 @@ export const en = {
   'devices.lastPush': 'Last data received',
   'devices.stale': 'No data for 24 h',
   'devices.details': 'Details',
-  'devices.token': 'Token of the same name',
+  'devices.token': 'Token',
   'devices.noToken': 'none',
   'devices.health7d': 'Pushes in the last 7 days',
   'devices.noPushes7d': 'No new data in the last 7 days.',
@@ -131,13 +131,13 @@ export const en = {
 
   'connect.title': 'Connect devices and agents',
   'connect.intro':
-    'Each device and each cloud agent needs its own token. Replace <token> with one, or create a token to get these commands with it filled in.',
+    "Each device and each cloud agent needs its own token. A device's token is named after the device: that name is the device name it connects under, and the token works for no other device. Replace <token> and <device-name>, or create a token to get these commands filled in.",
   'connect.createToken': 'Create token',
   'connect.noPublicUrl':
     'No public URL is configured, so the commands show https://hub.example.com. Replace it with the address of this hub, or start the hub with --public-url.',
   'connect.device': 'A device with agent sessions',
   'connect.deviceHelp':
-    'On each machine where agents run: connect once, then sync. origin mcp on that machine then answers from its own store and from this hub.',
+    'On each machine where agents run: connect once, under the name of its token, then sync. origin mcp on that machine then answers from its own store and from this hub.',
   'connect.deviceLabel': 'Connect and sync',
   'connect.cronLabel': 'Sync every 10 minutes (crontab)',
   'connect.agents': 'Cloud agents',
@@ -145,11 +145,11 @@ export const en = {
 
   'tokens.title': 'Access tokens',
   'tokens.help':
-    'Devices and agents use these bearer tokens for MCP and replication. They are stored as hashes and shown only once.',
+    "Devices and agents use these bearer tokens for MCP and replication. A token's name is a device name: the token sends and receives data only for the device of that name. Tokens are stored as hashes and shown only once.",
   'tokens.create': 'Create token',
   'tokens.none': 'No tokens yet',
   'tokens.noneHelp':
-    'Create one token for each device and each cloud agent that should reach this hub.',
+    'Create one token for each device, named after it, and one for each cloud agent that should reach this hub.',
   'tokens.name': 'Name',
   'tokens.created': 'Created',
   'tokens.lastUsed': 'Last used',
@@ -160,18 +160,18 @@ export const en = {
   'tokens.revoke': 'Revoke',
   'tokens.revokedNotice': 'Revoked {name}. Requests with that token are now rejected.',
   'tokens.createHelp':
-    'Name the token after the device or agent that will use it. The token is shown once.',
+    "For a device, use the device's name: the token works only for the device of that name. For a cloud agent, name it after the agent. The token is shown once.",
   'tokens.nameHelp':
-    'Lowercase letters, digits, ".", "_" and "-". A device uses its token name as its device name in the commands below.',
+    'Lowercase letters, digits, ".", "_" and "-". This is the device name: the device connects under it, as in the commands below.',
   'tokens.createButton': 'Create token',
   'tokens.createdTitle': 'Token created',
   'tokens.shownOnce':
-    'Copy the token for {name} now. It is not stored and will never be shown again; if you lose it, revoke it and create a new one.',
+    'Copy the token for {name} now. It is not stored and will never be shown again; if you lose it, revoke it and create a new one with the same name.',
   'tokens.token': 'Token',
   'tokens.done': 'Done',
   'tokens.revokeTitle': 'Revoke a token',
   'tokens.revokeHelp':
-    'Revoking {name} rejects every request that uses it, immediately. The name cannot be reused.',
+    'Revoking {name} rejects every request that uses it, immediately. To give {name} a new token afterwards, create one with the same name.',
   'tokens.revokeButton': 'Revoke {name}',
 
   'filter.source': 'Source',

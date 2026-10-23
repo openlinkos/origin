@@ -113,7 +113,7 @@ export const zh: Messages = {
   'devices.lastPush': '最近收到数据',
   'devices.stale': '24 小时无数据',
   'devices.details': '详情',
-  'devices.token': '同名令牌',
+  'devices.token': '令牌',
   'devices.noToken': '无',
   'devices.health7d': '最近 7 天的推送',
   'devices.noPushes7d': '最近 7 天没有新数据。',
@@ -126,13 +126,13 @@ export const zh: Messages = {
 
   'connect.title': '接入设备和 Agent',
   'connect.intro':
-    '每台设备、每个云端 Agent 都需要自己的令牌。把 <token> 替换为令牌，或者先创建令牌，就能得到已填好令牌的命令。',
+    '每台设备、每个云端 Agent 都需要自己的令牌。设备的令牌以设备命名：这个名称就是设备接入时使用的设备名，令牌不能用于其他设备。把 <token> 和 <device-name> 替换为实际的值，或者先创建令牌，就能得到已填好的命令。',
   'connect.createToken': '创建令牌',
   'connect.noPublicUrl':
     '尚未配置公开 URL，所以命令里显示的是 https://hub.example.com。请把它替换为这个中枢的地址，或者用 --public-url 启动中枢。',
   'connect.device': '有 Agent 会话的设备',
   'connect.deviceHelp':
-    '在每台运行 Agent 的机器上：先接入一次，再同步。之后这台机器上的 origin mcp 会根据自己的库和这个中枢作答。',
+    '在每台运行 Agent 的机器上：以令牌的名称接入一次，再同步。之后这台机器上的 origin mcp 会根据自己的库和这个中枢作答。',
   'connect.deviceLabel': '接入并同步',
   'connect.cronLabel': '每 10 分钟同步一次（crontab）',
   'connect.agents': '云端 Agent',
@@ -140,10 +140,11 @@ export const zh: Messages = {
 
   'tokens.title': '访问令牌',
   'tokens.help':
-    '设备和 Agent 用这些 bearer 令牌访问 MCP 和复制接口。令牌只以哈希形式保存，只显示一次。',
+    '设备和 Agent 用这些 bearer 令牌访问 MCP 和复制接口。令牌名就是设备名：令牌只能为同名的设备发送和接收数据。令牌只以哈希形式保存，只显示一次。',
   'tokens.create': '创建令牌',
   'tokens.none': '还没有令牌',
-  'tokens.noneHelp': '为每台需要访问这个中枢的设备、每个云端 Agent 各创建一个令牌。',
+  'tokens.noneHelp':
+    '为每台需要访问这个中枢的设备创建一个以它命名的令牌，并为每个云端 Agent 各创建一个令牌。',
   'tokens.name': '名称',
   'tokens.created': '创建时间',
   'tokens.lastUsed': '最近使用',
@@ -153,16 +154,19 @@ export const zh: Messages = {
   'tokens.revoked': '已吊销',
   'tokens.revoke': '吊销',
   'tokens.revokedNotice': '已吊销 {name}。使用该令牌的请求现在会被拒绝。',
-  'tokens.createHelp': '用将要使用它的设备或 Agent 来命名令牌。令牌只显示一次。',
-  'tokens.nameHelp': '小写字母、数字、“.”、“_”和“-”。在下面的命令里，设备用令牌名作为设备名。',
+  'tokens.createHelp':
+    '设备的令牌请用设备名命名：令牌只对同名的设备有效。云端 Agent 的令牌请用 Agent 命名。令牌只显示一次。',
+  'tokens.nameHelp':
+    '小写字母、数字、“.”、“_”和“-”。这就是设备名：设备以这个名称接入，如下面的命令所示。',
   'tokens.createButton': '创建令牌',
   'tokens.createdTitle': '令牌已创建',
   'tokens.shownOnce':
-    '请现在复制 {name} 的令牌。它不会被保存，也不会再显示；如果丢失，请吊销它并新建一个。',
+    '请现在复制 {name} 的令牌。它不会被保存，也不会再显示；如果丢失，请吊销它，再用同一个名称新建一个。',
   'tokens.token': '令牌',
   'tokens.done': '完成',
   'tokens.revokeTitle': '吊销令牌',
-  'tokens.revokeHelp': '吊销 {name} 会立即拒绝所有使用它的请求。这个名称不能再次使用。',
+  'tokens.revokeHelp':
+    '吊销 {name} 会立即拒绝所有使用它的请求。之后如需为 {name} 换一个令牌，用同一个名称新建即可。',
   'tokens.revokeButton': '吊销 {name}',
 
   'filter.source': '来源',

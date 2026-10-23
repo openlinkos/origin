@@ -48,7 +48,7 @@ The hub speaks plain HTTP. Before you expose it beyond localhost, put it behind 
 
 ## Create tokens
 
-Every request except `/healthz` needs a bearer token. Create one token per device or cloud agent, on the hub:
+Every request except `/healthz` needs a bearer token. Create one token per device or cloud agent, on the hub, and name a device's token after the device:
 
 ```bash
 origin token create laptop          # prints the token once, starting with ogn_
@@ -58,7 +58,9 @@ origin token revoke laptop
 
 With Docker, run the same commands through `docker exec`, for example `docker exec origin-hub origin token create laptop`. If you enable the [admin UI](./admin.md), you can also create and revoke tokens there, with the connection commands for each new token ready to copy.
 
-The hub stores only a hash of each token, so copy the token when it is printed. If a token is lost or a device is retired, revoke the token. Entries record the agent and the device as author, for example `claude-code@laptop`; an agent that connects to the hub directly is recorded with its token name instead, for example `claude-code@ci`.
+A token's name is a device name: the token `laptop` sends and receives sessions, entries, and tombstones only for the device `laptop`, and the hub refuses it for any other device. So a stolen token can never write as another device.
+
+The hub stores only a hash of each token, so copy the token when it is printed. If a token is lost, revoke it and create a new one with the same name; the device keeps its name and reconnects with the new token. If a device is retired, revoke its token. Entries record the agent and the device as author, for example `claude-code@laptop`; an agent that connects to the hub directly is recorded with its token name, for example `ci`.
 
 ## Connect a device
 
@@ -70,7 +72,7 @@ origin hub status
 origin sync
 ```
 
-- The hub knows the device by its store's name: `ORIGIN_DEVICE`, or the host name, when the store was first used. `--device` renames a store that has not saved an entry or forgotten anything yet; after that, the store keeps its name. `origin hub disconnect` removes the connection.
+- The hub knows the device by its store's name: `ORIGIN_DEVICE`, or the host name, when the store was first used. That name must be the name of the device's token; `origin hub connect` and `origin hub status` check it with the hub, and if they differ, refuse and say how to fix it. `--device` renames a store that has not saved an entry or forgotten anything yet; after that, the store keeps its name, and its token must be created under that name. `origin hub disconnect` removes the connection.
 - `ORIGIN_HUB_URL` and `ORIGIN_HUB_TOKEN` override the stored connection.
 - `origin sync` ingests local sessions, sends the raw mirrors and the entries and tombstones written on the device, and applies the hub's tombstones. It is safe to re-run: a sync picks up where the previous one stopped. `origin push` does the same.
 

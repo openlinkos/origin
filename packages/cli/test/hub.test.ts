@@ -22,6 +22,7 @@ import {
 import { createReplicaServer } from '@openlinkos/origin-mcp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HubConfig } from '../src/hub/config.js';
+import { checkHub } from '../src/hub/connect.js';
 import { createHubServer } from '../src/hub/server.js';
 import { syncWithHub } from '../src/hub/sync.js';
 
@@ -186,12 +187,12 @@ describe('personal hub', () => {
     expect((await ingest({ relPath: 'C:/Windows/x.jsonl' })).status).toBe(400);
     expect((await ingest({ device: '../evil' })).status).toBe(400);
     expect((await ingest({ source: 'nope' })).status).toBe(400);
-    // A device may not take the hub's own name: it would never receive the hub's tombstones.
-    expect((await ingest({ device: 'hub' })).status).toBe(400);
+    // The token of laptop acts only for laptop, never as another device or as the hub itself.
+    expect((await ingest({ device: 'hub' })).status).toBe(403);
     const asHub = await fetch(`${hub.url}/v1/tombstones?after=0&device=hub`, {
       headers: { Authorization: `Bearer ${hub.token}` },
     });
-    expect(asHub.status).toBe(400);
+    expect(asHub.status).toBe(403);
     expect((await ingest({})).status).toBe(200);
 
     revokeToken(hubDb, 'laptop');
@@ -199,5 +200,72 @@ describe('personal hub', () => {
       headers: { Authorization: `Bearer ${hub.token}` },
     });
     expect(res.status).toBe(401);
+  });
+
+  it('binds each token to the device it is named after', async () => {
+    const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
+    const desk = createToken(hubDb, 'desk');
+    const whoami = await fetch(`${hub.url}/v1/device`, { headers: auth(desk) });
+    expect(await whoami.json()).toEqual({ device: 'desk', hub: 'hub' });
+
+    // The laptop's sessions cannot be pushed, or its tombstones pulled, with the desk's token.
+    const asLaptop: HubConfig = { ...hub, token: desk };
+    await expect(syncWithHub({ db: deviceDb, home: deviceHome, hub: asLaptop })).rejects.toThrow(
+      /\(403\): This token belongs to device "desk", not "laptop"/,
+    );
+    expect(getEvent(hubDb, USER_EVENT)).toBeNull();
+    const refused = await fetch(`${hub.url}/v1/cursors?device=laptop`, { headers: auth(desk) });
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ device: 'desk' });
+    // Without a device named, a request acts for the token's device.
+    const own = await fetch(`${hub.url}/v1/cursors`, { headers: auth(desk) });
+    expect(await own.json()).toEqual({ cursors: [] });
+
+    // Through /mcp, the device part of an author is the token's name, and a device header naming
+    // another device is refused.
+    const mcp = (headers: Record<string, string>) =>
+      fetch(`${hub.url}/mcp`, {
+        method: 'POST',
+        headers: {
+          ...auth(desk),
+          ...headers,
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+      });
+    expect((await mcp({ 'X-Origin-Device': 'laptop' })).status).toBe(403);
+    expect((await mcp({ 'X-Origin-Device': 'desk', 'X-Origin-Client': 'agent-x' })).status).toBe(
+      200,
+    );
+    expect((await mcp({})).status).toBe(200);
+
+    // A token named like the hub serves no device.
+    const hubNamed = createToken(hubDb, 'hub');
+    expect((await fetch(`${hub.url}/v1/cursors`, { headers: auth(hubNamed) })).status).toBe(403);
+  });
+
+  it('checks before connecting that the token belongs to this device', async () => {
+    await expect(checkHub(hub, { renamable: true })).resolves.toBeUndefined();
+    const desk = createToken(hubDb, 'desk');
+    const asLaptop: HubConfig = { ...hub, token: desk };
+    await expect(checkHub(asLaptop, { renamable: true })).rejects.toThrow(
+      /belongs to device "desk", but this store is named "laptop".*--device desk\. Otherwise, create a token for laptop on the hub \(origin token create laptop\)/,
+    );
+    await expect(checkHub(asLaptop, { renamable: false })).rejects.toThrow(
+      /keeps that name, because it has written entries or tombstones under it.*origin token create laptop/,
+    );
+    await expect(checkHub({ ...hub, token: 'ogn_nope' }, { renamable: true })).rejects.toThrow(
+      /rejected the token/,
+    );
+
+    // A device that lost its token gets a new one under its name, and connects again.
+    revokeToken(hubDb, 'laptop');
+    await expect(checkHub(hub, { renamable: true })).rejects.toThrow(/rejected the token/);
+    const renewed: HubConfig = { ...hub, token: createToken(hubDb, 'laptop') };
+    await expect(checkHub(renewed, { renamable: false })).resolves.toBeUndefined();
+    expect(await syncWithHub({ db: deviceDb, home: deviceHome, hub: renewed })).toMatchObject({
+      files: 1,
+    });
   });
 });

@@ -44,6 +44,8 @@ class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** More fields for the JSON error body. */
+    readonly extra: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -71,7 +73,10 @@ export function createHubServer(opts: HubOptions): http.Server {
         res.end();
         return;
       }
-      sendJson(res, status, { error: status === 500 ? 'internal error' : (err as Error).message });
+      sendJson(res, status, {
+        error: status === 500 ? 'internal error' : (err as Error).message,
+        ...(err instanceof HttpError ? err.extra : {}),
+      });
     });
   });
 }
@@ -104,30 +109,37 @@ async function handle(
 
   switch (url.pathname) {
     case '/mcp': {
+      const author = authorFor(req, caller.name);
       const body = req.method === 'POST' ? await readJson(req) : undefined;
       await handleMcpHttp(req, res, body, {
         db: opts.db,
         home: opts.home,
         version: opts.version,
         log: opts.log,
-        author: authorFor(req, caller.name),
+        author,
       });
+      return;
+    }
+    case '/v1/device': {
+      requireMethod(req, 'GET');
+      sendJson(res, 200, { device: caller.name, hub: storeName(opts.db) });
       return;
     }
     case '/v1/cursors': {
       requireMethod(req, 'GET');
-      const device = deviceName(opts, url.searchParams.get('device'));
+      const device = deviceOf(opts, caller.name, url.searchParams.get('device'));
       sendJson(res, 200, { cursors: remoteCursors(opts.db, device) });
       return;
     }
     case '/v1/ingest': {
       requireMethod(req, 'POST');
       const body = (await readJson(req)) as Record<string, unknown>;
+      const device = deviceOf(opts, caller.name, body.device);
       const adapter = opts.adapters.find((a) => a.id === body.source);
       if (!adapter) throw new HttpError(400, `Unknown source: ${String(body.source)}`);
       if (typeof body.data !== 'string') throw new HttpError(400, 'Missing data.');
       const result = appendRemote({ db: opts.db, home: opts.home, log: opts.log }, adapter, {
-        device: deviceName(opts, body.device),
+        device,
         source: adapter.id,
         path: String(body.path ?? ''),
         relPath: String(body.relPath ?? ''),
@@ -143,7 +155,7 @@ async function handle(
     }
     case '/v1/entries': {
       requireMethod(req, 'POST');
-      const { device, records } = await replicaBody(opts, req, 'entries');
+      const { device, records } = await replicaBody(opts, req, caller.name, 'entries');
       // Validate everything first, then store in order; stop at the first entry that must wait.
       const entries = records.map(parseReplicaEntry);
       checkOrigins(entries, device);
@@ -162,7 +174,7 @@ async function handle(
     }
     case '/v1/tombstones': {
       if (req.method === 'POST') {
-        const { device, records } = await replicaBody(opts, req, 'tombstones');
+        const { device, records } = await replicaBody(opts, req, caller.name, 'tombstones');
         const tombstones = records.map(parseTombstoneRecord);
         checkOrigins(tombstones, device);
         const growthOrigin = storeName(opts.db);
@@ -171,7 +183,7 @@ async function handle(
         return;
       }
       requireMethod(req, 'GET');
-      const device = deviceName(opts, url.searchParams.get('device'));
+      const device = deviceOf(opts, caller.name, url.searchParams.get('device'));
       const after = Number(url.searchParams.get('after') ?? '0');
       if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, 'Invalid "after".');
       sendJson(res, 200, tombstoneFeed(opts.db, { after, device }));
@@ -182,40 +194,63 @@ async function handle(
   }
 }
 
+/** Refused: a token used for a device other than the one it is named after. */
+function wrongDevice(token: string, named: string): HttpError {
+  return new HttpError(
+    403,
+    `This token belongs to device "${token}", not "${named}": a token sends and receives data only for the device it is named after. Connect ${named} with a token named "${named}" (on the hub: origin token create ${named}).`,
+    { device: token },
+  );
+}
+
 /**
- * A device's name, as a device sends it. It may not be the hub's own name: the hub would take the
- * device's records for its own, and the device would miss the hub's tombstones.
+ * The device of a replication request: the one its token is named after (see
+ * docs/architecture.md#access). A request may name its device, and is refused if it names another.
+ * The token's name may not be the hub's own: the hub would take the device's records for its own,
+ * and the device would miss the hub's tombstones.
  */
-function deviceName(opts: HubOptions, value: unknown): string {
-  if (typeof value !== 'string' || !NAME_RE.test(value)) {
-    throw new HttpError(400, 'Invalid or missing device.');
+function deviceOf(opts: HubOptions, token: string, named: unknown): string {
+  if (named !== undefined && named !== null) {
+    if (typeof named !== 'string' || !NAME_RE.test(named)) {
+      throw new HttpError(400, 'Invalid device.');
+    }
+    if (named !== token) throw wrongDevice(token, named);
   }
-  if (value === storeName(opts.db)) {
-    throw new HttpError(400, `"${value}" is this hub's own name; give the device another name.`);
+  if (token === storeName(opts.db)) {
+    throw new HttpError(
+      403,
+      `"${token}" is this hub's own name, so no device can use this token; create a token named after the device.`,
+      { device: token },
+    );
   }
-  return value;
+  return token;
 }
 
 /** The device and the records of a replication request. */
 async function replicaBody(
   opts: HubOptions,
   req: http.IncomingMessage,
+  token: string,
   field: 'entries' | 'tombstones',
 ): Promise<{ device: string; records: unknown[] }> {
   const body = await readJson(req);
   if (typeof body !== 'object' || body === null) throw new HttpError(400, 'Invalid body.');
   const { device, [field]: records } = body as Record<string, unknown>;
+  const owner = deviceOf(opts, token, device);
   if (!Array.isArray(records) || records.length > MAX_RECORDS) {
     throw new HttpError(400, `Invalid or too many ${field}.`);
   }
-  return { device: deviceName(opts, device), records };
+  return { device: owner, records };
 }
 
 /** A device sends only what it wrote itself: its records carry its name. */
 function checkOrigins(records: Array<{ id: string; origin: string }>, device: string): void {
   for (const r of records) {
     if (r.origin !== device) {
-      throw new HttpError(400, `${r.id} comes from ${r.origin}, not from ${device}.`);
+      throw new HttpError(
+        403,
+        `${r.id} was written by ${r.origin}; the token of ${device} sends only what ${device} wrote.`,
+      );
     }
   }
 }
@@ -227,17 +262,18 @@ function header(req: http.IncomingMessage, name: string): string | undefined {
 }
 
 /**
- * The author of entries written through /mcp: `<agent>@<device>` for a device's agent (the device
- * names the agent and itself in X-Origin-Client and X-Origin-Device), `<agent>@<token>` for an
- * agent that names itself, and the token name otherwise.
+ * The author of entries written through /mcp: `<agent>@<token>` when the caller names its agent in
+ * X-Origin-Client (a device's `origin mcp` does), and the token name otherwise. The device part is
+ * always the token's name: a device that also sends X-Origin-Device must send that name, or the
+ * request is refused, so that no token writes as another device.
  */
 function authorFor(req: http.IncomingMessage, tokenName: string): string {
+  const device = header(req, 'x-origin-device');
+  if (device !== undefined && device !== tokenName) throw wrongDevice(tokenName, device);
   const client = header(req, 'x-origin-client')
     ?.replace(/[^A-Za-z0-9._-]+/g, '-')
     .slice(0, 64);
-  const device = header(req, 'x-origin-device');
-  if (!client) return tokenName;
-  return `${client}@${device && NAME_RE.test(device) ? device : tokenName}`;
+  return client ? `${client}@${tokenName}` : tokenName;
 }
 
 function requireMethod(req: http.IncomingMessage, ...methods: string[]): void {

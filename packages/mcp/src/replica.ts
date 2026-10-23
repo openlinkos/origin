@@ -82,7 +82,10 @@ export interface ReplicaServer {
 
 /** Header carrying the name of the agent behind a device, recorded in the entry author. */
 export const CLIENT_HEADER = 'X-Origin-Client';
-/** Header carrying the device's name, recorded in the author of entries the hub writes for it. */
+/**
+ * Header carrying the device's name. The hub records its token's name as the device; it refuses a
+ * request whose header names another device, so a misconfigured device fails visibly.
+ */
 export const DEVICE_HEADER = 'X-Origin-Device';
 
 /** HTTP header values must be visible ASCII. */
@@ -171,6 +174,10 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
     const message = (err as Error)?.message ?? String(err);
     if ((err instanceof StreamableHTTPError && err.code === 401) || /\b401\b/.test(message)) {
       return `the hub at ${opts.hub.url} rejected the token (HTTP 401); check it with \`origin hub status\``;
+    }
+    if ((err instanceof StreamableHTTPError && err.code === 403) || /\b403\b/.test(message)) {
+      // A hub token works only for the device it is named after (see docs/architecture.md#access).
+      return `the hub at ${opts.hub.url} refused this device's token (HTTP 403): it belongs to another device; check it with \`origin hub status\``;
     }
     return `the hub at ${opts.hub.url} is unreachable: ${message}`;
   };

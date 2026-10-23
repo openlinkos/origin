@@ -65,6 +65,7 @@ export {
   defaultStoreName,
   HUB_STORE_NAME,
   initStoreName,
+  isStoreNameFixed,
   setStoreName,
   storeName,
 } from './identity.js';

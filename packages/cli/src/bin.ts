@@ -26,6 +26,7 @@ import {
   isEntryForgotten,
   isEntryId,
   isEventForgotten,
+  isStoreNameFixed,
   listAdminSessions,
   listAudit,
   listDevices,
@@ -34,6 +35,7 @@ import {
   listProjects,
   listSessions,
   listTokens,
+  NAME_RE,
   OriginError,
   openDatabase,
   originHome,
@@ -60,6 +62,7 @@ import {
   removeHubConfig,
   writeHubConfig,
 } from './hub/config.js';
+import { checkHub } from './hub/connect.js';
 import { type HubAdminOptions, startHub } from './hub/serve.js';
 import { type HubSyncResult, syncWithHub } from './hub/sync.js';
 import { readNewPassword } from './password.js';
@@ -757,7 +760,9 @@ function cmdToken(ctx: Ctx, args: string[]): number {
   if (action === 'create' && name) {
     const token = createToken(ctx.db, name);
     auditCli(ctx, 'token.create', name);
-    console.log(`Token for ${name} (shown once, store it safely):\n\n  ${token}\n`);
+    console.log(
+      `Token for ${name} (shown once, store it safely):\n\n  ${token}\n\nA device uses it only under its name: origin hub connect <url> --token <token> --device ${name}`,
+    );
     return 0;
   }
   if (action === 'revoke' && name) {
@@ -901,17 +906,21 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
       console.error('Usage: origin hub connect <url> --token <token> [--device <name>]');
       return 2;
     }
-    // The device is known to its hub by the store's name; --device names a store that has not
-    // written anything yet.
-    if (values.device !== undefined && values.device !== storeName(ctx.db)) {
-      try {
-        setStoreName(ctx.db, values.device);
-      } catch (err) {
-        console.error(`${(err as Error).message} The hub will know this device by that name.`);
+    // The device is known to its hub by the store's name, and its token must be named after it
+    // (see docs/architecture.md#access). --device names a store that has not written anything yet.
+    const current = storeName(ctx.db);
+    const device = values.device ?? current;
+    if (device !== current) {
+      if (!NAME_RE.test(device)) throw new OriginError(`Invalid device name "${device}".`);
+      if (isStoreNameFixed(ctx.db)) {
+        throw new OriginError(
+          `This store is named "${current}" and keeps that name, because it has written entries or tombstones under it; it cannot connect as "${device}".`,
+        );
       }
     }
-    const hub = { url: normalizeHubUrl(url), token: values.token, device: storeName(ctx.db) };
-    await checkHub(hub);
+    const hub = { url: normalizeHubUrl(url), token: values.token, device };
+    await checkHub(hub, { renamable: !isStoreNameFixed(ctx.db) });
+    if (device !== current) setStoreName(ctx.db, device);
     writeHubConfig(ctx.home, hub);
     console.log(
       `Connected to ${hub.url} as ${hub.device}. Run "origin sync" to send this device's sessions and entries.`,
@@ -925,8 +934,8 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
       return 0;
     }
     console.log(`Hub     ${hub.url}\nDevice  ${hub.device}`);
-    await checkHub(hub);
-    console.log('Status  reachable, token accepted');
+    await checkHub(hub, { renamable: !isStoreNameFixed(ctx.db) });
+    console.log('Status  reachable, token accepted for this device');
     return 0;
   }
   if (action === 'disconnect') {
@@ -939,20 +948,6 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
     'Usage: origin hub connect <url> --token <token> [--device <name>] | status | disconnect',
   );
   return 2;
-}
-
-/** Fail with a readable error unless the hub answers and accepts the token. */
-async function checkHub(hub: { url: string; token: string; device: string }): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch(`${hub.url}/v1/cursors?device=${encodeURIComponent(hub.device)}`, {
-      headers: { Authorization: `Bearer ${hub.token}` },
-    });
-  } catch (err) {
-    throw new OriginError(`Cannot reach the hub at ${hub.url}: ${(err as Error).message}`);
-  }
-  if (res.status === 401) throw new OriginError(`The hub at ${hub.url} rejected the token.`);
-  if (!res.ok) throw new OriginError(`The hub at ${hub.url} answered ${res.status}.`);
 }
 
 function fmtBytes(n: number): string {

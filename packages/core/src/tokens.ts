@@ -5,7 +5,11 @@ import { OriginError } from './errors.js';
 /** Token and device names: lowercase ASCII, digits, `.`, `_`, `-`; at most 63 characters. */
 export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/;
 
-/** Hub access tokens (devices and agents). The admin password can never start with it (see password.ts). */
+/**
+ * Hub access tokens (devices and agents). The admin password can never start with it (see
+ * password.ts). A token is bound to one device, the one it is named after: on the hub's
+ * replication API it sends and receives data only for that device (see docs/architecture.md#access).
+ */
 export const TOKEN_PREFIX = 'ogn_';
 const LAST_USED_RESOLUTION = 60_000;
 
@@ -35,18 +39,27 @@ export function checkName(name: string, what: string): void {
   }
 }
 
-/** Create a hub access token. The token is returned once; only its SHA-256 hash is stored. */
+/**
+ * Create a hub access token for the device or agent `name`. The token is returned once; only its
+ * SHA-256 hash is stored. A device keeps its name, so a revoked token can be replaced by a new one
+ * of the same name (the revoked token stays invalid); an active token must be revoked first.
+ */
 export function createToken(db: Database, name: string, now = Date.now()): string {
   checkName(name, 'token');
-  if (db.prepare('SELECT 1 FROM api_token WHERE name = ?').get(name)) {
-    throw new OriginError(`A token named "${name}" exists or was revoked; choose another name.`);
+  const existing = db.prepare('SELECT revoked_at FROM api_token WHERE name = ?').get(name) as
+    | { revoked_at: number | null }
+    | undefined;
+  if (existing && existing.revoked_at === null) {
+    throw new OriginError(
+      `A token named "${name}" is active; revoke it first to give ${name} a new one.`,
+    );
   }
   const token = newSecret(TOKEN_PREFIX);
-  db.prepare('INSERT INTO api_token (name, hash, created_at) VALUES (?, ?, ?)').run(
-    name,
-    secretHash(token),
-    now,
-  );
+  db.prepare(
+    `INSERT INTO api_token (name, hash, created_at) VALUES (?, ?, ?)
+     ON CONFLICT (name) DO UPDATE SET
+       hash = excluded.hash, created_at = excluded.created_at, last_used_at = NULL, revoked_at = NULL`,
+  ).run(name, secretHash(token), now);
   return token;
 }
 
@@ -84,7 +97,10 @@ export function listTokens(db: Database): TokenInfo[] {
   }));
 }
 
-/** Revoke a token; false if it is unknown or already revoked. Revoked names cannot be reused. */
+/**
+ * Revoke a token; false if it is unknown or already revoked. The name stays listed as revoked until
+ * a new token is created under it.
+ */
 export function revokeToken(db: Database, name: string, now = Date.now()): boolean {
   const info = db
     .prepare('UPDATE api_token SET revoked_at = ? WHERE name = ? AND revoked_at IS NULL')
