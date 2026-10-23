@@ -5,6 +5,7 @@ import zlib from 'node:zlib';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { OriginError } from './errors.js';
+import { readRange } from './frames.js';
 import {
   appendMirror,
   FRAME_BYTES,
@@ -13,7 +14,6 @@ import {
   mirrorState,
   readMirror,
   readMirrorLine,
-  readRange,
   sealIdleMirrors,
   settleMirror,
 } from './mirror.js';

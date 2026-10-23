@@ -62,6 +62,20 @@ export {
   type TombstoneRecord,
 } from './forgetting.js';
 export {
+  BucketFrameStore,
+  bucketFrameStore,
+  FileFrameStore,
+  FRAME_CACHE_BYTES,
+  type FrameStore,
+  fileFrameStore,
+  frameBucket,
+  frameKey,
+  frameStore,
+  type ObjectStore,
+  releaseObjectStore,
+  useObjectStore,
+} from './frames.js';
+export {
   defaultStoreName,
   HUB_STORE_NAME,
   initStoreName,
@@ -83,6 +97,7 @@ export {
 } from './ingest.js';
 export {
   FRAME_BYTES,
+  type FrameUpload,
   IDLE_SEAL_MS,
   type MirrorState,
   type MirrorUsage,
@@ -92,6 +107,7 @@ export {
   readMirrorLine,
   readMirrorLines,
   sealIdleMirrors,
+  uploadFrames,
 } from './mirror.js';
 export {
   assertComplete,

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import zlib from 'node:zlib';
 import type { Database } from './db.js';
 import { OriginError } from './errors.js';
+import { readRange } from './frames.js';
 import {
   type Content,
   completeLines,
@@ -10,7 +11,6 @@ import {
   TRANSACTION_BYTES,
   tailHash,
 } from './ingest.js';
-import { readRange } from './mirror.js';
 import { assertRelay } from './mode.js';
 import { getSetting, setSetting } from './settings.js';
 import type { SourceAdapter, SourceFile, SyncResult } from './types.js';

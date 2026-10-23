@@ -3,6 +3,17 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { type Database, transaction } from './db.js';
 import { OriginError } from './errors.js';
+import {
+  BucketFrameStore,
+  FileFrameStore,
+  fileSize,
+  frameKey,
+  frameStore,
+  framesPath,
+  readRange,
+  repairFile,
+  writeAll,
+} from './frames.js';
 import { rawDir } from './paths.js';
 
 /**
@@ -19,7 +30,8 @@ import { rawDir } from './paths.js';
  * The content is the decompressed frames followed by the tail, both up to what the database
  * records: `raw_chunk` for the frames, and `raw_file.bytes_ingested` for the end. Bytes past that,
  * left by a write that never committed, are not part of the mirror and are dropped by the next
- * write. Every read and write of `raw/` goes through this module.
+ * write. Every read and write of `raw/` goes through this module and its frame store (frames.ts),
+ * which keeps the sealed frames in `<mirror>.zst` or, on a hub given one, in a bucket.
  */
 
 /** A frame is sealed once the open tail reaches this many bytes. */
@@ -59,10 +71,6 @@ interface Chunk {
 
 const CHUNK_COLUMNS =
   'first_line, line_count, byte_offset, byte_length, frame_offset, frame_length';
-
-export function framesPath(home: string, mirror: string): string {
-  return `${path.join(rawDir(home), mirror)}.zst`;
-}
 
 export function tailPath(home: string, mirror: string): string {
   return `${path.join(rawDir(home), mirror)}.tail`;
@@ -148,14 +156,11 @@ const READ_ATTEMPTS = 5;
 
 /** The uncompressed content of one sealed frame. */
 function readFrame(home: string, mirror: string, c: Chunk): Buffer {
-  const frame = readRange(
-    framesPath(home, mirror),
-    c.frame_offset,
-    c.frame_offset + c.frame_length,
-  );
-  if (frame.length !== c.frame_length) {
-    throw new OriginError(`The mirror ${mirror} is missing sealed data; the store is damaged.`);
-  }
+  return decompressFrame(mirror, c, frameStore(home).read(mirror, c.frame_offset, c.frame_length));
+}
+
+/** A sealed frame's content, checked against what `raw_chunk` records. */
+function decompressFrame(mirror: string, c: Chunk, frame: Buffer): Buffer {
   let data: Buffer;
   try {
     data = zlib.zstdDecompressSync(frame);
@@ -304,21 +309,8 @@ export function readMirrorLines(
  * break provenance. Must run under the write lock.
  */
 export function repairMirror(home: string, st: MirrorState): void {
-  const frames = framesPath(home, st.mirror);
-  const tail = tailPath(home, st.mirror);
-  const expected: Array<[string, number]> = [
-    [frames, st.frameBytes],
-    [tail, st.bytes - st.sealedBytes],
-  ];
-  for (const [file, size] of expected) {
-    const actual = fileSize(file);
-    if (actual > size) fs.truncateSync(file, size);
-    else if (actual < size) {
-      throw new OriginError(
-        `The mirror ${st.mirror} is shorter than the database records (${path.basename(file)}: ${actual} of ${size} bytes); the store is damaged.`,
-      );
-    }
-  }
+  frameStore(home).repair(st.mirror, st.frameBytes);
+  repairFile(st.mirror, tailPath(home, st.mirror), st.bytes - st.sealedBytes);
 }
 
 /**
@@ -351,34 +343,31 @@ export function appendMirror(
   const insert = db.prepare(
     `INSERT INTO raw_chunk (raw_file_id, ${CHUNK_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
-  const fd = fs.openSync(framesPath(home, st.mirror), 'a');
-  try {
-    let start = 0;
-    let line = st.sealedLines + 1;
-    let frameOffset = st.frameBytes;
-    for (const end of frameEnds(content, frameBytes)) {
-      const piece = content.subarray(start, end);
-      const frame = zlib.zstdCompressSync(piece, ZSTD_PARAMS);
-      writeAll(fd, frame);
-      const lines = countLines(piece);
-      insert.run(
-        st.rawFileId,
-        line,
-        lines,
-        st.sealedBytes + start,
-        piece.length,
-        frameOffset,
-        frame.length,
-      );
-      line += lines;
-      frameOffset += frame.length;
-      start = end;
-    }
-    // The frames must be on disk before the tail they replace is emptied.
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
+  const frames: Buffer[] = [];
+  let start = 0;
+  let line = st.sealedLines + 1;
+  let frameOffset = st.frameBytes;
+  for (const end of frameEnds(content, frameBytes)) {
+    const piece = content.subarray(start, end);
+    const frame = zlib.zstdCompressSync(piece, ZSTD_PARAMS);
+    frames.push(frame);
+    const lines = countLines(piece);
+    insert.run(
+      st.rawFileId,
+      line,
+      lines,
+      st.sealedBytes + start,
+      piece.length,
+      frameOffset,
+      frame.length,
+    );
+    line += lines;
+    frameOffset += frame.length;
+    start = end;
   }
+  // Stored, and durable, before the transaction that records them commits: on disk or in the
+  // bucket, the frames must be there before the tail they replace is emptied.
+  frameStore(home).write(st.mirror, st.frameBytes, frames);
   return true;
 }
 
@@ -519,6 +508,162 @@ export function mirrorUsage(db: Database): MirrorUsage {
   return usage;
 }
 
+/** Frames are copied from a file on disk in pieces of this size. */
+const COPY_CHUNK = 4 * 1024 * 1024;
+
+/**
+ * Write the sealed frames of mirror state `m` into `file`, laid out as `<mirror>.zst` (backups):
+ * keep the first `have` bytes the file holds, and append the rest up to `m.frameBytes`. From a
+ * bucket, frames are copied whole, so the copy starts at the frame that holds byte `have`.
+ * Returns the bytes written.
+ */
+export function copyFrames(
+  db: Database,
+  home: string,
+  m: MirrorState,
+  file: string,
+  have: number,
+): number {
+  const store = frameStore(home);
+  let start = Math.min(have, m.frameBytes);
+  let chunks: Chunk[] = [];
+  if (!(store instanceof FileFrameStore)) {
+    chunks = db
+      .prepare(
+        `SELECT ${CHUNK_COLUMNS} FROM raw_chunk WHERE raw_file_id = ?
+           AND frame_offset + frame_length > ? AND frame_offset + frame_length <= ?
+         ORDER BY frame_offset`,
+      )
+      .all(m.rawFileId, start, m.frameBytes) as unknown as Chunk[];
+    start = chunks[0]?.frame_offset ?? start;
+  }
+  if (!fs.existsSync(file)) fs.writeFileSync(file, '');
+  if (fileSize(file) !== start) fs.truncateSync(file, start);
+  if (store instanceof FileFrameStore) {
+    appendRange(framesPath(home, m.mirror), file, start, m.frameBytes);
+    return m.frameBytes - start;
+  }
+  const fd = fs.openSync(file, 'a');
+  try {
+    for (const c of chunks) writeAll(fd, store.read(m.mirror, c.frame_offset, c.frame_length));
+  } finally {
+    fs.closeSync(fd);
+  }
+  return m.frameBytes - start;
+}
+
+/** Append bytes `[start, end)` of `src` to `dst`. */
+function appendRange(src: string, dst: string, start: number, end: number): void {
+  if (end <= start) return;
+  const input = fs.openSync(src, 'r');
+  const output = fs.openSync(dst, 'a');
+  try {
+    const buf = Buffer.alloc(Math.min(COPY_CHUNK, end - start));
+    for (let at = start; at < end; ) {
+      const n = fs.readSync(input, buf, 0, Math.min(buf.length, end - at), at);
+      if (n <= 0) throw new OriginError(`The mirror ${src} is shorter than the database records.`);
+      fs.writeSync(output, buf, 0, n);
+      at += n;
+    }
+  } finally {
+    fs.closeSync(input);
+    fs.closeSync(output);
+  }
+}
+
+/** What uploadFrames did. */
+export interface FrameUpload {
+  /** Mirrors with frames on disk. */
+  mirrors: number;
+  /** Frames on disk that the database records, each now verified in the bucket. */
+  frames: number;
+  /** Of those, uploaded this time, and their size. */
+  uploaded: number;
+  uploadedBytes: number;
+  /** `<mirror>.zst` files whose every frame is verified in the bucket, with their size. */
+  removable: Array<{ mirror: string; bytes: number }>;
+  /** Of those, removed this time. */
+  removed: number;
+}
+
+/**
+ * Move the sealed frames a store still keeps on disk to its bucket (see useObjectStore), under the
+ * same keys new frames get, so that running it again, or after a crash, uploads nothing twice.
+ * Every frame is checked before it is uploaded (it must decompress, with its checksum, to the size
+ * `raw_chunk` records) and read back from the bucket afterwards; a frame already there with the
+ * same bytes is not uploaded again. A `<mirror>.zst` file is listed as removable only once every
+ * frame in it is verified in the bucket, and removed only with `remove`; frames sealed since the
+ * store uses the bucket are never on disk. May run while the hub serves.
+ */
+export function uploadFrames(
+  db: Database,
+  home: string,
+  opts: { remove?: boolean; log?: (message: string) => void } = {},
+): FrameUpload {
+  const store = frameStore(home);
+  if (!(store instanceof BucketFrameStore)) {
+    throw new OriginError('This store keeps its sealed frames on disk; give it a bucket first.');
+  }
+  const objects = store.objects;
+  const result: FrameUpload = {
+    mirrors: 0,
+    frames: 0,
+    uploaded: 0,
+    uploadedBytes: 0,
+    removable: [],
+    removed: 0,
+  };
+  const framesOf = db.prepare(
+    `SELECT ${CHUNK_COLUMNS} FROM raw_chunk WHERE raw_file_id = ? AND frame_offset < ?
+       AND frame_offset + frame_length <= ? ORDER BY frame_offset`,
+  );
+  for (const st of allMirrorStates(db)) {
+    const file = framesPath(home, st.mirror);
+    const size = fileSize(file);
+    if (size === 0) continue;
+    result.mirrors++;
+    // The file holds the frames sealed before the store used the bucket, and perhaps bytes past
+    // what the database records, left by a write that never committed; those are not frames.
+    const end = Math.min(size, st.frameBytes);
+    let verified = 0;
+    for (const c of framesOf.all(st.rawFileId, end, st.frameBytes) as unknown as Chunk[]) {
+      if (c.frame_offset !== verified || c.frame_offset + c.frame_length > end) break;
+      const frame = readRange(file, c.frame_offset, c.frame_offset + c.frame_length);
+      decompressFrame(st.mirror, c, frame);
+      const key = frameKey(st.mirror, c.frame_offset);
+      if (!objects.get(key)?.equals(frame)) {
+        objects.put(key, frame);
+        if (!objects.get(key)?.equals(frame)) {
+          throw new OriginError(
+            `The frame ${key} read back from ${objects.location} differs from what was uploaded.`,
+          );
+        }
+        result.uploaded++;
+        result.uploadedBytes += frame.length;
+      }
+      result.frames++;
+      verified = c.frame_offset + c.frame_length;
+      if (result.frames % 1000 === 0) {
+        opts.log?.(`${result.frames} frames verified, ${result.uploaded} uploaded`);
+      }
+    }
+    if (verified !== end) {
+      opts.log?.(`${st.mirror}.zst does not end at a frame; it is kept`);
+      continue;
+    }
+    result.removable.push({ mirror: st.mirror, bytes: size });
+    if (!opts.remove) continue;
+    try {
+      // A reader that opens the file meanwhile finds it gone and reads the bucket instead.
+      fs.rmSync(file, { force: true });
+      result.removed++;
+    } catch (err) {
+      opts.log?.(`could not remove ${st.mirror}.zst: ${(err as Error).message}`);
+    }
+  }
+  return result;
+}
+
 /**
  * Where to cut complete lines into frames: each frame ends at the first line break once it holds
  * `target` bytes, and a last piece smaller than half the target joins the frame before it.
@@ -561,34 +706,4 @@ function lineAt(buf: Buffer, n: number): string | null {
   const nl = buf.indexOf(0x0a, start);
   const line = buf.toString('utf8', start, nl < 0 ? buf.length : nl);
   return line.endsWith('\r') ? line.slice(0, -1) : line;
-}
-
-function fileSize(file: string): number {
-  try {
-    return fs.statSync(file).size;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0;
-    throw err;
-  }
-}
-
-/** Bytes `[start, end)` of a file; shorter if the file is. */
-export function readRange(file: string, start: number, end: number): Buffer {
-  const fd = fs.openSync(file, 'r');
-  try {
-    const buf = Buffer.alloc(Math.max(0, end - start));
-    let off = 0;
-    while (off < buf.length) {
-      const n = fs.readSync(fd, buf, off, buf.length - off, start + off);
-      if (n <= 0) break;
-      off += n;
-    }
-    return off === buf.length ? buf : buf.subarray(0, off);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-function writeAll(fd: number, buf: Buffer): void {
-  for (let off = 0; off < buf.length; ) off += fs.writeSync(fd, buf, off, buf.length - off);
 }

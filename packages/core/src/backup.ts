@@ -3,9 +3,10 @@ import path from 'node:path';
 import * as sqlite from 'node:sqlite';
 import type { Database } from './db.js';
 import { OriginError } from './errors.js';
+import { forgetFrameBucket, frameBucket, framesPath } from './frames.js';
 import {
   allMirrorStates,
-  framesPath,
+  copyFrames,
   hasFrameBoundary,
   type MirrorState,
   readMirror,
@@ -27,9 +28,6 @@ export interface BackupResult {
 
 type BackupFn = (db: Database, path: string, options?: { rate?: number }) => Promise<number>;
 
-/** Mirror bytes are copied in pieces of this size. */
-const COPY_CHUNK = 4 * 1024 * 1024;
-
 /**
  * Back up a store into `target` (see docs/guide/privacy.md#backing-up): first the database, with
  * SQLite's online backup in a single step, so that the copy is one consistent snapshot even while
@@ -38,7 +36,10 @@ const COPY_CHUNK = 4 * 1024 * 1024;
  * the frames a previous backup into `target` holds are extended with those it lacks; an open tail
  * is extended as long as no frame was sealed from it since, and written again otherwise. Its
  * content is read from the live store, where it may have been sealed in the meantime: a mirror's
- * content only grows, so it is the same. To restore, copy `target` into an empty ORIGIN_HOME.
+ * content only grows, so it is the same. On a hub that keeps its sealed frames in a bucket, they
+ * are copied from the bucket into `target`, laid out as on disk, so that a backup holds everything
+ * on its own; the copy of the database then no longer records the bucket. To restore, copy
+ * `target` into an empty ORIGIN_HOME.
  */
 export async function backupStore(
   db: Database,
@@ -72,6 +73,16 @@ export async function backupStore(
       m.state,
       before && before.identity === m.identity ? before.state : undefined,
     );
+  }
+  // From a hub that keeps its sealed frames in a bucket, the frames were copied into the backup:
+  // the copy keeps them all on disk, like any store without a bucket.
+  if (frameBucket(db) !== null) {
+    const copy = new sqlite.DatabaseSync(dest);
+    try {
+      forgetFrameBucket(copy);
+    } finally {
+      copy.close();
+    }
   }
   return {
     databaseBytes: fs.statSync(dest).size,
@@ -139,9 +150,7 @@ function copyMirror(
 
   const haveFrames = same ? Math.min(fileSize(frames), before.frameBytes) : 0;
   if (m.frameBytes > 0 || fileSize(frames) > 0) {
-    resize(frames, haveFrames);
-    appendRange(framesPath(home, m.mirror), frames, haveFrames, m.frameBytes);
-    written += m.frameBytes - haveFrames;
+    written += copyFrames(db, home, m, frames, haveFrames);
   }
 
   const tailLength = m.bytes - m.sealedBytes;
@@ -175,23 +184,4 @@ function fileSize(file: string): number {
 function resize(file: string, size: number): void {
   if (!fs.existsSync(file)) fs.writeFileSync(file, '');
   if (fileSize(file) !== size) fs.truncateSync(file, size);
-}
-
-/** Append bytes `[start, end)` of `src` to `dst`. */
-function appendRange(src: string, dst: string, start: number, end: number): void {
-  if (end <= start) return;
-  const input = fs.openSync(src, 'r');
-  const output = fs.openSync(dst, 'a');
-  try {
-    const buf = Buffer.alloc(Math.min(COPY_CHUNK, end - start));
-    for (let at = start; at < end; ) {
-      const n = fs.readSync(input, buf, 0, Math.min(buf.length, end - at), at);
-      if (n <= 0) throw new OriginError(`The mirror ${src} is shorter than the database records.`);
-      fs.writeSync(output, buf, 0, n);
-      at += n;
-    }
-  } finally {
-    fs.closeSync(input);
-    fs.closeSync(output);
-  }
 }
