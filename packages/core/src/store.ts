@@ -104,10 +104,17 @@ function whereClause(f: EventFilter, params: unknown[]): string {
   return ` AND ${parts.join(' AND ')}`;
 }
 
-/** Session timeline (most recent first). */
+/**
+ * Session timeline (most recent first). `match` keeps the sessions whose name contains it, ignoring
+ * case: the title, or for a session without one its provisional name (the `prompt`, see
+ * promptTitle). Provisional names are computed, not stored, so with `match` the sessions are read
+ * newest first, and the prompts of those without a title found, until the page is full.
+ */
 export function listSessions(
   db: Database,
-  filter: Pick<EventFilter, 'source' | 'project' | 'since' | 'until' | 'limit' | 'offset'> = {},
+  filter: Pick<EventFilter, 'source' | 'project' | 'since' | 'until' | 'limit' | 'offset'> & {
+    match?: string;
+  } = {},
 ): SessionRow[] {
   const params: unknown[] = [];
   const parts: string[] = ['event_count > 0'];
@@ -128,15 +135,37 @@ export function listSessions(
     params.push(filter.until);
   }
   const where = `WHERE ${parts.join(' AND ')}`;
-  params.push(filter.limit ?? 50, filter.offset ?? 0);
-  const rows = db
-    .prepare(
-      `SELECT ${SESSION_COLUMNS} FROM session ${where}
-       ORDER BY COALESCE(ended_at, 0) DESC LIMIT ? OFFSET ?`,
-    )
-    .all(...(params as never[])) as unknown as SessionRecord[];
+  const limit = filter.limit ?? 50;
+  const offset = filter.offset ?? 0;
   const prompt = promptFinder(db);
-  return rows.map((r) => toSessionRow(r, prompt));
+  const match = filter.match?.trim().toLocaleLowerCase() ?? '';
+  if (match === '') {
+    params.push(limit, offset);
+    const rows = db
+      .prepare(
+        `SELECT ${SESSION_COLUMNS} FROM session ${where}
+         ORDER BY COALESCE(ended_at, 0) DESC LIMIT ? OFFSET ?`,
+      )
+      .all(...(params as never[])) as unknown as SessionRecord[];
+    return rows.map((r) => toSessionRow(r, prompt));
+  }
+  const rows = db
+    .prepare(`SELECT ${SESSION_COLUMNS} FROM session ${where} ORDER BY COALESCE(ended_at, 0) DESC`)
+    .all(...(params as never[])) as unknown as SessionRecord[];
+  const out: SessionRow[] = [];
+  let skipped = 0;
+  for (const r of rows) {
+    if (r.title !== null && !r.title.toLocaleLowerCase().includes(match)) continue;
+    const row = toSessionRow(r, prompt);
+    if (r.title === null && !(row.prompt ?? '').toLocaleLowerCase().includes(match)) continue;
+    if (skipped < offset) {
+      skipped++;
+      continue;
+    }
+    out.push(row);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 /** At most this many characters of a prompt stand in for the name of a session without a title. */
@@ -200,6 +229,114 @@ function promptFinder(db: Database): (source: string, sessionId: string) => stri
     }
     return null;
   };
+}
+
+/** A position in a session's events, in time order: a timestamp, then the order of arrival. */
+export interface EventPosition {
+  ts: number;
+  seq: number;
+}
+
+/** A prompt of a session: a turn of the conversation starts with it (see sessionPrompts). */
+export interface SessionPrompt extends EventPosition {
+  id: string;
+  /** The prompt, cut short as a provisional name is (see promptTitle). */
+  prompt: string;
+}
+
+/**
+ * The prompts of a session, in time order: its visible user messages that are prompts the user
+ * typed (see promptTitle), except those of sub-agents, whose threads Claude Code marks `sidechain`
+ * in an event's meta. Read through the index of user messages (event_user_message), so that the
+ * turns of a long session are found without reading its other events.
+ */
+export function sessionPrompts(db: Database, source: string, sessionId: string): SessionPrompt[] {
+  const rows = db
+    .prepare(
+      `SELECT e.id, e.seq, e.ts, e.text FROM event e INDEXED BY event_user_message
+        WHERE e.source = ? AND e.session_id = ? AND e.role = 'user' AND e.kind = 'message'
+          AND (e.meta IS NULL OR json_extract(e.meta, '$.sidechain') IS NOT 1)
+          AND ${VISIBLE_EVENT}
+        ORDER BY e.ts, e.seq`,
+    )
+    .all(source, sessionId) as unknown as Array<{
+    id: string;
+    seq: number;
+    ts: number;
+    text: string;
+  }>;
+  const out: SessionPrompt[] = [];
+  for (const r of rows) {
+    const prompt = promptTitle(r.text);
+    if (prompt !== null) out.push({ id: r.id, seq: r.seq, ts: r.ts, prompt });
+  }
+  return out;
+}
+
+/**
+ * The visible events of a session from position `from` (inclusive) up to `to` (exclusive), in time
+ * order, through the `(source, session_id, ts)` index; either end may be left open. Pages of a
+ * session by turns read one range of its events (see sessionPrompts).
+ */
+export function listSessionEvents(
+  db: Database,
+  o: {
+    source: string;
+    sessionId: string;
+    from?: EventPosition | null;
+    to?: EventPosition | null;
+    limit?: number;
+    offset?: number;
+  },
+): EventRow[] {
+  const params: unknown[] = [o.source, o.sessionId];
+  let where = '';
+  if (o.from) {
+    where += ' AND e.ts >= ? AND (e.ts > ? OR e.seq >= ?)';
+    params.push(o.from.ts, o.from.ts, o.from.seq);
+  }
+  if (o.to) {
+    where += ' AND e.ts <= ? AND (e.ts < ? OR e.seq < ?)';
+    params.push(o.to.ts, o.to.ts, o.to.seq);
+  }
+  params.push(o.limit ?? 200, o.offset ?? 0);
+  const rows = db
+    .prepare(
+      `SELECT ${EVENT_COLUMNS} FROM event e
+        WHERE e.source = ? AND e.session_id = ?${where} AND ${VISIBLE_EVENT}
+        ORDER BY e.ts, e.seq LIMIT ? OFFSET ?`,
+    )
+    .all(...(params as never[])) as unknown as RawEventRecord[];
+  return rows.map(toEventRow);
+}
+
+/**
+ * The agent version recorded most recently for each source: from the events of its latest
+ * sessions (at most five per source, through the `(source, session_id, ts)` index), so that no
+ * query reads a source's events at large. A source whose latest sessions record none is left out.
+ */
+export function latestAgentVersions(db: Database): Map<string, string> {
+  const sessions = db
+    .prepare(
+      `SELECT source, session_id FROM (
+         SELECT source, session_id,
+                ROW_NUMBER() OVER (PARTITION BY source ORDER BY ended_at DESC) AS n
+           FROM session WHERE event_count > 0)
+        WHERE n <= 5 ORDER BY source, n`,
+    )
+    .all() as unknown as Array<{ source: string; session_id: string }>;
+  const version = db.prepare(
+    `SELECT e.agent_version AS v FROM event e
+      WHERE e.source = ? AND e.session_id = ? AND e.agent_version IS NOT NULL AND ${VISIBLE_EVENT}
+      ORDER BY e.ts DESC, e.seq DESC LIMIT 1`,
+  );
+  const out = new Map<string, string>();
+  for (const s of sessions) {
+    if (out.has(s.source)) continue;
+    const row = version.get(s.source, s.session_id) as { v: string } | undefined;
+    if (row) out.set(s.source, row.v);
+  }
+  return out;
 }
 
 const SESSION_COLUMNS =

@@ -6,6 +6,8 @@
  *   updates and deletes.
  * - event: unified events (Event), append-only, keyed by `seq`, their order of arrival in this store
  *   (the rowid; explicit so that VACUUM keeps it, since the search indexes refer to it).
+ *   event_user_message indexes a session's user messages alone, which a turn starts with (see
+ *   sessionPrompts), so that a long session's turns are found without reading its other events.
  * - event_block: for each block of 4,096 consecutive arrivals, the latest timestamp in it and up to
  *   its end, kept by a trigger, so that a newest-first query reading an index by arrival knows when
  *   nothing older can follow (see search.ts); derived.
@@ -119,6 +121,8 @@ CREATE INDEX IF NOT EXISTS event_ts      ON event (ts);
 CREATE INDEX IF NOT EXISTS event_session ON event (source, session_id, ts);
 CREATE INDEX IF NOT EXISTS event_project ON event (project, ts);
 CREATE INDEX IF NOT EXISTS event_seq_ts  ON event (seq, ts);
+CREATE INDEX IF NOT EXISTS event_user_message ON event (source, session_id, ts)
+  WHERE role = 'user' AND kind = 'message';
 
 CREATE TABLE IF NOT EXISTS event_block (
   block     INTEGER PRIMARY KEY,

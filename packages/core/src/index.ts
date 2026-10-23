@@ -143,8 +143,12 @@ export {
   storeMode,
 } from './mode.js';
 export {
+  ACTIVITY_BUCKET_MS,
+  type ActivityCount,
+  activeProjects,
   type DeviceFile,
   deviceFiles,
+  eventActivity,
   type IngestHealth,
   ingestHealth,
   type StoreUsage,
@@ -206,11 +210,14 @@ export {
 export { getSetting, setSetting } from './settings.js';
 export {
   type EventFilter,
+  type EventPosition,
   getEvent,
   getSession,
   isEventForgotten,
+  latestAgentVersions,
   listEvents,
   listProjects,
+  listSessionEvents,
   listSessions,
   loadEvent,
   PROMPT_TITLE_MAX,
@@ -221,7 +228,9 @@ export {
   recordedAgentVersion,
   type SearchHit,
   type SearchOptions,
+  type SessionPrompt,
   type SourceStats,
+  sessionPrompts,
   stats,
 } from './store.js';
 export { isoLocal, parseTime } from './time.js';

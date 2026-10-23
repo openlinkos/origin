@@ -151,6 +151,32 @@ describe('a store with a bucket', () => {
     const tail = fs.statSync(`${mirrorBase()}.tail`).size;
     const framesSize = sealed.reduce((n, c) => n + c.frame_length, 0);
     expect(storeUsage(db, home).mirrorStoredBytes.local).toBe(framesSize + tail);
+    // On disk, only the tail; the frames are in the bucket.
+    expect(storeUsage(db, home)).toMatchObject({
+      mirrorDiskBytes: tail,
+      bucket: { location: 's3://memory/test', frameBytes: framesSize },
+    });
+  });
+
+  it('counts frames sealed before the bucket as on disk until they are moved', async () => {
+    write(0, 9);
+    await syncSource(ctx(), fakeAdapter(src));
+    const before = storeUsage(db, home);
+    expect(before.bucket).toBeNull();
+    expect(before.mirrorDiskBytes).toBe(before.mirrorStoredBytes.local);
+    useObjectStore(db, home, objects);
+    const onDisk = chunks().reduce((n, c) => n + c.frame_length, 0);
+    write(9, 18);
+    await syncSource(ctx(), fakeAdapter(src));
+    const all = chunks().reduce((n, c) => n + c.frame_length, 0);
+    const tail = fs.existsSync(`${mirrorBase()}.tail`)
+      ? fs.statSync(`${mirrorBase()}.tail`).size
+      : 0;
+    expect(all).toBeGreaterThan(onDisk);
+    expect(storeUsage(db, home)).toMatchObject({
+      mirrorDiskBytes: onDisk + tail,
+      bucket: { location: 's3://memory/test', frameBytes: all - onDisk },
+    });
   });
 
   it('seals the tail of a file that stopped growing into the bucket', async () => {

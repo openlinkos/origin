@@ -65,11 +65,12 @@ export function downgradeToV1(file: string): void {
   const db = new DatabaseSync(file);
   try {
     db.exec('ALTER TABLE session DROP COLUMN title_manual');
-    // Tables and an index added since 0.1.0 without a migration (created on open, filled from what
+    // Tables and indexes added since 0.1.0 without a migration (created on open, filled from what
     // 0.1.0 kept; see BACKFILL_EFFECTS).
     db.exec('DROP TABLE IF EXISTS tombstone_effect');
     db.exec('DROP TABLE IF EXISTS tombstone_meta');
     db.exec('DROP INDEX IF EXISTS tombstone_target');
+    db.exec('DROP INDEX IF EXISTS event_user_message');
     db.exec("UPDATE session SET title = NULL WHERE source = 'claude-code'");
     db.exec('PRAGMA user_version = 0');
     const reference = legacyStore(':memory:');

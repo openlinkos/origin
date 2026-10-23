@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-802e5ccd
+sourceHash: sha256-aa5ec35f
 ---
 
 # 架构
@@ -327,7 +327,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 
 时间线按时间列出会话，或按顺序列出单个会话的事件（工具事件默认隐藏，除非请求显示）。
 
-**会话的名称。** 会话的 `title` 是它的 Agent 给它的标题，或用户通过 Agent 给它的标题（见各来源的映射）；Codex 不给任何标题，其他 Agent 也并不总是给。没有标题的会话改为带有一个 `prompt`：它的第一条提示，作为一个临时的名称，界面可以把它作为临时名称显示。它是该会话中最早的、属于用户亲手输入的提示的那个可见的用户 `message` 事件的文本：消息开头的 XML 风格元素（`<tag …>…</tag>`）是 Agent 作为上下文或命令回显添加的，例如 Claude Code 的 `<command-name>`、`<local-command-stdout>` 和 `<local-command-caveat>`，或 Codex 的 `<environment_context>`，它们会被跳过，其后的内容才算数；去掉这些之后为空、或只剩一个方括号提示（例如 `[Request interrupted by user]`）的消息会被略过。适配器标记为 `meta` 的事件（注入的上下文、合成的提示）不是消息。提示中的空白会被合并，并截断到 80 个字符。它在每次读取会话时（`listSessions`、`getSession`）通过 `(source, session_id, ts)` 索引从事件中计算得出，因此会随遗忘而变化（不变量 2）；不保存任何东西。MCP 的 `timeline`、`origin timeline`（放在引号中）以及管理服务的会话列表都在标题旁边带上它。
+**会话的名称。** 会话的 `title` 是它的 Agent 给它的标题，或用户通过 Agent 给它的标题（见各来源的映射）；Codex 不给任何标题，其他 Agent 也并不总是给。没有标题的会话改为带有一个 `prompt`：它的第一条提示，作为一个临时的名称，界面可以把它作为临时名称显示。它是该会话中最早的、属于用户亲手输入的提示的那个可见的用户 `message` 事件的文本：消息开头的 XML 风格元素（`<tag …>…</tag>`）是 Agent 作为上下文或命令回显添加的，例如 Claude Code 的 `<command-name>`、`<local-command-stdout>` 和 `<local-command-caveat>`，或 Codex 的 `<environment_context>`，它们会被跳过，其后的内容才算数；去掉这些之后为空、或只剩一个方括号提示（例如 `[Request interrupted by user]`）的消息会被略过。适配器标记为 `meta` 的事件（注入的上下文、合成的提示）不是消息。提示中的空白会被合并，并截断到 80 个字符。它在每次读取会话时（`listSessions`、`getSession`）通过 `event_user_message`（一个只包含每个会话的用户消息的索引）从事件中计算得出，因此会随遗忘而变化（不变量 2）；不保存任何东西。MCP 的 `timeline`、`origin timeline`（放在引号中）以及管理服务的会话列表都在标题旁边带上它。
 
 ## MCP server {#mcp-server}
 

@@ -121,7 +121,7 @@ describe('sessions without a title', () => {
     expect(stats(db)).toMatchObject([{ titled: 1 }]);
   });
 
-  it('are looked up through the index of a session, in time order', () => {
+  it('are looked up through the index of user messages, in time order', () => {
     const plan = db
       .prepare(
         `EXPLAIN QUERY PLAN SELECT e.text FROM event e
@@ -130,7 +130,7 @@ describe('sessions without a title', () => {
       )
       .all('fake', 'a') as Array<{ detail: string }>;
     const details = plan.map((p) => p.detail).join('\n');
-    expect(details).toContain('event_session');
+    expect(details).toContain('event_user_message');
     expect(details).not.toContain('TEMP B-TREE');
   });
 });
