@@ -17,12 +17,27 @@ import { projectFromCwd, truncate } from './util.js';
  * Sessions: `<GROK_HOME>/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl`, an ACP session-update
  * stream with one `{ method, params: { sessionId, update, _meta }, timestamp }` object per line. On
  * disk each message chunk holds a whole message; a tool call is a `tool_call` line and its result a
- * `tool_call_update` line with `rawOutput`. The other files of a session (`chat_history.jsonl`, which
- * repeats the conversation without timestamps, `summary.json`, …) are not read.
+ * `tool_call_update` line with `rawOutput`.
+ *
+ * A session's title is in its `summary.json`, which Grok rewrites in place: each session's title is
+ * a generated source (`<session-id>/title.jsonl`) that writes out the title fields of `summary.json`,
+ * as stored, as one line whenever the title changes. The other files of a session
+ * (`chat_history.jsonl`, which repeats the conversation without timestamps, …) are not read.
  */
 export const GROK_SOURCE_ID = 'grok';
 
 const UPDATES = 'updates.jsonl';
+const SUMMARY = 'summary.json';
+/** The name of the generated stream of a session's titles, next to its update stream. */
+const TITLES = 'title.jsonl';
+/** The fields of `summary.json` a title line holds, as stored. */
+const TITLE_FIELDS = [
+  'info',
+  'generated_title',
+  'session_summary',
+  'title_is_manual',
+  'updated_at',
+];
 const TOOL_USE_MAX = 2000;
 const TOOL_RESULT_MAX = 4000;
 
@@ -77,16 +92,84 @@ export function createGrokAdapter(opts: GrokAdapterOptions = {}): SourceAdapter 
       const sessions = path.join(home, 'sessions');
       for (const group of subdirectories(sessions)) {
         for (const session of subdirectories(path.join(sessions, group))) {
-          const abs = path.join(sessions, group, session, UPDATES);
-          if (isFile(abs))
-            out.push({ absPath: abs, relPath: `sessions/${group}/${session}/${UPDATES}` });
+          const dir = path.join(sessions, group, session);
+          const abs = path.join(dir, UPDATES);
+          if (!isFile(abs)) continue; // an internal planning agent's: no conversation
+          out.push({ absPath: abs, relPath: `sessions/${group}/${session}/${UPDATES}` });
+          const summary = path.join(dir, SUMMARY);
+          const st = stat(summary);
+          if (st) {
+            out.push({
+              absPath: summary,
+              relPath: `sessions/${group}/${session}/${TITLES}`,
+              generated: {
+                // summary.json is rewritten every turn; its title changes far less often.
+                token: `${st.size}:${st.mtimeMs}`,
+                mtimeMs: st.mtimeMs,
+                next: (last) => titleLines(summary, last),
+              },
+            });
+          }
         }
       }
       out.sort((a, b) => a.relPath.localeCompare(b.relPath));
       return out;
     },
-    parseLine: (line, ctx) => parseGrokLine(line, ctx),
+    parseLine: (line, ctx) =>
+      ctx.relPath.endsWith(`/${TITLES}`) ? parseGrokTitleLine(line, ctx) : parseGrokLine(line, ctx),
   };
+}
+
+/**
+ * The title lines that follow `last`, the last one written out: one holding the title fields of
+ * `summary.json` if its title is not that of `last`, else none. Grok rewrites the file in place; one
+ * that cannot be read now is read again once it changes.
+ */
+function titleLines(summary: string, last: string | null): string[] {
+  let stored: unknown;
+  try {
+    stored = JSON.parse(fs.readFileSync(summary, 'utf8'));
+  } catch {
+    return [];
+  }
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return [];
+  const record = stored as Record<string, unknown>;
+  const fields = Object.fromEntries(
+    TITLE_FIELDS.filter((k) => Object.hasOwn(record, k)).map((k) => [k, record[k]]),
+  );
+  const title = displayTitle(fields);
+  if (title === null) return [];
+  if (last !== null) {
+    try {
+      if (displayTitle(JSON.parse(last) as Record<string, unknown>) === title) return [];
+    } catch {
+      // an unreadable last line: write the title out again
+    }
+  }
+  return [JSON.stringify(fields)];
+}
+
+/**
+ * The title Grok shows for a session: `generated_title`, which holds the generated title or the one
+ * given with `/rename` (`title_is_manual`), else `session_summary`; null if both are blank.
+ */
+function displayTitle(fields: Record<string, unknown>): string | null {
+  for (const key of ['generated_title', 'session_summary']) {
+    const v = fields[key];
+    if (typeof v === 'string' && v.trim().length > 0) return v.trim();
+  }
+  return null;
+}
+
+/**
+ * Pure function: parse one line of a session's title stream. Grok keeps the current title itself,
+ * a manual one included, so the latest line's title is the session's. Exported for tests.
+ */
+export function parseGrokTitleLine(line: string, ctx: ParseContext): ParsedLine | null {
+  const where = sessionPath(ctx.relPath, TITLES);
+  if (!where) return null;
+  const title = displayTitle(JSON.parse(line) as Record<string, unknown>);
+  return title === null ? null : { events: [], sessionTitle: title, sessionId: where.sessionId };
 }
 
 function subdirectories(dir: string): string[] {
@@ -101,10 +184,16 @@ function subdirectories(dir: string): string[] {
 }
 
 function isFile(p: string): boolean {
+  return stat(p) !== null;
+}
+
+/** A file's size and modification time, or null if there is no such file. */
+function stat(p: string): fs.Stats | null {
   try {
-    return fs.statSync(p).isFile();
+    const st = fs.statSync(p);
+    return st.isFile() ? st : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -119,10 +208,10 @@ function readVersion(home: string): string | null {
   }
 }
 
-/** Session id and directory group from `sessions/<group>/<session-id>/updates.jsonl`. */
-function sessionPath(relPath: string): { group: string; sessionId: string } | null {
+/** Session id and directory group from `sessions/<group>/<session-id>/<name>`. */
+function sessionPath(relPath: string, name = UPDATES): { group: string; sessionId: string } | null {
   const parts = relPath.split('/');
-  if (parts.length !== 4 || parts[0] !== 'sessions' || parts[3] !== UPDATES) return null;
+  if (parts.length !== 4 || parts[0] !== 'sessions' || parts[3] !== name) return null;
   return parts[1] && parts[2] ? { group: parts[1], sessionId: parts[2] } : null;
 }
 

@@ -4,10 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   appendRemote,
+  type Database,
   listEvents,
   listSessions,
+  localRawFiles,
   openMemoryDatabase,
   rawLocator,
+  readMirror,
   readRawLine,
   syncSource,
 } from '@openlinkos/origin-core';
@@ -17,11 +20,13 @@ import {
   grokCwdFromGroup,
   grokSessionIdFromPath,
   parseGrokLine,
+  parseGrokTitleLine,
 } from '../src/index.js';
 
 const fixtures = fileURLToPath(new URL('./fixtures/grok/', import.meta.url));
 const SESSION = '01a0f000-0000-7000-8000-000000000001';
 const REL = `sessions/%2Fhome%2Fdev%2Fdemo-app/${SESSION}/updates.jsonl`;
+const TITLE_REL = `sessions/%2Fhome%2Fdev%2Fdemo-app/${SESSION}/title.jsonl`;
 const lines = fs.readFileSync(path.join(fixtures, REL), 'utf8').trim().split('\n');
 const T0 = Date.parse('2026-10-20T01:00:00Z');
 const ctx = (lineNo: number) => ({
@@ -114,13 +119,13 @@ describe('grok adapter', () => {
     fs.rmSync(originHome, { recursive: true, force: true });
   });
 
-  it('ingests the update stream of each session, and only that', async () => {
+  it('ingests the update stream and the title of each session, and nothing else', async () => {
     const db = openMemoryDatabase();
     const adapter = createGrokAdapter({ home: grokHome });
-    expect((await adapter.discover()).map((f) => f.relPath)).toEqual([REL]);
+    expect((await adapter.discover()).map((f) => f.relPath)).toEqual([TITLE_REL, REL]);
 
     const r = await syncSource({ db, home: originHome }, adapter);
-    expect(r).toMatchObject({ source: 'grok', filesChanged: 1, parseErrors: 0, eventsAdded: 13 });
+    expect(r).toMatchObject({ source: 'grok', filesChanged: 2, parseErrors: 0, eventsAdded: 13 });
     expect(adapter.version()).toBe('1.0.41');
 
     const events = listEvents(db, { sessionId: SESSION });
@@ -144,7 +149,9 @@ describe('grok adapter', () => {
     expect(JSON.parse(readRawLine(db, originHome, loc)!)).toMatchObject({
       params: { sessionId: SESSION },
     });
-    expect(listSessions(db).map((s) => [s.sessionId, s.project])).toEqual([[SESSION, 'demo-app']]);
+    expect(listSessions(db).map((s) => [s.sessionId, s.project, s.title])).toEqual([
+      [SESSION, 'demo-app', 'Upload retry'],
+    ]);
 
     const again = await syncSource({ db, home: originHome }, adapter);
     expect(again).toMatchObject({ filesChanged: 0, eventsAdded: 0 });
@@ -180,6 +187,143 @@ describe('grok adapter', () => {
       expect(listEvents(hub, { sessionId: SESSION }).map(strip)).toEqual(
         listEvents(device, { sessionId: SESSION }).map(strip),
       );
+      hub.close();
+    } finally {
+      fs.rmSync(hubHome, { recursive: true, force: true });
+    }
+    device.close();
+  });
+});
+
+describe('grok session titles', () => {
+  let grokHome: string;
+  let originHome: string;
+  const summaryFile = () =>
+    path.join(grokHome, 'sessions', '%2Fhome%2Fdev%2Fdemo-app', SESSION, 'summary.json');
+  /** Rewrite summary.json in place, as Grok does every turn, with these changes. */
+  const rewrite = (changes: Record<string, unknown>) => {
+    const summary = JSON.parse(fs.readFileSync(summaryFile(), 'utf8')) as Record<string, unknown>;
+    fs.writeFileSync(summaryFile(), JSON.stringify({ ...summary, ...changes }));
+    // A later modification time, as the next turn would leave.
+    const t = new Date(Date.now() + ++turns * 1000);
+    fs.utimesSync(summaryFile(), t, t);
+  };
+  let turns = 0;
+  const titleLines = (db: Database) => {
+    const raw = db
+      .prepare("SELECT id, bytes_ingested AS bytes FROM raw_file WHERE path LIKE '%summary.json'")
+      .get() as { id: number; bytes: number };
+    return readMirror(db, originHome, raw.id, 0, raw.bytes)
+      .toString('utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  };
+  const title = (db: Database) => listSessions(db)[0]?.title;
+
+  beforeEach(() => {
+    grokHome = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-grok-'));
+    originHome = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-home-'));
+    fs.cpSync(fixtures, grokHome, { recursive: true });
+  });
+  afterEach(() => {
+    fs.rmSync(grokHome, { recursive: true, force: true });
+    fs.rmSync(originHome, { recursive: true, force: true });
+  });
+
+  it('parses a title line: the generated or renamed title, else the summary', () => {
+    const at = { absPath: summaryFile(), relPath: TITLE_REL, lineNo: 1, fileMtimeMs: 0 };
+    const parse = (o: Record<string, unknown>) => parseGrokTitleLine(JSON.stringify(o), at);
+    expect(parse({ generated_title: ' Upload retry ', session_summary: 'x' })).toEqual({
+      events: [],
+      sessionTitle: 'Upload retry',
+      sessionId: SESSION,
+    });
+    expect(parse({ generated_title: '', session_summary: 'Older clients read this' })).toEqual({
+      events: [],
+      sessionTitle: 'Older clients read this',
+      sessionId: SESSION,
+    });
+    expect(parse({ generated_title: null, session_summary: '' })).toBeNull();
+    expect(parseGrokTitleLine('{"generated_title":"x"}', { ...at, relPath: REL })).toBeNull();
+  });
+
+  it('writes a line each time the title changes, and only then', async () => {
+    const db = openMemoryDatabase();
+    const adapter = createGrokAdapter({ home: grokHome });
+    await syncSource({ db, home: originHome }, adapter);
+    expect(title(db)).toBe('Upload retry');
+    expect(titleLines(db)).toEqual([
+      {
+        info: { id: SESSION, cwd: '/home/dev/demo-app' },
+        generated_title: 'Upload retry',
+        session_summary: 'Upload retry',
+        updated_at: '2026-10-20T01:00:20Z',
+      },
+    ]);
+
+    // Another turn: summary.json is rewritten, its title is the same.
+    rewrite({ num_messages: 30, updated_at: '2026-10-20T01:05:00Z' });
+    await syncSource({ db, home: originHome }, adapter);
+    expect(titleLines(db)).toHaveLength(1);
+
+    // Renamed with /rename; then back to automatic titles with /rename --auto, which blanks the
+    // title until a new one is generated.
+    rewrite({ generated_title: 'Retry with backoff', title_is_manual: true });
+    await syncSource({ db, home: originHome }, adapter);
+    expect(title(db)).toBe('Retry with backoff');
+    rewrite({ generated_title: null, session_summary: '', title_is_manual: false });
+    await syncSource({ db, home: originHome }, adapter);
+    expect(title(db)).toBe('Retry with backoff');
+    rewrite({ generated_title: 'Upload client retries' });
+    await syncSource({ db, home: originHome }, adapter);
+    expect(title(db)).toBe('Upload client retries');
+    expect(titleLines(db).map((l) => [l.generated_title, l.title_is_manual])).toEqual([
+      ['Upload retry', undefined],
+      ['Retry with backoff', true],
+      ['Upload client retries', false],
+    ]);
+
+    // Caught mid-write: nothing now, the title once the file is whole again.
+    const whole = fs.readFileSync(summaryFile(), 'utf8');
+    fs.writeFileSync(summaryFile(), '{"generated_title":"Half');
+    const t = new Date(Date.now() + ++turns * 1000);
+    fs.utimesSync(summaryFile(), t, t);
+    expect(await syncSource({ db, home: originHome }, adapter)).toMatchObject({ parseErrors: 0 });
+    expect(titleLines(db)).toHaveLength(3);
+    fs.writeFileSync(summaryFile(), whole);
+    rewrite({ generated_title: 'Whole again' });
+    await syncSource({ db, home: originHome }, adapter);
+    expect(title(db)).toBe('Whole again');
+    db.close();
+  });
+
+  it('gives a hub the same title from the pushed mirror', async () => {
+    const device = openMemoryDatabase();
+    await syncSource({ db: device, home: originHome }, createGrokAdapter({ home: grokHome }));
+    rewrite({ generated_title: 'Retry with backoff', title_is_manual: true });
+    await syncSource({ db: device, home: originHome }, createGrokAdapter({ home: grokHome }));
+    const hubHome = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-hub-'));
+    try {
+      const hub = openMemoryDatabase();
+      const onHub = createGrokAdapter({ home: hubHome });
+      for (const f of localRawFiles(device)) {
+        expect(
+          appendRemote({ db: hub, home: hubHome }, onHub, {
+            device: 'laptop',
+            source: 'grok',
+            path: f.path,
+            relPath: f.relPath,
+            generation: f.generation,
+            offset: 0,
+            data: readMirror(device, originHome, f.id, 0, f.bytes),
+          }),
+        ).toMatchObject({ ok: true, parseErrors: 0 });
+      }
+      expect(listSessions(hub).map((s) => [s.sessionId, s.title, s.eventCount])).toEqual(
+        listSessions(device).map((s) => [s.sessionId, s.title, s.eventCount]),
+      );
+      expect(title(hub)).toBe('Retry with backoff');
       hub.close();
     } finally {
       fs.rmSync(hubHome, { recursive: true, force: true });

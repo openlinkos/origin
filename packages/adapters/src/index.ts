@@ -40,6 +40,7 @@ export {
   grokHome,
   grokSessionIdFromPath,
   parseGrokLine,
+  parseGrokTitleLine,
 } from './grok.js';
 export { projectFromCwd } from './util.js';
 export {
