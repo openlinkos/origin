@@ -3,6 +3,7 @@ Thumbs.db
 .env
 .env.*
 .claude/settings.local.json
+.claude/worktrees/
 
 # node / build
 node_modules/
