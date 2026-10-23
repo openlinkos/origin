@@ -261,6 +261,8 @@ describe('the timeline', () => {
 describe('the overview', () => {
   it('charts the last 30 days by source, and ranks projects by their events then', async () => {
     const today = new Date(NOW);
+    // Late in the day, so that every event of the day is in the past, whatever the clock says.
+    const late = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23).getTime();
     const at = (k: number) =>
       new Date(today.getFullYear(), today.getMonth(), today.getDate() - k, 12).getTime();
     write([
@@ -280,10 +282,10 @@ describe('the overview', () => {
     await sync();
     await sync('other');
     forget(db, 'fake:a1', { reason: 'test' });
-    const o = service.overview(NOW);
+    const o = service.overview(late);
     expect(o.activity).toHaveLength(ACTIVITY_DAYS);
     expect(o.activity.at(-1)).toMatchObject({
-      day: dayKey(NOW),
+      day: dayKey(late),
       events: 4,
       bySource: { fake: 2, other: 2 },
     });
@@ -304,13 +306,13 @@ describe('the overview', () => {
     });
     expect(o.latestTombstones.map((t) => [t.kind, t.target])).toEqual([['forget', 'fake:a1']]);
     // Kept while nothing changes, counted again when events arrive or are forgotten.
-    expect(service.overview(NOW).activity).toEqual(o.activity);
+    expect(service.overview(late).activity).toEqual(o.activity);
     write([{ id: 'b2', session: 'b', ts: at(0) + 5, project: 'api' }]);
     await sync();
-    expect(service.overview(NOW).activity.at(-1)?.events).toBe(5);
+    expect(service.overview(late).activity.at(-1)?.events).toBe(5);
     forget(db, 'fake:b2', { reason: 'test' });
     forget(db, 'fake:a3', { reason: 'test' });
-    expect(service.overview(NOW).activity.at(-1)?.events).toBe(3);
+    expect(service.overview(late).activity.at(-1)?.events).toBe(3);
   });
 
   it('lists the latest entries and forgets, never what a forget hides', async () => {
