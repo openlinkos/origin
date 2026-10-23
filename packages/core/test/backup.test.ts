@@ -78,7 +78,7 @@ describe('backupStore', () => {
       fs.appendFileSync(file, line(String(i), 's', 1000 * i, 'user', `and then line ${i}`));
       await sync(db, home);
     }
-    forget(db, 'fake:2');
+    forget(db, 'fake:2', { reason: 'test' });
     const framesBefore = filesOf(target).frames.length;
     expect(filesOf(home).frames.length).toBeGreaterThan(framesBefore);
     const second = await backupStore(db, home, target);

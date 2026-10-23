@@ -3,7 +3,7 @@ import type { Database } from './db.js';
 /**
  * The audit log: an append-only record of administrative actions from the admin UI and the CLI
  * (see docs/architecture.md#admin-ui). Triggers reject every UPDATE and DELETE. Details hold ids
- * and counts only, never entry or event text, so that forgetting stays sticky (invariant 2).
+ * and counts only, never entry or event text, so that hidden content stays hidden (invariant 2).
  */
 export type AuditChannel = 'ui' | 'cli';
 

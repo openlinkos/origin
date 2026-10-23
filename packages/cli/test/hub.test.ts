@@ -145,7 +145,7 @@ describe('personal hub', () => {
   it('propagates forgetting from the hub to the device (invariant 2)', async () => {
     await push();
     const client = await hubClient();
-    await client.callTool({ name: 'forget', arguments: { id: USER_EVENT } });
+    await client.callTool({ name: 'forget', arguments: { id: USER_EVENT, reason: 'test' } });
     await client.close();
 
     expect(getEvent(deviceDb, USER_EVENT)).not.toBeNull();

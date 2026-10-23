@@ -120,6 +120,32 @@ describe('origin MCP server', () => {
     expect(gone).toMatchObject({ isError: true, text: 'fake:e1 has been forgotten.' });
   });
 
+  it('forgets only with a reason, records who asked, and has no way to restore', async () => {
+    const { tools } = await client.listTools();
+    const spec = tools.find((t) => t.name === 'forget');
+    expect(spec?.inputSchema.required).toEqual(expect.arrayContaining(['id', 'reason']));
+    expect(spec?.description).toContain('restore it later');
+    expect(tools.some((t) => /restore|unforget/i.test(t.name))).toBe(false);
+    const init = client.getInstructions() ?? '';
+    expect(init).not.toContain('cannot be undone');
+    expect(init).toContain('only the user can restore it');
+
+    await call('search', {}); // ingest
+    for (const args of [{ id: 'fake:e1' }, { id: 'fake:e1', reason: '   ' }]) {
+      expect((await call('forget', args)).isError).toBe(true);
+    }
+    expect(db.prepare('SELECT COUNT(*) AS n FROM tombstone').get()).toEqual({ n: 0 });
+
+    const forgotten = await call('forget', { id: 'fake:e1', reason: ' the user pasted a secret ' });
+    const row = db
+      .prepare(
+        `SELECT t.reason, m.author FROM tombstone t JOIN tombstone_meta m ON m.tombstone_id = t.id
+         WHERE t.id = ?`,
+      )
+      .get(forgotten.json.tombstone);
+    expect(row).toEqual({ reason: 'the user pasted a secret', author: 'test-agent@laptop' });
+  });
+
   it('reports caller errors as tool errors', async () => {
     const r = await call('remember', {
       kind: 'knowledge',

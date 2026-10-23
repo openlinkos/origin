@@ -195,7 +195,7 @@ describe('origin mcp on a connected device', () => {
 
   it('never shows what the device has forgotten, even while the hub still has it', async () => {
     await connect();
-    const forgotten = await call('forget', { id: 'fake:e1' });
+    const forgotten = await call('forget', { id: 'fake:e1', reason: 'test' });
     expect(forgotten.json.excluded_events).toBe(1);
     expect(getEvent(hub.db, 'fake:e1')).not.toBeNull(); // not synced in this test
     const r = await call('search', { query: 'Keep' });
@@ -303,7 +303,7 @@ describe('origin mcp on a connected device', () => {
     expect(corrected.json).toMatchObject({ origin: 'hub', entry: { supersedes: theirs.id } });
     expect(getEntry(hub.db, corrected.json.entry.id)?.author).toBe('agent-x@laptop');
     expect(getEntry(db, corrected.json.entry.id)).toBeNull();
-    const forgotten = await call('forget', { id: 'fake:h1' });
+    const forgotten = await call('forget', { id: 'fake:h1', reason: 'test' });
     expect(forgotten.json).toMatchObject({ origin: 'hub', excluded_events: 1 });
     expect(getEvent(hub.db, 'fake:h1')).toBeNull();
 

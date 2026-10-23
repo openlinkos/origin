@@ -275,7 +275,7 @@ describe('relay mode', () => {
       expect(found.events.map((e: { id: string }) => e.id)).toEqual([NEW_EVENT]);
 
       // Forgetting happens on the hub; the relay has nothing to hide, and its cursors still move.
-      await agent.callTool({ name: 'forget', arguments: { id: saved.entry.id } });
+      await agent.callTool({ name: 'forget', arguments: { id: saved.entry.id, reason: 'test' } });
       expect(isEntryForgotten(main.db, saved.entry.id)).toBe(true);
       expect(await sync()).toMatchObject({ tombstonesApplied: 0, tombstonesPushed: 0 });
       expect(getSetting(relayDb, pulledKey(hub))).not.toBeNull();

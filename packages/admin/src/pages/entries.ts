@@ -1,4 +1,10 @@
-import { ENTRY_KINDS, type Entry, type EventRow, type ForgetResult } from '@openlinkos/origin-core';
+import {
+  ENTRY_KINDS,
+  type Entry,
+  type EventRow,
+  type ForgetResult,
+  type RestoreResult,
+} from '@openlinkos/origin-core';
 import type { Ctx } from '../context.js';
 import { clip, fmtNumber, time } from '../context.js';
 import { href, html, type SafeHtml } from '../html.js';
@@ -295,18 +301,14 @@ export function forgetPage(
         <p>${ctx.mode === 'local' ? t('forget.warningLocal') : t('forget.warning')}</p>
         ${plan.entries.length > 0 ? html`<div><h3 class="ol-heading-sm">${t('forget.entries')}</h3>${idList(plan.entries, 'entry')}</div>` : ''}
         ${plan.events.length > 0 ? html`<div><h3 class="ol-heading-sm">${t('forget.events')}</h3>${idList(plan.events, 'event')}</div>` : ''}
-        <form method="post" action="/admin/forget" class="ol-form" data-confirm="${o.id}">
+        <form method="post" action="/admin/forget" class="ol-form">
           ${csrfField(ctx)}
           <input type="hidden" name="id" value="${o.id}">
           <input type="hidden" name="digest" value="${o.plan?.digest ?? ''}">
           <div class="ol-field">
             <label class="ol-label" for="reason">${t('forget.reason')}</label>
-            <input class="ol-input" type="text" id="reason" name="reason" maxlength="500" value="${o.reason ?? ''}" autocomplete="off" aria-describedby="reason-hint">
+            <input class="ol-input" type="text" id="reason" name="reason" required maxlength="500" value="${o.reason ?? ''}" autocomplete="off" aria-describedby="reason-hint">
             <p class="ol-hint" id="reason-hint">${t('forget.reasonHelp')}</p>
-          </div>
-          <div class="ol-field">
-            <label class="ol-label" for="confirm">${t('forget.confirmLabel')} <code>${o.id}</code></label>
-            <input class="ol-input ol-input-mono" type="text" id="confirm" name="confirm" required autocomplete="off" spellcheck="false">
           </div>
           <div class="ol-form-actions">
             ${submitButton(ctx, { label: t('forget.submit'), icon: 'eraser', variant: 'danger' })}
@@ -319,7 +321,7 @@ export function forgetPage(
   });
 }
 
-/** Where a forget operation goes from here: on a hub, to every device; on `origin ui`, to its hub. */
+/** Where a forget or a restore goes from here: on a hub, to every device; on `origin ui`, to its hub. */
 function propagation(ctx: Ctx): string {
   if (ctx.mode === 'hub') return ctx.t('forget.propagates');
   return ctx.service.hub() ? ctx.t('forget.propagatesLocal') : ctx.t('forget.localOnly');
@@ -333,9 +335,31 @@ export function forgottenPage(ctx: Ctx, r: ForgetResult): void {
     body: html`${pageHeader(ctx, { title: t('forget.doneTitle'), description: propagation(ctx) })}
     <div class="ol-stack">
       ${alert(ctx, 'success', t('forget.done', { entries: fmtNumber(r.entries.length, ctx.lang), events: fmtNumber(r.events.length, ctx.lang), tombstone: r.tombstoneId ?? '—' }))}
+      <p>${t('forget.restoreHint')}</p>
       <div class="ol-cluster">
-        ${linkButton(ctx, { href: '/admin/tombstones', label: t('nav.tombstones'), icon: 'eraser' })}
-        ${linkButton(ctx, { href: '/admin/', label: t('nav.backToOverview'), variant: 'ghost' })}
+        ${r.tombstoneId ? linkButton(ctx, { href: href('tombstone', { id: r.tombstoneId }), label: t('forget.record'), icon: 'eraser' }) : ''}
+        ${linkButton(ctx, { href: '/admin/tombstones', label: t('nav.tombstones'), variant: 'ghost' })}
+      </div>
+    </div>`,
+  });
+}
+
+/** After a restore: what came back here, and where the restore goes from here. */
+export function restoredPage(ctx: Ctx, r: RestoreResult): void {
+  const t = ctx.t;
+  const ids = (list: string[], path: 'entry' | 'event') =>
+    html`<ul class="admin-ids">${list.map((id) => html`<li><a class="ol-mono" href="${href(path, { id })}">${id}</a></li>`)}</ul>`;
+  renderPage(ctx, 200, {
+    title: t('restore.doneTitle'),
+    nav: 'tombstones',
+    body: html`${pageHeader(ctx, { title: t('restore.doneTitle'), description: propagation(ctx) })}
+    <div class="ol-stack">
+      ${alert(ctx, 'success', t('restore.done', { entries: fmtNumber(r.entries.length, ctx.lang), events: fmtNumber(r.events.length, ctx.lang), tombstone: r.tombstoneId }))}
+      ${r.entries.length > 0 ? html`<div><h3 class="ol-heading-sm">${t('forget.entries')}</h3>${ids(r.entries, 'entry')}</div>` : ''}
+      ${r.events.length > 0 ? html`<div><h3 class="ol-heading-sm">${t('forget.events')}</h3>${ids(r.events, 'event')}</div>` : ''}
+      <div class="ol-cluster">
+        ${linkButton(ctx, { href: href('tombstone', { id: r.target }), label: t('restore.back'), icon: 'history' })}
+        ${linkButton(ctx, { href: '/admin/tombstones', label: t('nav.tombstones'), variant: 'ghost' })}
       </div>
     </div>`,
   });

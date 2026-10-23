@@ -113,7 +113,7 @@ export async function recordHubSync<T>(
 /**
  * Sync this device with its hub (see docs/architecture.md#personal-hub): send the raw mirror bytes
  * the hub does not have yet, then the entries and tombstones written here after the push cursor,
- * then apply the hub's tombstones after the pull cursor (invariant 2, sticky forgetting, across
+ * then apply the hub's tombstones after the pull cursor (invariant 2, recorded forgetting, across
  * replicas). Each cursor is saved after every successful request, so an interrupted sync resumes
  * where it stopped, and running it again is a no-op. When it finished, or why it failed, is recorded
  * (lastHubSync).
@@ -197,9 +197,10 @@ function runs(changes: OwnChange[]): OwnChange[][] {
 }
 
 /**
- * Send the entries and tombstones written here, in the order they were written. Forgotten entries
- * are never sent. When the hub cannot take an entry yet, the cursor stops before it and later
- * entries wait too (they may depend on it), but tombstones keep going out: forgetting must not wait.
+ * Send the entries and tombstones (forgets and restores) written here, in the order they were
+ * written. Forgotten entries are never sent; one a restore brings back is logged again, and goes
+ * then. When the hub cannot take an entry yet, the cursor stops before it and later entries wait
+ * too (they may depend on it), but tombstones keep going out: forgetting must not wait.
  */
 export async function pushChanges(opts: HubSyncOptions, call: Call, result: HubSyncResult) {
   const key = pushedKey(opts.hub);
@@ -214,10 +215,13 @@ export async function pushChanges(opts: HubSyncOptions, call: Call, result: HubS
     for (const run of runs(changes)) {
       const last = (run[run.length - 1] as OwnChange).seq;
       if (run[0]?.kind === 'tombstone') {
+        // Forgets and restores this device made; a hub's forget it logged again stays here.
         const tombstones = run
           .map((c) => exportTombstone(opts.db, c.id))
-          .filter((t): t is TombstoneRecord => t !== null);
-        await call('POST', '/v1/tombstones', { device: opts.hub.device, tombstones });
+          .filter((t): t is TombstoneRecord => t !== null && t.origin === opts.hub.device);
+        if (tombstones.length > 0) {
+          await call('POST', '/v1/tombstones', { device: opts.hub.device, tombstones });
+        }
         result.tombstonesPushed += tombstones.length;
       } else if (!blocked) {
         const sent = run
@@ -263,7 +267,9 @@ export async function pullTombstones(opts: HubSyncOptions, call: Call, result: H
     }
     for (const value of page.tombstones) {
       const applied = applyTombstone(opts.db, parseTombstoneRecord(value), { judge });
-      if (applied.entries + applied.events > 0) result.tombstonesApplied++;
+      const changed =
+        applied.entries + applied.events + applied.restored.entries + applied.restored.events;
+      if (changed > 0) result.tombstonesApplied++;
     }
     if (!Number.isSafeInteger(page.next) || page.next < after) {
       throw new Error('The hub sent an invalid tombstone cursor.');

@@ -22,7 +22,7 @@ Origin puts **you** at the center instead of the tool:
 - **One memory across agents and machines.** Sessions from every agent are normalized into one event store, and any MCP-capable agent can query it. A self-hosted hub joins all your machines and cloud agents.
 - **Provenance by default.** Every event points to the original file and line, and every entry cites the events it comes from.
 - **Nothing is lost to cleanup.** Logs are mirrored append-only, so they outlive the agent's own retention.
-- **Correctable and forgettable.** You can correct entries, and forgetting sticks. A forgotten entry or event never shows up again and can never be cited again.
+- **Correctable and forgettable.** You can correct entries, and forgetting sticks: a forgotten entry or event stays hidden everywhere, and cannot be cited, until you restore it. Every forget is kept as a record with its reason.
 - **Your data, your machines.** Everything stays on machines you control: your devices and, optionally, your own hub. Origin never calls a third-party service or an LLM API.
 
 ## Features
@@ -31,9 +31,9 @@ Origin puts **you** at the center instead of the tool:
 - **Entries** in three kinds: `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries). Each carries its sources, a confidence, and a version history.
 - **Relevance-ranked full-text search** across sessions and entries, including CJK substring search (SQLite FTS5 trigram).
 - **Incremental, idempotent ingestion.** Only new bytes are read, rewritten files are kept as a new generation, compressed logs (zstd) are read transparently, and concurrent syncs are safe.
-- **A CLI** to browse the timeline, inspect any entry or event down to its original line, correct entries, and forget.
+- **A CLI** to browse the timeline, inspect any entry or event down to its original line, correct entries, and forget and restore.
 - **A personal hub** (`origin serve`, or the `ghcr.io/openlinkos/origin` image) that you host yourself. Every device keeps a complete memory of its own and sends the hub what it writes with `origin sync`; agents on a device read from both through their local `origin mcp`, and cloud agents connect over HTTP with a token. A machine with little disk can run as a relay that keeps no memory of its own and sends its agents' logs straight to the hub.
-- **An admin UI for your hub** (`origin serve --admin`), off by default: an overview of devices and storage, your sessions and entries, search, correcting, and forgetting with a preview, tokens with ready-made connection commands, and an audit log. Pages are rendered on the hub, and you sign in with the hub's admin password. On any machine, `origin ui` opens the same pages for its own store, on `127.0.0.1`, with a one-time sign-in link.
+- **An admin UI for your hub** (`origin serve --admin`), off by default: an overview of devices and storage, your sessions and entries, search, correcting, forgetting with a preview and restoring what was forgotten, tokens with ready-made connection commands, and an audit log. Pages are rendered on the hub, and you sign in with the hub's admin password. On any machine, `origin ui` opens the same pages for its own store, on `127.0.0.1`, with a one-time sign-in link.
 
 ## Supported agents
 
@@ -99,18 +99,18 @@ agent session logs ──scan──▶ append-only raw mirror ──deterministi
                                  you    ◀── admin UI on your hub ──────────────────┘
 ```
 
-Origin is built around five invariants: **provenance**, **sticky forgetting**, **append-only** storage, **your data on your machines**, and a **single entry point** (agents use MCP; people use the CLI or the admin UI of their hub). The core never calls a model. The agent that asks a question does the reasoning, and Origin supplies the facts and their sources. Read [docs/architecture.md](docs/architecture.md) for the data model, the ingestion algorithm, the forgetting rules, and the MCP tools.
+Origin is built around five invariants: **provenance**, **recorded forgetting**, **append-only** storage, **your data on your machines**, and a **single entry point** (agents use MCP; people use the CLI or the admin UI of their hub). The core never calls a model. The agent that asks a question does the reasoning, and Origin supplies the facts and their sources. Read [docs/architecture.md](docs/architecture.md) for the data model, the ingestion algorithm, the forgetting rules, and the MCP tools.
 
 ## Privacy
 
-Agent session logs often contain source code, command output, and anything you typed into a prompt — sometimes including secrets. Origin copies them into `~/.origin` so that they survive the agents' own cleanup. Without a hub it makes no network connections; with a hub, data travels only between your devices and your own hub, which should sit behind TLS. The stores are not encrypted, so protect them like the original logs. `origin forget` hides an entry or a message for good; deleting `~/.origin` (and your hub's data, if you run one) removes everything. Details: [Privacy and your data](docs/guide/privacy.md).
+Agent session logs often contain source code, command output, and anything you typed into a prompt — sometimes including secrets. Origin copies them into `~/.origin` so that they survive the agents' own cleanup. Without a hub it makes no network connections; with a hub, data travels only between your devices and your own hub, which should sit behind TLS. The stores are not encrypted, so protect them like the original logs. `origin forget` hides an entry or a message everywhere until you restore it; deleting `~/.origin` (and your hub's data, if you run one) removes everything. Details: [Privacy and your data](docs/guide/privacy.md).
 
 ## Roadmap
 
 Delivered as small, runnable increments, each usable on its own:
 
 1. ✅ Core store, Claude Code adapter, and CLI (`sync`, `status`, `timeline`, `search`, `show`, `projects`)
-2. ✅ MCP server, entries, correction, and sticky forgetting; connected to Claude Code
+2. ✅ MCP server, entries, correction, and forgetting; connected to Claude Code
 3. ✅ Codex adapter, including zstd-compressed and archived rollouts
 4. ✅ Personal hub: self-hosted, multi-device, remote MCP, with an admin UI
 5. ✅ Grok Build adapter

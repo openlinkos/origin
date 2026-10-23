@@ -224,15 +224,19 @@ describe('overview helpers', () => {
     expect(listSessions(db, { offset: 1 })).toEqual([]);
     expect(listEntries(db, { offset: 1 })).toEqual([]);
 
-    const r = forget(db, 'fake:e1', 'pasted by mistake', 5000);
+    const r = forget(db, 'fake:e1', { reason: 'pasted by mistake', author: 'user@test' }, 5000);
     expect(tombstoneCount(db)).toBe(1);
     const [t] = listTombstones(db);
     expect(t).toEqual({
       id: r.tombstoneId,
+      kind: 'forget',
       target: 'fake:e1',
       reason: 'pasted by mistake',
       createdAt: 5000,
       origin: storeName(db),
+      author: 'user@test',
+      inEffect: true,
+      restoredBy: [],
       entries: 1,
       events: 1,
     });
@@ -240,8 +244,8 @@ describe('overview helpers', () => {
     expect(listTombstones(db, { before: t!.id })).toEqual([]);
     expect(entriesCiting(db, 'fake:e1')).toEqual([]);
 
-    const second = forget(db, 'fake:e2');
-    forget(db, 'fake:e3');
+    const second = forget(db, 'fake:e2', { reason: 'test' });
+    forget(db, 'fake:e3', { reason: 'test' });
     expect(getSession(db, 'fake', 's1')).toBeNull();
     expect(listTombstones(db).map((x) => x.target)).toEqual(['fake:e3', 'fake:e2', 'fake:e1']);
     expect(listTombstones(db, { before: second.tombstoneId!, limit: 5 })).toHaveLength(1);

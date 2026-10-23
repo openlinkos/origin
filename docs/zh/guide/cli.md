@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-123e620d
+sourceHash: sha256-e7068bfd
 ---
 
 # 命令参考
@@ -13,7 +13,9 @@ origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all
 origin show      <id>                                  显示条目或事件，以及它的原始来源
 origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
 origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
-origin forget    <id> [--reason <text>] [--yes]        永久遗忘条目或事件（需加 --yes 确认）
+origin forget    <id> --reason <text> [--yes]          在每个库中隐藏条目或事件，并保存为记录（需加 --yes 确认）
+origin forgotten [--limit 50]                          遗忘与恢复的记录，从新到旧，附原因
+origin restore   <tombstone-id> --reason <text> [--yes]  带回一次遗忘隐藏的内容（需加 --yes 确认）
 origin projects                                        已知的项目名
 origin backup    <dir>                                 把数据库和原始镜像备份到 <dir>（增量）
 origin mcp                                             以 stdio 运行 MCP server（接入中枢后补充中枢的回答）
@@ -33,7 +35,7 @@ origin push                                            与 origin sync 相同（
 - **时间参数**：相对时长（`30m`、`24h`、`7d`、`2w`）或日期（`YYYY-MM-DD`、ISO 8601）。
 - **来源 id**：`claude-code`、`codex`、`cursor`、`grok` 与 `zcode`。
 - **条目类型**：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。
-- **id 形式**：条目如 `ent_5f0c2a9e41b7`；事件如 `claude-code:<uuid>` 或 `codex:<session>:o12`；遗忘记录（遗忘操作留下的记录）如 `tmb_3a9d70c1e2f4`。
+- **id 形式**：条目如 `ent_5f0c2a9e41b7`；事件如 `claude-code:<uuid>` 或 `codex:<session>:o12`；遗忘记录（遗忘与恢复留下的记录）如 `tmb_3a9d70c1e2f4`。
 - CLI 输出为英文。
 
 ## 检索 {#searching}
@@ -74,22 +76,24 @@ Sources:
 
 ## 纠正与遗忘 {#correcting-and-forgetting}
 
-`correct` 会为条目添加一个新版本，旧版本保留为历史。`forget` 会先列出影响范围，加 `--yes` 才真正执行：
+`correct` 会为条目添加一个新版本，旧版本保留为历史。`forget` 需要一个原因，会先列出将隐藏的内容，加 `--yes` 才真正执行：
 
 ```console
-$ origin forget ent_5f0c2a9e41b7
-This will forget 1 entry and 1 event:
+$ origin forget ent_5f0c2a9e41b7 --reason "wrong project"
+This will hide 1 entry and 1 event, here and on every store it reaches:
   ent_5f0c2a9e41b7
   claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
 
-Forgetting cannot be undone. Re-run with --yes to confirm.
+The forget is kept as a record with its reason; you can restore it later with origin restore. Re-run with --yes to confirm.
 ```
+
+`origin forgotten` 列出本库的遗忘与恢复记录，从新到旧，附带 id、目标、状态和原因。`origin restore <tombstone-id> --reason <text>` 会带回一次遗忘隐藏的内容，仍被其他遗忘隐藏的除外；它和 `forget` 一样，会先列出将带回的内容，加 `--yes` 才真正执行。Agent 不能恢复。恢复之后要再次隐藏，就再遗忘一次。
 
 遗忘规则见[隐私与数据](./privacy.md#forgetting)。
 
 ## 在浏览器中 {#in-your-browser}
 
-`origin ui` 为这台机器的库提供[管理界面](./admin.md#on-your-own-machine)，只监听 `127.0.0.1`，端口默认为 7079，可用 `--port` 指定。它会打印一个登录链接，并在默认浏览器中打开；链接只能使用一次，须在 5 分钟内使用；`--no-open` 只打印链接。这里没有密码。它在终端里运行时，按 Enter 就会得到一个新链接，同样会打印并打开；之前的链接随即失效。用 Ctrl+C 停止它，浏览器也随之退出登录。它启动时会在后台归档这台机器上 Agent 的会话，和 `origin sync --local` 一样，所以界面能显示 Agent 最近写下的内容；归档期间界面照常可用。它拒绝在中继上运行，因为中继不保有自己的会话。在已接入中枢的设备上，你在那里写入的条目和遗忘操作会在后台与中枢同步，与 `correct` 和 `forget` 之后一样。
+`origin ui` 为这台机器的库提供[管理界面](./admin.md#on-your-own-machine)，只监听 `127.0.0.1`，端口默认为 7079，可用 `--port` 指定。它会打印一个登录链接，并在默认浏览器中打开；链接只能使用一次，须在 5 分钟内使用；`--no-open` 只打印链接。这里没有密码。它在终端里运行时，按 Enter 就会得到一个新链接，同样会打印并打开；之前的链接随即失效。用 Ctrl+C 停止它，浏览器也随之退出登录。它启动时会在后台归档这台机器上 Agent 的会话，和 `origin sync --local` 一样，所以界面能显示 Agent 最近写下的内容；归档期间界面照常可用。它拒绝在中继上运行，因为中继不保有自己的会话。在已接入中枢的设备上，你在那里写入的条目以及遗忘和恢复操作，会在后台与中枢同步，与 `correct`、`forget` 和 `restore` 之后一样。
 
 ## 个人中枢 {#personal-hub}
 
@@ -98,8 +102,8 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 - 在中枢上，`origin serve` 提供 `POST /mcp` 和复制接口，`GET /healthz` 用于健康检查，不需要鉴权。`origin token create <name>` 会打印一个新令牌，只显示一次（以 `ogn_` 开头）；中枢只保存令牌的哈希。设备的令牌请以设备命名：它只对同名的设备有效。被吊销的令牌可以用同一个名称新建一个来替换。
 - 在设备上，`origin hub connect` 保存中枢地址和令牌；中枢以设备的库名称来识别它，这个名称必须与令牌名相同。`origin hub connect` 和 `origin hub status` 会向中枢核对，不一致时说明如何解决。此后 `origin sync` 也会与中枢同步：发送新的原始镜像字节，以及在本设备上写下的条目和遗忘记录，再应用中枢的遗忘记录。可以随时重跑，每次都会从上次停下的位置继续。`--local` 会跳过中枢。`origin status` 和 `origin hub status` 会显示这台设备上一次与中枢同步完成的时间（无论由哪个命令或 Agent 发起），如果此后有一次同步失败，还会显示它的错误。
 - 设备接入后，`origin mcp` 根据设备的库作答，并合并中枢的回答，等待中枢最多 2 秒；Agent 保存的内容写在设备上，然后再同步。
-- 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct` 和 `forget` 之后会与中枢同步；如果连不上中枢，改动会留在设备上，直到下一次同步。
-- `origin hub connect … --relay` 把一个空库变成[中继](./hub.md#run-a-device-as-a-relay)，它不保有自己的会话或条目；已经保存了这些内容的库会被拒绝。在中继上，`origin sync` 直接把 Agent 新增的记录行发送给中枢（`--local` 不适用），`origin status` 按来源显示尚未发送的文件和字节，并在尚未发送的会话临近被 Agent 删除的年龄时发出警告，`origin mcp` 把每一次工具调用都交给中枢，`search`、`timeline`、`show`、`entries`、`correct` 和 `forget` 都会询问中枢；`entries --history` 和 `projects` 不可用。`origin hub status` 会显示模式。
+- 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct`、`forget` 和 `restore` 之后会与中枢同步；如果连不上中枢，改动会留在设备上，直到下一次同步。
+- `origin hub connect … --relay` 把一个空库变成[中继](./hub.md#run-a-device-as-a-relay)，它不保有自己的会话或条目；已经保存了这些内容的库会被拒绝。在中继上，`origin sync` 直接把 Agent 新增的记录行发送给中枢（`--local` 不适用），`origin status` 按来源显示尚未发送的文件和字节，并在尚未发送的会话临近被 Agent 删除的年龄时发出警告，`origin mcp` 把每一次工具调用都交给中枢，`search`、`timeline`、`show`、`entries`、`correct` 和 `forget` 都会询问中枢；`entries --history`、`projects`、`forgotten` 和 `restore` 不可用（恢复请在中枢的管理界面中进行）。`origin hub status` 会显示模式。
 - `origin serve --admin` 会同时在 `/admin` 下提供[管理界面](./admin.md)；`--admin-listen <host:port>` 则改为在单独的监听地址上提供。在 TLS 之后时，用 `--public-url` 传入中枢的 https 地址；中枢拒绝在回环地址之外通过明文 HTTP 提供管理界面。
 - `origin serve --raw-s3-endpoint <url> --raw-s3-bucket <name>`，或 `ORIGIN_RAW_S3_*` 环境变量，会把中枢已封存的帧——原始镜像的大部分——保存在兼容 S3 的存储桶中，例如 MinIO；密钥只从环境变量读取。`origin raw upload` 把此前封存的帧移入存储桶并逐帧校验，默认一次 8 帧（可用 `--concurrency` 调整），`--remove` 随后删除原先存放它们的本地文件。见[把原始镜像放进存储桶](./hub.md#keep-raw-mirrors-in-a-bucket)。
 - `origin admin password` 设置管理界面的密码：在终端中询问两次，不显示你输入的内容；没有终端时从标准输入读取一行。`--generate` 随机生成一个密码，只打印一次。密码至少需要 10 个字符，设置后所有管理会话都会退出登录。中枢第一次在启用管理界面的情况下启动时，会生成一个密码，并在日志中打印一次。`origin admin sessions --revoke-all` 让所有会话退出登录，`origin admin audit` 打印审计日志。用 CLI 进行的令牌和密码变更也会记录在其中。

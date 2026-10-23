@@ -57,3 +57,10 @@ export const line = (
 export function mirrorText(db: Database, home: string, rawFileId: number): string {
   return readMirror(db, home, rawFileId, 0, Number.MAX_SAFE_INTEGER).toString('utf8');
 }
+
+/** What applying a tombstone did: entries and events newly hidden, and what came back. */
+export const applied = (entries: number, events: number, restored = { entries: 0, events: 0 }) => ({
+  entries,
+  events,
+  restored,
+});

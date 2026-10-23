@@ -23,6 +23,9 @@ import {
   getEntry,
   getEvent,
   getSession,
+  getTombstone,
+  type HiddenContent,
+  hiddenContent,
   type IngestHealth,
   ingestHealth,
   isEntryForgotten,
@@ -38,11 +41,15 @@ import {
   listTombstones,
   OriginError,
   planForget,
+  planRestore,
+  type RestorePlan,
+  type RestoreResult,
   rawDir,
   rawLocator,
   readRawLine,
   recordAudit,
   remember,
+  restore,
   revokeToken,
   type SearchHit,
   type SessionRow,
@@ -64,6 +71,8 @@ export const RAW_LINE_MAX = 4000;
 /** A device that has sent nothing for this long is flagged on the overview. */
 export const STALE_DEVICE_MS = 24 * 3_600_000;
 export const PAGE_SIZE = 50;
+/** At most this many hidden entries, and as many hidden events, on a forget's page. */
+export const HIDDEN_LIMIT = 200;
 
 /** Who is acting, for the audit log. */
 export interface Actor {
@@ -143,6 +152,19 @@ export interface ForgetPlan {
   plan: ForgetResult;
   /** Digest of the plan: forgetting is refused if the plan changed after it was shown. */
   digest: string;
+}
+
+/** A forget or a restore, for its page. */
+export interface TombstoneDetail {
+  tombstone: TombstoneSummary;
+  /** For a forget in effect: what it hides here, text included (shown to the owner only). */
+  hidden: HiddenContent | null;
+  /** For a forget in effect: what restoring it would bring back here. */
+  restorePlan: RestorePlan | null;
+  /** For a forget: the restores that lifted it. */
+  restores: TombstoneSummary[];
+  /** For a restore: the forget it lifts, if this store has it. */
+  forget: TombstoneSummary | null;
 }
 
 export interface Snippets {
@@ -228,7 +250,12 @@ export class AdminService {
       publicUrl: URL | null;
       /** For `origin ui`: the hub this device is connected to, if any. */
       hub?: () => HubLink | null;
-      /** Called after an entry is written or something is forgotten (`origin ui` then syncs). */
+      /**
+       * The hub's own store: restores log again the forgets whose coverage changes, so that the
+       * devices receive them.
+       */
+      hubStore?: boolean;
+      /** Called after an entry is written, or a forget or restore (`origin ui` then syncs). */
       afterWrite?: () => void;
     },
   ) {}
@@ -491,17 +518,13 @@ export class AdminService {
   }
 
   /**
-   * Forget an entry or event (invariant 2). The caller confirms by repeating the id and by sending
-   * the digest of the plan it showed; if the plan has changed since, nothing happens (409).
+   * Forget an entry or event (invariant 2), with the owner's reason. The caller sends the digest of
+   * the plan it showed; if the plan has changed since, nothing happens (409). A forget can be
+   * restored, so one confirmation is enough.
    */
-  forget(
-    who: Actor,
-    input: { id: unknown; digest: unknown; confirm: unknown; reason?: unknown },
-  ): ForgetResult {
+  forget(who: Actor, input: { id: unknown; digest: unknown; reason?: unknown }): ForgetResult {
     const id = checkId(input.id);
-    if (typeof input.confirm !== 'string' || input.confirm.trim() !== id) {
-      throw new OriginError('To confirm, type the id exactly as shown.');
-    }
+    const reason = typeof input.reason === 'string' ? input.reason : '';
     const plan = planForget(this.db, id);
     if (plan.entries.length === 0 && plan.events.length === 0) {
       throw new OriginError(`${id} has already been forgotten.`);
@@ -509,14 +532,53 @@ export class AdminService {
     if (input.digest !== planDigest(plan)) {
       throw new HttpError(409, 'What would be forgotten has changed. Review the plan again.');
     }
-    const reason =
-      typeof input.reason === 'string' && input.reason.trim()
-        ? input.reason.trim().slice(0, 500)
-        : undefined;
-    const result = forget(this.db, id, reason);
-    // Ids and counts only: the audit log must never keep forgotten text.
+    const result = forget(this.db, id, { reason, author: `user@${storeName(this.db)}` });
+    // Ids and counts only: the audit log never keeps text, the reason included.
     this.audit(who, 'forget', id, {
       targetType: result.targetType,
+      tombstoneId: result.tombstoneId,
+      entries: result.entries.length,
+      events: result.events.length,
+    });
+    this.written();
+    return result;
+  }
+
+  /** A forget or a restore; for a forget in effect, what it hides and what restoring brings back. */
+  tombstone(id: unknown): TombstoneDetail {
+    const tombstoneId = checkId(id, 'tombstone id');
+    const t = getTombstone(this.db, tombstoneId);
+    if (!t) throw new HttpError(404, `Unknown tombstone ${tombstoneId}.`);
+    const live = t.kind === 'forget' && t.inEffect;
+    return {
+      tombstone: t,
+      hidden: live ? hiddenContent(this.db, t.id, { limit: HIDDEN_LIMIT }) : null,
+      restorePlan: live ? planRestore(this.db, t.id) : null,
+      restores: t.restoredBy
+        .map((r) => getTombstone(this.db, r))
+        .filter((r): r is TombstoneSummary => r !== null),
+      forget: t.kind === 'restore' ? getTombstone(this.db, t.target) : null,
+    };
+  }
+
+  /**
+   * Restore a forget, with the owner's reason: what it hid comes back, except what another forget
+   * in effect covers, here and on every store the restore reaches. On a hub, forgets whose coverage
+   * changes are logged again, so that every device follows.
+   */
+  restore(who: Actor, input: { id: unknown; reason?: unknown }): RestoreResult {
+    const id = checkId(input.id, 'tombstone id');
+    const result = restore(
+      this.db,
+      id,
+      {
+        reason: typeof input.reason === 'string' ? input.reason : '',
+        author: `user@${storeName(this.db)}`,
+      },
+      Date.now(),
+      { growthOrigin: this.o.hubStore ? storeName(this.db) : undefined },
+    );
+    this.audit(who, 'restore', id, {
       tombstoneId: result.tombstoneId,
       entries: result.entries.length,
       events: result.events.length,

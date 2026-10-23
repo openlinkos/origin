@@ -17,6 +17,10 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 - `origin ui` serves the admin UI for the store on your own machine, on 127.0.0.1 only: it signs your browser in with a one-time link instead of a password, leaves out what only a hub has, and on a device connected to a hub syncs what you write and forget there in the background.
 - `origin ui` prints and opens a new sign-in link when you press Enter in its terminal, and the previous one stops working; and when it starts, it ingests this machine's agent sessions in the background, as `origin sync --local` does, while the UI can already be used.
 
+### Forgetting
+
+- A forget is now a record that the owner can restore at any time: `forget` requires a reason everywhere (MCP, CLI, admin UI) and records its author, `origin restore` and the admin UI's Forgotten page restore it with a reason (agents cannot), the page shows the owner what a forget hides, and `origin forgotten` lists forgets and restores. A restore is a tombstone whose target is the forget, and replicates like one; upgrade the hub before its devices, since Origin 0.1 ignores restores. Forgetting in the admin UI no longer asks to type the id or the password again.
+
 ### Personal hub
 
 - Relay mode for machines with little disk: `origin hub connect … --relay` makes an empty store a relay, which keeps only cursors, sends its agents' logs to the hub straight from the logs, and answers every MCP tool and CLI query through the hub.

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-e029f3dc
+sourceHash: sha256-6dc1a23b
 ---
 
 # 快速开始
@@ -61,7 +61,8 @@ Agent 会检索 Origin，并附上条目与事件 id 作答。想看原文，运
 origin entries                           # Agent 记下了什么
 origin show ent_5f0c2a9e41b7             # 条目及其来源与版本历史
 origin correct ent_5f0c2a9e41b7 "…"      # 用纠正后的版本替换
-origin forget ent_5f0c2a9e41b7 --yes     # 永久遗忘
+origin forget ent_5f0c2a9e41b7 --reason "wrong" --yes   # 在所有地方隐藏它，并保存为记录
+origin restore tmb_3a9d70c1e2f4 --reason "needed" --yes  # 把它找回来
 ```
 
 想在浏览器里做同样的事，运行 `origin ui`：它会用一次性登录链接，在 `127.0.0.1` 上为这台机器的库打开[管理界面](./admin.md#on-your-own-machine)。

@@ -57,7 +57,8 @@ The agent searches Origin and answers with entry and event ids. To read the orig
 origin entries                           # what agents have remembered
 origin show ent_5f0c2a9e41b7             # an entry with its sources and history
 origin correct ent_5f0c2a9e41b7 "…"      # replace it with a corrected version
-origin forget ent_5f0c2a9e41b7 --yes     # forget it for good
+origin forget ent_5f0c2a9e41b7 --reason "wrong" --yes   # hide it everywhere, as a record
+origin restore tmb_3a9d70c1e2f4 --reason "needed" --yes  # bring it back
 ```
 
 To do the same in your browser, run `origin ui`: it opens the [admin UI](./admin.md#on-your-own-machine) for the store on this machine, on `127.0.0.1`, with a one-time sign-in link.

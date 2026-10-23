@@ -12,8 +12,9 @@ import { ConflictError, OriginError } from './errors.js';
 import {
   type ApplyResult,
   applyTombstone,
-  applyTombstoneInTransaction,
-  exportTombstone,
+  coverArrival,
+  isRestoreTarget,
+  MAX_REASON,
   type RuleThreeJudge,
   TOMBSTONE_ID_RE,
   type TombstoneRecord,
@@ -23,8 +24,9 @@ import { NAME_RE } from './tokens.js';
 
 /**
  * Replication between a device and its hub (see docs/architecture.md#personal-hub). A device sends
- * the entries and tombstones it wrote, in the order of its change log; the hub sends back only
- * tombstones. Everything that arrives over the network is validated field by field first.
+ * the entries and tombstones (forgets and restores) it wrote, in the order of its change log; the
+ * hub sends back only tombstones. Everything that arrives over the network is validated field by
+ * field first.
  */
 
 /** One version of an entry as stores exchange it: its stored fields and every source it cites. */
@@ -76,19 +78,36 @@ function checkIds(value: unknown, what: string): string[] {
   return value.map((id) => checkString(id, what, MAX_ID));
 }
 
-/** A tombstone as another store sent it, or an OriginError. */
+/**
+ * A tombstone as another store sent it, or an OriginError. A restore's target is a tombstone id,
+ * other than its own, and it lists nothing. The reason may be missing only on tombstones written
+ * by Origin 0.1; the author is optional.
+ */
 export function parseTombstoneRecord(value: unknown): TombstoneRecord {
   if (!isRecord(value)) invalid('tombstone');
   const id = value.id;
   if (typeof id !== 'string' || !TOMBSTONE_ID_RE.test(id)) invalid('tombstone id');
+  const target = checkString(value.target, `target of ${id}`, MAX_ID);
+  const entries = checkIds(value.entries, `entries of ${id}`);
+  const events = checkIds(value.events, `events of ${id}`);
+  if (
+    isRestoreTarget(target) &&
+    (!TOMBSTONE_ID_RE.test(target) || target === id || entries.length + events.length > 0)
+  ) {
+    invalid(`restore ${id}`);
+  }
+  const reason = checkOptionalString(value.reason, `reason of ${id}`, MAX_REASON);
+  if (reason !== null && reason.trim().length === 0) invalid(`reason of ${id}`);
+  const author = checkOptionalString(value.author, `author of ${id}`, 200);
   return {
     id,
-    target: checkString(value.target, `target of ${id}`, MAX_ID),
-    reason: checkOptionalString(value.reason, `reason of ${id}`, 2000),
+    target,
+    reason,
     createdAt: checkTime(value.createdAt, `createdAt of ${id}`),
     origin: checkStoreName(value.origin, `origin of ${id}`),
-    entries: checkIds(value.entries, `entries of ${id}`),
-    events: checkIds(value.events, `events of ${id}`),
+    ...(author !== null ? { author } : {}),
+    entries,
+    events,
   };
 }
 
@@ -217,9 +236,9 @@ export type ReceiveResult =
 /**
  * Store a version of an entry written on another store (on a hub: pushed by a device). Idempotent
  * by id; the same id with a different body is refused. The version it supersedes and every event
- * it cites must already be here, or the result is `pending`. A version that joins a forgotten
- * chain, or cites events excluded here, is forgotten on arrival by the tombstones concerned
- * (invariant 2), and their growth is logged under `growthOrigin`.
+ * it cites must already be here, or the result is `pending`. A version that joins a hidden chain,
+ * or cites events hidden here, is hidden on arrival by the forgets concerned (invariant 2), and
+ * their growth is logged under `growthOrigin`.
  */
 export function receiveEntry(
   db: Database,
@@ -251,24 +270,8 @@ export function receiveEntry(
       if (missing.length > 0) return { status: 'pending', missing };
 
       insertEntry(db, e);
-      // The tombstones that forgot another version of its chain or excluded one of its sources.
-      const concerned = db
-        .prepare(
-          `SELECT t.id FROM tombstone t WHERE t.id IN (
-             SELECT fe.tombstone_id FROM forgotten_entry fe JOIN entry en ON en.id = fe.entry_id
-             WHERE en.root = (SELECT root FROM entry WHERE id = ?)
-             UNION
-             SELECT x.tombstone_id FROM excluded_event x JOIN entry_source s ON s.event_id = x.event_id
-             WHERE s.entry_id = ?)
-           ORDER BY t.rowid`,
-        )
-        .all(e.id, e.id) as unknown as Array<{ id: string }>;
-      for (const { id } of concerned) {
-        const t = exportTombstone(db, id);
-        if (t) {
-          applyTombstoneInTransaction(db, t, { keep: true, growthOrigin: opts.growthOrigin });
-        }
-      }
+      // Forgets that cover another version of its chain or one of its sources cover it too.
+      coverArrival(db, e.id, opts.growthOrigin);
       return { status: 'applied' };
     },
     { immediate: true },
@@ -277,14 +280,16 @@ export function receiveEntry(
 
 /**
  * Store a tombstone created on another store (on a hub: pushed by a device). The hub keeps every
- * tombstone it receives and logs its growth when its effects here go beyond those listed.
+ * tombstone it receives, a restore whose forget it has not received yet included, adds what the
+ * device covered to what the hub covers, and logs a forget again when its coverage here changes
+ * beyond what was listed.
  */
 export function receiveTombstone(
   db: Database,
   t: TombstoneRecord,
   opts: { growthOrigin: string },
 ): ApplyResult {
-  return applyTombstone(db, t, { keep: true, growthOrigin: opts.growthOrigin });
+  return applyTombstone(db, t, { keep: true, growthOrigin: opts.growthOrigin, from: 'device' });
 }
 
 /** A change this store made itself, in the order of its change log. */
@@ -309,10 +314,13 @@ export function ownChanges(db: Database, after: number, limit = 100): OwnChange[
  * in the tombstone's effects, so device and hub never disagree.
  */
 export function unpushedOnly(db: Database, pushedThrough: number): RuleThreeJudge {
-  const seqOf = db.prepare("SELECT seq FROM change_log WHERE kind = 'entry' AND id = ?");
+  // The latest change: an entry that a restore brought back is logged again, to be sent again.
+  const seqOf = db.prepare(
+    "SELECT MAX(seq) AS seq FROM change_log WHERE kind = 'entry' AND id = ?",
+  );
   return (root) => {
-    const row = seqOf.get(root) as { seq: number } | undefined;
-    return row === undefined || row.seq > pushedThrough;
+    const row = seqOf.get(root) as { seq: number | null } | undefined;
+    return row?.seq == null || row.seq > pushedThrough;
   };
 }
 

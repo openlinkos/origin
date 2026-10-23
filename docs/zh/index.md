@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-58b60cec
+sourceHash: sha256-bbbdd73a
 layout: home
 
 hero:
@@ -26,7 +26,7 @@ features:
   - title: 不怕清理
     details: 会话记录只追加地镜像保存，比各 Agent 自己的保留期更长久。
   - title: 可纠正、可遗忘
-    details: 错误的条目可以纠正；遗忘后的条目和消息不会再出现，也不能再被引用。
+    details: 错误的条目可以纠正；遗忘后的条目和消息在所有地方都保持隐藏，直到你恢复它们，而且每一次遗忘都连同原因保存为一条记录。
   - title: 你的数据，留在你的机器上
     details: 数据只存放在你控制的机器上：你的设备，以及可选的自建中枢。Origin 从不调用第三方服务，也不调用任何 LLM API。
   - title: 开源

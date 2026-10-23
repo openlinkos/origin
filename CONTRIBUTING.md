@@ -87,7 +87,7 @@ node -e "const c=require('fs').readFileSync(process.argv[1],'utf8').replace(/\r\
 ## Tests and fixtures
 
 - Tests live in `packages/<name>/test/*.test.ts` and run with Vitest.
-- Adapter parsing and the invariants (provenance, sticky forgetting, append-only, idempotent sync) must be covered by tests. MCP tools are tested end to end with in-memory and HTTP MCP clients (`packages/mcp/test`, including a connected device against an in-process hub), replication with real device-to-hub round trips (`packages/cli/test`), and the admin UI through HTTP with its security checks (`packages/admin/test`, and end to end in `packages/cli/test/admin.test.ts`). Always use temporary `ORIGIN_HOME` directories in tests.
+- Adapter parsing and the invariants (provenance, recorded forgetting, append-only, idempotent sync) must be covered by tests. MCP tools are tested end to end with in-memory and HTTP MCP clients (`packages/mcp/test`, including a connected device against an in-process hub), replication with real device-to-hub round trips (`packages/cli/test`), and the admin UI through HTTP with its security checks (`packages/admin/test`, and end to end in `packages/cli/test/admin.test.ts`). Always use temporary `ORIGIN_HOME` directories in tests.
 - **Fixtures must be synthetic.** Never commit real session logs, even partial ones. Build fixtures by hand or scrub them thoroughly: replace names, paths, repository URLs, prompts, outputs, tokens, and any other identifying or secret content.
 
 ## Adding a source adapter

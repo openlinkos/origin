@@ -307,7 +307,7 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
     forget: (args) =>
       run(async () => {
         if (!isKnown(db, args.id)) return onHub('forget', args, args.id);
-        const result = forgetIn(db, args);
+        const result = forgetIn(db, args, `${agentName(mcp)}@${opts.device}`);
         await afterWrite();
         return toolResult(result);
       }),

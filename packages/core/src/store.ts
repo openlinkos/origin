@@ -33,7 +33,7 @@ export interface SearchHit extends EventRow {
 export const EVENT_COLUMNS = `e.id, e.source, e.session_id, e.parent_id, e.ts, e.project, e.cwd, e.git_branch,
   e.role, e.kind, e.text, e.raw_file_id, e.raw_line, e.agent_version, e.meta`;
 
-/** Forgotten events are excluded from every query (invariant 2, sticky forgetting). */
+/** Forgotten events are excluded from every query (invariant 2, recorded forgetting). */
 export const VISIBLE_EVENT = 'NOT EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_id = e.id)';
 
 export interface RawEventRecord {
@@ -263,6 +263,17 @@ export function getEvent(db: Database, id: string): EventRow | null {
   const row = db
     .prepare(`SELECT ${EVENT_COLUMNS} FROM event e WHERE e.id = ? AND ${VISIBLE_EVENT}`)
     .get(id) as RawEventRecord | undefined;
+  return row ? toEventRow(row) : null;
+}
+
+/**
+ * An event by id, forgotten or not: only for the owner's view of what a forget hides (see
+ * tombstones.ts). Every other read uses getEvent.
+ */
+export function loadEvent(db: Database, id: string): EventRow | null {
+  const row = db.prepare(`SELECT ${EVENT_COLUMNS} FROM event e WHERE e.id = ?`).get(id) as
+    | RawEventRecord
+    | undefined;
   return row ? toEventRow(row) : null;
 }
 

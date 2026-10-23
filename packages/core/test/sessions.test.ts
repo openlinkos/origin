@@ -108,7 +108,7 @@ describe('sessions without a title', () => {
     expect(stats(db)).toMatchObject([{ source: 'fake', sessions: 2, titled: 0 }]);
 
     // The prompt is never shown once its event is forgotten (invariant 2): the next one is.
-    forget(db, 'fake:h', 'test');
+    forget(db, 'fake:h', { reason: 'test' });
     expect(byId().a).toMatchObject({ prompt: 'and update its tests' });
 
     // Once the session has a title, that is its name, and the prompt is not looked up.

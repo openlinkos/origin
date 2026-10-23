@@ -9,7 +9,9 @@ origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all
 origin show      <id>                                  Show an entry or an event, with its original source
 origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
 origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
-origin forget    <id> [--reason <text>] [--yes]        Forget an entry or event for good (needs --yes)
+origin forget    <id> --reason <text> [--yes]          Hide an entry or event on every store, as a record (needs --yes)
+origin forgotten [--limit 50]                          Forgets and restores, newest first, with their reasons
+origin restore   <tombstone-id> --reason <text> [--yes]  Bring back what a forget hid (needs --yes)
 origin projects                                        Known project names
 origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
 origin mcp                                             Run the MCP server over stdio (adds the hub's answers when connected)
@@ -29,7 +31,7 @@ origin push                                            Same as origin sync (kept
 - **Time values** are relative durations (`30m`, `24h`, `7d`, `2w`) or dates (`YYYY-MM-DD`, ISO 8601).
 - **Source ids** are `claude-code`, `codex`, `cursor`, `grok`, and `zcode`.
 - **Entry kinds** are `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries).
-- **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, and `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting leaves.
+- **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, and `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting and restoring leave.
 
 ## Searching
 
@@ -69,22 +71,24 @@ Sources:
 
 ## Correcting and forgetting
 
-`correct` adds a new version of an entry and keeps the old one as history. `forget` first shows what it will affect, and only acts with `--yes`:
+`correct` adds a new version of an entry and keeps the old one as history. `forget` needs a reason, first shows what it will hide, and only acts with `--yes`:
 
 ```console
-$ origin forget ent_5f0c2a9e41b7
-This will forget 1 entry and 1 event:
+$ origin forget ent_5f0c2a9e41b7 --reason "wrong project"
+This will hide 1 entry and 1 event, here and on every store it reaches:
   ent_5f0c2a9e41b7
   claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
 
-Forgetting cannot be undone. Re-run with --yes to confirm.
+The forget is kept as a record with its reason; you can restore it later with origin restore. Re-run with --yes to confirm.
 ```
+
+`origin forgotten` lists the forgets and restores of this store, newest first, with their ids, targets, status, and reasons. `origin restore <tombstone-id> --reason <text>` brings back what a forget hid, except what another forget still hides; like `forget`, it first shows what it will bring back, and only acts with `--yes`. Agents cannot restore. To hide something again after a restore, forget it again.
 
 The rules are described in [Privacy and your data](./privacy.md#forgetting).
 
 ## In your browser
 
-`origin ui` serves the [admin UI](./admin.md#on-your-own-machine) for this machine's store, on `127.0.0.1` only, at port 7079 unless you pass `--port`. It prints a sign-in link, which works once, within 5 minutes, and opens it in your default browser; `--no-open` only prints it. There is no password. While it runs in a terminal, press Enter for a new link, which it prints and opens the same way; the previous link stops working. Stop it with Ctrl+C, which also signs the browser out. When it starts, it ingests this machine's agent sessions in the background, as `origin sync --local` does, so the UI shows what your agents wrote last; the UI can be used meanwhile. It refuses to run on a relay, which keeps no sessions of its own. On a device connected to a hub, the entries you write and what you forget there are synced with the hub in the background, as after `correct` and `forget`.
+`origin ui` serves the [admin UI](./admin.md#on-your-own-machine) for this machine's store, on `127.0.0.1` only, at port 7079 unless you pass `--port`. It prints a sign-in link, which works once, within 5 minutes, and opens it in your default browser; `--no-open` only prints it. There is no password. While it runs in a terminal, press Enter for a new link, which it prints and opens the same way; the previous link stops working. Stop it with Ctrl+C, which also signs the browser out. When it starts, it ingests this machine's agent sessions in the background, as `origin sync --local` does, so the UI shows what your agents wrote last; the UI can be used meanwhile. It refuses to run on a relay, which keeps no sessions of its own. On a device connected to a hub, the entries you write, and what you forget or restore there, are synced with the hub in the background, as after `correct`, `forget`, and `restore`.
 
 ## Personal hub
 
@@ -93,8 +97,8 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 - On the hub, `origin serve` exposes `POST /mcp` and the replication API, and `GET /healthz` reports health without authentication. `origin token create <name>` prints a new token once (prefix `ogn_`); the hub stores only its hash. Name a device's token after the device: it works only for the device of that name. A revoked token can be replaced by a new one of the same name.
 - On a device, `origin hub connect` saves the hub's URL and a token; the hub knows the device by its store's name, which must be the token's name. `origin hub connect` and `origin hub status` check this with the hub and say how to fix a mismatch. From then on, `origin sync` also syncs with the hub: it sends new raw mirror bytes and the entries and tombstones written on the device, then applies the tombstones of the hub. It can be re-run at any time, and each run resumes where the previous one stopped. `--local` skips the hub. `origin status` and `origin hub status` show when the device last finished a sync with the hub, whichever command or agent ran it, and the error of the last sync if it failed since.
 - Once a device is connected, `origin mcp` answers from the device's store and merges in the hub's answers, waiting for the hub at most 2 seconds; what agents save is written on the device and then synced.
-- Curation commands (`entries`, `show`, `correct`, `forget`, …) act on the device's own store. On a connected device, `correct` and `forget` then sync with the hub; if the hub cannot be reached, the change stays on the device until the next sync.
-- `origin hub connect … --relay` makes an empty store a [relay](./hub.md#run-a-device-as-a-relay), which keeps no sessions or entries of its own; a store that holds any is refused. On a relay, `origin sync` sends the agents' new log lines straight to the hub (`--local` does not apply), `origin status` shows per source the files and bytes still to send and warns when sessions not sent yet near the age at which their agent deletes them, `origin mcp` hands every tool call to the hub, and `search`, `timeline`, `show`, `entries`, `correct`, and `forget` ask the hub; `entries --history` and `projects` are not available. `origin hub status` shows the mode.
+- Curation commands (`entries`, `show`, `correct`, `forget`, …) act on the device's own store. On a connected device, `correct`, `forget`, and `restore` then sync with the hub; if the hub cannot be reached, the change stays on the device until the next sync.
+- `origin hub connect … --relay` makes an empty store a [relay](./hub.md#run-a-device-as-a-relay), which keeps no sessions or entries of its own; a store that holds any is refused. On a relay, `origin sync` sends the agents' new log lines straight to the hub (`--local` does not apply), `origin status` shows per source the files and bytes still to send and warns when sessions not sent yet near the age at which their agent deletes them, `origin mcp` hands every tool call to the hub, and `search`, `timeline`, `show`, `entries`, `correct`, and `forget` ask the hub; `entries --history`, `projects`, `forgotten`, and `restore` are not available (restore in the hub's admin UI). `origin hub status` shows the mode.
 - `origin serve --admin` also serves the [admin UI](./admin.md) at `/admin`, and `--admin-listen <host:port>` serves it on a separate listener instead. Behind TLS, pass the hub's https address with `--public-url`; the hub refuses to serve the UI over plain HTTP beyond loopback.
 - `origin serve --raw-s3-endpoint <url> --raw-s3-bucket <name>`, or the `ORIGIN_RAW_S3_*` variables, keeps the hub's sealed frames, most of its raw mirrors, in an S3-compatible bucket such as MinIO; the keys are read only from the environment. `origin raw upload` moves the frames sealed before to the bucket, verifying each, 8 at a time unless `--concurrency` says otherwise, and `--remove` then removes the local files that held them. See [Keep raw mirrors in a bucket](./hub.md#keep-raw-mirrors-in-a-bucket).
 - `origin admin password` sets the admin UI's password: it asks twice on a terminal, without showing what you type, and otherwise reads one line from standard input; `--generate` picks a random one and prints it once. The password needs at least 10 characters, and setting it signs out every admin session. On its first start with the admin UI enabled, the hub generates a password and prints it to its log once. `origin admin sessions --revoke-all` signs out every session, and `origin admin audit` prints the audit log. Token and password changes made with the CLI are recorded there too.

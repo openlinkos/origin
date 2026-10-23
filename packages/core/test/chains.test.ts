@@ -24,7 +24,7 @@ import {
   storeName,
   syncSource,
 } from '../src/index.js';
-import { fakeAdapter, line } from './helpers.js';
+import { applied, fakeAdapter, line } from './helpers.js';
 
 let home: string;
 let src: string;
@@ -109,7 +109,7 @@ describe('store identity', () => {
     setStoreName(db, 'laptop');
     const a = note(['fake:e1']);
     const b = correct(db, a.id, { text: 'Chose SQLite with FTS5.', author: 'user@laptop' });
-    const t = forget(db, 'fake:e4', 'test');
+    const t = forget(db, 'fake:e4', { reason: 'test' });
     const log = db.prepare('SELECT seq, kind, id, origin FROM change_log ORDER BY seq').all();
     expect(log).toEqual([
       { seq: 1, kind: 'entry', id: a.id, origin: 'laptop' },
@@ -184,7 +184,7 @@ describe('concurrent corrections', () => {
     const mine = correct(db, a.id, { text: 'device version', author: 'user@laptop' }, 20_000);
     arrive({ id: 'ent_00000000000f', supersedes: a.id, createdAt: 30_000, sources: ['fake:e2'] });
 
-    const r = forget(db, mine.id);
+    const r = forget(db, mine.id, { reason: 'test' });
     expect(r.entries.sort()).toEqual([a.id, mine.id, 'ent_00000000000f'].sort());
     expect(r.events.sort()).toEqual(['fake:e1', 'fake:e2']);
     expect(listEntries(db, { includeSuperseded: true })).toEqual([]);
@@ -199,16 +199,16 @@ describe('concurrent corrections', () => {
       20_000,
     );
     // The current version still has a visible source: nothing more is forgotten.
-    forget(db, 'fake:e2');
+    forget(db, 'fake:e2', { reason: 'test' });
     const other = note(['fake:e1'], 'only e1', 15_000);
-    forget(db, other.id);
+    forget(db, other.id, { reason: 'test' });
     expect(getEntry(db, b.id)?.status).toBe('active');
     expect(entrySources(db, b.id).map((s) => s.eventId)).toEqual(['fake:e3']);
     // Its last source goes: the whole chain has lost its provenance.
-    const r = forget(db, 'fake:e4');
+    const r = forget(db, 'fake:e4', { reason: 'test' });
     expect(r.entries).toEqual([]);
     const last = note(['fake:e3'], 'cites e3', 25_000);
-    forget(db, last.id);
+    forget(db, last.id, { reason: 'test' });
     expect(isEntryForgotten(db, a.id)).toBe(true);
     expect(isEntryForgotten(db, b.id)).toBe(true);
   });
@@ -234,7 +234,7 @@ describe('applying tombstones from other stores', () => {
       entries: [a.id, 'ent_ffffffffffff'],
       events: ['fake:e1', 'fake:h9'],
     };
-    expect(applyTombstone(db, t)).toEqual({ entries: 2, events: 1 });
+    expect(applyTombstone(db, t)).toEqual(applied(2, 1));
     expect(isEntryForgotten(db, b.id)).toBe(true);
     // Version b's own new source was not listed, and a listed entry excludes nothing by itself.
     expect(getEvent(db, 'fake:e3')).not.toBeNull();
@@ -262,10 +262,7 @@ describe('applying tombstones from other stores', () => {
       entries: [],
       events: ['fake:e1'],
     };
-    expect(applyTombstone(db, t, { keep: true, growthOrigin: 'hub' })).toEqual({
-      entries: 1,
-      events: 2,
-    });
+    expect(applyTombstone(db, t, { keep: true, growthOrigin: 'hub' })).toEqual(applied(1, 2));
     expect(isEntryForgotten(db, a.id)).toBe(true);
     expect(getEvent(db, 'fake:e2')).toBeNull();
     const log = db.prepare("SELECT origin FROM change_log WHERE kind = 'tombstone'").all();
@@ -273,15 +270,12 @@ describe('applying tombstones from other stores', () => {
     expect(log).toEqual([{ origin: 'laptop' }, { origin: 'hub' }]);
 
     // Applying again changes nothing and logs nothing.
-    expect(applyTombstone(db, t, { keep: true, growthOrigin: 'hub' })).toEqual({
-      entries: 0,
-      events: 0,
-    });
+    expect(applyTombstone(db, t, { keep: true, growthOrigin: 'hub' })).toEqual(applied(0, 0));
     expect(db.prepare('SELECT COUNT(*) AS n FROM change_log').get()).toEqual({ n: 3 });
 
     // A hub keeps tombstones that change nothing; a device does not.
     const none = { ...t, id: 'tmb_00000000000c', target: 'fake:zz', events: ['fake:zz'] };
-    expect(applyTombstone(db, none)).toEqual({ entries: 0, events: 0 });
+    expect(applyTombstone(db, none)).toEqual(applied(0, 0));
     expect(exportTombstone(db, none.id)).toBeNull();
     applyTombstone(db, none, { keep: true });
     expect(exportTombstone(db, none.id)).toMatchObject({ entries: [], events: [] });

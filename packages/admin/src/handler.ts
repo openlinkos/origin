@@ -54,10 +54,11 @@ import {
   forgetPage,
   forgottenPage,
   rememberPage,
+  restoredPage,
 } from './pages/entries.js';
 import { here } from './pages/layout.js';
 import { connectPage, devicePage, devicesPage, overviewPage } from './pages/overview.js';
-import { auditPage, signinsPage, tombstonesPage } from './pages/records.js';
+import { auditPage, signinsPage, tombstonePage, tombstonesPage } from './pages/records.js';
 import { newTokenPage, revokeTokenPage, tokenCreatedPage, tokensPage } from './pages/tokens.js';
 import { CheckQueue, type LimiterOptions, LOGIN_LIMITS, LoginLimiter } from './ratelimit.js';
 import { AdminService, type HubLink } from './service.js';
@@ -140,7 +141,7 @@ interface State {
 
 /**
  * `none`: no session needed. `session`: signed in. `fresh`: signed in, and the password entered
- * within the last 10 minutes (token create and revoke, forget, revoking sessions).
+ * within the last 10 minutes (token create and revoke, revoking sessions).
  */
 export type RouteAuth = 'none' | 'session' | 'fresh';
 
@@ -511,46 +512,51 @@ const PAGES: Route[] = [
       });
     }
   }),
-  page('GET', '/forget', 'fresh', (ctx) => {
+  page('GET', '/forget', 'session', (ctx) => {
     const id = query(ctx, 'id');
     forgetPage(ctx, 200, { id, plan: ctx.service.forgetPlan(id) });
   }),
-  page(
-    'POST',
-    '/forget',
-    'fresh',
-    (ctx) => {
-      const id = field(ctx, 'id');
-      try {
-        const result = ctx.service.forget(actorOf(ctx), {
-          id,
-          digest: ctx.body.digest,
-          confirm: ctx.body.confirm,
-          reason: ctx.body.reason,
-        });
-        forgottenPage(ctx, result);
-      } catch (err) {
-        const status =
-          err instanceof HttpError && err.status === 409
-            ? 409
-            : err instanceof OriginError
-              ? 400
-              : 0;
-        if (status === 0) throw err;
-        forgetPage(ctx, status, {
-          id,
-          plan: ctx.service.forgetPlan(id),
-          reason: field(ctx, 'reason'),
-          error: (err as Error).message,
-        });
-      }
-    },
-    (ctx) => `/admin/forget?id=${encodeURIComponent(field(ctx, 'id'))}`,
-  ),
+  page('POST', '/forget', 'session', (ctx) => {
+    const id = field(ctx, 'id');
+    try {
+      const result = ctx.service.forget(actorOf(ctx), {
+        id,
+        digest: ctx.body.digest,
+        reason: ctx.body.reason,
+      });
+      forgottenPage(ctx, result);
+    } catch (err) {
+      const status =
+        err instanceof HttpError && err.status === 409 ? 409 : err instanceof OriginError ? 400 : 0;
+      if (status === 0) throw err;
+      forgetPage(ctx, status, {
+        id,
+        plan: ctx.service.forgetPlan(id),
+        reason: field(ctx, 'reason'),
+        error: (err as Error).message,
+      });
+    }
+  }),
 
   page('GET', '/tombstones', 'session', (ctx) =>
     tombstonesPage(ctx, ctx.service.tombstones(beforeTombstone(ctx))),
   ),
+  page('GET', '/tombstone', 'session', (ctx) =>
+    tombstonePage(ctx, 200, { detail: ctx.service.tombstone(query(ctx, 'id')) }),
+  ),
+  page('POST', '/restore', 'session', (ctx) => {
+    const id = field(ctx, 'id');
+    try {
+      restoredPage(ctx, ctx.service.restore(actorOf(ctx), { id, reason: ctx.body.reason }));
+    } catch (err) {
+      if (!(err instanceof OriginError)) throw err;
+      tombstonePage(ctx, 400, {
+        detail: ctx.service.tombstone(id),
+        reason: field(ctx, 'reason'),
+        error: err.message,
+      });
+    }
+  }),
   page('GET', '/audit', 'session', (ctx) => auditPage(ctx, ctx.service.auditLog(beforeParam(ctx)))),
   hubPage('GET', '/signins', 'session', (ctx) => {
     const n = Number(query(ctx, 'revoked'));
@@ -719,11 +725,10 @@ const API: Route[] = [
   api('GET', 'forget-plan', 'session', (ctx) =>
     json(ctx, 200, ctx.service.forgetPlan(query(ctx, 'id'))),
   ),
-  api('POST', 'forget', 'fresh', (ctx) => {
+  api('POST', 'forget', 'session', (ctx) => {
     const r = ctx.service.forget(actorOf(ctx), {
       id: ctx.body.id,
       digest: ctx.body.digest,
-      confirm: ctx.body.confirm,
       reason: ctx.body.reason,
     });
     json(ctx, 200, {
@@ -737,6 +742,18 @@ const API: Route[] = [
   api('GET', 'tombstones', 'session', (ctx) =>
     json(ctx, 200, ctx.service.tombstones(beforeTombstone(ctx))),
   ),
+  api('GET', 'tombstone', 'session', (ctx) =>
+    json(ctx, 200, ctx.service.tombstone(query(ctx, 'id'))),
+  ),
+  api('POST', 'restore', 'session', (ctx) => {
+    const r = ctx.service.restore(actorOf(ctx), { id: ctx.body.id, reason: ctx.body.reason });
+    json(ctx, 200, {
+      tombstoneId: r.tombstoneId,
+      target: r.target,
+      entries: r.entries.length,
+      events: r.events.length,
+    });
+  }),
   api('GET', 'audit', 'session', (ctx) => json(ctx, 200, ctx.service.auditLog(beforeParam(ctx)))),
   hubApi('GET', 'connect', 'session', (ctx) => json(ctx, 200, ctx.service.connect())),
   hubApi('GET', 'admin-sessions', 'session', (ctx) =>
@@ -775,7 +792,8 @@ const routeList = (routes: Route[]): RouteList =>
 /**
  * Every route of the hub's admin UI: only GET and POST, and every write is a POST. This list is the
  * whole surface; tests pin the writes so that nothing beyond them (editing or deleting events,
- * mirrors, entries, or tombstones; un-forgetting; changing the admin password) can appear unnoticed.
+ * mirrors, entries, or tombstones; changing the admin password) can appear unnoticed. Restoring a
+ * forget is a write of its own: it adds a tombstone and deletes nothing.
  */
 export const ADMIN_ROUTES: RouteList = routeList(ROUTES.hub);
 
@@ -952,6 +970,7 @@ export function createAdminHandler(options: AdminOptions): AdminHandler {
       version: options.version,
       startedAt: options.startedAt ?? now(),
       publicUrl,
+      hubStore: true,
     }),
     sessions: storedSessions(options.db),
     local: null,

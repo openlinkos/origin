@@ -25,7 +25,7 @@ features:
   - title: Nothing lost to cleanup
     details: Session logs are mirrored append-only, so they outlive each agent's own retention period.
   - title: Correct and forget
-    details: You can correct entries that are wrong. Forgotten entries and messages never come back and can never be cited again.
+    details: You can correct entries that are wrong. Forgotten entries and messages stay hidden everywhere until you restore them, and every forget is kept as a record with its reason.
   - title: Your data, your machines
     details: Everything stays on machines you control, your devices and optionally your own hub. Origin never calls a third-party service or an LLM API.
   - title: Open source

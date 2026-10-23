@@ -473,14 +473,13 @@ describe('admin UI on the hub', () => {
     expect(preview.status).toBe(200);
     expect(preview.text).toContain(entryId);
     const digest = /name="digest" value="([0-9a-f]+)"/.exec(preview.text)?.[1] ?? '';
-    const wrong = await b.post('/admin/forget', { id: USER_EVENT, digest, confirm: 'nope' });
+    // One confirmation, with a reason: no id to type again, no password to enter again.
+    expect(preview.text).not.toContain('name="confirm"');
+    const wrong = await b.post('/admin/forget', { id: USER_EVENT, digest, reason: '  ' });
     expect(wrong.status).toBe(400);
-    const done = await b.post('/admin/forget', {
-      id: USER_EVENT,
-      digest,
-      confirm: USER_EVENT,
-      reason: 'test',
-    });
+    expect(wrong.text).toContain('A reason is required');
+    expect(getEvent(hubDb, USER_EVENT)).not.toBeNull();
+    const done = await b.post('/admin/forget', { id: USER_EVENT, digest, reason: 'test' });
     expect(done.status).toBe(200);
 
     const client = await mcp();
@@ -514,6 +513,21 @@ describe('admin UI on the hub', () => {
     const tombstones = await b.get('/admin/tombstones');
     expect(tombstones.text).not.toContain('仓库');
     expect(tombstones.text).toContain(USER_EVENT);
+
+    // The owner opens the record, sees what it hides, and restores it; the device follows on its
+    // next sync.
+    const tombstoneId = forgetRecord?.detail?.tombstoneId as string;
+    const record = await b.get(`/admin/tombstone?id=${tombstoneId}`);
+    expect(record.status).toBe(200);
+    expect(record.text).toContain('Asked for a repository status check.');
+    expect(record.text).toContain('仓库');
+    const restored = await b.post('/admin/restore', { id: tombstoneId, reason: 'still needed' });
+    expect(restored.status).toBe(200);
+    expect(restored.text).toContain('Each device applies this on its next sync.');
+    expect(getEvent(hubDb, USER_EVENT)).not.toBeNull();
+    expect(getEntry(hubDb, entryId)?.status).toBe('active');
+    expect((await push()).tombstonesApplied).toBe(1);
+    expect(getEvent(deviceDb, USER_EVENT)).not.toBeNull();
   });
 
   it('refuses to forget when the plan has changed', async () => {
@@ -529,7 +543,7 @@ describe('admin UI on the hub', () => {
     const stale = await b.api('POST', 'forget', {
       id: USER_EVENT,
       digest: plan.digest,
-      confirm: USER_EVENT,
+      reason: 'stale plan',
     });
     expect(stale.status).toBe(409);
     expect(getEvent(hubDb, USER_EVENT)).not.toBeNull();
@@ -537,7 +551,7 @@ describe('admin UI on the hub', () => {
     const ok = await b.api('POST', 'forget', {
       id: USER_EVENT,
       digest: fresh.digest,
-      confirm: USER_EVENT,
+      reason: 'current plan',
     });
     expect(ok.status).toBe(200);
     expect(ok.json()).toMatchObject({ entries: 1, events: 1, targetType: 'event' });

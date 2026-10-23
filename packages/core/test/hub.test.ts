@@ -36,7 +36,7 @@ import {
   tombstoneFeed,
   verifyToken,
 } from '../src/index.js';
-import { fakeAdapter, line, mirrorText } from './helpers.js';
+import { applied, fakeAdapter, line, mirrorText } from './helpers.js';
 
 let dirs: string[];
 let home: string;
@@ -306,7 +306,7 @@ describe('appendRemote', () => {
   it('keeps events forgotten on the hub forgotten when a device pushes them again', () => {
     const { adapter } = spyAdapter();
     appendRemote({ db, home }, adapter, chunk({ text: two }));
-    forget(db, 'fake:e1');
+    forget(db, 'fake:e1', { reason: 'test' });
     // The device rewrote the file (new generation) and pushes the same lines again.
     appendRemote({ db, home }, adapter, chunk({ generation: 2, text: two }));
     expect(getEvent(db, 'fake:e1')).toBeNull();
@@ -467,8 +467,8 @@ describe('tombstones', () => {
       author: 'test',
       sources: [{ eventId: 'fake:e1' }],
     });
-    const first = forget(db, e.id, 'test');
-    const second = forget(db, 'fake:h1');
+    const first = forget(db, e.id, { reason: 'test' });
+    const second = forget(db, 'fake:h1', { reason: 'test' });
     // A tombstone a device pushed: it keeps its id and origin.
     applyTombstone(
       db,
@@ -489,7 +489,7 @@ describe('tombstones', () => {
       all.tombstones.map((t) => [t.id, t.target, t.reason, t.origin, t.entries, t.events]),
     ).toEqual([
       [first.tombstoneId, e.id, 'test', 'hub', [e.id], ['fake:e1']],
-      [second.tombstoneId, 'fake:h1', null, 'hub', [], ['fake:h1']],
+      [second.tombstoneId, 'fake:h1', 'test', 'hub', [], ['fake:h1']],
       ['tmb_0123456789ab', 'fake:e2', null, 'laptop', [], ['fake:e2']],
     ]);
     expect(all.more).toBe(false);
@@ -517,12 +517,12 @@ describe('tombstones', () => {
       author: 'test',
       sources: [{ eventId: 'fake:e1' }],
     });
-    forget(db, e.id, 'secret');
-    forget(db, 'fake:h1');
+    forget(db, e.id, { reason: 'secret' });
+    forget(db, 'fake:h1', { reason: 'test' });
     const [first, second] = tombstoneFeed(db, { after: 0, device: 'laptop' }).tombstones;
 
     expect(listSessions(device)[0]?.eventCount).toBe(2);
-    expect(applyTombstone(device, first!)).toEqual({ entries: 0, events: 1 });
+    expect(applyTombstone(device, first!)).toEqual(applied(0, 1));
     expect(getEvent(device, 'fake:e1')).toBeNull();
     expect(listSessions(device)[0]?.eventCount).toBe(1);
     expect(tombstoneFeed(device, { after: 0, device: 'other' }).tombstones).toEqual([
@@ -530,8 +530,8 @@ describe('tombstones', () => {
     ]);
 
     // Re-applying, or applying a tombstone about events the device never had, writes nothing.
-    expect(applyTombstone(device, first!)).toEqual({ entries: 0, events: 0 });
-    expect(applyTombstone(device, second!)).toEqual({ entries: 0, events: 0 });
+    expect(applyTombstone(device, first!)).toEqual(applied(0, 0));
+    expect(applyTombstone(device, second!)).toEqual(applied(0, 0));
     expect(tombstoneCount(device)).toBe(1);
     expect(() => applyTombstone(device, { ...first!, reason: 'changed' })).toThrow(
       /different content/,

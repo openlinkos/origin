@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-0f290cc4
+sourceHash: sha256-cb92420b
 ---
 
 # 个人中枢
@@ -100,7 +100,7 @@ origin status
 - 只有还没有保存任何内容的库才能成为中继。如果这台机器上已经有一个保存了会话或条目的库，Origin 会拒绝，并且不做任何改动；请把 `ORIGIN_HOME` 设为一个新目录，再接入那个库。中继会一直是中继；要在这台机器上重新保有完整的库，请再使用一个新的 `ORIGIN_HOME`。
 - `origin sync` 把每份会话记录新增的完整行发送给中枢，中枢像收到设备自己的副本一样归档并解析它们；`origin status` 按来源显示还有多少文件和字节尚未发送。和其他设备一样，Agent 的 `origin mcp` 在运行中也会发送新的行。
 - Agent 的注册都不用改，但在中继上，`origin mcp` 的每个工具都由中枢作答：它先把刚刚写下的内容发送给中枢，让 Agent 能找到并引用它，再把调用交给中枢。Agent 保存的内容写在中枢上，作者记为 `claude-code@vps`。连不上中枢时，工具会失败，并说明中继离线时无法作答。
-- `origin search`、`timeline`、`show`、`entries`、`correct` 和 `forget` 也会询问中枢，`correct` 记为 `user@vps`。中继无法事先列出 `origin forget` 将遗忘的内容，所以它会说明按规则将遗忘什么，并照常需要 `--yes`。`entries --history` 和 `projects` 在中继上不可用；请使用中枢的[管理界面](./admin.md)。
+- `origin search`、`timeline`、`show`、`entries`、`correct` 和 `forget` 也会询问中枢，`correct` 记为 `user@vps`。中继无法事先列出 `origin forget` 将隐藏的内容，所以它会说明按规则将隐藏什么，并照常需要 `--yes`。`entries --history`、`projects`、`forgotten` 和 `restore` 在中继上不可用；请使用中枢的[管理界面](./admin.md)。
 - 连不上中枢时，什么也不会发送，新的会话只存在于 Agent 自己的记录文件中。有些 Agent 会删除旧的记录，Claude Code 默认在 30 天后删除（`cleanupPeriodDays`），所以请确保中继定期连上它的中枢；如果上面运行着不使用 Origin 的 Agent，请定时运行 `origin sync`。
 - 在那之前，中继会发出警告：尚未发送的会话距离 Claude Code 删除它们的年龄（`~/.claude/settings.json` 中的 `cleanupPeriodDays`，或 30 天）不到一周时，以及其他 Agent 的会话已等待一周仍未发送时，`origin status` 会说明，`origin sync` 在没能发送全部内容时也会说明。连不上中枢期间，Agent 的工具失败时也会提到这一点。
 
@@ -120,7 +120,7 @@ codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var OR
 
 ## 遗忘 {#forgetting}
 
-通过中枢遗忘，效果和单机时一样（见[隐私与数据](./privacy.md#forgetting)），而且会同步到每台设备：每台设备在下一次同步时应用中枢的遗忘记录，本地副本会隐藏同样的条目和事件；而在某台设备上遗忘的内容会到达中枢，再从中枢到达其他每台设备。即使某台设备再次推送，被遗忘的事件也保持隐藏。
+通过中枢遗忘，效果和单机时一样（见[隐私与数据](./privacy.md#forgetting)），而且会同步到每台设备：每台设备在下一次同步时应用中枢的遗忘记录，本地副本会隐藏同样的条目和事件；而在某台设备上遗忘的内容会到达中枢，再从中枢到达其他每台设备。即使某台设备再次推送，被遗忘的事件也保持隐藏。恢复也以同样的方式传递：在中枢的管理界面中恢复，或者在设备上用 `origin restore` 恢复，每个库都会带回那次遗忘隐藏的内容，无论遗忘和恢复以什么顺序到达。
 
 ## 在浏览器中管理 {#manage-it-in-a-browser}
 

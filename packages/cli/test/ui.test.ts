@@ -156,7 +156,7 @@ describe('origin ui', () => {
     expect(page).not.toContain(hub.token);
 
     const plan = (await b.api('GET', `forget-plan?id=${id}`)).json();
-    const done = await b.post('/admin/forget', { id, digest: plan.digest, confirm: id });
+    const done = await b.post('/admin/forget', { id, digest: plan.digest, reason: 'test' });
     expect(done.status).toBe(200);
     await ui.idle();
     expect(getEntry(hubDb, id)).toBeNull();

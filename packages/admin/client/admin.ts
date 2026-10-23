@@ -79,24 +79,8 @@ function rawLines(): void {
   }
 }
 
-/** Keep "forget" disabled until the id has been typed. The server checks it again. */
-function confirmForms(): void {
-  for (const form of document.querySelectorAll<HTMLFormElement>('form[data-confirm]')) {
-    const expected = form.dataset.confirm ?? '';
-    const input = form.querySelector<HTMLInputElement>('input[name="confirm"]');
-    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
-    if (!input || !submit) continue;
-    const update = () => {
-      submit.disabled = input.value.trim() !== expected;
-    };
-    input.addEventListener('input', update);
-    update();
-  }
-}
-
 localTimes();
 copyButtons();
 rawLines();
-confirmForms();
 
 export {};

@@ -103,7 +103,7 @@ describe('origin mcp on a relay', () => {
 
     const fixed = await call('correct', { id: saved.json.entry.id, text: 'The VPS is a relay.' });
     expect(getEntry(hub.db, fixed.json.entry.id)).toMatchObject({ author: 'agent-x@laptop' });
-    const gone = await call('forget', { id: 'fake:e2' });
+    const gone = await call('forget', { id: 'fake:e2', reason: 'test' });
     expect(gone.json.excluded_events).toBe(1);
     expect(getEvent(hub.db, 'fake:e2')).toBeNull();
   });

@@ -8,7 +8,7 @@ export const INSTRUCTIONS = `Origin is the user's local, cross-agent memory: an 
 
 - To answer questions about past work, decisions, or reasons, use \`search\` and \`timeline\`, then \`get\` or \`sources\` to read the original text. Cite entry and event ids.
 - When you learn something that will matter in future sessions — a decision and its reason, a stable fact, a preference of the user — save it with \`remember\`, citing the events it comes from: event ids from search/timeline, or an exact quote from this conversation.
-- If an entry is wrong or outdated, use \`correct\`. Use \`forget\` only when the user explicitly asks; it cannot be undone.
+- If an entry is wrong or outdated, use \`correct\`. Use \`forget\` only when the user explicitly asks, and pass their reason: it hides the entry or event from every query on every store and is kept as a record; only the user can restore it, from the Origin CLI or admin UI.
 - Time arguments accept relative values (30m, 24h, 7d, 2w) or dates (YYYY-MM-DD).`;
 
 const time = z
@@ -116,10 +116,15 @@ export const TOOL_SPECS = {
   forget: {
     title: 'Forget',
     description:
-      'Permanently forget an entry (every version, and the events it cites) or an event (and every entry that cites it). Only on the user’s explicit request; cannot be undone.',
+      'Hide an entry (every version, and the events it cites) or an event (and every entry that cites it) from every query, on every store. Only on the user’s explicit request, with their reason. The forget is kept as a record with its reason; the user can restore it later from the Origin CLI or admin UI, and agents cannot.',
     inputSchema: {
       id: z.string().describe('Entry id (ent_…) or event id (source:…)'),
-      reason: z.string().optional(),
+      reason: z
+        .string()
+        .trim()
+        .min(1)
+        .max(2000)
+        .describe('Why the user wants it forgotten (required; kept with the record)'),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
   },

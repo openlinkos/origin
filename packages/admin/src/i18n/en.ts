@@ -91,7 +91,7 @@ export const en = {
   'overview.devices': 'Devices',
   'overview.devicesMeta': '{n} active {n|token|tokens}',
   'overview.tombstones': 'Forgotten',
-  'overview.tombstonesMeta': 'ids and counts only',
+  'overview.tombstonesMeta': 'forgets and restores',
   'overview.devicesTitle': 'Devices',
   'overview.allDevices': 'All devices',
   'overview.sourcesTitle': 'Sources',
@@ -322,29 +322,42 @@ export const en = {
 
   'forget.title': 'Forget',
   'forget.warning':
-    'Forgetting cannot be undone. The items below disappear from search, timelines, and every agent, on this hub and on every device after its next push.',
+    'The items below disappear from search, timelines, and every agent, on this hub and on every device after its next sync. The forget is kept as a record with your reason, and you can restore it later from the Forgotten page.',
   'forget.summary':
     'This will forget {entries} {entries|entry|entries} and {events} {events|event|events}',
   'forget.rules':
     'Forgetting an entry forgets every version of it and hides the events it cites. Forgetting an event hides it and forgets every entry that cites it. An entry left with no visible source is forgotten too.',
   'forget.entries': 'Entries',
   'forget.events': 'Events',
-  'forget.reason': 'Reason (optional)',
+  'forget.reason': 'Reason',
   'forget.reasonHelp':
-    'The reason is kept with the tombstone and sent to your devices. Do not paste the forgotten content here.',
-  'forget.confirmLabel': 'To confirm, type',
-  'forget.submit': 'Forget for good',
+    'Required. The reason is kept with the record and sent to your devices. Do not paste the forgotten content here.',
+  'forget.submit': 'Forget',
   'forget.already': '{id} has already been forgotten.',
   'forget.doneTitle': 'Forgotten',
   'forget.done':
     'Forgot {entries} {entries|entry|entries} and {events} {events|event|events} (tombstone {tombstone}).',
   'forget.propagates': 'Each device applies this on its next sync.',
+  'forget.restoreHint':
+    'The forget is kept as a record. To bring back what it hides, restore it from its page.',
+  'forget.record': 'Open the record',
   'forget.warningLocal':
-    'Forgetting cannot be undone. The items below disappear from search, timelines, and every agent on this device and, if it is connected to a hub, on the hub and your other devices after the next sync.',
+    'The items below disappear from search, timelines, and every agent on this device and, if it is connected to a hub, on the hub and your other devices after the next sync. The forget is kept as a record with your reason, and you can restore it later from the Forgotten page.',
   'forget.propagatesLocal':
     'It is being sent to your hub, which passes it on to your other devices. If the hub cannot be reached, it goes with the next sync.',
   'forget.localOnly':
-    'This device is not connected to a hub. If you connect it to one later, this forget operation goes along with everything else.',
+    'This device is not connected to a hub. If you connect it to one later, this record goes along with everything else.',
+
+  'restore.title': 'Restore',
+  'restore.plan':
+    'Restoring brings back {entries} {entries|entry|entries} and {events} {events|event|events} here. Whatever another forget still covers stays hidden. The restore is kept as a record too; to hide the items again, forget them again.',
+  'restore.reason': 'Reason',
+  'restore.reasonHelp': 'Required. Kept with the record and sent to your devices.',
+  'restore.submit': 'Restore',
+  'restore.doneTitle': 'Restored',
+  'restore.done':
+    'Brought back {entries} {entries|entry|entries} and {events} {events|event|events} here (restore {tombstone}).',
+  'restore.back': 'Back to the forget',
 
   'pager.label': 'Pages',
   'pager.page': 'Page {n}',
@@ -355,18 +368,49 @@ export const en = {
 
   'tombstones.title': 'Forgotten',
   'tombstones.help':
-    'Each forget operation leaves a tombstone: its target, the counts of what it removed, and the reason given. The forgotten text is never shown, here or anywhere else.',
+    'Every forget and every restore is kept as a record: when, where, by whom, why, and what it covers. Open a forget to see what it hides and to restore it.',
   'tombstones.none': 'Nothing has been forgotten',
   'tombstones.noneHelp':
-    'When you forget an entry or an event, its tombstone appears here. The text itself is never shown again.',
+    'When you or an agent forget an entry or an event, the record appears here, and you can restore it.',
   'tombstones.howItWorks': 'How forgetting works',
   'tombstones.id': 'Tombstone',
+  'tombstones.record': 'Record',
+  'tombstones.kind.forget': 'Forget',
+  'tombstones.kind.restore': 'Restore',
   'tombstones.time': 'Time',
   'tombstones.target': 'Target',
-  'tombstones.origin': 'Forgotten on',
+  'tombstones.origin': 'Made on',
+  'tombstones.author': 'By',
+  'tombstones.covers': 'Covers',
+  'tombstones.coversCount': '{entries} {entries|entry|entries} · {events} {events|event|events}',
+  'tombstones.status': 'Status',
+  'tombstones.inEffect': 'In effect',
+  'tombstones.restored': 'Restored',
   'tombstones.entries': 'Entries',
   'tombstones.events': 'Events',
   'tombstones.reason': 'Reason',
+
+  'tombstone.forgetTitle': 'Forget',
+  'tombstone.restoreTitle': 'Restore',
+  'tombstone.forgetHelp':
+    'A forget hides its target and its cascade on every store until it is restored.',
+  'tombstone.restoreHelp':
+    'A restore lifts a forget: what it hid is visible again, except what another forget in effect covers.',
+  'tombstone.details': 'Record',
+  'tombstone.restores': 'Restored by',
+  'tombstone.liftsForget': 'Forget it lifts',
+  'tombstone.restoredNotice':
+    'This forget has been restored: what it hid is visible again, unless another forget in effect covers it.',
+  'tombstone.unknownForget':
+    'The forget this restore lifts is not on this store; it takes effect if that forget arrives.',
+  'tombstone.hiddenTitle': 'What it hides',
+  'tombstone.hiddenHelp':
+    'Shown to you alone, so that you can decide whether to restore it. Agents, search, and timelines do not see it.',
+  'tombstone.hiddenEntries': 'Entries ({n})',
+  'tombstone.hiddenEvents': 'Session events ({n})',
+  'tombstone.more': 'and {n} more',
+  'tombstone.nothingHidden':
+    'Nothing it covers is hidden on this store: what it hid is held elsewhere, or another record changed it.',
 
   'audit.title': 'Audit log',
   'audit.help':

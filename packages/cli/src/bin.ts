@@ -20,7 +20,6 @@ import {
   entryHistory,
   entrySources,
   fingerprintSources,
-  forget,
   generateAdminPassword,
   getEntry,
   getEvent,
@@ -46,7 +45,6 @@ import {
   openDatabase,
   originHome,
   parseTime,
-  planForget,
   rawLocator,
   readRawLine,
   recordAudit,
@@ -79,6 +77,7 @@ import {
   type TimelineResult,
   WATCH_INTERVAL_MS,
 } from '@openlinkos/origin-mcp';
+import { cmdForget, cmdForgotten, cmdRestore, type ForgettingCtx } from './forgetting.js';
 import { count, oneLine, table } from './format.js';
 import { BUCKET_OPTIONS, bucketFlags, setUpFrames } from './hub/bucket.js';
 import {
@@ -111,7 +110,9 @@ Usage:
   origin show      <id>                                  Show an entry or an event, with its original source
   origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
   origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
-  origin forget    <id> [--reason <text>] [--yes]        Forget an entry or event for good (needs --yes)
+  origin forget    <id> --reason <text> [--yes]          Hide an entry or event on every store, as a record (needs --yes)
+  origin forgotten [--limit 50]                          Forgets and restores, newest first, with their reasons
+  origin restore   <tombstone-id> --reason <text> [--yes]  Bring back what a forget hid (needs --yes)
   origin projects                                        Known project names
   origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
   origin mcp                                             Run the MCP server over stdio (forwards to the hub when connected)
@@ -140,7 +141,16 @@ interface Ctx {
 }
 
 /** Commands that may write entries or tombstones, or talk to a hub, and so need the store named. */
-const NAMED_COMMANDS = new Set(['sync', 'push', 'mcp', 'correct', 'forget', 'hub', 'ui']);
+const NAMED_COMMANDS = new Set([
+  'sync',
+  'push',
+  'mcp',
+  'correct',
+  'forget',
+  'restore',
+  'hub',
+  'ui',
+]);
 
 /**
  * Name the store the first time it is needed (see docs/architecture.md#storage): a hub's store is
@@ -205,7 +215,11 @@ async function main(argv: string[]): Promise<number> {
       case 'correct':
         return await cmdCorrect(ctx, rest);
       case 'forget':
-        return await cmdForget(ctx, rest);
+        return await cmdForget(forgettingCtx(ctx), rest);
+      case 'forgotten':
+        return cmdForgotten(forgettingCtx(ctx), rest);
+      case 'restore':
+        return await cmdRestore(forgettingCtx(ctx), rest);
       case 'projects':
         return cmdProjects(ctx);
       case 'backup':
@@ -958,70 +972,14 @@ async function cmdCorrect(ctx: Ctx, args: string[]): Promise<number> {
   return 0;
 }
 
-async function cmdForget(ctx: Ctx, args: string[]): Promise<number> {
-  const { values, positionals } = parseArgs({
-    args,
-    allowPositionals: true,
-    options: { reason: { type: 'string' }, yes: { type: 'boolean', default: false } },
-  });
-  const id = positionals[0];
-  if (!id) {
-    console.error('Usage: origin forget <id> [--reason <text>] [--yes]');
-    return 2;
-  }
-  if (isRelay(ctx.db)) return forgetOnHub(relayHub(ctx), id, values);
-  const plan = planForget(ctx.db, id);
-  if (plan.entries.length === 0 && plan.events.length === 0) {
-    console.log(`${id} has already been forgotten.`);
-    return 0;
-  }
-  const summary = `${count(plan.entries.length, 'entry', 'entries')} and ${count(plan.events.length, 'event')}`;
-  if (!values.yes) {
-    console.log(`This will forget ${summary}:`);
-    for (const e of plan.entries) console.log(`  ${e}`);
-    for (const e of plan.events) console.log(`  ${e}`);
-    console.log('\nForgetting cannot be undone. Re-run with --yes to confirm.');
-    return 1;
-  }
-  const done = forget(ctx.db, id, values.reason);
-  console.log(`Forgot ${summary} (tombstone ${done.tombstoneId}).`);
-  await syncAfterChange(ctx);
-  return 0;
-}
-
-/**
- * `origin forget` on a relay: done on the hub, whose answer names what was forgotten. The relay
- * cannot list the effects beforehand, so the confirmation says what the rules will forget.
- */
-async function forgetOnHub(
-  hub: HubConfig,
-  id: string,
-  values: { reason?: string; yes: boolean },
-): Promise<number> {
-  if (!values.yes) {
-    const r = (await askHub(hub, 'get', { id })) as GetResult;
-    const what =
-      'entry' in r
-        ? `the entry ${id}, every version of it, and the events they cite`
-        : `the event ${id} and every entry that cites it`;
-    console.log(
-      `On the hub, this will forget ${what}, on every store.\n\nForgetting cannot be undone. Re-run with --yes to confirm.`,
-    );
-    return 1;
-  }
-  const r = (await askHub(hub, 'forget', { id, reason: values.reason })) as {
-    tombstone: string | null;
-    forgotten_entries: string[];
-    excluded_events: number;
+/** What `origin forget`, `forgotten`, and `restore` need from this command line. */
+function forgettingCtx(ctx: Ctx): ForgettingCtx {
+  return {
+    db: ctx.db,
+    hub: () => hubOf(ctx),
+    relayHub: () => relayHub(ctx),
+    afterChange: () => syncAfterChange(ctx),
   };
-  if (r.tombstone === null) {
-    console.log(`${id} has already been forgotten.`);
-    return 0;
-  }
-  console.log(
-    `Forgot ${count(r.forgotten_entries.length, 'entry', 'entries')} and ${count(r.excluded_events, 'event')} on the hub (tombstone ${r.tombstone}).`,
-  );
-  return 0;
 }
 
 function cmdProjects(ctx: Ctx): number {

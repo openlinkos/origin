@@ -109,7 +109,7 @@ function localHandlers(
         await refresh(true);
         return toolResult(correctIn(db, args, author()));
       }),
-    forget: (args) => run(() => toolResult(forgetIn(db, args))),
+    forget: (args) => run(() => toolResult(forgetIn(db, args, author()))),
   };
 }
 

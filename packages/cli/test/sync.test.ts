@@ -22,6 +22,7 @@ import {
   localRawFiles,
   openDatabase,
   remember,
+  restore,
   setSetting,
   syncSource,
   tombstoneFeed,
@@ -112,7 +113,7 @@ describe('device to hub replication', () => {
       author: 'user@laptop',
     });
     const k = note(deviceDb, replies[0]!, 'A note the user regrets.');
-    const t = forget(deviceDb, k.id, 'not needed');
+    const t = forget(deviceDb, k.id, { reason: 'not needed' });
 
     await expect(sync(offline)).rejects.toThrow(/Cannot reach the hub/);
     expect(getSetting(deviceDb, pushedKey(hub))).toBeNull();
@@ -165,7 +166,7 @@ describe('device to hub replication', () => {
     await sync();
 
     // Forgotten on the hub: the device's copy goes on its next sync.
-    const onHub = forget(hubDb, a.id, 'wrong');
+    const onHub = forget(hubDb, a.id, { reason: 'wrong' });
     expect(await sync()).toMatchObject({ tombstonesApplied: 1, tombstonesPushed: 0 });
     expect(isEntryForgotten(deviceDb, a.id)).toBe(true);
     expect(getEvent(deviceDb, USER_EVENT)).toBeNull();
@@ -177,7 +178,7 @@ describe('device to hub replication', () => {
     const b = note(deviceDb, replies[1]!, 'The working tree was clean.');
     await sync();
     expect(getEntry(hubDb, b.id)?.status).toBe('active');
-    const onDevice = forget(deviceDb, b.id);
+    const onDevice = forget(deviceDb, b.id, { reason: 'test' });
     expect(await sync()).toMatchObject({ tombstonesPushed: 1, tombstonesApplied: 0 });
     expect(isEntryForgotten(hubDb, b.id)).toBe(true);
     expect(getEvent(hubDb, replies[1]!)).toBeNull();
@@ -188,6 +189,104 @@ describe('device to hub replication', () => {
       onHub.tombstoneId,
       onDevice.tombstoneId,
     ]);
+  });
+
+  it('carries restores both ways, and sends what a restore brings back', async () => {
+    const a = note(deviceDb, USER_EVENT, 'Asked for the repository status.');
+    await sync();
+
+    // Forgotten, then restored, on the hub: the device follows both.
+    const onHub = forget(hubDb, a.id, { reason: 'wrong', author: 'user@hub' });
+    await sync();
+    expect(isEntryForgotten(deviceDb, a.id)).toBe(true);
+    const back = restore(hubDb, onHub.tombstoneId!, { reason: 'needed after all' }, Date.now(), {
+      growthOrigin: 'hub',
+    });
+    expect(await sync()).toMatchObject({ tombstonesApplied: 1, tombstonesPushed: 0 });
+    expect(getEntry(deviceDb, a.id)?.status).toBe('active');
+    expect(getEvent(deviceDb, USER_EVENT)).not.toBeNull();
+    expect(exportTombstone(deviceDb, back.tombstoneId)).toMatchObject({
+      target: onHub.tombstoneId,
+      origin: 'hub',
+      reason: 'needed after all',
+    });
+
+    // Forgotten on the device before it ever reached the hub, then restored there: the hub hides
+    // the event at once, and gets the entry once it is back.
+    const b = note(deviceDb, replies[1]!, 'The working tree was clean.');
+    const onDevice = forget(deviceDb, b.id, { reason: 'test', author: 'user@laptop' });
+    // a goes up again too: the device sends its own entries a restore brought back, since it
+    // cannot tell whether the hub ever had them; the hub has it already.
+    expect(await sync()).toMatchObject({ entriesPushed: 1, tombstonesPushed: 1 });
+    expect(getEntry(hubDb, b.id)).toBeNull();
+    expect(getEvent(hubDb, replies[1]!)).toBeNull();
+    const r = restore(deviceDb, onDevice.tombstoneId!, {
+      reason: 'keep it',
+      author: 'user@laptop',
+    });
+    expect(await sync()).toMatchObject({ entriesPushed: 1, tombstonesPushed: 1 });
+    expect(getEntry(hubDb, b.id)?.status).toBe('active');
+    expect(getEvent(hubDb, replies[1]!)).not.toBeNull();
+    expect(exportTombstone(hubDb, r.tombstoneId)).toMatchObject({
+      origin: 'laptop',
+      author: 'user@laptop',
+    });
+    expect(await sync()).toMatchObject({
+      entriesPushed: 0,
+      tombstonesPushed: 0,
+      tombstonesApplied: 0,
+    });
+  });
+
+  it('brings a hub and two devices to the same state, whoever forgets and restores', async () => {
+    const deskHome = path.join(tmp, 'desk');
+    const deskDb = openDatabase(path.join(deskHome, 'origin.db'));
+    try {
+      initStoreName(deskDb, 'desk');
+      await syncSource(
+        { db: deskDb, home: deskHome },
+        createClaudeCodeAdapter({ projectsDir: fixtures }),
+      );
+      const desk: HubConfig = { ...hub, token: createToken(hubDb, 'desk'), device: 'desk' };
+      const syncDesk = () => syncWithHub({ db: deskDb, home: deskHome, hub: desk });
+      const hidden = (db: Database) =>
+        (
+          db
+            .prepare('SELECT event_id AS id FROM excluded_event ORDER BY event_id')
+            .all() as unknown as Array<{ id: string }>
+        ).map((r) => r.id);
+      const same = () => {
+        expect(hidden(deviceDb)).toEqual(hidden(hubDb));
+        expect(hidden(deskDb)).toEqual(hidden(hubDb));
+      };
+
+      const a = note(deviceDb, USER_EVENT, 'Asked for the repository status.');
+      await sync();
+      await syncDesk();
+      // The laptop forgets an answer; the desk forgets the question, which a cites (rule 2 on the
+      // hub, which the laptop learns from the hub).
+      const t1 = forget(deviceDb, replies[0]!, { reason: 'laptop' });
+      const t2 = forget(deskDb, USER_EVENT, { reason: 'desk' });
+      await syncDesk();
+      await sync();
+      await syncDesk();
+      same();
+      expect(isEntryForgotten(deviceDb, a.id)).toBe(true);
+
+      // The hub restores the desk's forget; the laptop restores its own. In any order of syncs,
+      // everything comes back everywhere.
+      restore(hubDb, t2.tombstoneId!, { reason: 'hub' }, Date.now(), { growthOrigin: 'hub' });
+      restore(deviceDb, t1.tombstoneId!, { reason: 'laptop' });
+      await syncDesk();
+      await sync();
+      await syncDesk();
+      same();
+      expect(hidden(hubDb)).toEqual([]);
+      expect(getEntry(deviceDb, a.id)?.status).toBe('active');
+      expect(getEntry(hubDb, a.id)?.status).toBe('active');
+    } finally {
+      deskDb.close();
+    }
   });
 
   it('resolves concurrent corrections on the hub by (created_at, id)', async () => {
@@ -219,7 +318,7 @@ describe('device to hub replication', () => {
   it('forgets a correction that joins a forgotten chain, and an entry citing a forgotten event', async () => {
     const a = note(deviceDb, USER_EVENT, 'v1');
     await sync();
-    const gone = forget(hubDb, a.id);
+    const gone = forget(hubDb, a.id, { reason: 'test' });
     // Before hearing of it, the device corrects the entry and cites one more event.
     const d = correct(deviceDb, a.id, {
       text: 'v2',
@@ -228,7 +327,7 @@ describe('device to hub replication', () => {
     });
     // And cites an event that the hub forgets meanwhile.
     const x = note(deviceDb, replies[1]!, 'The tree was clean.');
-    forget(hubDb, replies[1]!);
+    forget(hubDb, replies[1]!, { reason: 'test' });
 
     const r = await sync();
     expect(r.entriesPushed).toBe(2);
@@ -259,7 +358,7 @@ describe('device to hub replication', () => {
     );
     // Then another entry citing the same event is forgotten on the hub (rule 1 excludes it).
     const other = note(hubDb, replies[0]!, 'other', 3_000);
-    forget(hubDb, other.id);
+    forget(hubDb, other.id, { reason: 'test' });
     await sync();
     // On the hub the current version keeps a visible source, so the entry stays, and the device
     // does not decide otherwise from its partial view.
@@ -281,7 +380,7 @@ describe('device to hub replication', () => {
       return new Response(JSON.stringify({ cursors }));
     };
     const a = note(deviceDb, USER_EVENT, 'v1');
-    const t = forget(deviceDb, replies[1]!);
+    const t = forget(deviceDb, replies[1]!, { reason: 'test' });
     const r = await sync(noMirrors);
     expect(r).toMatchObject({ files: 0, entriesPushed: 0, tombstonesPushed: 1 });
     expect(r.waiting).toEqual({ id: a.id, missing: [USER_EVENT] });

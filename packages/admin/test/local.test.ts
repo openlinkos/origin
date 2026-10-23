@@ -438,6 +438,98 @@ describe('origin ui: pages', () => {
   });
 });
 
+describe('origin ui: the Forgotten view', () => {
+  const ANSWER = 'fake:evt-asst-1';
+
+  it('shows what a forget hides, escaped, and nowhere else; restores it with a reason', async () => {
+    let writes = 0;
+    const local = await serveLocal({ afterWrite: () => void writes++ });
+    const b = await local.signedIn();
+    const entry = remember(db, {
+      kind: 'memory',
+      text: `Pasted ${XSS} into the prompt`,
+      confidence: 1,
+      author: 'claude-code@laptop',
+      sources: [{ eventId: ANSWER }],
+    });
+    const preview = await b.get(`/admin/forget?id=${entry.id}`);
+    expect(preview.text).not.toContain('name="confirm"');
+    expect(preview.text).toContain('restore it later');
+    const digest = /name="digest" value="([0-9a-f]+)"/.exec(preview.text)?.[1] ?? '';
+    const forgot = await b.post('/admin/forget', {
+      id: entry.id,
+      digest,
+      reason: `asked by the owner ${XSS}`,
+    });
+    expect(forgot.status).toBe(200);
+    const tombstone = /tmb_[0-9a-f]{12}/.exec(forgot.text)?.[0] ?? '';
+    expect(forgot.text).toContain(`/admin/tombstone?id=${tombstone}`);
+
+    // The list: records, reasons, counts; never the hidden text.
+    const list = await b.get('/admin/tombstones');
+    expect(list.status).toBe(200);
+    expect(pageProblems(list.text)).toEqual([]);
+    expect(list.text).toContain(tombstone);
+    expect(list.text).toContain('In effect');
+    expect(list.text).toContain('asked by the owner &lt;img src=x onerror=alert(1)&gt;');
+    expect(list.text).not.toContain('Pasted');
+    expect(list.text).not.toContain('<img src=x');
+
+    // The record: what it hides, entries and session events, escaped.
+    const page = await b.get(`/admin/tombstone?id=${tombstone}`);
+    expect(page.status).toBe(200);
+    expect(pageProblems(page.text)).toEqual([]);
+    expect(page.text).toContain('Pasted &lt;img src=x onerror=alert(1)&gt; into the prompt');
+    expect(page.text).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(page.text).not.toContain('<img src=x');
+    expect(page.text).toContain('brings back 1 entry and 1 event');
+    expect(page.text).toContain('action="/admin/restore"');
+    // Agents and every other page still see nothing of it.
+    expect((await b.get(`/admin/entry?id=${entry.id}`)).status).toBe(410);
+    expect((await b.get(`/admin/event?id=${encodeURIComponent(ANSWER)}`)).status).toBe(410);
+    expect((await b.get('/admin/search?q=Pasted')).text).not.toContain('Pasted &lt;img');
+    const api = (await b.api('GET', `tombstone?id=${tombstone}`)).json();
+    expect(api.hidden.entries.map((e: { id: string }) => e.id)).toEqual([entry.id]);
+    expect(api.restorePlan).toMatchObject({ entries: [entry.id], events: [ANSWER] });
+
+    // A restore needs a reason.
+    const refused = await b.post('/admin/restore', { id: tombstone, reason: '  ' });
+    expect(refused.status).toBe(400);
+    expect(refused.text).toContain('A reason is required');
+    expect(pageProblems(refused.text)).toEqual([]);
+    expect(getEntry(db, entry.id)).toBeNull();
+
+    const restored = await b.post('/admin/restore', { id: tombstone, reason: 'kept by mistake' });
+    expect(restored.status).toBe(200);
+    expect(pageProblems(restored.text)).toEqual([]);
+    expect(restored.text).toContain('Brought back 1 entry and 1 event');
+    expect(restored.text).toContain('This device is not connected to a hub.');
+    expect(getEntry(db, entry.id)?.status).toBe('active');
+    expect(getEvent(db, ANSWER)).not.toBeNull();
+    expect(writes).toBe(2);
+
+    // The forget's page no longer shows text; both records are listed.
+    const after = await b.get(`/admin/tombstone?id=${tombstone}`);
+    expect(after.text).toContain('has been restored');
+    expect(after.text).not.toContain('Pasted &lt;img');
+    expect(after.text).not.toContain('action="/admin/restore"');
+    const records = (await b.api('GET', 'tombstones')).json().tombstones;
+    expect(records.map((r: { kind: string }) => r.kind)).toEqual(['restore', 'forget']);
+    expect(records[0]).toMatchObject({ target: tombstone, author: 'user@laptop' });
+    expect(
+      (await b.api('POST', 'restore', { id: tombstone, reason: 'again' })).json().error,
+    ).toMatch(/already been restored/);
+
+    // The audit log keeps ids and counts, never text or reasons.
+    const audit = listAudit(db).filter((r) => r.action === 'restore');
+    expect(audit).toMatchObject([
+      { actor: 'local', target: tombstone, detail: { entries: 1, events: 1 } },
+    ]);
+    const all = JSON.stringify(listAudit(db));
+    for (const text of ['Pasted', 'mistake', 'asked by the owner']) expect(all).not.toContain(text);
+  });
+});
+
 describe('origin ui: writes', () => {
   it('remember, correct, and forget without a password, as actor local, then call afterWrite', async () => {
     let writes = 0;
@@ -474,7 +566,7 @@ describe('origin ui: writes', () => {
     expect(preview.status).toBe(200);
     expect(preview.text).toContain('on the hub and your other devices after the next sync');
     const digest = /name="digest" value="([0-9a-f]+)"/.exec(preview.text)?.[1] ?? '';
-    const done = await b.post('/admin/forget', { id: newId, digest, confirm: newId });
+    const done = await b.post('/admin/forget', { id: newId, digest, reason: 'not needed' });
     expect(done.status).toBe(200);
     expect(done.text).toContain('It is being sent to your hub');
     expect(getEntry(db, newId)).toBeNull();
@@ -495,7 +587,7 @@ describe('origin ui: writes', () => {
     const local = await serveLocal();
     const b = await local.signedIn();
     const plan = (await b.api('GET', `forget-plan?id=${encodeURIComponent(EVENT)}`)).json();
-    const res = await b.post('/admin/forget', { id: EVENT, digest: plan.digest, confirm: EVENT });
+    const res = await b.post('/admin/forget', { id: EVENT, digest: plan.digest, reason: 'test' });
     expect(res.status).toBe(200);
     expect(res.text).toContain('This device is not connected to a hub.');
   });
@@ -512,15 +604,15 @@ describe('origin ui: writes', () => {
       '/admin/correct (session)',
       '/admin/remember (session)',
       '/admin/forget (session)',
+      '/admin/restore (session)',
       '/admin/api/logout (session)',
       '/admin/api/entries (session)',
       '/admin/api/correct (session)',
       '/admin/api/forget (session)',
+      '/admin/api/restore (session)',
     ]);
     for (const r of LOCAL_ROUTES) {
-      expect(r.path).not.toMatch(
-        /delete|edit|update|unforget|restore|password|key|sql|file|token/i,
-      );
+      expect(r.path).not.toMatch(/delete|edit|update|unforget|purge|password|key|sql|file|token/i);
     }
   });
 });

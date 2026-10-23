@@ -126,7 +126,7 @@ describe('forget (invariant 2)', () => {
     const a = remember(db, memory(['fake:e1']));
     const b = correct(db, a.id, { text: 'v2', author: 'user', sources: [{ eventId: 'fake:e2' }] });
 
-    const r = forget(db, a.id, 'test');
+    const r = forget(db, a.id, { reason: 'test' });
     expect(r.tombstoneId).not.toBeNull();
     expect(r.entries.sort()).toEqual([a.id, b.id].sort());
     expect(r.events.sort()).toEqual(['fake:e1', 'fake:e2']);
@@ -150,7 +150,7 @@ describe('forget (invariant 2)', () => {
     expect(getEvent(db, 'fake:e1')).toBeNull();
     expect(searchEvents(db, 'SQLite')).toEqual([]);
 
-    expect(forget(db, b.id).tombstoneId).toBeNull(); // nothing left to forget
+    expect(forget(db, b.id, { reason: 'test' }).tombstoneId).toBeNull(); // nothing left to forget
   });
 
   it('forgets entries that cite a forgotten event, and entries left without sources', () => {
@@ -162,7 +162,7 @@ describe('forget (invariant 2)', () => {
     expect(plan.targetType).toBe('event');
     expect(getEntry(db, x.id)).not.toBeNull(); // planning changes nothing
 
-    const r = forget(db, 'fake:e3');
+    const r = forget(db, 'fake:e3', { reason: 'test' });
     expect(r.events.sort()).toEqual(['fake:e1', 'fake:e3']);
     expect(r.entries.sort()).toEqual([x.id, z.id].sort());
     expect(getEntry(db, y.id)).not.toBeNull();
@@ -171,13 +171,15 @@ describe('forget (invariant 2)', () => {
 
   it('keeps session aggregates in line with visible events', () => {
     expect(listSessions(db)[0]?.eventCount).toBe(4);
-    forget(db, 'fake:e4');
+    forget(db, 'fake:e4', { reason: 'test' });
     expect(listSessions(db)[0]?.eventCount).toBe(3);
-    for (const id of ['fake:e1', 'fake:e2', 'fake:e3']) forget(db, id);
+    for (const id of ['fake:e1', 'fake:e2', 'fake:e3']) forget(db, id, { reason: 'test' });
     expect(listSessions(db)).toEqual([]);
   });
 
   it('rejects unknown ids', () => {
-    expect(() => forget(db, 'ent_000000000000')).toThrow(/Unknown entry or event/);
+    expect(() => forget(db, 'ent_000000000000', { reason: 'test' })).toThrow(
+      /Unknown entry or event/,
+    );
   });
 });

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-7b84210a
+sourceHash: sha256-9f31c837
 ---
 
 # 接入 Agent
@@ -65,7 +65,7 @@ Grok 默认合并 `~/.claude.json` 中的 MCP server，所以完成上面的 Cla
 | `sources` | 条目或事件背后的原始记录行 |
 | `remember` | 保存一条引用来源的条目（`memory`、`knowledge` 或 `cognition`） |
 | `correct` | 用纠正后的版本替换条目 |
-| `forget` | 永久遗忘条目或事件；只有你明确要求时 Agent 才会使用 |
+| `forget` | 在每个库中隐藏条目或事件，并附上你的原因；只有你明确要求时 Agent 才会使用，也只有你能恢复 |
 
 server 会告诉 Agent 如何使用这些工具，你只需用自然语言提问。它在回答前会同步新的会话记录，所以 Agent 甚至能引用你一分钟前说的话。Agent 运行期间，Origin 还会在后台每分钟收取一次新的记录行，并在 Agent 退出时再收取一次。工具的完整说明见[架构](../architecture.md#mcp-server)。
 

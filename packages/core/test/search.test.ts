@@ -368,6 +368,7 @@ describe('time order with many matches', { timeout: 60_000 }, () => {
           id: string;
         }
       ).id,
+      { reason: 'test' },
     );
     const mid = 5e8;
     const cases: Array<[string, SearchOptions]> = [
@@ -433,8 +434,8 @@ describe('forgetting and rebuilding', () => {
 
   it('hides forgotten events from every index (invariant 2)', async () => {
     await setUp();
-    forget(db, 'fake:gone');
-    forget(db, 'fake:tool-gone');
+    forget(db, 'fake:gone', { reason: 'test' });
+    forget(db, 'fake:tool-gone', { reason: 'test' });
     for (const [q, opts] of queries) {
       const found = ids(q, opts);
       expect(found).not.toContain('gone');
@@ -452,7 +453,7 @@ describe('forgetting and rebuilding', () => {
       author: 'test',
       sources: [{ eventId: 'fake:keep' }],
     });
-    forget(db, 'fake:gone');
+    forget(db, 'fake:gone', { reason: 'test' });
     const before = queries.map(([q, opts]) => ids(q, opts));
     const entriesBefore = searchEntries(db, 'sqlite 部署').map((e) => e.id);
     rebuildSearchIndexes(db);
@@ -524,9 +525,9 @@ describe('remember by quote', () => {
       ['older', 1000, 'deploy the certificate on Friday'],
       ['newer', 2000, 'deploy the certificate on Friday'],
     ]);
-    forget(db, 'fake:newer');
+    forget(db, 'fake:newer', { reason: 'test' });
     expect(cite('deploy the certificate on friday')).toEqual(['older']);
-    forget(db, 'fake:older');
+    forget(db, 'fake:older', { reason: 'test' });
     expect(() => cite('deploy the certificate on friday')).toThrow(/No event contains the quote/);
   });
 

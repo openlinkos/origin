@@ -163,8 +163,8 @@ describe('syncSource', () => {
         `${JSON.stringify({ session: 'h4', title: 'a title without events' })}\n`,
     );
     await syncSource({ db, home }, fakeAdapter(src));
-    forget(db, 'fake:4');
-    forget(db, 'fake:3');
+    forget(db, 'fake:4', { reason: 'test' });
+    forget(db, 'fake:3', { reason: 'test' });
     const scan = db
       .prepare(
         `SELECT source, COUNT(DISTINCT session_id) AS sessions, COUNT(*) AS events, MIN(ts) AS first,

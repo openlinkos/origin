@@ -23,8 +23,17 @@
  *   corrections on different stores); `root` is the first version of the chain, fixed on insert.
  *   Status is derived, never stored. `origin` is the store that wrote the version.
  * - entry_fts: FTS5 trigram index over entries.
- * - tombstone / forgotten_entry / excluded_event: forget operations (Tombstone, with a global
- *   `tmb_` id and the store it came from) and their effects on this store.
+ * - tombstone / forgotten_entry / excluded_event: forget and restore operations (Tombstone, with a
+ *   global `tmb_` id and the store it came from; a restore is a tombstone whose target is a
+ *   forget's id), and what is hidden on this store: each hidden entry and event with one forget in
+ *   effect that covers it.
+ * - tombstone_effect: what each forget covers on this store, several forgets per item: by the
+ *   rules from its target (`direct`), as its hub listed it (`listed`, on a device, replaced by
+ *   each new list), as a device reported it (`reported`, on a hub), or by rule 3 (`cascade`). An
+ *   item is hidden while a forget in effect covers it (see forgetting.ts).
+ * - tombstone_meta: the author of each tombstone, when known. Every tombstone written by this
+ *   version has a row; tombstones without one predate tombstone_effect and are filled in from
+ *   forgotten_entry and excluded_event when the database is opened (BACKFILL_EFFECTS).
  * - change_log: append-only sequence of the entries and tombstones this store has received or
  *   written, filled by triggers; replication cursors point into it.
  * - api_token: hub access tokens (name and SHA-256 hash; the token itself is never stored).
@@ -243,6 +252,21 @@ CREATE TABLE IF NOT EXISTS excluded_event (
   tombstone_id TEXT NOT NULL REFERENCES tombstone(id)
 );
 CREATE INDEX IF NOT EXISTS excluded_event_tombstone ON excluded_event (tombstone_id);
+CREATE INDEX IF NOT EXISTS tombstone_target ON tombstone (target);
+
+CREATE TABLE IF NOT EXISTS tombstone_effect (
+  tombstone_id TEXT NOT NULL REFERENCES tombstone(id),
+  kind         TEXT NOT NULL CHECK (kind IN ('entry', 'event')),
+  item         TEXT NOT NULL,
+  how          TEXT NOT NULL CHECK (how IN ('direct', 'listed', 'reported', 'cascade')),
+  PRIMARY KEY (tombstone_id, kind, item, how)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS tombstone_effect_item ON tombstone_effect (item, kind);
+
+CREATE TABLE IF NOT EXISTS tombstone_meta (
+  tombstone_id TEXT PRIMARY KEY REFERENCES tombstone(id),
+  author       TEXT
+);
 
 CREATE TABLE IF NOT EXISTS change_log (
   seq    INTEGER PRIMARY KEY,
@@ -310,4 +334,47 @@ END;
 CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log BEGIN
   SELECT RAISE(ABORT, 'audit_log is append-only');
 END;
+`;
+
+/** Whether some tombstone predates tombstone_effect and tombstone_meta (a read-only check). */
+export const NEEDS_BACKFILL = `SELECT 1 FROM tombstone t
+  WHERE NOT EXISTS (SELECT 1 FROM tombstone_meta m WHERE m.tombstone_id = t.id) LIMIT 1`;
+
+/**
+ * Record, once, what the forgets of a store written before tombstone_effect existed cover: what
+ * forgotten_entry and excluded_event attribute to each, and what the rules give from its target
+ * (rule 1 for an entry, rule 2 for an event; see forgetting.ts). All of it counts as `direct`, so it
+ * stays hidden while the forget is in effect. Then every such tombstone gets its tombstone_meta row.
+ */
+export const BACKFILL_EFFECTS = `
+CREATE TEMP TABLE IF NOT EXISTS backfill_todo (id TEXT PRIMARY KEY, target TEXT NOT NULL);
+DELETE FROM backfill_todo;
+INSERT INTO backfill_todo (id, target)
+  SELECT t.id, t.target FROM tombstone t
+  WHERE NOT EXISTS (SELECT 1 FROM tombstone_meta m WHERE m.tombstone_id = t.id);
+CREATE TEMP TABLE IF NOT EXISTS backfill_chain (tid TEXT NOT NULL, root TEXT NOT NULL);
+DELETE FROM backfill_chain;
+INSERT INTO backfill_chain (tid, root)
+  SELECT d.id, en.root FROM backfill_todo d JOIN entry en ON en.id = d.target
+  UNION
+  SELECT d.id, en.root FROM backfill_todo d
+    JOIN entry_source s ON s.event_id = d.target JOIN entry en ON en.id = s.entry_id;
+INSERT OR IGNORE INTO tombstone_effect (tombstone_id, kind, item, how)
+  SELECT c.tid, 'entry', v.id, 'direct' FROM backfill_chain c JOIN entry v ON v.root = c.root
+  UNION
+  SELECT c.tid, 'event', s.event_id, 'direct' FROM backfill_chain c
+    JOIN entry v ON v.root = c.root JOIN entry_source s ON s.entry_id = v.id
+    WHERE EXISTS (SELECT 1 FROM event e WHERE e.id = s.event_id)
+  UNION
+  SELECT d.id, 'event', d.target, 'direct' FROM backfill_todo d
+    WHERE EXISTS (SELECT 1 FROM event e WHERE e.id = d.target)
+  UNION
+  SELECT f.tombstone_id, 'entry', f.entry_id, 'direct' FROM forgotten_entry f
+    JOIN backfill_todo d ON d.id = f.tombstone_id
+  UNION
+  SELECT x.tombstone_id, 'event', x.event_id, 'direct' FROM excluded_event x
+    JOIN backfill_todo d ON d.id = x.tombstone_id;
+INSERT OR IGNORE INTO tombstone_meta (tombstone_id, author) SELECT id, NULL FROM backfill_todo;
+DELETE FROM backfill_todo;
+DELETE FROM backfill_chain;
 `;

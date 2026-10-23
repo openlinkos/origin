@@ -331,8 +331,8 @@ export function correctIn(db: Database, args: ToolArgs<'correct'>, author: strin
   return { entry: entryView(entry) };
 }
 
-export function forgetIn(db: Database, args: ToolArgs<'forget'>) {
-  const r = forget(db, args.id, args.reason);
+export function forgetIn(db: Database, args: ToolArgs<'forget'>, author: string) {
+  const r = forget(db, args.id, { reason: args.reason, author });
   return {
     tombstone: r.tombstoneId,
     forgotten_entries: r.entries,

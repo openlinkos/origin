@@ -314,7 +314,8 @@ describe('routes', () => {
         "/admin/tokens/revoke (fresh)",
         "/admin/correct (session)",
         "/admin/remember (session)",
-        "/admin/forget (fresh)",
+        "/admin/forget (session)",
+        "/admin/restore (session)",
         "/admin/signins/revoke (fresh)",
         "/admin/api/login (none)",
         "/admin/api/logout (session)",
@@ -323,13 +324,15 @@ describe('routes', () => {
         "/admin/api/token-revoke (fresh)",
         "/admin/api/entries (session)",
         "/admin/api/correct (session)",
-        "/admin/api/forget (fresh)",
+        "/admin/api/forget (session)",
+        "/admin/api/restore (session)",
         "/admin/api/sessions-revoke (fresh)",
       ]
     `);
-    // Nothing that could edit or delete history, un-forget, or change the admin password.
+    // Restoring a forget adds a record and deletes nothing. Nothing else could edit or delete
+    // history, or change the admin password.
     for (const r of ADMIN_ROUTES) {
-      expect(r.path).not.toMatch(/delete|edit|update|unforget|restore|password|key|sql|file/i);
+      expect(r.path).not.toMatch(/delete|edit|update|unforget|purge|password|key|sql|file/i);
     }
   });
 

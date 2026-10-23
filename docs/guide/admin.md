@@ -11,8 +11,9 @@ A [personal hub](./hub.md) can serve a web interface for you, its owner. From a 
 - **Events** with their provenance: the device, the original file, the generation, and the mirror line. The original raw line is shown only when you ask for it, shortened to 4,000 characters.
 - **Search** across entries and events.
 - **Entries**: browse them with their sources and version history (where each version was written, and which versions lost to a concurrent correction), **correct** an entry (a new version replaces it; the old one stays in the history), and **remember** a new entry from an event page, citing that event. Entries you write are recorded with the author `user@hub` (`user@` and the hub's name), as `origin correct` records `user@` and the device's name.
-- **Forget** an entry or an event: the UI first shows exactly which entries and events will be forgotten, and you confirm by typing the id. Forgetting works as everywhere else (see [Privacy and your data](./privacy.md#forgetting)) and reaches every device on its next sync.
-- **Forgotten** (the tombstone each forget operation leaves), the **audit log**, and your open **sign-ins**.
+- **Forget** an entry or an event: the UI first shows exactly which entries and events will be hidden, and you confirm once, with a reason. Forgetting works as everywhere else (see [Privacy and your data](./privacy.md#forgetting)) and reaches every device on its next sync.
+- **Forgotten**: every forget and restore, with its time, where it was made, who made it, its reason, and what it covers. A forget's own page shows you what it hides, the entries' text and the session events, which appear nowhere else; **Restore** there brings it back, after saying what will come back and asking for a reason.
+- The **audit log**, and your open **sign-ins**.
 
 The admin UI is available in English and Simplified Chinese, following your browser's language, and follows your system's light or dark mode. Both can be switched at the foot of the sidebar, or below the form on the sign-in page.
 
@@ -28,7 +29,7 @@ origin ui --no-open       # only print the sign-in link
 
 There is no password. When it starts, `origin ui` prints a sign-in link and opens it in your default browser. The link works once, within 5 minutes, and keeps that browser signed in until you stop `origin ui` with Ctrl+C, for at most 12 hours. For a new link, for example to sign in from another browser, press Enter in the terminal where `origin ui` runs, or start it again; the previous link stops working, whether it was used or not.
 
-It has the pages above, except those that only make sense on a hub: tokens, devices, connection commands, and sign-ins. Remembering, correcting, and forgetting work as on a hub, and the audit log records them with the actor `local`. It shows what the store holds: agents that use Origin archive their sessions as they go, and when it starts, `origin ui` brings in the rest in the background, as `origin sync --local` does, while you browse. If the machine is connected to a hub, the overview shows the hub and when the machine last synced with it; what you change is sent to the hub in the background right away, or with the next sync if the hub cannot be reached.
+It has the pages above, except those that only make sense on a hub: tokens, devices, connection commands, and sign-ins. Remembering, correcting, forgetting, and restoring work as on a hub, and the audit log records them with the actor `local`. It shows what the store holds: agents that use Origin archive their sessions as they go, and when it starts, `origin ui` brings in the rest in the background, as `origin sync --local` does, while you browse. If the machine is connected to a hub, the overview shows the hub and when the machine last synced with it; what you change is sent to the hub in the background right away, or with the next sync if the hub cannot be reached.
 
 `origin ui` listens only on `127.0.0.1`, and answers only to `127.0.0.1` and `localhost` on its own port. To use it on a machine you reach over SSH, forward the same port number, then open the link it prints:
 
@@ -100,7 +101,7 @@ origin admin sessions --revoke-all  # sign out everywhere
 origin admin audit --limit 50       # recent administrative actions
 ```
 
-A session ends after 30 minutes without activity or 12 hours after you signed in. Creating or revoking a token, forgetting, and signing out other sessions ask for the password again if you have not entered it in the last 10 minutes.
+A session ends after 30 minutes without activity or 12 hours after you signed in. Creating or revoking a token and signing out other sessions ask for the password again if you have not entered it in the last 10 minutes. Forgetting and restoring do not: each can be undone by the other.
 
 ## Behind TLS and a CDN
 
@@ -139,11 +140,11 @@ docker run -d --name origin-hub -p 127.0.0.1:7077:7077 -v origin-data:/data \
 
 ## Security
 
-- **Your data stays put.** The admin UI loads nothing from other sites and makes no requests of its own beyond the hub. It reads and writes through the same operations as the CLI and MCP, so provenance and sticky forgetting hold.
-- **What it never does.** It cannot edit or delete events, raw mirrors, entries, or tombstones, cannot undo a forget, and never shows the text of anything forgotten: a tombstone keeps the target id, the reason if you gave one, and the ids it removed, and the audit log keeps ids and counts only. It cannot show a token again, change the admin password, or change its own security settings. Those stay on the hub's command line.
+- **Your data stays put.** The admin UI loads nothing from other sites and makes no requests of its own beyond the hub. It reads and writes through the same operations as the CLI and MCP, so provenance and recorded forgetting hold.
+- **What it never does.** It cannot edit or delete events, raw mirrors, entries, or tombstones, and shows the text of forgotten content only on the page of the forget that hides it: lists show a tombstone's target id, its reason, and counts, and the audit log keeps ids and counts only. A restore adds a record; it deletes nothing. It cannot show a token again, change the admin password, or change its own security settings. Those stay on the hub's command line.
 - **The password.** The hub stores only a scrypt hash of it (N = 2^15, r = 8, p = 3, with a random salt), checks one attempt at a time, and compares in constant time.
 - **Requests.** Every change is a form submission that must carry the session's anti-forgery token and come from the hub's own address; cross-site requests are refused. After 10 failed sign-ins from one client within 10 minutes (100 from all clients), sign-in pauses and the UI says when to retry. Behind a proxy or CDN, this needs `ORIGIN_CLIENT_IP_HEADER` (see [Behind TLS and a CDN](#behind-tls-and-a-cdn)).
 - **Pages.** Everything shown is escaped, so a session log that contains HTML or script is displayed as text. Every response forbids inline scripts, framing, caching, and indexing.
-- **Audit log.** Sign-ins, failed attempts, token changes, entries written, forget operations, and ended sessions are recorded with the time, the client address, and the browser's user agent. Token and password changes made with the CLI, and passwords the hub generates or finds changed when it starts, are recorded too, but never the password itself. The log can only grow; read it in the UI or with `origin admin audit`.
+- **Audit log.** Sign-ins, failed attempts, token changes, entries written, forgets and restores, and ended sessions are recorded with the time, the client address, and the browser's user agent. Token and password changes made with the CLI, and passwords the hub generates or finds changed when it starts, are recorded too, but never the password itself. The log can only grow; read it in the UI or with `origin admin audit`.
 
 Report security problems privately, as described in the [security policy](https://github.com/openlinkos/origin/blob/master/SECURITY.md).

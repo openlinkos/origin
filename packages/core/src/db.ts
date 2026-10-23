@@ -6,6 +6,7 @@ import zlib from 'node:zlib';
 import { cjkIndexText } from './cjk.js';
 import { OriginError } from './errors.js';
 import { type Migration, migrate, refuseNewerStore } from './migrations.js';
+import { BACKFILL_EFFECTS, NEEDS_BACKFILL } from './schema.js';
 import type { SourceAdapter } from './types.js';
 
 export type Database = DatabaseSync;
@@ -80,11 +81,23 @@ export function openDatabase(file: string, opts: OpenOptions = {}): Database {
     // A large import grows the write-ahead log; truncate it back to 64 MiB after each checkpoint.
     db.exec(`PRAGMA journal_size_limit = ${JOURNAL_SIZE_LIMIT};`);
     migrate(db, { ...opts, home: path.dirname(path.resolve(file)), file });
+    backfillTombstoneEffects(db);
   } catch (err) {
     db.close();
     throw err;
   }
   return db;
+}
+
+/**
+ * Fill tombstone_effect for tombstones written without it: by a store from before it existed, or by
+ * a process of an older version still running against this store (see BACKFILL_EFFECTS). The check
+ * is a read, so opening a store that needs nothing takes no write lock.
+ */
+function backfillTombstoneEffects(db: Database): void {
+  if (db.prepare(NEEDS_BACKFILL).get()) {
+    transaction(db, () => db.exec(BACKFILL_EFFECTS), { immediate: true });
+  }
 }
 
 /** In-memory database for tests and one-off analysis, at the latest format version. */
