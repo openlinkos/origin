@@ -209,6 +209,7 @@ export {
 } from './search.js';
 export { getSetting, setSetting } from './settings.js';
 export {
+  commandLine,
   type EventFilter,
   type EventPosition,
   getEvent,
@@ -231,7 +232,9 @@ export {
   type SessionPrompt,
   type SourceStats,
   sessionPrompts,
+  sessionTurnStarts,
   stats,
+  type TurnStart,
 } from './store.js';
 export { isoLocal, parseTime } from './time.js';
 export {

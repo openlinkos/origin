@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ACTIVITY_BUCKET_MS,
   activeProjects,
+  commandLine,
   type Database,
   type EventKind,
   eventActivity,
@@ -15,6 +16,7 @@ import {
   openDatabase,
   type SourceAdapter,
   sessionPrompts,
+  sessionTurnStarts,
   syncSource,
 } from '../src/index.js';
 
@@ -129,6 +131,80 @@ describe('session prompts', () => {
     const details = plan.map((p) => p.detail).join('\n');
     expect(details).toContain('event_user_message');
     expect(details).not.toContain('TEMP B-TREE');
+  });
+});
+
+describe('turn starts', () => {
+  const echo = (name: string, args = '') =>
+    `<command-message>${name.slice(1)}</command-message>\n<command-name>${name}</command-name>\n<command-args>${args}</command-args>`;
+
+  it('name a command and its arguments, and only a command', () => {
+    expect(commandLine(echo('/review', 'PR 12'))).toBe('/review PR 12');
+    expect(commandLine('<command-name>/clear</command-name>')).toBe('/clear');
+    expect(commandLine('<command-name>/x</command-name> and a prompt')).toBeNull();
+    expect(commandLine('<local-command-stdout>ok</local-command-stdout>')).toBeNull();
+    expect(commandLine('Run /review')).toBeNull();
+  });
+
+  it('are the prompts, and the commands the agent acted on before the next prompt or command', async () => {
+    write([
+      { id: 'p1', session: 's', ts: T, text: 'First prompt' },
+      { id: 'a1', session: 's', ts: T + 1, role: 'assistant', text: 'Done.' },
+      // A local command: its output only, then a command the agent works on.
+      { id: 'model', session: 's', ts: T + 2, text: echo('/model', 'opus') },
+      {
+        id: 'out',
+        session: 's',
+        ts: T + 3,
+        text: '<local-command-stdout>Set model to opus</local-command-stdout>',
+      },
+      { id: 'review', session: 's', ts: T + 4, text: echo('/review', 'PR 12') },
+      { id: 'expanded', session: 's', ts: T + 5, kind: 'meta', text: 'Review the pull request…' },
+      { id: 'call', session: 's', ts: T + 6, role: 'assistant', kind: 'tool_use', text: 'Bash {}' },
+      { id: 'result', session: 's', ts: T + 7, kind: 'tool_result', text: 'ok' },
+      // A command only a sub-agent acted on, then one whose only answer is forgotten.
+      { id: 'sub', session: 's', ts: T + 8, text: echo('/agents') },
+      {
+        id: 'subwork',
+        session: 's',
+        ts: T + 9,
+        role: 'assistant',
+        text: 'x',
+        meta: { sidechain: true },
+      },
+      { id: 'clear', session: 's', ts: T + 10, text: echo('/clear') },
+      { id: 'p2', session: 's', ts: T + 11, text: 'Second prompt' },
+      { id: 'last', session: 's', ts: T + 12, text: echo('/summary') },
+      { id: 'answer', session: 's', ts: T + 13, role: 'assistant', text: 'Summary.' },
+    ]);
+    await syncSource({ db, home }, adapter(src));
+    const starts = () =>
+      sessionTurnStarts(db, 'fake', 's').map((s) => [
+        s.id.slice('fake:'.length),
+        s.prompt,
+        s.command,
+      ]);
+    expect(starts()).toEqual([
+      ['p1', 'First prompt', false],
+      ['review', '/review PR 12', true],
+      ['p2', 'Second prompt', false],
+      ['last', '/summary', true],
+    ]);
+    forget(db, 'fake:answer', { reason: 'test' });
+    expect(starts().map((s) => s[0])).toEqual(['p1', 'review', 'p2']);
+    // Prompts alone, and the provisional name, still skip every command.
+    expect(sessionPrompts(db, 'fake', 's').map((p) => p.id)).toEqual(['fake:p1', 'fake:p2']);
+    write([
+      { id: 'c0', session: 'c', ts: T, text: echo('/review') },
+      { id: 'c1', session: 'c', ts: T + 1, role: 'assistant', text: 'Working.' },
+      { id: 'c2', session: 'c', ts: T + 2, text: 'The real prompt' },
+    ]);
+    await syncSource({ db, home }, adapter(src));
+    expect(listSessions(db, { match: 'real' }).map((s) => s.prompt)).toEqual(['The real prompt']);
+    expect(sessionTurnStarts(db, 'fake', 'c').map((s) => s.prompt)).toEqual([
+      '/review',
+      'The real prompt',
+    ]);
   });
 });
 

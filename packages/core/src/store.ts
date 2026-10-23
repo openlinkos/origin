@@ -251,7 +251,21 @@ export interface SessionPrompt extends EventPosition {
  * turns of a long session are found without reading its other events.
  */
 export function sessionPrompts(db: Database, source: string, sessionId: string): SessionPrompt[] {
-  const rows = db
+  const out: SessionPrompt[] = [];
+  for (const r of userMessages(db, source, sessionId)) {
+    const prompt = promptTitle(r.text);
+    if (prompt !== null) out.push({ id: r.id, seq: r.seq, ts: r.ts, prompt });
+  }
+  return out;
+}
+
+/** A session's visible user messages, sub-agents' excepted, through event_user_message. */
+function userMessages(
+  db: Database,
+  source: string,
+  sessionId: string,
+): Array<{ id: string; seq: number; ts: number; text: string }> {
+  return db
     .prepare(
       `SELECT e.id, e.seq, e.ts, e.text FROM event e INDEXED BY event_user_message
         WHERE e.source = ? AND e.session_id = ? AND e.role = 'user' AND e.kind = 'message'
@@ -265,12 +279,67 @@ export function sessionPrompts(db: Database, source: string, sessionId: string):
     ts: number;
     text: string;
   }>;
-  const out: SessionPrompt[] = [];
-  for (const r of rows) {
+}
+
+/** At most this many characters of a command and its arguments name a turn. */
+const COMMAND_MAX = 200;
+
+/**
+ * The command a user message echoes, with its arguments (`/review PR 12`), or null: a message made
+ * only of XML-style elements (see promptTitle) among which Claude Code's `<command-name>`, with its
+ * `<command-args>`.
+ */
+export function commandLine(text: string): string | null {
+  if (promptTitle(text) !== null) return null;
+  const name = /<command-name>([\s\S]*?)<\/command-name>/.exec(text)?.[1]?.trim();
+  if (!name) return null;
+  const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1]?.trim() ?? '';
+  const line = `${name}${args ? ` ${args}` : ''}`.replace(/\s+/g, ' ');
+  return line.length > COMMAND_MAX ? `${line.slice(0, COMMAND_MAX - 1).trimEnd()}…` : line;
+}
+
+/** Where a turn starts: a prompt, or a command that set the agent to work (see sessionTurnStarts). */
+export interface TurnStart extends SessionPrompt {
+  /** Whether the turn starts at a command; `prompt` is then the command and its arguments. */
+  command: boolean;
+}
+
+/**
+ * Where a session's turns start, in time order: at each of its prompts (see sessionPrompts), and at
+ * each command it echoes (see commandLine) that the agent acted on, with a message or a tool call of
+ * its own (not a sub-agent's), before the next prompt or command. A command the agent did not act
+ * on, such as `/clear` or `/model`, starts no turn. Prompts come from the index of user messages;
+ * each command costs one look into the `(source, session_id, ts)` index, up to the agent's first
+ * event after it.
+ */
+export function sessionTurnStarts(db: Database, source: string, sessionId: string): TurnStart[] {
+  const candidates: TurnStart[] = [];
+  for (const r of userMessages(db, source, sessionId)) {
     const prompt = promptTitle(r.text);
-    if (prompt !== null) out.push({ id: r.id, seq: r.seq, ts: r.ts, prompt });
+    if (prompt !== null) {
+      candidates.push({ id: r.id, seq: r.seq, ts: r.ts, prompt, command: false });
+      continue;
+    }
+    const command = commandLine(r.text);
+    if (command !== null)
+      candidates.push({ id: r.id, seq: r.seq, ts: r.ts, prompt: command, command: true });
   }
-  return out;
+  if (!candidates.some((c) => c.command)) return candidates;
+  const agent = `e.source = ? AND e.session_id = ? AND e.ts >= ? AND (e.ts > ? OR e.seq > ?)
+    AND e.role = 'assistant' AND e.kind IN ('message', 'tool_use')
+    AND (e.meta IS NULL OR json_extract(e.meta, '$.sidechain') IS NOT 1) AND ${VISIBLE_EVENT}`;
+  const before = db.prepare(
+    `SELECT 1 FROM event e WHERE ${agent} AND e.ts <= ? AND (e.ts < ? OR e.seq < ?) LIMIT 1`,
+  );
+  const after = db.prepare(`SELECT 1 FROM event e WHERE ${agent} LIMIT 1`);
+  return candidates.filter((c, i) => {
+    if (!c.command) return true;
+    const next = candidates[i + 1];
+    const from = [source, sessionId, c.ts, c.ts, c.seq];
+    return next
+      ? before.get(...from, next.ts, next.ts, next.seq) !== undefined
+      : after.get(...from) !== undefined;
+  });
 }
 
 /**
