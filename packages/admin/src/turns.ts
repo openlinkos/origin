@@ -5,7 +5,7 @@
  * injected context become notes, and the last reply of the agent is told apart from the work that
  * led to it. Pure functions over the events of one page.
  */
-import type { EventRow, SessionPrompt } from '@openlinkos/origin-core';
+import type { EventRow, SessionPrompt, TurnStart } from '@openlinkos/origin-core';
 
 /** A command echo, its output, a notice, injected context, or a system event: shown small. */
 export interface Note {
@@ -48,7 +48,10 @@ export interface ToolSummary {
 export interface Turn {
   /** 1 for the first prompt; 0 for what came before it. */
   number: number;
+  /** The event the turn starts at: a prompt, or a command (see `command`). */
   prompt: EventRow | null;
+  /** For a turn that starts at a command the agent acted on, the command and its arguments. */
+  command: string | null;
   /** The first and last event of the turn on this page. */
   startedAt: number;
   endedAt: number;
@@ -286,7 +289,12 @@ function summarize(items: TurnItem[]): ToolSummary {
 }
 
 /** Split a turn's items into the notes after the prompt, the work, the reply, and later notes. */
-function shape(number: number, prompt: EventRow | null, items: TurnItem[], all: EventRow[]): Turn {
+function shape(
+  number: number,
+  start: { prompt: EventRow | null; command: string | null },
+  items: TurnItem[],
+  all: EventRow[],
+): Turn {
   let lead = 0;
   while (lead < items.length && items[lead]?.type === 'note') lead++;
   let reply = -1;
@@ -304,7 +312,8 @@ function shape(number: number, prompt: EventRow | null, items: TurnItem[], all: 
   const replyItem = reply < 0 ? undefined : items[reply];
   return {
     number,
-    prompt,
+    prompt: start.prompt,
+    command: start.command,
     startedAt: first?.ts ?? 0,
     endedAt: last?.ts ?? 0,
     lead: items.slice(0, lead),
@@ -317,34 +326,39 @@ function shape(number: number, prompt: EventRow | null, items: TurnItem[], all: 
 }
 
 /**
- * Group the events of one page into turns. `prompts` are the prompts that start turns on the page
- * and `firstNumber` the number of the first of them; events before the first prompt belong to turn
- * `firstNumber - 1` (0, what came before the first prompt, on the first page). Calls are paired
- * with their results by their call id, or, without one, with the first call before them that has
- * none and no result yet.
+ * Group the events of one page into turns. `starts` are where the turns on the page start (see
+ * sessionTurnStarts: prompts, and commands the agent acted on) and `firstNumber` the number of the
+ * first of them; events before the first start belong to turn `firstNumber - 1` (0, what came before
+ * the first prompt, on the first page). Calls are paired with their results by their call id, or,
+ * without one, with the first call before them that has none and no result yet.
  */
 export function groupTurns(
   events: EventRow[],
-  prompts: ReadonlyArray<Pick<SessionPrompt, 'id'>>,
+  starts: ReadonlyArray<Pick<TurnStart, 'id'> & Partial<Pick<TurnStart, 'command' | 'prompt'>>>,
   firstNumber: number,
 ): Turn[] {
-  const numbers = new Map(prompts.map((p, i) => [p.id, firstNumber + i]));
+  const numbers = new Map(
+    starts.map((p, i) => [
+      p.id,
+      { number: firstNumber + i, command: p.command ? (p.prompt ?? null) : null },
+    ]),
+  );
   const turns: Turn[] = [];
   let number = firstNumber - 1;
-  let prompt: EventRow | null = null;
+  let start: { prompt: EventRow | null; command: string | null } = { prompt: null, command: null };
   let items: TurnItem[] = [];
   let all: EventRow[] = [];
   const byKey = new Map<string, ToolRun>();
   let unkeyed: ToolRun[] = [];
   const close = () => {
-    if (all.length > 0) turns.push(shape(number, prompt, items, all));
+    if (all.length > 0) turns.push(shape(number, start, items, all));
   };
   for (const e of events) {
     const n = numbers.get(e.id);
     if (n !== undefined) {
       close();
-      number = n;
-      prompt = e;
+      number = n.number;
+      start = { prompt: e, command: n.command };
       items = [];
       all = [e];
       continue;

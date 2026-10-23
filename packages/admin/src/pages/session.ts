@@ -87,6 +87,18 @@ function promptBlock(ctx: Ctx, e: EventRow): SafeHtml {
     </div>`;
 }
 
+/** A turn that starts at a command the agent acted on: the command, as a chip, where a prompt goes. */
+function commandBlock(ctx: Ctx, e: EventRow, command: string): SafeHtml {
+  const label = ctx.t('turn.command');
+  return html`<div class="admin-prompt">
+      <span class="admin-turn-avatar" data-role="user">${icon(ctx, 'user', 'sm')}</span>
+      <div class="admin-prompt-body">
+        <span class="admin-chip admin-chip-command" title="${label}">${icon(ctx, 'terminal', 'sm')}<span class="ol-sr-only">${label}: </span><span class="admin-chip-label">${command}</span></span>
+      </div>
+      ${eventLink(ctx, e.id)}
+    </div>`;
+}
+
 /** The input of a call, pretty-printed when it is JSON. */
 function inputText(input: string): string {
   const text = input.trim();
@@ -213,7 +225,7 @@ function turnCard(ctx: Ctx, turn: Turn, o: { open: boolean; part: number }): Saf
           <span class="admin-sep" aria-hidden="true">·</span><span>${t('sessions.eventCount', { n: n(turn.events) })}</span>
         </span>
       </div>
-      ${turn.prompt ? promptBlock(ctx, turn.prompt) : ''}
+      ${turn.prompt ? (turn.command !== null ? commandBlock(ctx, turn.prompt, turn.command) : promptBlock(ctx, turn.prompt)) : ''}
       ${notes(ctx, turn.lead)}
       ${workBlock(ctx, turn, o.open)}
       ${turn.reply ? messageBlock(ctx, turn.reply, { subAgent: false, cls: 'admin-reply' }) : ''}

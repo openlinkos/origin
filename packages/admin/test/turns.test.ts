@@ -88,6 +88,34 @@ describe('turns', () => {
     ]);
   });
 
+  it('start at a command the agent acted on, with the command as the turn’s prompt', () => {
+    const p1 = user('Look at it.');
+    const r1 = reply('Looked.');
+    const clear = user('<command-name>/clear</command-name>');
+    const review = user('<command-name>/review</command-name>\n<command-args>PR 12</command-args>');
+    const expanded = ev({ role: 'user', kind: 'meta', text: 'Review the pull request.' });
+    const c = call('Bash', '{"command":"gh pr diff 12"}', { callId: 'k' });
+    const r = result('diff', { callId: 'k' });
+    const done = reply('Looks good.');
+    const turns = groupTurns(
+      [p1, r1, clear, review, expanded, c, r, done],
+      [{ id: p1.id }, { id: review.id, command: true, prompt: '/review PR 12' }],
+      1,
+    );
+    expect(turns.map((t) => [t.number, t.prompt?.id, t.command])).toEqual([
+      [1, p1.id, null],
+      [2, review.id, '/review PR 12'],
+    ]);
+    // A command the agent did not act on stays a note of the turn around it.
+    expect(turns[0]?.trail.map((i) => (i.type === 'note' ? i.note.label : null))).toEqual([
+      '/clear',
+    ]);
+    expect(turns[1]?.lead.map((i) => (i.type === 'note' ? i.note.kind : null))).toEqual([
+      'context',
+    ]);
+    expect(turns[1]).toMatchObject({ tools: { calls: 1, ok: 1 }, reply: { id: done.id } });
+  });
+
   it('number the turns of a later page from its first prompt', () => {
     const p = user('Go on.');
     const turns = groupTurns([p, reply('Done.')], [{ id: p.id }], 21);

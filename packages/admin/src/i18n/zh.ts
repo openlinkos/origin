@@ -268,6 +268,7 @@ export const zh: Messages = {
   'turn.status.error': '失败',
   'turn.status.pending': '无结果',
   'turn.subAgent': '子 Agent',
+  'turn.command': '命令',
   'turn.input': '输入',
   'turn.result': '结果',
   'turn.noResult': '没有记录到结果。',

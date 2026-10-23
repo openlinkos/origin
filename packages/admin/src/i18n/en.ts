@@ -278,6 +278,7 @@ export const en = {
   'turn.status.error': 'failed',
   'turn.status.pending': 'no result',
   'turn.subAgent': 'sub-agent',
+  'turn.command': 'Command',
   'turn.input': 'Input',
   'turn.result': 'Result',
   'turn.noResult': 'No result was recorded.',

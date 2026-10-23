@@ -5,10 +5,12 @@
  * `html` template. The markup comes from the renderer's own static strings alone.
  *
  * Supported: paragraphs (line breaks kept), headings, bold and italic, inline code, fenced code
- * blocks, bulleted and numbered lists (nested by indentation), blockquotes, thematic breaks, and
- * links to http and https URLs, written `[label](url)` or bare, which open in a new tab with
- * `rel="noopener noreferrer"` and show their URL. Anything else, HTML and tables included, stays
- * text: tables are kept as they were written, in monospace.
+ * blocks, bulleted and numbered lists (nested by indentation), blockquotes, thematic breaks, pipe
+ * tables (a header, a delimiter row that sets each column's alignment, and rows, with inline markup
+ * in the cells and `\|` for a pipe), and links to http and https URLs, written `[label](url)` or
+ * bare, which open in a new tab with `rel="noopener noreferrer"` and show their URL. Anything else,
+ * HTML included, stays text; a table whose header and delimiter row disagree is kept as written,
+ * in monospace.
  */
 import { type HtmlValue, html, type SafeHtml } from './html.js';
 
@@ -27,7 +29,6 @@ const QUOTE = /^ {0,3}>[ \t]?/;
 const RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 const BULLET = /^( {0,3})([-*+])(?:[ \t]+(.*))?$/;
 const ORDERED = /^( {0,3})(\d{1,9})([.)])(?:[ \t]+(.*))?$/;
-const TABLE_RULE = /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*$/;
 const LANG = /^[\w+#.-]{1,32}$/;
 
 const blank = (line: string) => line.trim() === '';
@@ -164,23 +165,110 @@ function blocks(lines: string[], depth: number): SafeHtml[] {
       continue;
     }
 
-    if (line.includes('|') && TABLE_RULE.test(lines[i + 1] ?? '')) {
-      const rows: string[] = [];
-      while (i < lines.length && !blank(lines[i] ?? '') && (lines[i] ?? '').includes('|')) {
-        rows.push(lines[i++] ?? '');
+    const rule = line.includes('|') ? delimiterRow(lines[i + 1] ?? '') : null;
+    if (rule) {
+      const header = tableCells(line);
+      if (header.length !== rule.length) {
+        // The header and the delimiter row disagree: no table, the lines stay as written.
+        const rows: string[] = [];
+        while (i < lines.length && !blank(lines[i] ?? '') && (lines[i] ?? '').includes('|')) {
+          rows.push(lines[i++] ?? '');
+        }
+        out.push(html`<pre class="admin-md-text">${rows.join('\n')}</pre>`);
+        continue;
       }
-      out.push(html`<pre class="admin-md-text">${rows.join('\n')}</pre>`);
+      const body: string[][] = [];
+      i += 2;
+      while (i < lines.length) {
+        const row = lines[i] ?? '';
+        if (blank(row) || !row.includes('|') || startsBlock(row, depth)) break;
+        body.push(tableCells(row));
+        i++;
+      }
+      out.push(table(header, rule, body));
       continue;
     }
 
     const para: string[] = [line.trim()];
     i++;
     while (i < lines.length && !blank(lines[i] ?? '') && !startsBlock(lines[i] ?? '', depth)) {
-      para.push((lines[i++] ?? '').trim());
+      const next = lines[i] ?? '';
+      // A table's header ends the paragraph before it.
+      if (next.includes('|') && delimiterRow(lines[i + 1] ?? '')) break;
+      para.push(next.trim());
+      i++;
     }
     out.push(html`<p>${inline(para.join('\n'), 0, true)}</p>`);
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tables (GitHub's pipe tables)
+
+type Align = 'left' | 'center' | 'right' | null;
+
+/** A table cell longer than this many characters wraps; shorter ones keep to one line. */
+const WRAP_CELL = 40;
+
+/**
+ * The cells of a table row: split at every `|` not escaped as `\|`, which stands for a pipe in the
+ * cell (code spans included, as on GitHub), without the leading and trailing pipe, trimmed. Other
+ * escapes are left to the cell's inline markup.
+ */
+export function tableCells(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1);
+  const cells: string[] = [];
+  let cell = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '\\' && s[i + 1] === '|') {
+      cell += '|';
+      i++;
+    } else if (c === '|') {
+      cells.push(cell.trim());
+      cell = '';
+    } else {
+      cell += c;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+/** The alignment of each column, if the line is a table's delimiter row (`| :--- | ---: |`). */
+function delimiterRow(line: string): Align[] | null {
+  if (!line.includes('|') || !/^[\s|:-]+$/.test(line)) return null;
+  const cells = tableCells(line);
+  if (!cells.every((c) => /^:?-+:?$/.test(c))) return null;
+  return cells.map((c) => {
+    const left = c.startsWith(':');
+    const right = c.endsWith(':');
+    return left && right ? 'center' : right ? 'right' : left ? 'left' : null;
+  });
+}
+
+/** A table: a header row and its body, as many cells per row as the header (ragged rows fit). */
+function table(header: string[], align: Align[], body: string[][]): SafeHtml {
+  const cell = (tag: 'th' | 'td', text: string, a: Align) => {
+    const content = inline(text, 0, true);
+    // Cells keep to one line, so a wide table scrolls; only long text wraps.
+    const names = [a ? `admin-md-${a}` : '', text.length > WRAP_CELL ? 'admin-md-wrap' : '']
+      .filter(Boolean)
+      .join(' ');
+    const cls = names ? html` class="${names}"` : '';
+    return tag === 'th' ? html`<th${cls}>${content}</th>` : html`<td${cls}>${content}</td>`;
+  };
+  return html`<div class="admin-md-table"><table><thead><tr>${header.map((h, k) => cell('th', h, align[k] ?? null))}</tr></thead>${
+    body.length === 0
+      ? ''
+      : html`<tbody>${body.map(
+          (row) =>
+            html`<tr>${header.map((_, k) => cell('td', row[k] ?? '', align[k] ?? null))}</tr>`,
+        )}</tbody>`
+  }</table></div>`;
 }
 
 function list(

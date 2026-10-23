@@ -56,18 +56,18 @@ import {
   restore,
   revokeToken,
   type SearchHit,
-  type SessionPrompt,
   type SessionRow,
   type SourceStats,
   type StoreUsage,
   searchEntries,
   searchEvents,
-  sessionPrompts,
+  sessionTurnStarts,
   stats,
   storeName,
   storeUsage,
   type TokenInfo,
   type TombstoneSummary,
+  type TurnStart,
   tombstoneCount,
 } from '@openlinkos/origin-core';
 import { HttpError } from './http.js';
@@ -550,7 +550,7 @@ export class AdminService {
     return {
       sessions: rows.slice(0, PAGE_SIZE).map((s) => ({
         ...s,
-        turns: sessionPrompts(this.db, s.source, s.sessionId).length,
+        turns: sessionTurnStarts(this.db, s.source, s.sessionId).length,
       })),
       page,
       more: rows.length > PAGE_SIZE,
@@ -596,7 +596,8 @@ export class AdminService {
   ): SessionTurns {
     const session = this.session(source, id);
     const key = { source: session.source, sessionId: session.sessionId };
-    const prompts: SessionPrompt[] = sessionPrompts(this.db, key.source, key.sessionId);
+    // Where turns start: the prompts, and the commands the agent acted on.
+    const prompts: TurnStart[] = sessionTurnStarts(this.db, key.source, key.sessionId);
     const first = prompts[0];
     const preamble = first
       ? listSessionEvents(this.db, { ...key, to: first, limit: 1 }).length > 0

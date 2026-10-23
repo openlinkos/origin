@@ -162,6 +162,24 @@ body {
   color: var(--ol-color-fg-subtle);
 }
 
+/* A command that set the agent to work, where a turn's prompt goes. */
+.admin-chip.admin-chip-command {
+  min-height: 2rem;
+  padding-inline: var(--ol-space-3);
+  border-color: var(--ol-color-accent-border);
+  background: var(--ol-color-accent-bg);
+  color: var(--ol-color-fg);
+  font-size: var(--ol-font-size-sm);
+}
+
+.admin-chip-command > .ol-icon {
+  color: var(--ol-color-accent-text);
+}
+
+.admin-prompt-body > .admin-chip-command {
+  align-self: flex-start;
+}
+
 .admin-chip-label {
   min-width: 0;
   overflow: hidden;
@@ -260,7 +278,7 @@ body {
   white-space: normal;
 }
 
-.admin-timeline .admin-day-row th {
+:where(.admin-timeline) .admin-day-row > th {
   padding-block: var(--ol-space-1-5);
   border-block-start: 1px solid var(--ol-color-border);
   background: var(--ol-color-bg-subtle);
@@ -270,7 +288,7 @@ body {
   letter-spacing: 0.01em;
 }
 
-.admin-timeline tbody:first-of-type .admin-day-row th {
+:where(.admin-timeline tbody:first-of-type) .admin-day-row > th {
   border-block-start: 0;
 }
 
@@ -872,10 +890,6 @@ body {
   margin-block-start: var(--ol-space-3);
 }
 
-.admin-md p {
-  margin: 0;
-}
-
 .admin-md .admin-md-h {
   color: var(--ol-color-fg);
   font-weight: var(--ol-font-weight-semibold);
@@ -939,6 +953,48 @@ body {
   font-family: var(--ol-font-family-mono);
   font-size: var(--ol-font-size-2xs);
   overflow-wrap: anywhere;
+}
+
+/* Table cells keep to one line, except long ones (.admin-md-wrap); a wide table scrolls sideways. */
+.admin-md-table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.admin-md-table table {
+  border-collapse: collapse;
+  font-size: var(--ol-font-size-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.55;
+}
+
+.admin-md-table th,
+.admin-md-table td {
+  padding: var(--ol-space-1-5) var(--ol-space-3);
+  border: 1px solid var(--ol-color-border);
+  overflow-wrap: normal;
+  text-align: start;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.admin-md-table .admin-md-wrap {
+  min-width: 14rem;
+  white-space: normal;
+}
+
+.admin-md-table th {
+  background: var(--ol-color-bg-subtle);
+  color: var(--ol-color-fg);
+  font-weight: var(--ol-font-weight-semibold);
+}
+
+.admin-md-table .admin-md-center {
+  text-align: center;
+}
+
+.admin-md-table .admin-md-right {
+  text-align: end;
 }
 
 @media (forced-colors: active) {

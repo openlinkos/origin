@@ -413,6 +413,44 @@ describe('origin ui: pages', () => {
     expect(zh.text).toContain('<span class="ol-brand-tag">本机</span>');
   });
 
+  it('show a command the agent acted on as the prompt of its own turn', async () => {
+    const local = await serveLocal();
+    const b = await local.signedIn();
+    const t = Date.UTC(2026, 9, 20, 10);
+    const more = [
+      { id: 'evt-clear', ts: t, role: 'user', text: '<command-name>/clear</command-name>' },
+      {
+        id: 'evt-review',
+        ts: t + 1000,
+        role: 'user',
+        text: `<command-name>/review</command-name><command-args>PR 12 ${XSS}</command-args>`,
+      },
+      {
+        id: 'evt-asst-2',
+        ts: t + 2000,
+        role: 'assistant',
+        text: '| a | b |\n|---|---|\n| `x \\| y` | 2 |',
+      },
+    ];
+    fs.appendFileSync(
+      path.join(tmp, 'agent', `${SESSION}.jsonl`),
+      `${more.map((l) => JSON.stringify(l)).join('\n')}\n`,
+    );
+    await syncSource({ db, home: tmp }, fakeAdapter(path.join(tmp, 'agent')));
+    const page = (await b.get(`/admin/session?source=fake&id=${SESSION}`)).text;
+    expect(pageProblems(page)).toEqual([]);
+    expect(page).toContain('<li class="admin-turn" id="turn-2">');
+    expect(page).not.toContain('id="turn-3"');
+    expect(page).toContain('<span class="admin-chip admin-chip-command" title="Command">');
+    expect(page).toContain(
+      '<span class="admin-chip-label">/review PR 12 &lt;img src=x onerror=alert(1)&gt;</span>',
+    );
+    // /clear stays a note of the first turn; the reply's table is a table.
+    expect(page).toContain('<span class="admin-chip-label">/clear</span>');
+    expect(page).toContain('<td><code>x | y</code></td><td>2</td>');
+    expect(page).not.toContain('<img src=x');
+  });
+
   it('leave out what only a hub has', async () => {
     const local = await serveLocal();
     const b = await local.signedIn();

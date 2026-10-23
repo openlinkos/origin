@@ -237,6 +237,36 @@ describe('a session by turns', () => {
   });
 });
 
+describe('commands', () => {
+  it('start a turn when the agent acts on them, and stay notes otherwise', async () => {
+    const t = NOW - DAY;
+    write([
+      { id: 'p1', session: 's', ts: t, text: 'Hello' },
+      { id: 'a1', session: 's', ts: t + 1, role: 'assistant', text: 'Hi.' },
+      { id: 'clear', session: 's', ts: t + 2, text: '<command-name>/clear</command-name>' },
+      { id: 'out', session: 's', ts: t + 3, text: '<local-command-stdout></local-command-stdout>' },
+      {
+        id: 'review',
+        session: 's',
+        ts: t + 4,
+        text: '<command-name>/review</command-name><command-args>PR 12</command-args>',
+      },
+      { id: 'meta', session: 's', ts: t + 5, kind: 'meta', text: 'Review the pull request.' },
+      { id: 'a2', session: 's', ts: t + 6, role: 'assistant', text: 'Reviewed.' },
+    ]);
+    await sync();
+    const page = service.sessionTurns('fake', 's');
+    expect(page.total).toBe(2);
+    expect(page.turns.map((x) => [x.number, x.command, x.events])).toEqual([
+      [1, null, 4],
+      [2, '/review PR 12', 3],
+    ]);
+    expect(page.days).toEqual([{ day: dayKey(t), turn: 1, turns: 2 }]);
+    expect(service.sessions({}).sessions.map((s) => [s.prompt, s.turns])).toEqual([['Hello', 2]]);
+    expect(service.sessionTurns('fake', 's', { at: 'fake:a2' }).turn).toBe(2);
+  });
+});
+
 describe('the timeline', () => {
   it('counts the turns of each session, and filters by name', async () => {
     write([

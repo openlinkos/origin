@@ -24,6 +24,12 @@ const TAGS = new Set([
   'li',
   'blockquote',
   'hr',
+  'table',
+  'thead',
+  'tbody',
+  'tr',
+  'th',
+  'td',
 ]);
 const ATTRIBUTES = new Set(['class', 'href', 'target', 'rel', 'start']);
 
@@ -135,10 +141,53 @@ describe('markdown', () => {
     }
   });
 
-  it('keeps tables and HTML as text', () => {
-    expect(inner('| a | b |\n|---|---|\n| <i>1</i> | 2 |')).toBe(
-      '<pre class="admin-md-text">| a | b |\n|---|---|\n| &lt;i&gt;1&lt;/i&gt; | 2 |</pre>',
+  it('renders pipe tables, aligned by their delimiter row, with inline markup in the cells', () => {
+    expect(
+      inner(
+        '| Step | Count | Note |\n|:---|---:|:-:|\n| **build** | 12 | `ok` |\n| test | 3 | — |',
+      ),
+    ).toBe(
+      '<div class="admin-md-table"><table><thead><tr><th class="admin-md-left">Step</th><th class="admin-md-right">Count</th><th class="admin-md-center">Note</th></tr></thead>' +
+        '<tbody><tr><td class="admin-md-left"><strong>build</strong></td><td class="admin-md-right">12</td><td class="admin-md-center"><code>ok</code></td></tr>' +
+        '<tr><td class="admin-md-left">test</td><td class="admin-md-right">3</td><td class="admin-md-center">—</td></tr></tbody></table></div>',
     );
+    // Long cells may wrap; the others keep to one line.
+    expect(inner(`| a | b |\n|---|--:|\n| ${'word '.repeat(10)}| 1 |`)).toContain(
+      `<td class="admin-md-wrap">${'word '.repeat(10).trim()}</td><td class="admin-md-right">1</td>`,
+    );
+    // Without outer pipes, and without a body.
+    expect(inner('a | b\n--- | ---')).toBe(
+      '<div class="admin-md-table"><table><thead><tr><th>a</th><th>b</th></tr></thead></table></div>',
+    );
+    // A single column, and a table straight after a paragraph's line, as on GitHub.
+    expect(inner('Results:\n| only |\n| --- |\n| one |')).toBe(
+      '<p>Results:</p><div class="admin-md-table"><table><thead><tr><th>only</th></tr></thead><tbody><tr><td>one</td></tr></tbody></table></div>',
+    );
+  });
+
+  it('reads \\| as a pipe inside cells, code included, and fits ragged rows to the header', () => {
+    expect(inner('| Expr | Means |\n|---|---|\n| `a \\| b` | a or b \\| c |')).toBe(
+      '<div class="admin-md-table"><table><thead><tr><th>Expr</th><th>Means</th></tr></thead><tbody><tr><td><code>a | b</code></td><td>a or b | c</td></tr></tbody></table></div>',
+    );
+    const ragged = inner('| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 | 4 | 5 |');
+    expect(ragged).toContain('<tr><td>1</td><td></td><td></td></tr>');
+    expect(ragged).toContain('<tr><td>1</td><td>2</td><td>3</td></tr>');
+    expect(ragged).not.toContain('4');
+    // The table ends at a blank line, or at a line that starts another block.
+    expect(inner('| a |\n|---|\n| 1 |\n\nAfter')).toMatch(/<\/table><\/div><p>After<\/p>$/);
+    expect(inner('| a |\n|---|\n| 1 |\n- item')).toMatch(
+      /<\/table><\/div><ul><li><p>item<\/p><\/li><\/ul>$/,
+    );
+  });
+
+  it('keeps malformed tables and HTML as text', () => {
+    // The header and the delimiter row disagree.
+    expect(inner('| a | b |\n|---|\n| <i>1</i> | 2 |')).toBe(
+      '<pre class="admin-md-text">| a | b |\n|---|\n| &lt;i&gt;1&lt;/i&gt; | 2 |</pre>',
+    );
+    // No delimiter row, or one with something other than dashes and colons.
+    expect(inner('| a | b |\n| c | d |')).toBe('<p>| a | b |<br>| c | d |</p>');
+    expect(inner('| a | b |\n|--x|---|')).toBe('<p>| a | b |<br>|--x|---|</p>');
     expect(inner('<details open><summary>x</summary></details>')).toBe(
       '<p>&lt;details open&gt;&lt;summary&gt;x&lt;/summary&gt;&lt;/details&gt;</p>',
     );
@@ -171,6 +220,13 @@ describe('markdown', () => {
       `${'*'.repeat(5000)}x${'_'.repeat(5000)}`,
       `${'[a]('.repeat(3000)}https://x.example`,
       `${'`'.repeat(4000)}`,
+      // Tables: hostile cells, headers, alignments, and escapes.
+      '| <script>alert(1)</script> | b |\n|---|---|\n| <img src=x onerror=alert(1)> | [x](javascript:alert(1)) |',
+      '| a" onmouseover="alert(1) | b |\n|:-:|-:|\n| `<svg onload=alert(1)>` \\| x | **<b>y</b>** |',
+      '| [ok](https://example.com/"><script>) | c |\n|---|---|\n| </td></tr></table><script>alert(1)</script> | d |',
+      '| a |\n|:--:" onclick="x|\n| b |',
+      `| ${'|'.repeat(3000)} |\n|${'---|'.repeat(3)}\n| x |`,
+      `| a |\n|---|\n${'| <i>x</i> \\| y |\n'.repeat(2000)}`,
     ];
     for (const text of hostile) {
       const out = md(text);
@@ -182,6 +238,15 @@ describe('markdown', () => {
       );
       expect(out).not.toMatch(/<(script|img|svg|iframe)/i);
     }
+    // Hostile cells are tables still, with every cell escaped.
+    const cells = md(hostile[hostile.length - 6] ?? '');
+    expect(cells).toContain('<th>&lt;script&gt;alert(1)&lt;/script&gt;</th><th>b</th>');
+    expect(cells).toContain(
+      '<td>&lt;img src=x onerror=alert(1)&gt;</td><td>[x](javascript:alert(1))</td>',
+    );
+    expect(md(hostile[hostile.length - 5] ?? '')).toContain(
+      '<th class="admin-md-center">a&quot; onmouseover=&quot;alert(1)</th>',
+    );
     // Entities in the text are shown as written, never decoded into markup.
     expect(inner('&lt;b&gt;')).toBe('<p>&amp;lt;b&amp;gt;</p>');
   });
