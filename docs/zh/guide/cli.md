@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-52d86617
+sourceHash: sha256-547509c8
 ---
 
 # 命令参考
@@ -17,6 +17,7 @@ origin forget    <id> [--reason <text>] [--yes]        永久遗忘条目或事�
 origin projects                                        已知的项目名
 origin backup    <dir>                                 把数据库和原始镜像备份到 <dir>（增量）
 origin mcp                                             以 stdio 运行 MCP server（接入中枢后补充中枢的回答）
+origin ui        [--port 7079] [--no-open]             在浏览器中浏览和管理本库，只监听 127.0.0.1
 
 origin serve     [--host 127.0.0.1] [--port 7077]      把本库作为个人中枢运行（MCP over HTTP）
                  [--admin | --admin-listen <host:port>] [--public-url <url>]   同时提供管理界面
@@ -83,6 +84,10 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 ```
 
 遗忘规则见[隐私与数据](./privacy.md#forgetting)。
+
+## 在浏览器中 {#in-your-browser}
+
+`origin ui` 为这台机器的库提供[管理界面](./admin.md#on-your-own-machine)，只监听 `127.0.0.1`，端口默认为 7079，可用 `--port` 指定。它会打印一个登录链接，并在默认浏览器中打开；链接只能使用一次，须在 5 分钟内使用；`--no-open` 只打印链接。这里没有密码。用 Ctrl+C 停止它，浏览器也随之退出登录；需要新链接时，重新运行它即可。在已接入中枢的设备上，你在那里写入的条目和遗忘操作会在后台与中枢同步，与 `correct` 和 `forget` 之后一样。
 
 ## 个人中枢 {#personal-hub}
 

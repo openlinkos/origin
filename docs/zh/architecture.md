@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-48280ade
+sourceHash: sha256-ecc3653a
 ---
 
 # 架构
@@ -40,12 +40,12 @@ sourceHash: sha256-48280ade
 
 - 把 Claude Code、Codex、Cursor、ZCode、Grok Build 的本地会话归档进同一个只追加的库。
 - 让任何 Agent 都能通过 MCP 检索归档、浏览时间线、把任何回答展开到它的原始来源，并记录持久的条目（记忆 / 知识 / 认知）。
-- 让人通过 `origin` CLI 或自己中枢的管理界面查看、纠正和遗忘条目；遗忘必须持久生效。
+- 让人通过 `origin` CLI 或管理界面查看、纠正和遗忘条目，无论是在自己的中枢上，还是用 `origin ui` 在自己的机器上；遗忘必须持久生效。
 - 一个人常常在多台机器上运行 Agent（笔记本、服务器、云端 Agent）。每台设备都保有一份完整的、属于自己的记忆；可选的自托管**个人中枢**把每台设备写下的内容汇集到一个库中，让任何地方的 Agent 都能找到。
 
 达成目标的标志是：在你任何一台机器上，从任何一个已接入的 Agent 问“上周在项目 X 里我决定了什么，为什么？”，都能得到附带来源的回答，而且被遗忘的条目永远不会再回来。
 
-**目前明确不做：** 多租户托管（Origin 只服务一个人，每个人运行自己的一份）、由本项目运营的托管服务、端到端加密、设备之间互相拉取对方的数据、不经过中枢的点对点同步、实时协作、自己中枢上供主人使用的管理界面之外的任何 Web 界面（没有公开页面、没有分享、没有多账户）、屏幕 / 邮件 / 浏览器采集、知识图谱、向量检索、主动提醒，以及任何对模型 API 的调用。
+**目前明确不做：** 多租户托管（Origin 只服务一个人，每个人运行自己的一份）、由本项目运营的托管服务、端到端加密、设备之间互相拉取对方的数据、不经过中枢的点对点同步、实时协作、自己的中枢或机器上供主人使用的管理界面之外的任何 Web 界面（没有公开页面、没有分享、没有多账户）、屏幕 / 邮件 / 浏览器采集、知识图谱、向量检索、主动提醒，以及任何对模型 API 的调用。
 
 ## 记忆、知识与认知 {#memory-knowledge-and-cognition}
 
@@ -78,6 +78,7 @@ agent session logs on disk ──scan──▶ Raw (append-only mirror)
  agents ◀── MCP (stdio): search · timeline · get · sources · remember · correct · forget
  people ◀── CLI `origin`: sync · status · timeline · search · show · entries · correct · forget
  people ◀── admin UI (hub, /admin): overview · timeline · search · entries · remember · correct · forget · tokens
+ people ◀── origin ui (device, 127.0.0.1): overview · timeline · search · entries · remember · correct · forget
 ```
 
 使用个人中枢时，每台设备都保有一份完整的、属于自己的库，离线时也照常可用。它把原始镜像发送给中枢（由中枢用同样的适配器解析），也把自己写下的条目和遗忘记录发送给中枢；它从中枢收到的只有遗忘记录。设备上的 Agent 使用本地的 `origin mcp`，它根据设备自己的库作答，并合并中枢的回答；云端 Agent 则使用中枢的 HTTP 端点：
@@ -98,14 +99,14 @@ agents on B ──▶ origin mcp ──▶ store B ── (as for device A) ─�
 2. **遗忘粘性。** 执行 `forget` 之后，条目立即从该库的所有查询中消失，它的来源事件加入一个排除集，此后任何写入都无法让它们复活。遗忘记录会到达每一个库，并且只增不减：被遗忘的内容无论到达哪里都保持被遗忘，之后才到达的版本和副本也是如此，而且没有任何东西会被取消遗忘。
 3. **只追加。** Raw 镜像和事件永远不会被改写：镜像的内容（即其未压缩的字节）只会增长，一行一旦采集就永远不变，无论它以何种形式存储（见[原始镜像](#raw-mirrors)）。条目通过取代（`supersedes`）来变更，从不原地修改。
 4. **你的数据，留在你的机器上。** 所有数据都存放在你控制的机器上：你的各台设备上的 `~/.origin/`，以及可选的你自己的中枢。Origin 从不调用第三方服务；唯一的网络流量发生在你的设备和你的中枢之间。
-5. **单一入口。** 无论来自哪个界面，每一次读写都经过同一组 core 操作：Agent 使用 MCP（所在设备的 `origin mcp`，或中枢的 HTTP 端点）；人使用 CLI 或自己中枢的管理界面。写入发生在发起它的那个库中——在设备上就是先写入设备自己的库——再由复制通过同样的操作应用到其他库。中枢的复制 API 在你自己的各个库之间传输原始镜像、条目和遗忘记录，它既不是 Agent 的入口，也不是人的入口。
+5. **单一入口。** 无论来自哪个界面，每一次读写都经过同一组 core 操作：Agent 使用 MCP（所在设备的 `origin mcp`，或中枢的 HTTP 端点）；人使用 CLI 或管理界面（自己中枢上的，或设备上的 `origin ui`）。写入发生在发起它的那个库中——在设备上就是先写入设备自己的库——再由复制通过同样的操作应用到其他库。中枢的复制 API 在你自己的各个库之间传输原始镜像、条目和遗忘记录，它既不是 Agent 的入口，也不是人的入口。
 
 ## 设计原则 {#design-principles}
 
 - **内核不含 LLM。** Origin 从不调用模型 API。它只负责归档、规范化、建立索引和存储。分析发生在提问的那个 Agent 里——它本身就是一个能力很强的模型。Agent 通过 MCP `remember` 保存它学到的东西；人通过 CLI 或管理界面纠正和遗忘。如果将来需要周期性的整合，它会作为无头的编码 Agent 任务运行（例如 `claude -p`），而不是直接集成模型 API。这是当前的立场；如果评估表明它力有不逮，尤其是在认知层，可以重新考虑。
 - **确定、容错的适配器。** 每个来源都有一个纯粹、确定性的解析器。Agent 的记录格式变化频繁，所以适配器会记录 Agent 版本，跳过无法解析的行并统计失败次数，绝不中止采集。
 - **以 MCP 作为互通点。** MCP 是所有目标 Agent 唯一共有的接口。其中几个 Agent 还会读取 Claude Code 的 MCP 配置，所以一次注册就能覆盖不止一个 Agent。
-- **小而保守的管理界面。** 中枢的管理界面只供它的主人使用。页面在服务器端由一个对每个值都做转义的模板渲染，外加一点可选的脚本。它的样式表、字体和图标来自 OpenLinkOS 设计系统（`@openlinkos/ui`），在构建时复制进这个包；不从别处加载任何东西，也没有打包工具。CLI 能做的它都能做，但不做任何会破坏不变量的事：不原地编辑，不撤销遗忘，不在屏幕上显示被遗忘的文本。
+- **小而保守的管理界面。** 管理界面，无论是中枢上的，还是设备上的 `origin ui`，都只供它的主人使用。页面在服务器端由一个对每个值都做转义的模板渲染，外加一点可选的脚本。它的样式表、字体和图标来自 OpenLinkOS 设计系统（`@openlinkos/ui`），在构建时复制进这个包；不从别处加载任何东西，也没有打包工具。CLI 能做的它都能做，但不做任何会破坏不变量的事：不原地编辑，不撤销遗忘，不在屏幕上显示被遗忘的文本。
 - **小而可运行的增量。** 每个来源适配器都单独交付、单独可用；设计只深入到当前增量所需的程度。
 
 ## 包 {#packages}
@@ -117,12 +118,12 @@ pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.16（�
 | `@openlinkos/origin-core` | `packages/core` | 存储、schema、采集（本地与远程）、条目、遗忘、令牌、管理密码与会话、审计日志、查询 | — |
 | `@openlinkos/origin-adapters` | `packages/adapters` | 每个来源一个确定性解析器 | core |
 | `@openlinkos/origin-mcp` | `packages/mcp` | MCP 工具；基于 stdio 和无状态 HTTP 的 server，以及已接入中枢的设备上的 server，它把中枢的回答合并进自己的回答 | core |
-| `@openlinkos/origin-admin` | `packages/admin` | 中枢的管理界面：服务器端渲染的页面、JSON API 及其静态资源 | core |
-| `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢），以及设备与中枢之间的同步 | core, adapters, mcp, admin |
+| `@openlinkos/origin-admin` | `packages/admin` | 管理界面，供中枢和 `origin ui` 使用：服务器端渲染的页面、JSON API 及其静态资源 | core |
+| `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢）、`origin ui`，以及设备与中枢之间的同步 | core, adapters, mcp, admin |
 
 五个包以同一个版本号一起发布到 npm；用户安装 `@openlinkos/origin`，其余几个随之安装。1.0 之前，另外四个包属于内部实现，它们的 API 可能在任何版本中改变。
 
-`core` 不得依赖任何其他包，`mcp` 和 `admin` 都不得依赖 `adapters`：CLI 以回调的形式把采集注入各个 server，中枢的 HTTP server 位于 CLI 中，并由它挂载管理界面的请求处理函数。适配器实现 `core` 中的 `SourceAdapter` 接口：
+`core` 不得依赖任何其他包，`mcp` 和 `admin` 都不得依赖 `adapters`：CLI 以回调的形式把采集注入各个 server，中枢和 `origin ui` 的 HTTP server 位于 CLI 中，并由它挂载管理界面的请求处理函数。适配器实现 `core` 中的 `SourceAdapter` 接口：
 
 ```ts
 interface SourceAdapter {
@@ -160,8 +161,8 @@ interface SourceAdapter {
 | `tombstone`, `forgotten_entry`, `excluded_event` | 遗忘操作，每条都有一个全局 id（`tmb_` 加随机十六进制，与 `ent_` id 相同）和它的 `origin`，以及它们在本库中的影响 |
 | `change_log` | 本库写入或收到的条目和遗忘记录的只追加序列（序号、类型、id、origin、时间），由触发器填写；触发器拒绝任何更新和删除。复制游标指向这个序列 |
 | `api_token` | 中枢访问令牌：名称（设备的令牌即设备名）和 SHA-256 哈希，从不保存令牌本身 |
-| `setting` | 少量键值状态，只属于各自的库，从不复制：库的名称、设备的复制游标，以及中枢上管理密码的 scrypt 哈希 |
-| `admin_session` | 管理界面的会话：会话 id 的哈希、它的 CSRF 令牌和各个时间戳 |
+| `setting` | 少量键值状态，只属于各自的库，从不复制：库的名称、设备的复制游标及其上次与中枢同步的时间，以及中枢上管理密码的 scrypt 哈希 |
+| `admin_session` | 中枢管理界面的会话：会话 id 的哈希、它的 CSRF 令牌和各个时间戳（`origin ui` 把会话保存在内存中） |
 | `audit_log` | 管理操作的只追加记录，只含 id 和数量，从不包含内容；触发器拒绝任何更新和删除 |
 
 - 存储使用 Node 内置的 `node:sqlite`，因此没有需要编译的原生模块。多个进程可以共享同一个数据库（CLI，以及每个 Agent 会话各一个 MCP server）；WAL 模式和 busy timeout 负责处理这种情况。
@@ -337,11 +338,11 @@ interface SourceAdapter {
 - `origin hub connect <url> --token <token> [--device <name>]` 把连接信息保存在 `<ORIGIN_HOME>/hub.json` 中。设备名就是它的库的名称（见[存储](#storage)），而且必须是这台设备的令牌名：这个命令会向中枢询问令牌属于哪台设备（`GET /v1/device`），如果不是这个库，就拒绝接入并说明如何解决。`--device` 可以给一个还没有写入任何条目或遗忘记录的库改名。`origin hub status` 也做同样的检查。`ORIGIN_HUB_URL` 和 `ORIGIN_HUB_TOKEN` 会覆盖保存的连接信息。
 - 配置了中枢之后，`origin mcp` 仍然根据设备自己的库提供服务，并合并中枢的回答（见 [MCP server](#mcp-server)）。它在运行中与中枢同步：读取类工具之前最多每 10 秒一次，每次写入后立即同步，记录文件有变化时每分钟同步一次，Agent 离开时再同步一次；等待中枢的时间不会超过超时时限。Agent 的注册无需改动，Agent 也仍然能引用刚刚说过的内容。
 - 没有本地记录的云端 Agent 直接用 bearer 令牌注册中枢的 `/mcp` URL。
-- CLI 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct` 和 `forget` 之后会与中枢同步，所以改动会到达中枢；如果是遗忘，还会到达其他每台设备。中枢的管理界面会显示所有设备的条目。
+- CLI 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct` 和 `forget` 之后会与中枢同步，所以改动会到达中枢；如果是遗忘，还会到达其他每台设备。`origin ui` 同样作用于设备自己的库，并在每次写入后在后台与中枢同步。中枢的管理界面会显示所有设备的条目。
 
 ### 管理界面 {#admin-ui}
 
-中枢可以为它的主人提供一个 Web 界面。它默认关闭；它是同一个库的一个视图，而不是另一套系统：每个页面、每次 JSON 调用都经过 MCP 和 CLI 所用的同一组 core 操作（不变量 5）。`@openlinkos/origin-admin` 包提供一个请求处理函数，由中枢挂载。
+中枢可以为它的主人提供一个 Web 界面。它默认关闭；它是同一个库的一个视图，而不是另一套系统：每个页面、每次 JSON 调用都经过 MCP 和 CLI 所用的同一组 core 操作（不变量 5）。`@openlinkos/origin-admin` 包提供一个请求处理函数，由中枢挂载。`origin ui` 在设备上为该设备自己的库提供同样的界面，并有自己的登录方式（见最后两点）。
 
 - **提供方式。** `origin serve --admin` 把界面挂载在中枢端口的 `/admin` 下；`origin serve --admin-listen 127.0.0.1:7078` 则改在一个单独的监听地址上提供，通过 SSH 隧道或 `kubectl port-forward` 访问。如果界面会在非回环地址上提供，除非 `--public-url`（`ORIGIN_PUBLIC_URL`）是 https URL，或者是回环主机上的 http URL（例如发布在 `127.0.0.1` 上的容器端口），否则中枢拒绝启动。没有公开 URL 时，界面只响应发往回环主机名的回环连接，这同时也能防御 DNS 重绑定。界面未启用时，`/admin` 返回 404。
 - **登录。** 每个中枢只有一个管理密码，没有用户名。设置了 `ORIGIN_ADMIN_PASSWORD` 时，它就是管理密码，并且优先于其他来源；它至少要有 10 个字符，否则中枢拒绝启动。否则，管理密码在中枢上用 `origin admin password` 设置（在终端中输入两次，或从标准输入读取一行），或用 `origin admin password --generate` 生成。如果中枢在启用管理界面的情况下启动时两者都没有，它会生成一个密码（20 个随机 base32 字符，100 位），保存它的哈希，并在日志中只打印这一次。没有首次访问时的设置向导，所以新建的中枢不会被第一个访问到它的人占用。密码以 scrypt 哈希的形式（N = 2^15、r = 8、p = 3，随机的 16 字节盐）写成 `scrypt$N$r$p$<salt>$<hash>`，保存在只留在中枢上的 `setting` 中；中枢也会保存 `ORIGIN_ADMIN_PASSWORD` 的这种哈希，以便发现它是否变化。校验逐个进行，并以恒定时间比较。管理密码和中枢令牌互不接受：密码不能以 `ogn_` 开头，`/mcp` 和 `/v1/*` 只接受 bearer 令牌，`/admin` 只接受它自己的会话 cookie。
@@ -350,7 +351,9 @@ interface SourceAdapter {
 - **响应。** 页面在服务器端由一个对每个插值都做转义的模板渲染；一小段脚本提供一些便利，例如就地加载原始行，但没有页面依赖它。每个响应都带有严格的 Content-Security-Policy（没有内联脚本或样式，启用 Trusted Types 且不允许任何策略）、`Cache-Control: no-store, private`、`Vary: Cookie`，以及防止嵌入、类型嗅探、引用来源泄露和被搜索引擎收录的请求头；在 https 之后还带有 HSTS。所有资源，包括设计系统的样式表、字体和图标，都由中枢自己以带内容哈希的文件名提供；每个页面只内联它用到的图标符号，界面从不发起外部请求。
 - **能做什么。** 概览（数量统计、设备及其最近推送、存储、解析错误）、令牌（创建：令牌只显示一次，旁边附有现成的接入命令；吊销）、设备、时间线、会话、带溯源链的事件（原始行按需加载，截断到 4,000 个字符；工具事件默认隐藏）、检索、条目及其历史、`correct`（未指定时置信度为 1）、从事件页面 `remember`（引用该事件，作者为 `user@` 加中枢的名称），以及预览之后的 `forget`：请求带上所展示计划的摘要，并再次输入 id；如果计划在此期间发生了变化，就不会遗忘任何内容（409）。
 - **不能做什么。** 编辑或删除事件、原始镜像、条目或遗忘记录；撤销遗忘；显示被遗忘内容的任何文本（遗忘记录只保存目标 id、填写的原因和被移除内容的 id；审计日志只保存 id 和数量）；保存没有可见来源的条目；再次显示令牌；修改管理密码或其他安全设置；执行任意查询，或读取可见事件的镜像行以外的任何文件。
-- **审计日志。** 来自界面的登录和失败尝试（每个客户端在每个时间窗口内合并为一条记录）、令牌变更、写入的条目、遗忘操作和被结束的会话（操作者 `owner`），来自 CLI 的令牌和密码变更（操作者 `cli`），以及中枢启动时生成或变更的密码（操作者 `hub`），都会连同渠道、客户端地址和 user agent 一起追加到 `audit_log`。详情只含 id 和数量，从不包含文本或密码，因此遗忘保持粘性；触发器拒绝任何更新和删除。
+- **审计日志。** 来自界面的登录和失败尝试（每个客户端在每个时间窗口内合并为一条记录）、令牌变更、写入的条目、遗忘操作和被结束的会话（操作者 `owner`，在 `origin ui` 中为 `local`），来自 CLI 的令牌和密码变更（操作者 `cli`），以及中枢启动时生成或变更的密码（操作者 `hub`），都会连同渠道、客户端地址和 user agent 一起追加到 `audit_log`。详情只含 id 和数量，从不包含文本或密码，因此遗忘保持粘性；触发器拒绝任何更新和删除。
+- **在设备上：`origin ui`。** CLI 为它所在机器的库（`~/.origin` 或 `$ORIGIN_HOME`）提供同样的页面，只监听 `127.0.0.1`，端口默认为 7079，可用 `--port` 指定；它拒绝其他任何地址。它只响应 `Host` 为 `127.0.0.1:<port>` 或 `localhost:<port>` 的请求，以此防御 DNS 重绑定，并保留上面所说的响应头、请求体上限以及对每个 POST 的检查。这里没有密码，因此也没有要管理的令牌、设备、接入命令或管理会话：这些页面和调用在这里并不存在，中枢上要求最近输入过密码的操作在这里只需要会话。它能写入的与中枢的界面相同（`remember`、`correct`，以及预览之后的 `forget`），作者记为 `user@<device>`，审计日志中的操作者为 `local`。在已接入中枢的设备上，每次写入之后都会在后台与中枢同步，与 `origin correct` 和 `origin forget` 之后一样；概览会显示中枢、设备上次与它完成同步的时间（保存在 `setting` 中），以及 `origin ui` 的上一次同步是否失败。
+- **登录 `origin ui`。** 它启动时打印一个带一次性密钥（32 个随机字节）的链接，并用平台自带的方式（`cmd /c start`、`open`、`xdg-open`）在默认浏览器中打开它，除非指定了 `--no-open`。交给浏览器的不是链接本身，而是一个跳转到该链接的文件，这个文件只有它的主人可读，并在退出时删除，因为机器上的其他用户能读到进程的命令行。密钥只能使用一次，须在 5 分钟内使用，并且只在这个进程中有效，进程只保存它的哈希；它被兑换成一个会话，响应随即重定向到 `/admin/`，所以密钥不会留在地址栏和 referrer 中。会话只存在于这个进程的内存中，从不写入 `admin_session`：它在 `origin ui` 停止、退出登录或满 12 小时后结束，其他任何 server 都不接受它，包括同一个库上中枢的管理界面。它的 cookie 是 `origin-ui`（HttpOnly、SameSite=Lax，路径 `/admin`）：使用自己的名称，因为浏览器在同一主机的各个端口之间共享 cookie；没有 `Secure` 属性或 `__Host-` 前缀，因为 Safari 在纯 http 的回环地址上会丢弃这样的 cookie；用 Lax，因为从文件打开链接算作跨站请求。
 
 ## 待解决的问题 {#open-questions}
 

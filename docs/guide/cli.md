@@ -13,6 +13,7 @@ origin forget    <id> [--reason <text>] [--yes]        Forget an entry or event 
 origin projects                                        Known project names
 origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
 origin mcp                                             Run the MCP server over stdio (adds the hub's answers when connected)
+origin ui        [--port 7079] [--no-open]             Browse and curate this store in your browser, on 127.0.0.1
 
 origin serve     [--host 127.0.0.1] [--port 7077]      Run this store as a personal hub (MCP over HTTP)
                  [--admin | --admin-listen <host:port>] [--public-url <url>]   Also serve the admin UI
@@ -78,6 +79,10 @@ Forgetting cannot be undone. Re-run with --yes to confirm.
 ```
 
 The rules are described in [Privacy and your data](./privacy.md#forgetting).
+
+## In your browser
+
+`origin ui` serves the [admin UI](./admin.md#on-your-own-machine) for this machine's store, on `127.0.0.1` only, at port 7079 unless you pass `--port`. It prints a sign-in link, which works once, within 5 minutes, and opens it in your default browser; `--no-open` only prints it. There is no password. Stop it with Ctrl+C, which also signs the browser out; run it again for a new link. On a device connected to a hub, the entries you write and what you forget there are synced with the hub in the background, as after `correct` and `forget`.
 
 ## Personal hub
 

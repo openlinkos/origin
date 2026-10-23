@@ -2,7 +2,7 @@
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { adapterById, allAdapters, KNOWN_SOURCE_IDS } from '@openlinkos/origin-adapters';
-import { parseListen, parsePublicUrl } from '@openlinkos/origin-admin';
+import { parseListen, parsePublicUrl, SIGN_IN_LINK_MS } from '@openlinkos/origin-admin';
 import {
   backupStore,
   correct,
@@ -68,6 +68,7 @@ import { type HubAdminOptions, startHub } from './hub/serve.js';
 import { type HubSyncResult, syncWithHub } from './hub/sync.js';
 import { readNewPassword } from './password.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
+import { openInBrowser, startLocalUi, UI_PORT, writeSignInFile } from './ui.js';
 
 const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 
@@ -86,6 +87,7 @@ Usage:
   origin projects                                        Known project names
   origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
   origin mcp                                             Run the MCP server over stdio (forwards to the hub when connected)
+  origin ui        [--port 7079] [--no-open]             Browse and curate this store in your browser, on 127.0.0.1
 
 Personal hub:
   origin serve     [--host 127.0.0.1] [--port 7077]      Run this store as a personal hub (MCP over HTTP)
@@ -108,7 +110,7 @@ interface Ctx {
 }
 
 /** Commands that may write entries or tombstones, or talk to a hub, and so need the store named. */
-const NAMED_COMMANDS = new Set(['sync', 'push', 'mcp', 'correct', 'forget', 'hub']);
+const NAMED_COMMANDS = new Set(['sync', 'push', 'mcp', 'correct', 'forget', 'hub', 'ui']);
 
 /**
  * Name the store the first time it is needed (see docs/architecture.md#storage): a hub's store is
@@ -165,6 +167,8 @@ async function main(argv: string[]): Promise<number> {
         return await cmdBackup(ctx, rest);
       case 'mcp':
         return await cmdMcp(ctx);
+      case 'ui':
+        return await cmdUi(ctx, rest);
       case 'serve':
         return await cmdServe(ctx, rest);
       case 'token':
@@ -672,6 +676,58 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
     log,
     watchIntervalMs,
   });
+  return 0;
+}
+
+/**
+ * The admin UI for this store, on 127.0.0.1 (see docs/architecture.md#admin-ui): prints a one-time
+ * sign-in link and opens it in the default browser, then serves until Ctrl+C.
+ */
+async function cmdUi(ctx: Ctx, args: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      port: { type: 'string', default: String(UI_PORT) },
+      'no-open': { type: 'boolean', default: false },
+    },
+  });
+  const port = Number(values.port);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new OriginError(`Invalid port: ${values.port}`);
+  }
+  // Every store holds its own data today. A store that kept none (a relay, should one exist) would
+  // have nothing to show here, and would be refused at this point.
+  const ui = await startLocalUi({
+    db: ctx.db,
+    home: ctx.home,
+    version: VERSION,
+    port,
+    hub: () => hubOf(ctx),
+    log: (m) => console.error(m),
+  });
+  const minutes = SIGN_IN_LINK_MS / 60_000;
+  console.log(`Origin UI for ${ctx.home} at ${ui.url}`);
+  console.log(
+    `\nSign in with this link. It works once, within ${minutes} minutes; run origin ui again for a new one.\n\n    ${ui.signInUrl}\n`,
+  );
+  const hub = hubOf(ctx);
+  if (hub) {
+    console.log(
+      `Connected to hub ${hub.url} as ${hub.device}: entries and forget operations made here are synced to it.`,
+    );
+  }
+  console.log('Press Ctrl+C to stop.');
+  const file = values['no-open'] ? null : writeSignInFile(ui.signInUrl);
+  if (file) openInBrowser(file.file, (m) => console.error(m));
+  try {
+    await new Promise<void>((resolve) => {
+      const stop = () => void ui.close().then(resolve);
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+    });
+  } finally {
+    file?.remove();
+  }
   return 0;
 }
 

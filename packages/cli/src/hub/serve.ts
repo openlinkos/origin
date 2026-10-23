@@ -83,8 +83,8 @@ async function close(server: http.Server): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-/** A listener that serves only the admin UI. */
-function createAdminServer(handler: AdminHandler): http.Server {
+/** A listener that serves only the admin UI (`--admin-listen`, and `origin ui`). */
+export function createAdminServer(handler: AdminHandler): http.Server {
   return http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://admin');
     if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {

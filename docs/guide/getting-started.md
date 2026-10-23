@@ -60,4 +60,6 @@ origin correct ent_5f0c2a9e41b7 "…"      # replace it with a corrected version
 origin forget ent_5f0c2a9e41b7 --yes     # forget it for good
 ```
 
+To do the same in your browser, run `origin ui`: it opens the [admin UI](./admin.md#on-your-own-machine) for the store on this machine, on `127.0.0.1`, with a one-time sign-in link.
+
 See the [CLI reference](./cli.md) for every command, and [Privacy and your data](./privacy.md) for what Origin stores and how forgetting works.

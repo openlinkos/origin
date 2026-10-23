@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-519e18f3
+sourceHash: sha256-e029f3dc
 ---
 
 # 快速开始
@@ -63,5 +63,7 @@ origin show ent_5f0c2a9e41b7             # 条目及其来源与版本历史
 origin correct ent_5f0c2a9e41b7 "…"      # 用纠正后的版本替换
 origin forget ent_5f0c2a9e41b7 --yes     # 永久遗忘
 ```
+
+想在浏览器里做同样的事，运行 `origin ui`：它会用一次性登录链接，在 `127.0.0.1` 上为这台机器的库打开[管理界面](./admin.md#on-your-own-machine)。
 
 全部命令见[命令参考](./cli.md)；Origin 保存了什么、遗忘如何生效，见[隐私与数据](./privacy.md)。

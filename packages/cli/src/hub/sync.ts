@@ -48,6 +48,8 @@ export interface HubSyncResult {
 /** Settings keys of a device's cursors for one hub. */
 export const pushedKey = (hub: HubConfig) => `hub.pushed:${hub.url}`;
 export const pulledKey = (hub: HubConfig) => `hub.pulled:${hub.url}`;
+/** When the last sync with this hub finished, in milliseconds, for `origin ui`. */
+export const syncedKey = (hub: HubConfig) => `hub.synced:${hub.url}`;
 
 /**
  * Sync this device with its hub (see docs/architecture.md#personal-hub): send the raw mirror bytes
@@ -70,6 +72,7 @@ export async function syncWithHub(opts: HubSyncOptions): Promise<HubSyncResult> 
   await pushMirrors(opts, call, result);
   await pushChanges(opts, call, result);
   await pullTombstones(opts, call, result);
+  setSetting(opts.db, syncedKey(opts.hub), String(Date.now()));
   return result;
 }
 

@@ -1,6 +1,6 @@
 # Admin UI
 
-A [personal hub](./hub.md) can serve a web interface for you, its owner. From a browser you can see what your devices have pushed, browse and search your sessions, curate entries, forget what should not be kept, and manage the hub's tokens. The admin UI is off by default. It is for one person: there are no public pages, no sharing, and no other accounts.
+A [personal hub](./hub.md) can serve a web interface for you, its owner. From a browser you can see what your devices have pushed, browse and search your sessions, curate entries, forget what should not be kept, and manage the hub's tokens. The admin UI is off by default. It is for one person: there are no public pages, no sharing, and no other accounts. You can also open it on your own machine, for the store there, without a hub: see [On your own machine](#on-your-own-machine).
 
 ## What you can do
 
@@ -15,6 +15,26 @@ A [personal hub](./hub.md) can serve a web interface for you, its owner. From a 
 - **Forgotten** (the tombstone each forget operation leaves), the **audit log**, and your open **sign-ins**.
 
 The admin UI is available in English and Simplified Chinese, following your browser's language, and follows your system's light or dark mode. Both can be switched at the foot of the sidebar, or below the form on the sign-in page.
+
+## On your own machine
+
+On any machine where Origin archives your sessions, `origin ui` serves the admin UI for that machine's own store (`~/.origin`, or `$ORIGIN_HOME`). No hub is needed:
+
+```bash
+origin ui                 # opens http://127.0.0.1:7079/admin/ in your browser
+origin ui --port 7080     # on another port
+origin ui --no-open       # only print the sign-in link
+```
+
+There is no password. When it starts, `origin ui` prints a sign-in link and opens it in your default browser. The link works once, within 5 minutes, and keeps that browser signed in until you stop `origin ui` with Ctrl+C, for at most 12 hours. For a new link, for example to sign in from another browser, stop `origin ui` and start it again.
+
+It has the pages above, except those that only make sense on a hub: tokens, devices, connection commands, and sign-ins. Remembering, correcting, and forgetting work as on a hub, and the audit log records them with the actor `local`. It shows what the store holds: agents that use Origin archive their sessions as they go, and `origin sync` brings in the rest. If the machine is connected to a hub, the overview shows the hub and when the machine last synced with it; what you change is sent to the hub in the background right away, or with the next sync if the hub cannot be reached.
+
+`origin ui` listens only on `127.0.0.1`, and answers only to `127.0.0.1` and `localhost` on its own port. To use it on a machine you reach over SSH, forward the same port number, then open the link it prints:
+
+```bash
+ssh -L 7079:127.0.0.1:7079 you@workstation   # then, on the workstation: origin ui --no-open
+```
 
 ## Enable it
 
