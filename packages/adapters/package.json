@@ -2,6 +2,13 @@
   "name": "@openlinkos/origin-adapters",
   "version": "0.1.0",
   "description": "Origin source adapters: deterministic parsers for local AI agent session logs.",
+  "keywords": [
+    "origin",
+    "openlinkos",
+    "claude-code",
+    "codex",
+    "session-logs"
+  ],
   "license": "MIT",
   "author": "OpenLinkOS",
   "homepage": "https://github.com/openlinkos/origin#readme",
@@ -22,7 +29,9 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map",
+    "!dist/**/.tsbuildinfo"
   ],
   "scripts": {
     "build": "tsc -b"
@@ -32,5 +41,9 @@
   },
   "engines": {
     "node": ">=22.16"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

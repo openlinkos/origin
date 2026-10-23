@@ -2,6 +2,17 @@
   "name": "@openlinkos/origin",
   "version": "0.1.0",
   "description": "The `origin` command: sync, search, and curate your AI agent memory locally, and serve it to agents over MCP.",
+  "keywords": [
+    "origin",
+    "openlinkos",
+    "mcp",
+    "ai-agents",
+    "memory",
+    "claude-code",
+    "codex",
+    "cli",
+    "local-first"
+  ],
   "license": "MIT",
   "author": "OpenLinkOS",
   "homepage": "https://github.com/openlinkos/origin#readme",
@@ -19,7 +30,9 @@
     "origin": "./dist/bin.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map",
+    "!dist/**/.tsbuildinfo"
   ],
   "scripts": {
     "build": "tsc -b"
@@ -35,5 +48,9 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.32.1"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

@@ -2,6 +2,12 @@
   "name": "@openlinkos/origin-admin",
   "version": "0.1.0",
   "description": "Origin admin UI: a server-rendered web interface for the owner of a self-hosted Origin hub.",
+  "keywords": [
+    "origin",
+    "openlinkos",
+    "admin",
+    "dashboard"
+  ],
   "license": "MIT",
   "author": "OpenLinkOS",
   "homepage": "https://github.com/openlinkos/origin#readme",
@@ -23,7 +29,9 @@
   },
   "files": [
     "dist",
-    "assets"
+    "assets",
+    "!dist/**/*.map",
+    "!dist/**/.tsbuildinfo"
   ],
   "scripts": {
     "build": "tsc -b && node scripts/vendor.mjs"
@@ -36,5 +44,9 @@
   },
   "engines": {
     "node": ">=22.16"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }
