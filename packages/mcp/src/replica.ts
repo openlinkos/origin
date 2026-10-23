@@ -70,6 +70,12 @@ export interface ReplicaServer {
   mcp: McpServer;
   /** Ingest local sources and sync with the hub; `force` ignores the minimum interval. */
   refresh(force?: boolean): Promise<void>;
+  /**
+   * Open the hub connection ahead of the first read, so it does not spend its timeout on the TLS
+   * handshake and MCP initialization. Call it once the agent has initialized: the connection
+   * carries the agent's name. Never throws; a failure is retried on the next read.
+   */
+  warm(): Promise<void>;
   /** Disconnect from the hub. */
   close(): Promise<void>;
 }
@@ -369,6 +375,14 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
       await ingest(force);
       await sync(force);
     },
+    warm: async () => {
+      await connect().then(
+        () => undefined,
+        (err: unknown) => {
+          opts.log?.(unreachable(err));
+        },
+      );
+    },
     close: disconnect,
   };
 }
@@ -379,6 +393,8 @@ export async function serveReplica(opts: ReplicaOptions): Promise<void> {
   const closed = new Promise<void>((resolve) => {
     server.mcp.server.onclose = () => resolve();
   });
+  // Connect to the hub as soon as the agent has introduced itself, before its first read.
+  server.mcp.server.oninitialized = () => void server.warm();
   await server.mcp.connect(new StdioServerTransport());
   process.stdin.once('end', () => void server.mcp.close());
   void server.refresh(true);

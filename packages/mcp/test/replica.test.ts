@@ -256,6 +256,23 @@ describe('origin mcp on a connected device', () => {
     );
   });
 
+  it('consults a slow hub in time once the connection has been warmed', async () => {
+    // Each hub request takes 100 ms. Cold, the first read must also initialize the connection
+    // (two more requests), which does not fit in 250 ms; warmed, only the call itself remains.
+    hub.delayMs = 100;
+    await connect({ hubTimeoutMs: 250 });
+    const cold = await call('search', { query: 'Keep' });
+    expect(cold.note).toMatch(/hub was not consulted/);
+
+    await replica.close();
+    await connect({ hubTimeoutMs: 250 });
+    await replica.warm();
+    const warm = await call('search', { query: 'Keep' });
+    expect(warm.note).toBeNull();
+    expect(ids(warm.json.events).sort()).toEqual(['fake:d1', 'fake:e1', 'fake:h1']);
+    hub.delayMs = 0;
+  });
+
   it('writes locally and syncs after, and does on the hub what only the hub has', async () => {
     await connect();
     await call('search', { query: 'Keep' });
