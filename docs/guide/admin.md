@@ -26,9 +26,9 @@ origin ui --port 7080     # on another port
 origin ui --no-open       # only print the sign-in link
 ```
 
-There is no password. When it starts, `origin ui` prints a sign-in link and opens it in your default browser. The link works once, within 5 minutes, and keeps that browser signed in until you stop `origin ui` with Ctrl+C, for at most 12 hours. For a new link, for example to sign in from another browser, stop `origin ui` and start it again.
+There is no password. When it starts, `origin ui` prints a sign-in link and opens it in your default browser. The link works once, within 5 minutes, and keeps that browser signed in until you stop `origin ui` with Ctrl+C, for at most 12 hours. For a new link, for example to sign in from another browser, press Enter in the terminal where `origin ui` runs, or start it again; the previous link stops working, whether it was used or not.
 
-It has the pages above, except those that only make sense on a hub: tokens, devices, connection commands, and sign-ins. Remembering, correcting, and forgetting work as on a hub, and the audit log records them with the actor `local`. It shows what the store holds: agents that use Origin archive their sessions as they go, and `origin sync` brings in the rest. If the machine is connected to a hub, the overview shows the hub and when the machine last synced with it; what you change is sent to the hub in the background right away, or with the next sync if the hub cannot be reached.
+It has the pages above, except those that only make sense on a hub: tokens, devices, connection commands, and sign-ins. Remembering, correcting, and forgetting work as on a hub, and the audit log records them with the actor `local`. It shows what the store holds: agents that use Origin archive their sessions as they go, and when it starts, `origin ui` brings in the rest in the background, as `origin sync --local` does, while you browse. If the machine is connected to a hub, the overview shows the hub and when the machine last synced with it; what you change is sent to the hub in the background right away, or with the next sync if the hub cannot be reached.
 
 `origin ui` listens only on `127.0.0.1`, and answers only to `127.0.0.1` and `localhost` on its own port. To use it on a machine you reach over SSH, forward the same port number, then open the link it prints:
 

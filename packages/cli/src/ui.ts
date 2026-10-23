@@ -4,8 +4,15 @@ import type http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import readline from 'node:readline';
 import { type AdminHandler, createLocalAdmin, type HubLink } from '@openlinkos/origin-admin';
-import { type Database, getSetting, OriginError } from '@openlinkos/origin-core';
+import {
+  type Database,
+  getSetting,
+  OriginError,
+  type SourceAdapter,
+  syncSource,
+} from '@openlinkos/origin-core';
 import type { HubConfig } from './hub/config.js';
 import { createAdminServer } from './hub/serve.js';
 import { syncedKey, syncWithHub } from './hub/sync.js';
@@ -26,9 +33,22 @@ export interface StartUiOptions {
   port: number;
   /** The hub this device is connected to, read each time: the connection can change meanwhile. */
   hub: () => HubConfig | null;
+  /**
+   * The agents whose new log lines to ingest in the background once the UI listens, as
+   * `origin sync --local` does, so that it shows what they wrote last. None by default.
+   */
+  ingest?: SourceAdapter[];
   log?: (message: string) => void;
   /** Clock, for tests. */
   now?: () => number;
+}
+
+/** What the background ingest of `origin ui` added. */
+export interface UiIngest {
+  filesChanged: number;
+  eventsAdded: number;
+  parseErrors: number;
+  durationMs: number;
 }
 
 export interface RunningUi {
@@ -36,9 +56,16 @@ export interface RunningUi {
   url: string;
   /** The one-time sign-in link: it works once, within a few minutes, and only in this process. */
   signInUrl: string;
+  /** Issue a new sign-in link, as signInUrl is; the previous one stops working, used or not. */
+  newSignInUrl(): string;
+  /** The background ingest: what it added once it is done, or null if there was none. */
+  ingested: Promise<UiIngest | null>;
   /** Wait for the sync with the hub that the last write started, if any. */
   idle(): Promise<void>;
-  /** Stop serving; waits a few seconds for a sync with the hub that is under way. */
+  /**
+   * Stop serving; waits a few seconds for a sync with the hub that is under way. An ingest under way
+   * is not waited for: it starts no other source, and the next sync goes on where it stopped.
+   */
   close(): Promise<void>;
 }
 
@@ -166,11 +193,15 @@ export async function startLocalUi(o: StartUiOptions): Promise<RunningUi> {
   });
   handler = admin.handler;
   const base = `http://${host}:${port}`;
+  let stopping = false;
   return {
     url: `${base}/admin/`,
     signInUrl: `${base}${admin.signInPath()}`,
+    newSignInUrl: () => `${base}${admin.signInPath()}`,
+    ingested: ingestInBackground(o, log, () => stopping),
     idle: () => background.idle(),
     async close() {
+      stopping = true;
       if (server.listening) {
         server.closeAllConnections();
         await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -188,21 +219,81 @@ export async function startLocalUi(o: StartUiOptions): Promise<RunningUi> {
 }
 
 /**
+ * Ingest the agents' new log lines one source after another, as `origin sync --local` does, while
+ * the UI serves: each write transaction is short, and the ingest lets requests in between. It
+ * starts once the caller has had the UI, and stops before the next source once `stopped()`.
+ */
+async function ingestInBackground(
+  o: StartUiOptions,
+  log: (message: string) => void,
+  stopped: () => boolean,
+): Promise<UiIngest | null> {
+  if (!o.ingest || o.ingest.length === 0) return null;
+  await new Promise((resolve) => setImmediate(resolve));
+  const startedAt = Date.now();
+  const total: UiIngest = { filesChanged: 0, eventsAdded: 0, parseErrors: 0, durationMs: 0 };
+  for (const adapter of o.ingest) {
+    if (stopped()) break;
+    try {
+      const r = await syncSource({ db: o.db, home: o.home }, adapter);
+      total.filesChanged += r.filesChanged;
+      total.eventsAdded += r.eventsAdded;
+      total.parseErrors += r.parseErrors;
+    } catch (err) {
+      // Once origin ui stops, the store closes under it: that is no error of the source.
+      if (!stopped()) log(`Could not ingest ${adapter.id}: ${(err as Error).message}`);
+    }
+  }
+  total.durationMs = Date.now() - startedAt;
+  return total;
+}
+
+/**
+ * Call `onEnter` each time Enter is pressed in the terminal `origin ui` runs in. Standard input is
+ * read only if it is a terminal: input from a pipe or a file, or none, as under a service manager,
+ * is left alone. Returns a function that stops listening.
+ */
+export function onEnter(
+  input: NodeJS.ReadableStream & { isTTY?: boolean },
+  onEnter: () => void,
+): () => void {
+  if (input.isTTY !== true) return () => {};
+  const lines = readline.createInterface({ input, terminal: false });
+  lines.on('line', () => onEnter());
+  let open = true;
+  lines.once('close', () => {
+    open = false;
+  });
+  return () => {
+    if (open) lines.close();
+    input.pause();
+  };
+}
+
+/**
  * A page that sends the browser on to the sign-in link. The browser is given this file rather than
  * the link itself, as Jupyter does: a command line can be read by other users of the machine (on
  * Linux, in /proc), and one of them could use the link first. The file is readable only by its
  * owner, in a directory of its own, and is removed when `origin ui` stops.
  */
-export function writeSignInFile(url: string): { file: string; remove(): void } {
+export function writeSignInFile(url: string): {
+  file: string;
+  /** Send the browser on to a new link instead, from the same file. */
+  update(url: string): void;
+  remove(): void;
+} {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-ui-'));
   const file = path.join(dir, 'sign-in.html');
-  const attr = url.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-  fs.writeFileSync(
-    file,
-    `<!doctype html>\n<meta charset="utf-8">\n<meta http-equiv="refresh" content="0;url=${attr}">\n<title>Origin</title>\n<p><a href="${attr}">Open Origin</a></p>\n`,
-    { mode: 0o600 },
-  );
-  return { file, remove: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  const write = (link: string) => {
+    const attr = link.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+    fs.writeFileSync(
+      file,
+      `<!doctype html>\n<meta charset="utf-8">\n<meta http-equiv="refresh" content="0;url=${attr}">\n<title>Origin</title>\n<p><a href="${attr}">Open Origin</a></p>\n`,
+      { mode: 0o600 },
+    );
+  };
+  write(url);
+  return { file, update: write, remove: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
 /** How to open a file or URL with the default browser, with what each platform has built in. */

@@ -84,7 +84,7 @@ The rules are described in [Privacy and your data](./privacy.md#forgetting).
 
 ## In your browser
 
-`origin ui` serves the [admin UI](./admin.md#on-your-own-machine) for this machine's store, on `127.0.0.1` only, at port 7079 unless you pass `--port`. It prints a sign-in link, which works once, within 5 minutes, and opens it in your default browser; `--no-open` only prints it. There is no password. Stop it with Ctrl+C, which also signs the browser out; run it again for a new link. On a device connected to a hub, the entries you write and what you forget there are synced with the hub in the background, as after `correct` and `forget`.
+`origin ui` serves the [admin UI](./admin.md#on-your-own-machine) for this machine's store, on `127.0.0.1` only, at port 7079 unless you pass `--port`. It prints a sign-in link, which works once, within 5 minutes, and opens it in your default browser; `--no-open` only prints it. There is no password. While it runs in a terminal, press Enter for a new link, which it prints and opens the same way; the previous link stops working. Stop it with Ctrl+C, which also signs the browser out. When it starts, it ingests this machine's agent sessions in the background, as `origin sync --local` does, so the UI shows what your agents wrote last; the UI can be used meanwhile. It refuses to run on a relay, which keeps no sessions of its own. On a device connected to a hub, the entries you write and what you forget there are synced with the hub in the background, as after `correct` and `forget`.
 
 ## Personal hub
 

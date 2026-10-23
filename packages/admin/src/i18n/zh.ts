@@ -55,7 +55,7 @@ export const zh: Messages = {
   'local.signInHelp':
     'origin ui 启动时会在终端里打印一个登录链接，并在浏览器中打开它。打开这个链接即可登录。',
   'local.newLink':
-    '每个链接只能使用一次，且须在 {min} 分钟内使用。要获取新链接，先停止 origin ui（Ctrl+C），再重新启动：',
+    '每个链接只能使用一次，且须在 {min} 分钟内使用。要获取新链接，在运行 origin ui 的终端里按 Enter，或者重新启动它：',
   'local.link.used': '这个登录链接已经用过了。每个链接只能使用一次。',
   'local.link.expired': '这个登录链接已经过期。',
   'local.link.invalid': '这个登录链接无效，可能来自 origin ui 之前的一次运行。',

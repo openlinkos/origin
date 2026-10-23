@@ -57,7 +57,7 @@ export const en = {
   'local.signInHelp':
     'When origin ui starts, it prints a sign-in link in its terminal and opens it in your browser. Open that link to sign in.',
   'local.newLink':
-    'Each link works once, within {min} minutes. For a new one, stop origin ui (Ctrl+C) and start it again:',
+    'Each link works once, within {min} minutes. For a new one, press Enter in the terminal where origin ui runs, or start it again:',
   'local.link.used': 'This sign-in link has already been used. Each link works only once.',
   'local.link.expired': 'This sign-in link has expired.',
   'local.link.invalid':

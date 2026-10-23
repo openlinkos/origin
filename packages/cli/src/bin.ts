@@ -96,7 +96,7 @@ import { type HubAdminOptions, startHub } from './hub/serve.js';
 import { type HubSyncResult, lastHubSync, syncWithHub } from './hub/sync.js';
 import { readNewPassword } from './password.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
-import { openInBrowser, startLocalUi, UI_PORT, writeSignInFile } from './ui.js';
+import { onEnter, openInBrowser, startLocalUi, UI_PORT, writeSignInFile } from './ui.js';
 
 const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 
@@ -1124,7 +1124,8 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
 
 /**
  * The admin UI for this store, on 127.0.0.1 (see docs/architecture.md#admin-ui): prints a one-time
- * sign-in link and opens it in the default browser, then serves until Ctrl+C.
+ * sign-in link and opens it in the default browser, ingests this machine's agents in the background,
+ * then serves until Ctrl+C. Enter, in a terminal, issues a new link.
  */
 async function cmdUi(ctx: Ctx, args: string[]): Promise<number> {
   const { values } = parseArgs({
@@ -1143,18 +1144,22 @@ async function cmdUi(ctx: Ctx, args: string[]): Promise<number> {
       'This store is a relay and keeps no sessions of its own; open the admin UI of its hub instead.',
     );
   }
+  const log = (m: string) => console.error(m);
   const ui = await startLocalUi({
     db: ctx.db,
     home: ctx.home,
     version: VERSION,
     port,
     hub: () => hubOf(ctx),
-    log: (m) => console.error(m),
+    ingest: allAdapters(),
+    log,
   });
   const minutes = SIGN_IN_LINK_MS / 60_000;
+  // Enter is read only from a terminal, never from a pipe or a file (see onEnter).
+  const interactive = process.stdin.isTTY === true;
   console.log(`Origin UI for ${ctx.home} at ${ui.url}`);
   console.log(
-    `\nSign in with this link. It works once, within ${minutes} minutes; run origin ui again for a new one.\n\n    ${ui.signInUrl}\n`,
+    `\nSign in with this link. It works once, within ${minutes} minutes; ${interactive ? 'press Enter here' : 'run origin ui again'} for a new one.\n\n    ${ui.signInUrl}\n`,
   );
   const hub = hubOf(ctx);
   if (hub) {
@@ -1162,9 +1167,31 @@ async function cmdUi(ctx: Ctx, args: string[]): Promise<number> {
       `Connected to hub ${hub.url} as ${hub.device}: entries and forget operations made here are synced to it.`,
     );
   }
-  console.log('Press Ctrl+C to stop.');
+  console.log(
+    "Ingesting this machine's agent sessions in the background, as origin sync --local does; the UI shows them as they arrive.",
+  );
+  void ui.ingested.then((r) => {
+    if (r) {
+      console.log(
+        `Ingested ${count(r.eventsAdded, 'new event')} from ${count(r.filesChanged, 'changed file')} in ${fmtDuration(r.durationMs)}${r.parseErrors > 0 ? `, with ${count(r.parseErrors, 'parse error')}` : ''}.`,
+      );
+    }
+  });
+  console.log(
+    interactive ? 'Press Enter for a new sign-in link, Ctrl+C to stop.' : 'Press Ctrl+C to stop.',
+  );
   const file = values['no-open'] ? null : writeSignInFile(ui.signInUrl);
-  if (file) openInBrowser(file.file, (m) => console.error(m));
+  if (file) openInBrowser(file.file, log);
+  const stopListening = onEnter(process.stdin, () => {
+    const link = ui.newSignInUrl();
+    console.log(
+      `\nA new sign-in link; the previous one no longer works. It works once, within ${minutes} minutes.\n\n    ${link}\n`,
+    );
+    if (file) {
+      file.update(link);
+      openInBrowser(file.file, log);
+    }
+  });
   try {
     await new Promise<void>((resolve) => {
       const stop = () => void ui.close().then(resolve);
@@ -1172,6 +1199,7 @@ async function cmdUi(ctx: Ctx, args: string[]): Promise<number> {
       process.once('SIGTERM', stop);
     });
   } finally {
+    stopListening();
     file?.remove();
   }
   return 0;

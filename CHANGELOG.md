@@ -14,6 +14,7 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 ### Admin UI
 
 - `origin ui` serves the admin UI for the store on your own machine, on 127.0.0.1 only: it signs your browser in with a one-time link instead of a password, leaves out what only a hub has, and on a device connected to a hub syncs what you write and forget there in the background.
+- `origin ui` prints and opens a new sign-in link when you press Enter in its terminal, and the previous one stops working; and when it starts, it ingests this machine's agent sessions in the background, as `origin sync --local` does, while the UI can already be used.
 
 ### Personal hub
 

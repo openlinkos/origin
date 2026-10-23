@@ -3,6 +3,7 @@ import type http from 'node:http';
 import net, { type AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { createClaudeCodeAdapter } from '@openlinkos/origin-adapters';
 import {
@@ -14,14 +15,22 @@ import {
   initStoreName,
   listAudit,
   openDatabase,
+  type SourceAdapter,
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Browser, pageProblems } from '../../admin/test/helpers.js';
+import { fakeAdapter, line } from '../../core/test/helpers.js';
 import type { HubConfig } from '../src/hub/config.js';
 import { createHubServer } from '../src/hub/server.js';
 import { syncedKey } from '../src/hub/sync.js';
-import { browserCommand, type RunningUi, startLocalUi, writeSignInFile } from '../src/ui.js';
+import {
+  browserCommand,
+  onEnter,
+  type RunningUi,
+  startLocalUi,
+  writeSignInFile,
+} from '../src/ui.js';
 
 const fixtures = fileURLToPath(
   new URL('../../adapters/test/fixtures/claude-code/', import.meta.url),
@@ -204,6 +213,147 @@ describe('origin ui', () => {
       /is in use \(is origin ui already running\?\)/,
     );
   });
+
+  it('issues a new sign-in link while it runs; the previous one stops working', async () => {
+    const ui = await start(null);
+    const unused = new URL(ui.signInUrl);
+    const fresh = ui.newSignInUrl();
+    expect(fresh).not.toBe(ui.signInUrl);
+    const b = new Browser(unused.origin);
+    expect((await b.get(`${unused.pathname}${unused.search}`)).status).toBe(401);
+    const link = new URL(fresh);
+    expect((await b.get(`${link.pathname}${link.search}`)).status).toBe(303);
+    expect((await b.get('/admin/')).status).toBe(200);
+    // Another one after signing in: the session stays, and the used link is replaced too.
+    const next = new URL(ui.newSignInUrl());
+    const other = new Browser(next.origin);
+    expect((await other.get(`${link.pathname}${link.search}`)).status).toBe(401);
+    expect((await other.get(`${next.pathname}${next.search}`)).status).toBe(303);
+    expect((await b.get('/admin/')).status).toBe(200);
+  });
+});
+
+describe('ingesting in the background', () => {
+  let src: string;
+  /** An adapter whose discovery waits until `release()`, and that counts how often it ran. */
+  const gated = (id: string) => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const base = fakeAdapter(src);
+    const adapter = {
+      ...base,
+      id,
+      discovered: 0,
+      async discover() {
+        adapter.discovered++;
+        await gate;
+        return base.discover();
+      },
+    };
+    return { adapter, release };
+  };
+  beforeEach(() => {
+    src = path.join(tmp, 'logs');
+    fs.mkdirSync(src);
+    fs.writeFileSync(
+      path.join(src, 'n.jsonl'),
+      line('n1', 'n', Date.now(), 'user', 'Written while origin ui was not running.'),
+    );
+  });
+
+  it("serves at once, and shows the agents' new sessions once they are ingested", async () => {
+    const { adapter, release } = gated('fake');
+    const ui = await startLocalUi({
+      db: deviceDb,
+      home: deviceHome,
+      version: 'test',
+      port: 0,
+      hub: () => null,
+      ingest: [adapter as SourceAdapter],
+    });
+    uis.push(ui);
+    let done = false;
+    void ui.ingested.then(() => {
+      done = true;
+    });
+    const b = await signIn(ui);
+    expect((await b.get('/admin/')).status).toBe(200);
+    expect(adapter.discovered).toBe(1);
+    expect(done).toBe(false);
+    expect(getEvent(deviceDb, 'fake:n1')).toBeNull();
+    release();
+    expect(await ui.ingested).toMatchObject({ filesChanged: 1, eventsAdded: 1, parseErrors: 0 });
+    const page = await b.get(`/admin/event?id=${encodeURIComponent('fake:n1')}`);
+    expect(page.status).toBe(200);
+    expect(page.text).toContain('Written while origin ui was not running.');
+  });
+
+  it('starts no other source once it stops, and needs none', async () => {
+    const first = gated('fake');
+    const second = gated('fake2');
+    const ui = await startLocalUi({
+      db: deviceDb,
+      home: deviceHome,
+      version: 'test',
+      port: 0,
+      hub: () => null,
+      ingest: [first.adapter, second.adapter] as SourceAdapter[],
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    await ui.close();
+    first.release();
+    second.release();
+    await ui.ingested;
+    expect(first.adapter.discovered).toBe(1);
+    expect(second.adapter.discovered).toBe(0);
+    const none = await startLocalUi({
+      db: deviceDb,
+      home: deviceHome,
+      version: 'test',
+      port: 0,
+      hub: () => null,
+    });
+    uis.push(none);
+    expect(await none.ingested).toBeNull();
+  });
+});
+
+describe('pressing Enter', () => {
+  it('calls back for each line typed in a terminal, until it stops listening', async () => {
+    const input = Object.assign(new PassThrough(), { isTTY: true });
+    let presses = 0;
+    const stop = onEnter(input, () => presses++);
+    input.write('\n');
+    input.write('anything\r\n');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(presses).toBe(2);
+    stop();
+    input.write('\n');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(presses).toBe(2);
+    stop(); // again: harmless
+  });
+
+  it('leaves input that is not a terminal alone', async () => {
+    const piped = new PassThrough();
+    let presses = 0;
+    const stop = onEnter(piped, () => presses++);
+    piped.end('\n\n');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(presses).toBe(0);
+    expect(piped.listenerCount('data')).toBe(0);
+    expect(piped.readableFlowing).toBeNull();
+    stop();
+    // A terminal that closes, such as one that was hung up, ends the listening quietly.
+    const closing = Object.assign(new PassThrough(), { isTTY: true });
+    const stopClosing = onEnter(closing, () => presses++);
+    closing.end();
+    await new Promise((resolve) => setImmediate(resolve));
+    stopClosing();
+    expect(presses).toBe(0);
+  });
 });
 
 describe('opening the browser', () => {
@@ -228,7 +378,7 @@ describe('opening the browser', () => {
 
   it('goes through a file only its owner can read, so the secret stays off command lines', () => {
     const url = 'http://127.0.0.1:7079/admin/login?secret=abc_DEF-123&x="<y>"';
-    const { file, remove } = writeSignInFile(url);
+    const { file, update, remove } = writeSignInFile(url);
     const text = fs.readFileSync(file, 'utf8');
     expect(text).toContain(
       '<meta http-equiv="refresh" content="0;url=http://127.0.0.1:7079/admin/login?secret=abc_DEF-123&#38;x=&#34;&#60;y&#62;&#34;">',
@@ -238,6 +388,12 @@ describe('opening the browser', () => {
       expect(fs.statSync(file).mode & 0o777).toBe(0o600);
       expect(fs.statSync(path.dirname(file)).mode & 0o777).toBe(0o700);
     }
+    // A new link goes into the same file.
+    update('http://127.0.0.1:7079/admin/login?secret=new');
+    expect(fs.readFileSync(file, 'utf8')).toContain(
+      'content="0;url=http://127.0.0.1:7079/admin/login?secret=new"',
+    );
+    if (process.platform !== 'win32') expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     remove();
     expect(fs.existsSync(path.dirname(file))).toBe(false);
   });
