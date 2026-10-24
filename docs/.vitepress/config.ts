@@ -11,11 +11,17 @@ export default defineOpenLinkOSConfig({
   themeConfig: {
     socialLinks: [{ icon: 'github', link: repo }],
   },
+  legal: [
+    {
+      text: { en: 'Privacy', zh: '隐私说明' },
+      link: { en: 'https://linkos.io/privacy', zh: 'https://linkos.io/zh/privacy' },
+    },
+    { text: { en: 'MIT License', zh: 'MIT 许可证' }, link: `${repo}/blob/master/LICENSE` },
+  ],
   locales: {
     root: {
       description: 'Local-first, cross-agent personal memory for AI coding agents.',
       themeConfig: {
-        footer: { message: 'Released under the MIT License.' },
         nav: [
           { text: 'Guide', link: '/guide/getting-started' },
           { text: 'Architecture', link: '/architecture' },
@@ -45,7 +51,6 @@ export default defineOpenLinkOSConfig({
     zh: {
       description: '本地优先、跨 Agent 的个人记忆，服务于 AI 编码 Agent。',
       themeConfig: {
-        footer: { message: '基于 MIT 许可证发布。' },
         nav: [
           { text: '指南', link: '/zh/guide/getting-started' },
           { text: '架构', link: '/zh/architecture' },
