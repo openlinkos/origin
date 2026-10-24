@@ -322,7 +322,10 @@ describe('restore', () => {
 describe('restores across stores', () => {
   const record = (db: Database, id: string) => exportTombstone(db, id) as TombstoneRecord;
 
-  it('converge whatever order forgets and restores arrive in, applied twice or not', async () => {
+  // Every order of four records, each applied twice: slow on Windows CI.
+  it('converge whatever order forgets and restores arrive in, applied twice or not', {
+    timeout: 60_000,
+  }, async () => {
     const origin = await store('laptop');
     const a = note(origin, ['fake:e1', 'fake:e2'], 'a');
     const b = note(origin, ['fake:e2', 'fake:e3'], 'b');

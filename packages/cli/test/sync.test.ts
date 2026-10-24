@@ -573,7 +573,10 @@ describe('agent versions', () => {
 });
 
 describe('concurrent pushes', () => {
-  it('goes on while another process pushes the same file, from where the hub stands', async () => {
+  // Six megabytes pushed in chunks against a racing hub: slow on Windows CI.
+  it('goes on while another process pushes the same file, from where the hub stands', {
+    timeout: 60_000,
+  }, async () => {
     // A long session: several chunks. Another process (say, an agent's origin mcp) pushes each
     // chunk first, so every request of this sync meets a hub that has already moved on.
     const projects = path.join(tmp, 'long');

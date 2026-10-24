@@ -272,7 +272,9 @@ describe('synchronous HTTP bridge', () => {
         /no answer from the worker/,
       );
       await fake.delay(0);
-      const res = client.request(get(`${fake.endpoint.origin}/${BUCKET}/y`), 1000);
+      // The new worker has to start first, which can take more than a second on a slow machine;
+      // what matters here is that it answers.
+      const res = client.request(get(`${fake.endpoint.origin}/${BUCKET}/y`), 15_000);
       expect(res.status).toBe(403);
     } finally {
       await fake.delay(0);
