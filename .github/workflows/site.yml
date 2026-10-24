@@ -5,6 +5,9 @@ on:
     branches: [master]
     paths:
       - 'docs/**'
+      # The changelog page includes it, and the navigation shows the CLI's version.
+      - 'CHANGELOG.md'
+      - 'packages/cli/package.json'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
@@ -60,6 +63,9 @@ jobs:
           curl -fsS -o /dev/null http://localhost:8080/
           curl -fsS http://localhost:8080/zh/ | grep -q 'lang="zh-CN"'
           curl -fsS http://localhost:8080/guide/cli | grep -q 'CLI reference'
+          curl -fsS http://localhost:8080/changelog | grep -q 'Changelog'
+          curl -fsS http://localhost:8080/zh/changelog | grep -q 'lang="zh-CN"'
+          curl -fsS http://localhost:8080/ | grep -q "v$(node -p "require('./packages/cli/package.json').version")"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/no-such-page)" = 404
           curl -fsSI http://localhost:8080/ | grep -qi '^cache-control: no-cache'
           # Brand assets, metadata and language detection from @openlinkos/vitepress-theme.
