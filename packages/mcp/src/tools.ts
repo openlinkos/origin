@@ -8,6 +8,7 @@ export const INSTRUCTIONS = `Origin is the user's local, cross-agent memory: an 
 
 - To answer questions about past work, decisions, or reasons, use \`search\` and \`timeline\`, then \`get\` or \`sources\` to read the original text. Cite entry and event ids.
 - When you learn something that will matter in future sessions — a decision and its reason, a stable fact, a preference of the user — save it with \`remember\`, citing the events it comes from: event ids from search/timeline, or an exact quote from this conversation.
+- Entries marked \`imported\` mirror an agent's own memory files (such as Claude Code's memory directory); a later version of the file supersedes a correction made here. Entries whose validity has ended are left out of search unless you ask for one by id.
 - If an entry is wrong or outdated, use \`correct\`. Use \`forget\` only when the user explicitly asks, and pass their reason: it hides the entry or event from every query on every store and is kept as a record; only the user can restore it, from the Origin CLI or admin UI.
 - Time arguments accept relative values (30m, 24h, 7d, 2w) or dates (YYYY-MM-DD).`;
 

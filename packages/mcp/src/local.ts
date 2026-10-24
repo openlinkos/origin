@@ -51,6 +51,11 @@ export interface EntryView {
   superseded_by: string | null;
   /** The first version of the entry; all its versions share it. */
   root: string;
+  /**
+   * Derived from an agent's own memory file, which a later version of the file supersedes (absent
+   * from hubs older than 0.3).
+   */
+  imported?: boolean;
   origin?: Found;
 }
 
@@ -166,6 +171,7 @@ export function entryView(e: Entry): EntryView {
     supersedes: e.supersedes,
     superseded_by: e.supersededBy,
     root: e.root,
+    imported: e.imported,
   };
 }
 
