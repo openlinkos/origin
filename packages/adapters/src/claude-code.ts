@@ -9,6 +9,13 @@ import type {
   SourceAdapter,
   SourceFile,
 } from '@openlinkos/origin-core';
+import {
+  markdownFiles,
+  memoryStream,
+  parseMemoryLine,
+  readFrontMatterMemory,
+  subdirectories,
+} from './memory.js';
 import { projectFromCwd, truncate } from './util.js';
 
 /**
@@ -18,8 +25,15 @@ import { projectFromCwd, truncate } from './util.js';
  * agent-name / summary / mode / permission-mode / file-history-snapshot / system / …; the messages
  * (user, assistant) and the session's titles (ai-title, custom-title, and summary in older logs)
  * carry information.
+ *
+ * Each project's memory directory, `<cwd-slug>/memory/`, holds Claude Code's own memories, one
+ * Markdown file each with a `MEMORY.md` index: it is written out as a memory stream,
+ * `memory/<cwd-slug>.jsonl` (see memory.ts).
  */
 export const CLAUDE_CODE_SOURCE_ID = 'claude-code';
+
+/** The path prefix of the memory streams (a project's slug never is `memory`). */
+const MEMORY_PREFIX = 'memory/';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TOOL_USE_MAX = 2000;
@@ -49,10 +63,26 @@ export function createClaudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): So
       if (!fs.existsSync(root)) return [];
       const out: SourceFile[] = [];
       walk(root, root, out);
+      for (const slug of subdirectories(root)) {
+        const dir = path.join(root, slug, 'memory');
+        const stream = memoryStream({
+          dir,
+          relPath: `${MEMORY_PREFIX}${slug}.jsonl`,
+          files: () => markdownFiles(dir, ['MEMORY.md']),
+          where: () => {
+            const cwd = projectCwd(path.join(root, slug));
+            return { cwd, project: projectFromCwd(cwd ?? undefined) };
+          },
+        });
+        if (stream) out.push(stream);
+      }
       out.sort((a, b) => a.relPath.localeCompare(b.relPath));
       return out;
     },
     parseLine(line: string, ctx: ParseContext): ParsedLine | null {
+      if (ctx.relPath.startsWith(MEMORY_PREFIX)) {
+        return parseMemoryLine(line, ctx, (_file, content) => readFrontMatterMemory(content));
+      }
       const parsed = parseClaudeCodeLine(line, ctx);
       if (parsed) {
         for (const ev of parsed.events) if (ev.agentVersion) lastVersion = ev.agentVersion;
@@ -79,6 +109,51 @@ function walk(root: string, dir: string, out: SourceFile[]): void {
       out.push({ absPath: abs, relPath: path.relative(root, abs).split(path.sep).join('/') });
     }
   }
+}
+
+/**
+ * The working directory of a project's sessions, from the first line that records one in its
+ * newest session logs, or null. A project's slug cannot be turned back into its path.
+ */
+function projectCwd(projectDir: string): string | null {
+  let logs: Array<{ file: string; mtimeMs: number }>;
+  try {
+    logs = fs
+      .readdirSync(projectDir, { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
+      .map((e) => {
+        const file = path.join(projectDir, e.name);
+        return { file, mtimeMs: fs.statSync(file).mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      .slice(0, 3);
+  } catch {
+    return null;
+  }
+  for (const { file } of logs) {
+    let head: string;
+    try {
+      const fd = fs.openSync(file, 'r');
+      try {
+        const buf = Buffer.alloc(64 * 1024);
+        head = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, 0)).toString('utf8');
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      continue;
+    }
+    for (const line of head.split('\n')) {
+      if (!line.includes('"cwd"')) continue;
+      try {
+        const cwd = (JSON.parse(line) as { cwd?: unknown }).cwd;
+        if (typeof cwd === 'string' && cwd.length > 0) return cwd;
+      } catch {
+        // a line cut short by the 64 KiB read
+      }
+    }
+  }
+  return null;
 }
 
 /** Derive the session id from the file name: `<uuid>.jsonl` → uuid; subagent files return null (use the in-line sessionId). */

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-6dc1a23b
+sourceHash: sha256-0740e632
 ---
 
 # 快速开始
@@ -32,7 +32,7 @@ origin status    # 各来源的会话、事件与条目统计
 origin timeline  # 最近 7 天的会话
 ```
 
-`sync` 是增量的，可以随时重跑。Agent 通过 MCP 使用 Origin 时，server 会自动同步，一般不需要手动运行。
+`sync` 是增量的，可以随时重跑。Agent 通过 MCP 使用 Origin 时，server 会自动同步，一般不需要手动运行。它还会把 Claude Code、ZCode 和 Grok Build 为自己保存的记忆导入为条目，这些条目随文件变化（见[原生记忆](../sources.md#native-memories)）。
 
 ## 接入 Agent {#connect-an-agent}
 

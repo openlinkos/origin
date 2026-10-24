@@ -7,7 +7,7 @@ Agent session logs often contain source code, file contents, command output, and
 Everything lives in one directory, `~/.origin` (or `ORIGIN_HOME`):
 
 - `origin.db`: a SQLite database with the normalized events, their search index, your entries, and the record of everything you forgot and restored.
-- `raw/`: append-only copies of the original session log files, compressed with zstd: each is a `.zst` file of compressed frames and a `.tail` file with its newest lines. A hub can keep the compressed frames in a bucket instead (see [Keep raw mirrors in a bucket](./hub.md#keep-raw-mirrors-in-a-bucket)).
+- `raw/`: append-only copies of the original session log files, and of every version of the memory files agents keep for themselves, compressed with zstd: each is a `.zst` file of compressed frames and a `.tail` file with its newest lines. A hub can keep the compressed frames in a bucket instead (see [Keep raw mirrors in a bucket](./hub.md#keep-raw-mirrors-in-a-bucket)).
 
 Your data lives only on machines you control: your devices and, if you run one, your own hub, with the bucket you give it, if any. Origin never calls a third-party service or an LLM API. Without a hub it makes no network connections at all; with a hub, the only traffic is between your devices and your hub, and between the hub and its bucket. The directory is not encrypted, so protect it the way you would protect the original logs.
 
@@ -26,6 +26,8 @@ Every forget is kept as a record, with its reason, when and where it was made, a
 **Restoring.** You can undo a forget at any time by restoring it, with a reason: `origin restore <tombstone-id> --reason <text>`, or **Restore** on the forget's page in the admin UI, which also shows you what it hides. What it hid comes back, except what another forget still hides. A restore is a record too, so the history stays complete; to hide the item again, forget it again. Only you can restore: agents have no tool for it.
 
 Forgetting **hides**; it does not erase. The raw mirror files under `~/.origin/raw/` still contain the original lines, because the archive is append-only, and a restore relies on them. To remove data for good, see [Removing everything](#removing-everything).
+
+Origin reads the memory files of Claude Code, ZCode, and Grok Build but never changes them. Forgetting an entry imported from one hides it in Origin, its later versions included, and leaves the file as it is: edit or delete the file too if the agent should stop using it.
 
 ## With a personal hub
 

@@ -10,6 +10,15 @@ import type {
   SourceAdapter,
   SourceFile,
 } from '@openlinkos/origin-core';
+import {
+  frontMatter,
+  type MemoryContent,
+  markdownFiles,
+  memoryStream,
+  parseMemoryLine,
+  readFrontMatterMemory,
+  readPlainMemory,
+} from './memory.js';
 import { projectFromCwd, truncate } from './util.js';
 
 /**
@@ -23,11 +32,17 @@ import { projectFromCwd, truncate } from './util.js';
  * a generated source (`<session-id>/title.jsonl`) that writes out the title fields of `summary.json`,
  * as stored, as one line whenever the title changes. The other files of a session
  * (`chat_history.jsonl`, which repeats the conversation without timestamps, …) are not read.
+ *
+ * Grok's memory directories are written out as memory streams, `memory/…` (see memoryStreams).
  */
 export const GROK_SOURCE_ID = 'grok';
 
 const UPDATES = 'updates.jsonl';
 const SUMMARY = 'summary.json';
+/** The path prefix of the memory streams (the sessions' is `sessions/`). */
+const MEMORY_PREFIX = 'memory/';
+/** Where version 2 keeps the observations it has not consolidated into topics yet. */
+const INBOX = 'observations/_inbox';
 /** The name of the generated stream of a session's titles, next to its update stream. */
 const TITLES = 'title.jsonl';
 /** The fields of `summary.json` a title line holds, as stored. */
@@ -112,12 +127,132 @@ export function createGrokAdapter(opts: GrokAdapterOptions = {}): SourceAdapter 
           }
         }
       }
+      out.push(...memoryStreams(home));
       out.sort((a, b) => a.relPath.localeCompare(b.relPath));
       return out;
     },
-    parseLine: (line, ctx) =>
-      ctx.relPath.endsWith(`/${TITLES}`) ? parseGrokTitleLine(line, ctx) : parseGrokLine(line, ctx),
+    parseLine: (line, ctx) => {
+      if (ctx.relPath.startsWith(MEMORY_PREFIX)) return parseMemoryLine(line, ctx, readGrokMemory);
+      return ctx.relPath.endsWith(`/${TITLES}`)
+        ? parseGrokTitleLine(line, ctx)
+        : parseGrokLine(line, ctx);
+    },
   };
+}
+
+/**
+ * Grok Build's memory directories, as memory streams (see memory.ts):
+ * - `memory-v2/global/` and `memory-v2/workspaces/<name>-<hash>/`: the consolidated topics,
+ *   `topics/*.md`, and the observations not consolidated yet, `observations/_inbox/*.md`, which
+ *   Grok moves to `archive/` once their content is in a topic (`memory/v2/<dir>.jsonl`);
+ * - `memory/MEMORY.md` and `memory/<name>-<hash>/MEMORY.md`, of earlier versions
+ *   (`memory/v1/<dir>.jsonl`).
+ * Each directory's `MEMORY.md` of version 2 is an index Grok generates, and is not read.
+ */
+function memoryStreams(home: string): SourceFile[] {
+  const out: SourceFile[] = [];
+  const add = (stream: SourceFile | null) => {
+    if (stream) out.push(stream);
+  };
+  const v2 = path.join(home, 'memory-v2');
+  const v2Dirs: Array<[string, string, string | null]> = [
+    ['global', path.join(v2, 'global'), null],
+    ...subdirectories(path.join(v2, 'workspaces')).map((name): [string, string, string | null] => [
+      `workspaces/${name}`,
+      path.join(v2, 'workspaces', name),
+      name,
+    ]),
+  ];
+  for (const [key, dir, workspace] of v2Dirs) {
+    add(
+      memoryStream({
+        dir,
+        relPath: `${MEMORY_PREFIX}v2/${key}.jsonl`,
+        files: () => [
+          ...markdownFiles(path.join(dir, 'topics')).map((n) => `topics/${n}`),
+          ...markdownFiles(path.join(dir, INBOX)).map((n) => `${INBOX}/${n}`),
+        ],
+        where: () => (workspace ? workspaceWhere(workspace, workspaceCwd(home, dir)) : NOWHERE),
+      }),
+    );
+  }
+  const v1 = path.join(home, 'memory');
+  const v1Dirs: Array<[string, string, string | null]> = [
+    ['global', v1, null],
+    ...subdirectories(v1).map((name): [string, string, string | null] => [
+      name,
+      path.join(v1, name),
+      name,
+    ]),
+  ];
+  for (const [key, dir, workspace] of v1Dirs) {
+    add(
+      memoryStream({
+        dir,
+        relPath: `${MEMORY_PREFIX}v1/${key}.jsonl`,
+        files: () => (isFile(path.join(dir, 'MEMORY.md')) ? ['MEMORY.md'] : []),
+        where: () => (workspace ? workspaceWhere(workspace, indexCwd(dir)) : NOWHERE),
+      }),
+    );
+  }
+  return out;
+}
+
+const NOWHERE = { project: null, cwd: null };
+
+/** A workspace's project: its working directory's, or its directory's name, `<name>-<hash>`. */
+function workspaceWhere(name: string, cwd: string | null) {
+  return {
+    cwd,
+    project: projectFromCwd(cwd ?? undefined) ?? (name.replace(/-[0-9a-f]{8}$/, '') || null),
+  };
+}
+
+/**
+ * A version 2 workspace's working directory: that of the session an observation of it was
+ * captured from (its `session_id`), found among the sessions' directories, or null.
+ */
+function workspaceCwd(home: string, dir: string): string | null {
+  const observations = [
+    ...markdownFiles(path.join(dir, INBOX)).map((n) => path.join(dir, INBOX, n)),
+    ...subdirectories(path.join(dir, 'archive')).flatMap((d) =>
+      markdownFiles(path.join(dir, 'archive', d)).map((n) => path.join(dir, 'archive', d, n)),
+    ),
+  ];
+  const sessions = path.join(home, 'sessions');
+  const groups = subdirectories(sessions);
+  for (const file of observations.slice(0, 5)) {
+    let session: unknown;
+    try {
+      session = frontMatter(fs.readFileSync(file, 'utf8')).data.session_id;
+    } catch {
+      continue;
+    }
+    if (typeof session !== 'string' || !/^[\w-]+$/.test(session)) continue;
+    const group = groups.find((g) => fs.existsSync(path.join(sessions, g, session)));
+    if (group) return grokCwdFromGroup(group);
+  }
+  return null;
+}
+
+/** A version 1 workspace's working directory, from its index's heading, or null. */
+function indexCwd(dir: string): string | null {
+  try {
+    const first = fs.readFileSync(path.join(dir, 'MEMORY.md'), 'utf8').split(/\r?\n/, 1)[0] ?? '';
+    const cwd = /^#\s+Project Memory\s+[—-]\s+(.+)$/.exec(first)?.[1]?.trim();
+    return cwd && /^(?:[A-Za-z]:[\\/]|\/)/.test(cwd) ? cwd : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Observations are captured by a model and not consolidated yet: less sure than a topic. */
+const OBSERVATION_CONFIDENCE = 0.7;
+
+/** The memory in a version of one of Grok's memory files. */
+function readGrokMemory(file: string, content: string): MemoryContent {
+  if (file.startsWith(`${INBOX}/`)) return readFrontMatterMemory(content, OBSERVATION_CONFIDENCE);
+  return readPlainMemory(content, 'knowledge');
 }
 
 /**

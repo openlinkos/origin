@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-e50bbe5a
+sourceHash: sha256-ffd73e15
 ---
 
 # 会话来源
@@ -14,7 +14,7 @@ sourceHash: sha256-e50bbe5a
 | `zcode` | [ZCode](https://github.com/zai-org/ZCode) | **已支持** | `~/.zcode/cli/db/db.sqlite` | SQLite（关系型） |
 | `grok` | [Grok Build](https://github.com/xai-org/grok-build) | **已支持** | `~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl` | JSONL 格式的 ACP session-update 流 |
 
-这五个 Agent 也都维护各自的记忆，范围限定在单个仓库、项目或机器。这些原生记忆没有来源引用，因此 Origin 把它们视为可能的导入对象，而从不把它们当作事实来源。
+这五个 Agent 也都维护各自的记忆，范围限定在单个仓库、项目或机器。Origin 把 Claude Code、ZCode 和 Grok Build 的记忆文件导入为条目（见[原生记忆](#native-memories)）；这些文件不引用任何来源，所以导入的条目引用的是它所来自的那个文件版本。
 
 ## Claude Code {#claude-code}
 
@@ -24,7 +24,7 @@ sourceHash: sha256-e50bbe5a
 - **格式：** 每行一个 JSON 对象。`type` 是 `user`、`assistant`、`ai-title`、`custom-title`、`agent-name`、`last-prompt`、`summary`、`system`、`mode`、`permission-mode`、`file-history-snapshot`、`attachment` 等之一。消息行带有 `uuid`、`parentUuid`、`timestamp`、`cwd`、`gitBranch`、`sessionId`、`version` 和 `message { role, content }`；`content` 是一个字符串，或由 `text` / `tool_use` / `tool_result` / `thinking` / `image` 块组成的数组。
 - **标题：** `{ type: "ai-title", aiTitle, sessionId }` 是 Claude Code 生成的标题，大约每一轮都会再写一次，并随着对话的进行而改变；最新的一行就是当前的标题。用户给出的名称（`/rename`、`--name`、hook 的 `sessionTitle`、Agent SDK 的 `renameSession()`）是一行 `{ type: "custom-title", customTitle, sessionId }`，同样会被再次写入，并且优先于 AI 生成的标题，即使它后面还有 `ai-title` 行。`{ type: "agent-name", agentName, sessionId }` 是会话在 Claude Code 的 Agent 视图中的名称；它出现在会话自己的记录中，而不只是子 Agent 的记录中，并且重复 AI 生成的标题或自定义标题。`{ type: "last-prompt", lastPrompt, leafUuid, sessionId }` 记录最近的一条提示。2.1 之前的版本写入的则是 `{ type: "summary", summary, leafUuid }` 行。
 - **保留期：** 会话在 `cleanupPeriodDays`（默认 30）天后被删除。`memory/` 目录不受此限。
-- **原生记忆：** `<cwd-slug>/memory/`——一个 `MEMORY.md` 索引，外加每条记忆一个带 frontmatter 的 Markdown 文件。范围限定在一台机器上的一个 git 仓库。
+- **原生记忆：** `<cwd-slug>/memory/`——一个 `MEMORY.md` 索引，外加每条记忆一个带 frontmatter 的 Markdown 文件。范围限定在一台机器上的一个 git 仓库。会被导入，见[原生记忆](#native-memories)。
 
 映射为 Origin 事件的方式见 [architecture.md](architecture.md#claude-code-mapping)。
 
@@ -44,7 +44,7 @@ sourceHash: sha256-e50bbe5a
 - 事件 id：`codex:<session-id>:o<ordinal>`；对于没有 ordinal 的 rollout，先退回使用 item id，再退回使用行号。
 - cwd、项目和 Agent 版本来自 `session_meta`。对于在之后某次同步中才采集的行，适配器会重新读取该 rollout 的第一行。
 - `.jsonl.zst` 文件会被解压，并以普通 JSONL 的形式镜像。同一个 rollout 在压缩前后都被采集时，会产生相同的事件 id，因此事件不会重复。
-- **原生记忆：** 默认关闭（`features.memories = true`）。存放在 `~/.codex/memories/` 下，范围限定在机器，分为两个阶段：先按 thread 生成 `raw_memory` / `rollout_summary`，再全局合并到 `MEMORY.md` 和 `memory_summary.md`。其中的条目引用各自的 rollout，并跟踪 `usage_count`；未被使用的记忆默认 30 天后过期。
+- **原生记忆：** 默认关闭（`features.memories = true`）。存放在 `~/.codex/memories/` 下，范围限定在机器，分为两个阶段：先按 thread 生成 `raw_memory` / `rollout_summary`，再全局合并到 `MEMORY.md` 和 `memory_summary.md`。其中的条目引用各自的 rollout，并跟踪 `usage_count`；未被使用的记忆默认 30 天后过期。尚未导入。
 
 ## Cursor {#cursor}
 
@@ -76,7 +76,7 @@ sourceHash: sha256-e50bbe5a
 - 文本部件变成 `message` 事件；隐藏消息里的文本，或标记为 `synthetic` 的文本，变成 `meta`。文件部件变成 `[image]` 或 `[file]`。工具部件变成一个 `tool_use` 事件（`<tool> <input>`，最多 2,000 个字符）和一个 `tool_result` 事件（它的输出或错误，最多 4,000 个字符），`status` 不是 `completed` 时会记下。reasoning、步骤标记、时间线通知和压缩标记会被跳过；镜像保留它们。
 - 事件 id：`zcode:<session-id>:<消息 sequence>.<部件 sequence>`，工具的结果加 `#1`。
 - 时间戳取自部件自己的时间，其次是它所在的行。cwd 取自消息的 `path.cwd`，其次是会话的目录；标题和 ZCode 版本取自会话。
-- **原生记忆：** 默认关闭。`~/.zcode/cli/memories/projects/<project>/memory/` 使用与 Claude Code 相同的 `MEMORY.md` 布局。
+- **原生记忆：** 默认关闭。`~/.zcode/cli/memories/projects/<project>-<hash>/memory/` 使用与 Claude Code 相同的 `MEMORY.md` 布局。会被导入，见[原生记忆](#native-memories)。
 
 ## Grok Build {#grok-build}
 
@@ -86,7 +86,7 @@ sourceHash: sha256-e50bbe5a
 - **格式：** 每个会话一个目录。`updates.jsonl` 是权威记录，一个 ACP session-update 流，每行一个 `{ method, params: { sessionId, update, _meta }, timestamp }` 对象：`method` 是 `session/update` 或 `_x.ai/session/update`，`timestamp` 以秒为单位，`_meta` 带有 `eventId`（在文件内唯一，大多是 `<session-id>-<n>`）和 `agentTimestampMs`。`update.sessionUpdate` 是 `user_message_chunk`、`agent_message_chunk`、`agent_thought_chunk`、`tool_call`、`tool_call_update`、`plan`、`turn_completed`、`background_tasks`、`subagent_spawned`、`subagent_finished`、`goal_updated` 或其他类型。在磁盘上，每个消息块都是一整条消息。
 - **其他文件：** `chat_history.jsonl` 保存发送给模型的消息，不带时间戳；`events.jsonl` 是遥测（阶段、工具耗时）；`summary.json` 保存标题、时间戳、模型和消息数。目录里还有 `system_prompt.txt`、`plan.json`、`rewind_points.jsonl`、`compaction_checkpoints/` 和 `subagents/`。内部的规划 Agent（`grok-build-plan`）留下的会话没有 `updates.jsonl`；子 Agent 作为独立会话，存放在同一棵目录树里。
 - **标题：** `summary.json` 是一个 JSON 对象，每一轮都被原地重写：`info`（`id`、`cwd`）、`generated_title`、`session_summary`、`title_is_manual`、`created_at`、`updated_at`、`num_messages`、`agent_name` 等。`generated_title` 保存 Grok 显示的标题：在第一条提示之后生成，并在最初的几轮中再生成一两次；或者是用 `/rename` 给出的标题，它会设置 `title_is_manual`，此后自动标题不再改动它，直到 `/rename --auto` 把它清空。`session_summary` 为较旧的客户端镜像这个标题，并在 `generated_title` 为空时显示。
-- **原生记忆：** 实验性功能，默认关闭（`GROK_MEMORY=1`）。以 Markdown 形式存放在 `~/.grok/memory/` 下（全局的 `MEMORY.md`，加上按 git remote 哈希区分的各工作区目录），或者存放在 `~/.grok/memory-v2/` 下。
+- **原生记忆：** 实验性功能，默认关闭（`GROK_MEMORY=1`）。以 Markdown 形式存放在 `~/.grok/memory/` 下（全局的 `MEMORY.md`，加上按 git remote 哈希区分的各工作区目录），或者存放在 `~/.grok/memory-v2/` 下。会被导入，见[原生记忆](#native-memories)。
 - **互通：** Grok 默认合并 `~/.claude.json`、Cursor 的 `mcp.json` 和项目 `.mcp.json` 中的 MCP server，因此为 Claude Code 注册 Origin 之后，Grok 也能使用它。`grok inspect` 列出合并后的 server；`grok mcp list` 只显示 Grok 自己配置的。
 
 **Origin 映射：**
@@ -96,5 +96,45 @@ sourceHash: sha256-e50bbe5a
 - `tool_call` 变成 `tool_use` 事件（`<name> <input>`，最多 2,000 个字符），名称取自 `_meta["x.ai/tool"]`，服务端搜索命名为 `web_search`。带有 `rawOutput` 的 `tool_call_update` 变成它的 `tool_result`（Grok 显示的文本、图片和 diff，没有时用原始输出；最多 4,000 个字符），`status` 不是 `completed` 时会记下。其他 `tool_call_update` 行只是在细化这次调用，会被跳过。
 - 事件 id：`eventId` 形如 `<session-id>-<n>` 时为 `grok:<session-id>:e<n>`，否则为 `grok:<session-id>:<eventId>`，没有时退回使用行号。
 - 时间戳取自 `agentTimestampMs`，其次是 `timestamp`。cwd 和项目来自 group 的名称；slug 加哈希命名的 group 里的会话没有 cwd，因为中枢看不到 `.cwd` 文件。行里不带 Grok 的版本，所以事件记录的是同步时已安装的版本（`$GROK_HOME/version.json`）。
+
+## 原生记忆 {#native-memories}
+
+核对版本与上面各节相同（2026 年 10 月）。Origin 把下面这些记忆目录作为记忆流读取，每个目录一条，并把每个记忆文件导入为一个条目；它从不写入这些目录。文件如何变成事件和条目，见 [architecture.md](architecture.md#native-memories)。
+
+| 来源 id | 记忆目录 | 读取的文件 | 镜像为 |
+|---|---|---|---|
+| `claude-code` | `~/.claude/projects/<cwd-slug>/memory/` | 除 `MEMORY.md` 外的 `*.md` | `memory/<cwd-slug>.jsonl` |
+| `zcode` | `~/.zcode/cli/memories/projects/<name>-<hash>/memory/` | 除 `MEMORY.md` 外的 `*.md` | `memory/<name>-<hash>.jsonl` |
+| `grok` | `$GROK_HOME/memory-v2/global/`、`$GROK_HOME/memory-v2/workspaces/<name>-<hash>/` | `topics/*.md`、`observations/_inbox/*.md` | `memory/v2/global.jsonl`、`memory/v2/workspaces/<name>-<hash>.jsonl` |
+| `grok` | `$GROK_HOME/memory/`、`$GROK_HOME/memory/<name>-<hash>/` | `MEMORY.md` | `memory/v1/global.jsonl`、`memory/v1/<name>-<hash>.jsonl` |
+
+超过 256 KiB 的文件不会读取。条目的类型取自记忆的类型（如果有）：`user` 和 `feedback`（这个人是什么样的、提出过什么要求）对应 `cognition`，`project` 对应 `memory`，`reference`、其他类型或没有类型对应 `knowledge`。
+
+**Claude Code 和 ZCode** 为每条记忆保存一个带 YAML front matter 的 Markdown 文件，另有一个每条记忆一行的索引 `MEMORY.md`，Origin 不读取它：它说的内容，各个文件里都有。例如（虚构的示例）：
+
+```markdown
+---
+name: small-commits
+description: Prefers small commits, each with one purpose
+metadata:
+  type: feedback
+  originSessionId: 3f2a9c1e-7b4d-4e8a-9c6b-1d2e3f4a5b6c
+---
+
+Split unrelated changes into separate commits.
+
+**Why:** a commit with one purpose is easy to review and to revert.
+```
+
+- front matter 包含 `name`、`description`，以及带有记忆 `type` 的 `metadata`（写在顶层的 `type` 也会读取）；Claude Code 还会写入 `node_type`、`originSessionId`（写下这条记忆的会话）和 `modified`。条目的正文是描述、一个空行，再加上正文部分；置信度为 0.9。
+- Claude Code 以项目的 slug 命名这个目录，而 slug 无法还原为路径：工作目录以及项目（工作目录的最后一段）取自该项目最新的会话记录中记下的 `cwd`。
+- ZCode 以项目的工作目录命名这个目录，形如 `<basename>-<hash>`：basename 是该目录的最后一段，hash 是其小写路径的 SHA-256 的前 16 个十六进制字符。Origin 在 ZCode 各会话的目录中找出具有这个 hash 的工作目录；找不到时，以 hash 之前的名称作为项目。
+
+**Grok Build** 的记忆有两种布局，都是实验性的。
+
+- **第 2 版**（`memory-v2/`）有一个存放全局记忆的目录，每个工作区还各有一个，命名为 `<basename>-<hash>`。Grok 用模型从会话中捕获*观察*（observation），放进 `observations/_inbox/`：front matter 带有 `type`、`session_id`、`keywords`、`created_at` 等，接着是一个标题和一段文字。之后它把观察整合进*主题*，即 `topics/*.md`（一个标题、一行摘要和若干小节，没有 front matter），并把已整合的观察移到 `archive/`。每个主题是一个 `knowledge` 条目，正文是去掉 HTML 注释后的全文，置信度为 0.9。收件箱中的每条观察是一个条目，正文是它的正文部分，类型由它的 `type` 决定，置信度为 0.7；当 Grok 把它移到归档中时，这个条目就结束了，Origin 不读取归档。`MEMORY.md` 是 Grok 生成的索引，`index.sqlite` 和 `memory_state.sqlite` 保存它自己的状态（包括它自己的遗忘）；这些都不会读取。工作区的工作目录，取自它的某条观察被捕获时所在的会话（观察的 `session_id`，在各会话分组中查找）；找不到时，项目为 hash 之前的名称。全局记忆没有项目。
+- **第 1 版**（`memory/`）把记忆本身保存在 `MEMORY.md` 中：一个全局的，每个工作区各一个。每个都是一个 `knowledge` 条目，正文是去掉 HTML 注释后的文本，置信度为 0.9；只有标题和引用说明的文件除外，例如 Grok 写入的模板。工作区的工作目录取自它的标题 `# Project Memory — <path>`。
+
+**Codex** 启用记忆后，把记忆保存在 `~/.codex/memories/` 下，形式是它自己合并的摘要；Origin 尚未读取它们。**Cursor** 已不再在磁盘上保存记忆。
 
 如何为每个 Agent 注册 Origin，见[接入 Agent](guide/connect-agents.md)。

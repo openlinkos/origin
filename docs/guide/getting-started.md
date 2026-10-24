@@ -28,7 +28,7 @@ origin status    # sessions, events, and entries per source
 origin timeline  # sessions from the last 7 days
 ```
 
-`sync` is incremental and safe to re-run. When agents use Origin over MCP, the server syncs on its own, so you rarely need to run `sync` by hand.
+`sync` is incremental and safe to re-run. When agents use Origin over MCP, the server syncs on its own, so you rarely need to run `sync` by hand. It also imports the memories that Claude Code, ZCode, and Grok Build keep for themselves, as entries that follow their files (see [Native memories](../sources.md#native-memories)).
 
 ## Connect an agent
 

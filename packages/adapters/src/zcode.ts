@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +12,13 @@ import type {
   SourceAdapter,
   SourceFile,
 } from '@openlinkos/origin-core';
+import {
+  markdownFiles,
+  memoryStream,
+  parseMemoryLine,
+  readFrontMatterMemory,
+  subdirectories,
+} from './memory.js';
 import { projectFromCwd, truncate } from './util.js';
 
 /**
@@ -21,8 +29,14 @@ import { projectFromCwd, truncate } from './util.js';
  * after (compaction marks old tool output), so each session is a generated source: every message
  * is written out once, when it has settled, as one line holding its row, its parts' rows, and some
  * of its session's columns, all as stored.
+ *
+ * ZCode's memories, one Markdown file each with a `MEMORY.md` index, are in
+ * `~/.zcode/cli/memories/projects/<name>/memory/`: each directory is written out as a memory
+ * stream, `memory/<name>.jsonl` (see memory.ts).
  */
 export const ZCODE_SOURCE_ID = 'zcode';
+
+const MEMORY_PREFIX = 'memory/';
 
 const TOOL_USE_MAX = 2000;
 const TOOL_RESULT_MAX = 4000;
@@ -94,7 +108,8 @@ interface SessionState {
 }
 
 export function createZCodeAdapter(opts: ZCodeAdapterOptions = {}): SourceAdapter {
-  const dbPath = path.join(opts.home ?? zcodeHome(), 'cli', 'db', 'db.sqlite');
+  const home = opts.home ?? zcodeHome();
+  const dbPath = path.join(home, 'cli', 'db', 'db.sqlite');
   const now = opts.now ?? Date.now;
   const keepOpenMs = opts.keepOpenMs ?? KEEP_OPEN_MS;
   let lastVersion: string | null = null;
@@ -152,7 +167,9 @@ export function createZCodeAdapter(opts: ZCodeAdapterOptions = {}): SourceAdapte
     displayName: 'ZCode',
     version: () => lastVersion,
     async discover(): Promise<SourceFile[]> {
-      if (!fs.existsSync(dbPath)) return [];
+      const out: SourceFile[] = memoryStreams();
+      const sorted = () => out.sort((a, b) => a.relPath.localeCompare(b.relPath));
+      if (!fs.existsSync(dbPath)) return sorted();
       let sessions: SessionState[];
       try {
         sessions = withDb((db) => {
@@ -169,11 +186,11 @@ export function createZCodeAdapter(opts: ZCodeAdapterOptions = {}): SourceAdapte
             .all() as unknown as SessionState[];
         });
       } catch {
-        return []; // not a ZCode database this adapter knows
+        return sorted(); // not a ZCode database this adapter knows
       }
       const t = now();
-      return sessions
-        .map((s) => ({
+      for (const s of sessions) {
+        out.push({
           absPath: `${dbPath}#${s.id}`,
           relPath: `sessions/${s.id}.jsonl`,
           generated: {
@@ -182,11 +199,66 @@ export function createZCodeAdapter(opts: ZCodeAdapterOptions = {}): SourceAdapte
             mtimeMs: s.lastUpdated,
             next: (last: string | null, maxBytes: number) => next(s.id, last, maxBytes),
           },
-        }))
-        .sort((a, b) => a.relPath.localeCompare(b.relPath));
+        });
+      }
+      return sorted();
     },
-    parseLine: (line, ctx) => parseZCodeLine(line, ctx),
+    parseLine: (line, ctx) =>
+      ctx.relPath.startsWith(MEMORY_PREFIX)
+        ? parseMemoryLine(line, ctx, (_file, content) => readFrontMatterMemory(content))
+        : parseZCodeLine(line, ctx),
   };
+
+  /** The memory directory of each project, `memories/projects/<name>/memory/`, as a stream. */
+  function memoryStreams(): SourceFile[] {
+    const projects = path.join(home, 'cli', 'memories', 'projects');
+    const out: SourceFile[] = [];
+    for (const name of subdirectories(projects)) {
+      const dir = path.join(projects, name, 'memory');
+      const stream = memoryStream({
+        dir,
+        relPath: `${MEMORY_PREFIX}${name}.jsonl`,
+        files: () => markdownFiles(dir, ['MEMORY.md']),
+        where: () => {
+          const cwd = memoryCwd(name);
+          return { cwd, project: projectFromCwd(cwd ?? undefined) ?? memoryProject(name) };
+        },
+      });
+      if (stream) out.push(stream);
+    }
+    return out;
+  }
+
+  /**
+   * The working directory a project's memory directory is named after: `<name>-<hash>`, where the
+   * hash is the first 16 hex digits of the SHA-256 of the lowercased directory. Found among the
+   * sessions' directories, or null.
+   */
+  function memoryCwd(name: string): string | null {
+    const hash = /-([0-9a-f]{16})$/.exec(name)?.[1];
+    if (!hash || !fs.existsSync(dbPath)) return null;
+    try {
+      const dirs = withDb(
+        (db) =>
+          db
+            .prepare('SELECT DISTINCT directory FROM session WHERE directory IS NOT NULL')
+            .all() as unknown as Array<{ directory: string }>,
+      );
+      const match = dirs.find(
+        (d) =>
+          createHash('sha256').update(d.directory.toLowerCase()).digest('hex').slice(0, 16) ===
+          hash,
+      );
+      return match?.directory ?? null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** A project's name from its memory directory's, `<name>-<hash>`, when its directory is unknown. */
+function memoryProject(name: string): string | null {
+  return name.replace(/-[0-9a-f]{16}$/, '') || null;
 }
 
 /**

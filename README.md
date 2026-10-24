@@ -29,6 +29,7 @@ Origin puts **you** at the center instead of the tool:
 
 - **MCP server** (`origin mcp`) with seven tools: `search`, `timeline`, `get`, `sources`, `remember`, `correct`, `forget`. It syncs automatically, so agents always see the latest sessions.
 - **Entries** in three kinds: `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries). Each carries its sources, a confidence, and a version history.
+- **Native memory import.** The memory files that Claude Code, ZCode, and Grok Build keep for themselves are imported as entries, each citing the version of its file: when the agent changes a memory, the entry follows, and when it deletes one, the entry ends.
 - **Relevance-ranked full-text search** across sessions and entries, including CJK substring search (SQLite FTS5 trigram).
 - **Incremental, idempotent ingestion.** Only new bytes are read, rewritten files are kept as a new generation, compressed logs (zstd) are read transparently, and concurrent syncs are safe.
 - **A CLI** to browse the timeline, inspect any entry or event down to its original line, correct entries, and forget and restore.
