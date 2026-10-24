@@ -31,7 +31,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
-    "@openlinkos/vitepress-theme": "0.4.0",
+    "@openlinkos/vitepress-theme": "0.4.1",
     "@types/node": "24.19.2",
     "typescript": "7.0.2",
     "vitepress": "1.6.4",
