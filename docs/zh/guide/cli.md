@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-e7068bfd
+sourceHash: sha256-a569a057
 ---
 
 # 命令参考
@@ -35,6 +35,7 @@ origin push                                            与 origin sync 相同（
 - **时间参数**：相对时长（`30m`、`24h`、`7d`、`2w`）或日期（`YYYY-MM-DD`、ISO 8601）。
 - **来源 id**：`claude-code`、`codex`、`cursor`、`grok` 与 `zcode`。
 - **条目类型**：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。
+- **条目**：列出和检索到的都是当前的条目。已被取代的版本，以及有效期已经结束的条目（例如文件已被删除的导入记忆），用 `origin entries --history` 或 `origin show` 才能看到。从 Agent 为自己保存的记忆文件导入的条目会标记为导入的。
 - **id 形式**：条目如 `ent_5f0c2a9e41b7`；事件如 `claude-code:<uuid>` 或 `codex:<session>:o12`；遗忘记录（遗忘与恢复留下的记录）如 `tmb_3a9d70c1e2f4`。
 - CLI 输出为英文。
 

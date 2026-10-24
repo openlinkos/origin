@@ -544,7 +544,10 @@ interface ShownEvent {
 }
 
 /** An entry as the CLI lists it. */
-type ShownEntry = Pick<Entry, 'id' | 'createdAt' | 'confidence' | 'project' | 'text'> & {
+type ShownEntry = Pick<
+  Entry,
+  'id' | 'createdAt' | 'confidence' | 'project' | 'text' | 'validTo' | 'imported'
+> & {
   kind: string;
   status: string;
 };
@@ -580,6 +583,8 @@ const fromEntryView = (v: EntryView): ShownEntry => ({
   project: v.project,
   status: v.status,
   text: v.text,
+  validTo: parseIso(v.valid_to),
+  imported: v.imported === true,
 });
 
 /** The most a hub's tool returns at once (see TOOL_SPECS in the MCP package). */
@@ -676,8 +681,18 @@ async function cmdTimeline(ctx: Ctx, args: string[]): Promise<number> {
   );
 }
 
+/** Whether an entry's validity has ended: its `valid_to` has passed. */
+const hasEnded = (e: Pick<Entry, 'validTo'>) => e.validTo !== null && e.validTo <= Date.now();
+
 function printEntryLine(e: ShownEntry): void {
-  const tags = [e.kind, `conf ${e.confidence}`, e.project, e.status === 'active' ? null : e.status]
+  const tags = [
+    e.kind,
+    `conf ${e.confidence}`,
+    e.project,
+    e.status === 'active' ? null : e.status,
+    e.imported ? 'imported' : null,
+    hasEnded(e) ? `ended ${fmtDateTime(e.validTo)}` : null,
+  ]
     .filter(Boolean)
     .join(', ');
   console.log(`[${fmtDateTime(e.createdAt)}] ${tags}\n    ${oneLine(e.text, 200)}\n    ↳ ${e.id}`);
@@ -806,7 +821,14 @@ function printEntry(e: ShownEntryDetail, history: string[], sources: ShownSource
     `Created     ${fmtDateTime(e.createdAt)} by ${e.author}  confidence ${e.confidence}  project ${e.project ?? '—'}`,
   );
   if (e.validFrom !== null || e.validTo !== null) {
-    console.log(`Valid       ${fmtDateTime(e.validFrom)} → ${fmtDateTime(e.validTo)}`);
+    const ended = hasEnded(e) ? ' (ended)' : '';
+    console.log(`Valid       ${fmtDateTime(e.validFrom)} → ${fmtDateTime(e.validTo)}${ended}`);
+  }
+  if (e.imported) {
+    const agent = e.author.replace(/@.*$/, '');
+    console.log(
+      `Imported    from ${agent}'s own memory file; its next version replaces this entry`,
+    );
   }
   if (e.status === 'superseded') {
     const why = e.concurrent ? ', after a concurrent correction' : '';
