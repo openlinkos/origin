@@ -15,5 +15,9 @@ export default defineConfig({
   test: {
     include: ['packages/*/test/**/*.test.ts'],
     environment: 'node',
+    // Most tests run real SQLite, file IO, and loopback HTTP; CI runners, Windows ones especially,
+    // are several times slower than a workstation and vary from run to run.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });
