@@ -1,6 +1,6 @@
 {
   "name": "@openlinkos/origin-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Origin core: append-only raw mirror, unified event store, search and timeline (no LLM calls).",
   "keywords": [
     "origin",

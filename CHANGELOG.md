@@ -2,7 +2,11 @@
 
 All notable changes to Origin are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the store format or a public interface, and its notes say what to do. The five packages (`@openlinkos/origin` and `@openlinkos/origin-core`, `-adapters`, `-mcp`, `-admin`) are released together under one version.
 
-## [Unreleased]
+## [0.2.0] - 2026-10-24
+
+Five agents archived instead of two, a local admin UI, relays, restorable forgetting, and versioned stores.
+
+**Upgrading.** A store is upgraded in place the first time Origin 0.2 opens it; to be safe, back it up first with `origin backup <dir>`. Upgrade the hub before its devices, since Origin 0.1 ignores restores, and do not go back to 0.1 on an upgraded store. Re-register nothing: `origin mcp` keeps its name and tools (`forget` now requires a reason).
 
 ### Archive and search
 
@@ -33,6 +37,12 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 ### Tooling
 
 - Stores record their format version and are upgraded in place, once, when a newer Origin opens them, stores of 0.1.0 included; Origin refuses a store whose format is newer than it knows.
+
+### Fixes
+
+- A device no longer gives up pushing a file that another of its processes (`origin sync` and an agent's `origin mcp`) is pushing at the same time, and neither does a relay.
+- A device sends the agent version it recorded for a file's events with the file, so a hub records the same version for agents whose logs carry none (Grok Build, Cursor).
+- A tool call that gets several results, such as a Claude Code background agent's, keeps them all instead of showing the later ones as a call named `?`.
 
 ## [0.1.0] - 2026-10-23
 
@@ -66,4 +76,5 @@ The first release.
 - `origin backup <dir>` copies a store consistently while agents keep writing.
 - Requires Node.js 22.16 or later.
 
+[0.2.0]: https://github.com/openlinkos/origin/releases/tag/v0.2.0
 [0.1.0]: https://github.com/openlinkos/origin/releases/tag/v0.1.0
