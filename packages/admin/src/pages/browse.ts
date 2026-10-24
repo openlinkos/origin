@@ -97,7 +97,7 @@ export function sessionsPage(
       <thead><tr><th class="admin-col-time">${t('sessions.time')}</th><th>${t('sessions.titleColumn')}</th><th>${t('overview.source')}</th><th>${t('filter.project')}</th><th class="ol-num">${t('sessions.duration')}</th><th class="ol-num">${t('sessions.turns')}</th><th class="ol-num">${t('overview.events')}</th></tr></thead>
       ${byDay(o.sessions, (s) => s.endedAt).map(
         (g) => html`<tbody>
-        <tr class="admin-day-row"><th colspan="${columns}" scope="colgroup">${g.day ? dayLabel(ctx, g.day) : '—'}</th></tr>
+        <tr class="ol-table-group"><th colspan="${columns}" scope="rowgroup">${g.day ? dayLabel(ctx, g.day) : '—'}</th></tr>
         ${g.rows.map(
           (s) => html`<tr>
           <td class="ol-nowrap ol-subtle">${s.endedAt === null ? '—' : clock(s.endedAt)}</td>

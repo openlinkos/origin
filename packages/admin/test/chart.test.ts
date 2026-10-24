@@ -25,25 +25,31 @@ describe('the stacked column chart', () => {
   it('is an accessible SVG, coloured by class, with every number in a table', () => {
     const out = chart([{ 'claude-code': 4, codex: 2 }, {}, { codex: 6 }]);
     expect(out).toContain(
-      '<svg class="admin-chart-svg" viewBox="0 0 720 200" role="img" aria-labelledby="activity-title activity-desc" focusable="false">',
+      '<svg class="ol-chart-svg" viewBox="0 0 720 200" role="img" aria-labelledby="activity-title activity-desc" focusable="false">',
     );
     expect(out).toContain('<title id="activity-title">Activity &lt;last 30 days&gt;</title>');
     expect(out).toContain('<desc id="activity-desc">12 events</desc>');
     // The series keep their slots; the lower segment is a rectangle, the top one rounded.
-    expect(out.match(/class="admin-chart-bar admin-series-1"/g)).toHaveLength(1);
-    expect(out.match(/class="admin-chart-bar admin-series-3"/g)).toHaveLength(2);
-    expect(out).toMatch(/<rect class="admin-chart-bar admin-series-1" x="[\d.]+" y="[\d.]+"/);
-    expect(out).toMatch(/<path class="admin-chart-bar admin-series-3" d="M[\d. MVQHZ]+"\/>/);
+    expect(out.match(/class="ol-chart-bar ol-series-1"/g)).toHaveLength(1);
+    expect(out.match(/class="ol-chart-bar ol-series-3"/g)).toHaveLength(2);
+    expect(out).toMatch(/<rect class="ol-chart-bar ol-series-1" x="[\d.]+" y="[\d.]+"/);
+    expect(out).toMatch(/<path class="ol-chart-bar ol-series-3" d="M[\d. MVQHZ]+"\/>/);
     // Each column tells its numbers on hover; empty columns have none to tell.
     expect(out).toContain('<title>Day 0: 6\nclaude-code 4\ncodex 2</title>');
     expect(out).toContain('<title>Day 1: 0</title>');
     // Labels under every second column, counted from the last.
-    expect(out.match(/class="admin-chart-label"/g)).toHaveLength(2);
+    expect(out.match(/class="ol-chart-label"/g)).toHaveLength(2);
     expect(out).toContain('text-anchor="end">D2</text>');
     // The legend and the table.
+    expect(out).toContain('<figure class="ol-chart">');
+    expect(out).toContain('<g class="ol-chart-col"><title>');
     expect(out).toContain(
-      '<span class="admin-swatch admin-series-3" aria-hidden="true"></span><span>codex</span><span class="admin-legend-value">8</span>',
+      '<ul class="ol-legend"><li><span class="ol-swatch ol-series-1" aria-hidden="true"></span>',
     );
+    expect(out).toContain(
+      '<span class="ol-swatch ol-series-3" aria-hidden="true"></span><span>codex</span><span class="ol-legend-value">8</span>',
+    );
+    expect(out).toContain('<details class="ol-details ol-chart-table">');
     expect(out).toContain(
       '<tr><td class="ol-nowrap">Day 2</td><td class="ol-num">0</td><td class="ol-num">6</td><td class="ol-num">6</td></tr>',
     );
@@ -57,10 +63,13 @@ describe('the stacked column chart', () => {
     expect(chart([{ codex: 6474 }])).toContain('>8K</text>');
   });
 
-  it('draws share bars with attributes only', () => {
+  it('draws share bars as meters in the first series colour, with attributes only', () => {
     expect(shareBar(5, 10, '5 events').value).toBe(
-      '<svg class="admin-share" viewBox="0 0 100 6" preserveAspectRatio="none" role="img" aria-label="5 events"><rect class="admin-share-track" width="100" height="6" rx="3"/><rect class="admin-share-bar admin-series-1" width="50" height="6" rx="3"/></svg>',
+      '<meter class="ol-meter ol-meter-series ol-series-1" min="0" max="10" value="5" aria-label="5 events">5 events</meter>',
     );
-    expect(shareBar(0, 0, 'none').value).toContain('width="0"');
+    // A meter needs a range: with nothing to compare, it is empty.
+    expect(shareBar(0, 0, 'none').value).toContain('min="0" max="1" value="0"');
+    expect(shareBar(12, 10, 'over').value).toContain('max="10" value="10"');
+    expect(shareBar(1, 4, '<b>').value).toContain('aria-label="&lt;b&gt;">&lt;b&gt;</meter>');
   });
 });

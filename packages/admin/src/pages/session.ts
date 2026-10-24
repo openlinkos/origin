@@ -79,7 +79,7 @@ function promptBlock(ctx: Ctx, e: EventRow): SafeHtml {
   return html`<div class="admin-prompt">
       <span class="admin-turn-avatar" data-role="user">${icon(ctx, 'user', 'sm')}</span>
       <div class="admin-prompt-body">
-        ${chips.length > 0 ? html`<div class="admin-notes">${chips}</div>` : ''}
+        ${chips.length > 0 ? html`<div class="ol-cluster">${chips}</div>` : ''}
         <div class="admin-prompt-text">${long ? `${prompt.slice(0, PROMPT_SHOWN)}…` : prompt}</div>
         ${long ? html`<details class="ol-details"><summary>${ctx.t('turn.wholePrompt', { n: fmtNumber(prompt.length, ctx.lang) })}</summary><div class="admin-prompt-text">${prompt}</div></details>` : ''}
       </div>
@@ -93,7 +93,7 @@ function commandBlock(ctx: Ctx, e: EventRow, command: string): SafeHtml {
   return html`<div class="admin-prompt">
       <span class="admin-turn-avatar" data-role="user">${icon(ctx, 'user', 'sm')}</span>
       <div class="admin-prompt-body">
-        <span class="admin-chip admin-chip-command" title="${label}">${icon(ctx, 'terminal', 'sm')}<span class="ol-sr-only">${label}: </span><span class="admin-chip-label">${command}</span></span>
+        <span class="ol-chip ol-chip-accent ol-chip-lg ol-chip-mono" title="${label}">${icon(ctx, 'terminal', 'sm')}<span class="ol-sr-only">${label}: </span><span class="ol-chip-label">${command}</span></span>
       </div>
       ${eventLink(ctx, e.id)}
     </div>`;
@@ -167,32 +167,31 @@ function summaryLine(ctx: Ctx, s: ToolSummary): SafeHtml {
   const n = (v: number) => fmtNumber(v, ctx.lang);
   const names = s.byName.slice(0, 6);
   const others = s.byName.slice(6).reduce((sum, x) => sum + x.count, 0);
-  return html`<span class="admin-fold-title">${icon(ctx, 'wrench', 'sm')}${s.calls > 0 ? t('turn.tools', { n: n(s.calls) }) : t('turn.steps')}</span>
+  return html`<span class="ol-fold-title">${icon(ctx, 'wrench', 'sm')}${s.calls > 0 ? t('turn.tools', { n: n(s.calls) }) : t('turn.steps')}</span>
     ${
       s.calls > 0
-        ? html`<span class="admin-fold-names">${names.map(
-            (x, i) =>
-              html`${i > 0 ? html`<span class="admin-sep" aria-hidden="true">·</span>` : ''}<span class="admin-fold-name">${x.name}<span class="admin-times">×${n(x.count)}</span></span>`,
-          )}${others > 0 ? html`<span class="admin-sep" aria-hidden="true">·</span><span>${t('turn.otherTools', { n: n(others) })}</span>` : ''}</span>
-    <span class="admin-fold-status">
-      <span class="admin-ok" title="${t('turn.status.ok')}">${icon(ctx, 'circle-check', 'sm')}${n(s.ok)}<span class="ol-sr-only"> ${t('turn.status.ok')}</span></span>
-      ${s.error > 0 ? html`<span class="admin-error" title="${t('turn.status.error')}">${icon(ctx, 'circle-x', 'sm')}${n(s.error)}<span class="ol-sr-only"> ${t('turn.status.error')}</span></span>` : ''}
-      ${s.pending > 0 ? html`<span class="admin-pending" title="${t('turn.status.pending')}">${icon(ctx, 'loader-circle', 'sm')}${n(s.pending)}<span class="ol-sr-only"> ${t('turn.status.pending')}</span></span>` : ''}
+        ? html`<span class="ol-fold-meta ol-mono">${names.map(
+            (x) => html`<span>${x.name}<span class="admin-times">×${n(x.count)}</span></span>`,
+          )}${others > 0 ? html`<span>${t('turn.otherTools', { n: n(others) })}</span>` : ''}</span>
+    <span class="ol-fold-meta">
+      <span class="ol-tone-success" title="${t('turn.status.ok')}">${icon(ctx, 'circle-check', 'sm')}${n(s.ok)}<span class="ol-sr-only"> ${t('turn.status.ok')}</span></span>
+      ${s.error > 0 ? html`<span class="ol-tone-danger" title="${t('turn.status.error')}">${icon(ctx, 'circle-x', 'sm')}${n(s.error)}<span class="ol-sr-only"> ${t('turn.status.error')}</span></span>` : ''}
+      ${s.pending > 0 ? html`<span class="ol-subtle" title="${t('turn.status.pending')}">${icon(ctx, 'loader-circle', 'sm')}${n(s.pending)}<span class="ol-sr-only"> ${t('turn.status.pending')}</span></span>` : ''}
     </span>`
         : ''
     }
-    ${s.messages > 0 ? html`<span class="admin-fold-messages">${t('turn.messages', { n: n(s.messages) })}</span>` : ''}`;
+    ${s.messages > 0 ? html`<span class="ol-fold-end">${t('turn.messages', { n: n(s.messages) })}</span>` : ''}`;
 }
 
 function workBlock(ctx: Ctx, turn: Turn, open: boolean): HtmlValue {
   if (turn.work.length === 0) return '';
   if (turn.tools.calls === 0) {
     // No tools: what the agent said on the way is shown as it is.
-    return html`<ol class="admin-work admin-work-open">${turn.work.map((i) => itemBlock(ctx, i))}</ol>`;
+    return html`<ol class="admin-work">${turn.work.map((i) => itemBlock(ctx, i))}</ol>`;
   }
-  return html`<details class="admin-fold"${open ? html` open` : ''}>
+  return html`<details class="ol-fold"${open ? html` open` : ''}>
       <summary>${summaryLine(ctx, turn.tools)}</summary>
-      <ol class="admin-work">${turn.work.map((i) => itemBlock(ctx, i))}</ol>
+      <ol class="ol-fold-body admin-work">${turn.work.map((i) => itemBlock(ctx, i))}</ol>
     </details>`;
 }
 
@@ -202,9 +201,9 @@ function notes(ctx: Ctx, items: TurnItem[]): HtmlValue {
       ? noteChip(ctx, i)
       : i.type === 'message'
         ? messageBlock(ctx, i.event, { subAgent: i.subAgent, cls: 'admin-step-message' })
-        : html`<ol class="admin-work admin-work-open">${toolRow(ctx, i)}</ol>`,
+        : html`<ol class="admin-work">${toolRow(ctx, i)}</ol>`,
   );
-  return chips.length > 0 ? html`<div class="admin-notes">${chips}</div>` : '';
+  return chips.length > 0 ? html`<div class="ol-cluster">${chips}</div>` : '';
 }
 
 function turnCard(ctx: Ctx, turn: Turn, o: { open: boolean; part: number }): SafeHtml {
@@ -216,7 +215,7 @@ function turnCard(ctx: Ctx, turn: Turn, o: { open: boolean; part: number }): Saf
       : o.part > 0
         ? t('turn.titlePart', { n: n(turn.number), part: n(o.part + 1) })
         : t('turn.title', { n: n(turn.number) });
-  return html`<li class="admin-turn" id="turn-${turn.number}">
+  return html`<li class="ol-card admin-turn" id="turn-${turn.number}">
       <div class="admin-turn-head">
         <h2 class="admin-turn-title"><a href="#turn-${turn.number}">${title}</a></h2>
         <span class="admin-turn-meta">
@@ -287,10 +286,10 @@ export function sessionPage(ctx: Ctx, o: SessionTurns & { open: boolean }): void
     <div class="admin-session-bar">
       ${
         o.days.length > 1
-          ? html`<nav class="admin-days" aria-label="${t('turns.days')}">${icon(ctx, 'calendar', 'sm')}<ol>${o.days.map(
+          ? html`<nav class="admin-days" aria-label="${t('turns.days')}">${icon(ctx, 'calendar', 'sm')}<ol class="ol-cluster">${o.days.map(
               (d) =>
                 // A day is current when some of its turns are on this page.
-                html`<li><a href="${link({ turn: d.turn, part: 0 }, `#turn-${d.turn}`)}"${firstShown !== undefined && d.turn <= (lastShown ?? firstShown) && d.turn + d.turns - 1 >= firstShown ? html` aria-current="true"` : ''}>${dayLabel(ctx, d.day, { weekday: false })}<span class="admin-times">${n(d.turns)}</span></a></li>`,
+                html`<li><a class="ol-chip" href="${link({ turn: d.turn, part: 0 }, `#turn-${d.turn}`)}"${firstShown !== undefined && d.turn <= (lastShown ?? firstShown) && d.turn + d.turns - 1 >= firstShown ? html` aria-current="true"` : ''}>${dayLabel(ctx, d.day, { weekday: false })}<span class="admin-times">${n(d.turns)}</span></a></li>`,
             )}</ol></nav>`
           : html`<span></span>`
       }

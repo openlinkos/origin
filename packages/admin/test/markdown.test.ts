@@ -3,7 +3,8 @@ import { markdown, safeUrl } from '../src/markdown.js';
 
 const md = (text: string) => markdown(text).value;
 /** The rendered markup, without the wrapper. */
-const inner = (text: string) => md(text).replace(/^<div class="admin-md">|<\/div>$/g, '');
+const inner = (text: string) =>
+  md(text).replace(/^<div class="ol-prose ol-prose-sm">|<\/div>$/g, '');
 
 /** The tags and attributes the renderer may write; anything else is a failure. */
 const TAGS = new Set([
@@ -32,14 +33,30 @@ const TAGS = new Set([
   'td',
 ]);
 const ATTRIBUTES = new Set(['class', 'href', 'target', 'rel', 'start']);
+/** The classes the renderer may write: the design system's prose, code, and table cells. */
+const CLASSES = new Set([
+  'ol-prose',
+  'ol-prose-sm',
+  'ol-code',
+  'ol-code-label',
+  'ol-prose-table',
+  'ol-align-start',
+  'ol-align-center',
+  'ol-align-end',
+  'ol-cell-wrap',
+  'admin-md-url',
+]);
 
-/** Every tag of the output is one the renderer writes, with its attributes only. */
+/** Every tag of the output is one the renderer writes, with its attributes and classes only. */
 function markupProblems(out: string): string[] {
   const problems: string[] = [];
   for (const [tag, name = '', attrs = ''] of out.matchAll(/<\/?([a-zA-Z0-9]+)([^>]*)>/g)) {
     if (!TAGS.has(name.toLowerCase())) problems.push(`tag ${tag}`);
     const rest = attrs.replace(/\s([a-z]+)="([^"]*)"/g, (_m, a: string, v: string) => {
       if (!ATTRIBUTES.has(a)) problems.push(`attribute ${a} in ${tag}`);
+      if (a === 'class') {
+        for (const c of v.split(' ')) if (!CLASSES.has(c)) problems.push(`class ${c} in ${tag}`);
+      }
       if (a === 'href' && !/^https?:\/\//.test(v)) problems.push(`href ${v}`);
       if (a === 'target' && v !== '_blank') problems.push(`target ${v}`);
       if (a === 'rel' && v !== 'noopener noreferrer') problems.push(`rel ${v}`);
@@ -62,7 +79,7 @@ describe('markdown', () => {
 
   it('renders headings below the page headings', () => {
     expect(inner('# Title\n## Part\n### Detail\n#### Deeper ##')).toBe(
-      '<h4 class="admin-md-h">Title</h4><h5 class="admin-md-h">Part</h5><h6 class="admin-md-h">Detail</h6><h6 class="admin-md-h">Deeper</h6>',
+      '<h4>Title</h4><h5>Part</h5><h6>Detail</h6><h6>Deeper</h6>',
     );
     expect(inner('#hashtag')).toBe('<p>#hashtag</p>');
   });
@@ -86,14 +103,14 @@ describe('markdown', () => {
 
   it('renders fenced code blocks with their language, as text', () => {
     expect(inner('```ts\nconst a = 1 < 2;\n\n**x**\n```')).toBe(
-      '<div class="ol-code admin-md-code"><div class="ol-code-label">ts</div><pre><code>const a = 1 &lt; 2;\n\n**x**</code></pre></div>',
+      '<div class="ol-code"><div class="ol-code-label">ts</div><pre><code>const a = 1 &lt; 2;\n\n**x**</code></pre></div>',
     );
     expect(inner('~~~~\nunclosed\n~~~')).toBe(
-      '<div class="ol-code admin-md-code"><pre><code>unclosed\n~~~</code></pre></div>',
+      '<div class="ol-code"><pre><code>unclosed\n~~~</code></pre></div>',
     );
     // An info string that is not a plain language name is not shown.
     expect(inner('``` x" onclick="y\nz\n```')).toBe(
-      '<div class="ol-code admin-md-code"><pre><code>z</code></pre></div>',
+      '<div class="ol-code"><pre><code>z</code></pre></div>',
     );
   });
 
@@ -121,13 +138,13 @@ describe('markdown', () => {
 
   it('renders links to http and https only, in a new tab, with their URL shown', () => {
     expect(inner('See [the docs](https://example.com/a?b=1&c=2).')).toBe(
-      '<p>See <a class="admin-md-link" href="https://example.com/a?b=1&amp;c=2" target="_blank" rel="noopener noreferrer">the docs</a> <span class="admin-md-url">https://example.com/a?b=1&amp;c=2</span>.</p>',
+      '<p>See <a href="https://example.com/a?b=1&amp;c=2" target="_blank" rel="noopener noreferrer">the docs</a> <span class="admin-md-url">https://example.com/a?b=1&amp;c=2</span>.</p>',
     );
     expect(inner('Bare https://example.com/x_y, then (http://a.example/b).')).toBe(
-      '<p>Bare <a class="admin-md-link" href="https://example.com/x_y" target="_blank" rel="noopener noreferrer">https://example.com/x_y</a>, then (<a class="admin-md-link" href="http://a.example/b" target="_blank" rel="noopener noreferrer">http://a.example/b</a>).</p>',
+      '<p>Bare <a href="https://example.com/x_y" target="_blank" rel="noopener noreferrer">https://example.com/x_y</a>, then (<a href="http://a.example/b" target="_blank" rel="noopener noreferrer">http://a.example/b</a>).</p>',
     );
     expect(inner('[same](https://example.com/)')).toBe(
-      '<p><a class="admin-md-link" href="https://example.com/" target="_blank" rel="noopener noreferrer">same</a> <span class="admin-md-url">https://example.com/</span></p>',
+      '<p><a href="https://example.com/" target="_blank" rel="noopener noreferrer">same</a> <span class="admin-md-url">https://example.com/</span></p>',
     );
     expect(inner('见 https://example.com/页面。')).toContain('href="https://example.com/"');
     for (const url of [
@@ -147,27 +164,27 @@ describe('markdown', () => {
         '| Step | Count | Note |\n|:---|---:|:-:|\n| **build** | 12 | `ok` |\n| test | 3 | — |',
       ),
     ).toBe(
-      '<div class="admin-md-table"><table><thead><tr><th class="admin-md-left">Step</th><th class="admin-md-right">Count</th><th class="admin-md-center">Note</th></tr></thead>' +
-        '<tbody><tr><td class="admin-md-left"><strong>build</strong></td><td class="admin-md-right">12</td><td class="admin-md-center"><code>ok</code></td></tr>' +
-        '<tr><td class="admin-md-left">test</td><td class="admin-md-right">3</td><td class="admin-md-center">—</td></tr></tbody></table></div>',
+      '<div class="ol-prose-table"><table><thead><tr><th class="ol-align-start">Step</th><th class="ol-align-end">Count</th><th class="ol-align-center">Note</th></tr></thead>' +
+        '<tbody><tr><td class="ol-align-start"><strong>build</strong></td><td class="ol-align-end">12</td><td class="ol-align-center"><code>ok</code></td></tr>' +
+        '<tr><td class="ol-align-start">test</td><td class="ol-align-end">3</td><td class="ol-align-center">—</td></tr></tbody></table></div>',
     );
     // Long cells may wrap; the others keep to one line.
     expect(inner(`| a | b |\n|---|--:|\n| ${'word '.repeat(10)}| 1 |`)).toContain(
-      `<td class="admin-md-wrap">${'word '.repeat(10).trim()}</td><td class="admin-md-right">1</td>`,
+      `<td class="ol-cell-wrap">${'word '.repeat(10).trim()}</td><td class="ol-align-end">1</td>`,
     );
     // Without outer pipes, and without a body.
     expect(inner('a | b\n--- | ---')).toBe(
-      '<div class="admin-md-table"><table><thead><tr><th>a</th><th>b</th></tr></thead></table></div>',
+      '<div class="ol-prose-table"><table><thead><tr><th>a</th><th>b</th></tr></thead></table></div>',
     );
     // A single column, and a table straight after a paragraph's line, as on GitHub.
     expect(inner('Results:\n| only |\n| --- |\n| one |')).toBe(
-      '<p>Results:</p><div class="admin-md-table"><table><thead><tr><th>only</th></tr></thead><tbody><tr><td>one</td></tr></tbody></table></div>',
+      '<p>Results:</p><div class="ol-prose-table"><table><thead><tr><th>only</th></tr></thead><tbody><tr><td>one</td></tr></tbody></table></div>',
     );
   });
 
   it('reads \\| as a pipe inside cells, code included, and fits ragged rows to the header', () => {
     expect(inner('| Expr | Means |\n|---|---|\n| `a \\| b` | a or b \\| c |')).toBe(
-      '<div class="admin-md-table"><table><thead><tr><th>Expr</th><th>Means</th></tr></thead><tbody><tr><td><code>a | b</code></td><td>a or b | c</td></tr></tbody></table></div>',
+      '<div class="ol-prose-table"><table><thead><tr><th>Expr</th><th>Means</th></tr></thead><tbody><tr><td><code>a | b</code></td><td>a or b | c</td></tr></tbody></table></div>',
     );
     const ragged = inner('| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 | 4 | 5 |');
     expect(ragged).toContain('<tr><td>1</td><td></td><td></td></tr>');
@@ -183,7 +200,7 @@ describe('markdown', () => {
   it('keeps malformed tables and HTML as text', () => {
     // The header and the delimiter row disagree.
     expect(inner('| a | b |\n|---|\n| <i>1</i> | 2 |')).toBe(
-      '<pre class="admin-md-text">| a | b |\n|---|\n| &lt;i&gt;1&lt;/i&gt; | 2 |</pre>',
+      '<pre>| a | b |\n|---|\n| &lt;i&gt;1&lt;/i&gt; | 2 |</pre>',
     );
     // No delimiter row, or one with something other than dashes and colons.
     expect(inner('| a | b |\n| c | d |')).toBe('<p>| a | b |<br>| c | d |</p>');
@@ -191,6 +208,31 @@ describe('markdown', () => {
     expect(inner('<details open><summary>x</summary></details>')).toBe(
       '<p>&lt;details open&gt;&lt;summary&gt;x&lt;/summary&gt;&lt;/details&gt;</p>',
     );
+  });
+
+  it("writes the design system's prose, with its own classes only", () => {
+    const out = md(
+      [
+        '# Title',
+        'Text with `code`, **bold**, and [a link](https://example.com/a).',
+        '- one\n  1. nested',
+        '> quoted',
+        '---',
+        '```sh\nls\n```',
+        `| a | b | c |\n|:-|:-:|-:|\n| ${'long '.repeat(10)} | x | 1 |`,
+        '| a | b |\n|---|\n| 1 | 2 |',
+      ].join('\n\n'),
+    );
+    expect(out.startsWith('<div class="ol-prose ol-prose-sm"><h4>Title</h4>')).toBe(true);
+    for (const c of ['ol-code-label', 'ol-align-start', 'ol-align-center', 'ol-align-end'])
+      expect(out).toContain(`class="${c}"`);
+    expect(out).toContain('<td class="ol-align-start ol-cell-wrap">');
+    expect(out).toContain('<pre>| a | b |');
+    expect(markupProblems(out)).toEqual([]);
+    // The check itself: a class outside the list is a problem.
+    expect(markupProblems('<p class="ol-prose admin-md">x</p>')).toEqual([
+      'class admin-md in <p class="ol-prose admin-md">',
+    ]);
   });
 
   it('never lets hostile text become markup', () => {
@@ -245,7 +287,7 @@ describe('markdown', () => {
       '<td>&lt;img src=x onerror=alert(1)&gt;</td><td>[x](javascript:alert(1))</td>',
     );
     expect(md(hostile[hostile.length - 5] ?? '')).toContain(
-      '<th class="admin-md-center">a&quot; onmouseover=&quot;alert(1)</th>',
+      '<th class="ol-align-center">a&quot; onmouseover=&quot;alert(1)</th>',
     );
     // Entities in the text are shown as written, never decoded into markup.
     expect(inner('&lt;b&gt;')).toBe('<p>&amp;lt;b&amp;gt;</p>');

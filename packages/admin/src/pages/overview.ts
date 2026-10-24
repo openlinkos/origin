@@ -125,7 +125,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
   // Every source keeps its colour on the page: the chart's series, and the swatches in the tables.
   const slots = new Map(o.sources.map((s, i) => [s.source, Math.min(i + 1, SERIES_SLOTS)]));
   const swatch = (source: string) =>
-    html`<span class="admin-swatch admin-series-${slots.get(source) ?? SERIES_SLOTS}" aria-hidden="true"></span>`;
+    html`<span class="ol-swatch ol-series-${slots.get(source) ?? SERIES_SLOTS}" aria-hidden="true"></span>`;
   // On `origin ui` a device's name is plain text: there are no device pages.
   const deviceName = (name: string) =>
     local ? html`${name}` : html`<a href="${href('device', { name })}">${name}</a>`;
@@ -194,10 +194,10 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
     body:
       o.recent.length === 0
         ? html`<p class="ol-muted ol-text-sm">${t('overview.noSessions')}</p>`
-        : html`<ul class="admin-list">${o.recent.map(
+        : html`<ul class="ol-list">${o.recent.map(
             (s) => html`<li>
-          <a class="admin-list-title" href="${sessionHref(s)}">${sessionName(ctx, s, 90)}</a>
-          <span class="admin-list-meta">${sourceBadge(s.source)}${s.project ? html`<span>${s.project}</span>` : ''}${time(s.endedAt)}</span>
+          <a class="ol-list-title" href="${sessionHref(s)}">${sessionName(ctx, s, 90)}</a>
+          <span class="ol-list-meta">${sourceBadge(s.source)}${s.project ? html`<span>${s.project}</span>` : ''}${time(s.endedAt)}</span>
         </li>`,
           )}</ul>`,
   });
@@ -208,11 +208,11 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
     body:
       o.projects.length === 0
         ? html`<p class="ol-muted ol-text-sm">${t('overview.projectsNone', { days: ACTIVITY_DAYS })}</p>`
-        : html`<ul class="admin-list">${o.projects.map(
+        : html`<ul class="ol-list">${o.projects.map(
             (p) => html`<li>
-          <span class="admin-list-row"><a class="admin-list-title" href="${href('sessions', { project: p.project })}">${p.project}</a><span class="admin-list-value">${t('overview.projectEvents', { n: n(p.events) })}</span></span>
+          <span class="ol-list-row"><a class="ol-list-title" href="${href('sessions', { project: p.project })}">${p.project}</a><span class="ol-list-value">${t('overview.projectEvents', { n: n(p.events) })}</span></span>
           ${shareBar(p.events, topProject, t('overview.projectEvents', { n: n(p.events) }))}
-          <span class="admin-list-meta"><span>${t('overview.projectSessions', { n: n(p.sessions) })}</span>${time(p.lastAt)}</span>
+          <span class="ol-list-meta"><span>${t('overview.projectSessions', { n: n(p.sessions) })}</span>${time(p.lastAt)}</span>
         </li>`,
           )}</ul>`,
   });
@@ -228,7 +228,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
             o.sources.map(
               (s) =>
                 html`<tr>
-              <td class="ol-nowrap"><span class="admin-source-cell">${swatch(s.source)}<a class="ol-cell-title" href="${href('sessions', { source: s.source })}">${s.source}</a></span></td>
+              <td class="ol-nowrap"><span class="ol-legend-item">${swatch(s.source)}<a class="ol-cell-title" href="${href('sessions', { source: s.source })}">${s.source}</a></span></td>
               <td class="ol-nowrap">${s.agentVersion ? html`<span class="ol-mono">${s.agentVersion}</span>` : html`<span class="ol-subtle">—</span>`}</td>
               <td class="ol-nowrap">${time(s.lastTs)}</td>
               <td class="ol-nowrap">${time(s.lastSyncAt)}</td>
@@ -251,10 +251,10 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
     body:
       o.latestEntries.length === 0
         ? html`<p class="ol-muted ol-text-sm">${t('entries.noneYet')}</p>`
-        : html`<ul class="admin-list">${o.latestEntries.map(
+        : html`<ul class="ol-list">${o.latestEntries.map(
             (e) => html`<li>
-          <a class="admin-list-title" href="${href('entry', { id: e.id })}">${clip(e.text, 120)}</a>
-          <span class="admin-list-meta">${kindBadge(ctx, e.kind)}<span>${e.author}</span>${time(e.createdAt)}</span>
+          <a class="ol-list-title" href="${href('entry', { id: e.id })}">${clip(e.text, 120)}</a>
+          <span class="ol-list-meta">${kindBadge(ctx, e.kind)}<span>${e.author}</span>${time(e.createdAt)}</span>
         </li>`,
           )}</ul>`,
   });
@@ -270,18 +270,18 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
     body:
       o.latestTombstones.length === 0
         ? html`<p class="ol-muted ol-text-sm">${t('tombstones.none')}</p>`
-        : html`<ul class="admin-list">${o.latestTombstones.map(
+        : html`<ul class="ol-list">${o.latestTombstones.map(
             (r) => html`<li>
-          <span class="admin-list-row">${
+          <span class="ol-list-row">${
             r.kind === 'restore'
               ? badge(t('tombstones.kind.restore'), 'success', { square: true })
               : badge(t('tombstones.kind.forget'), 'danger', { square: true })
-          }<a class="admin-list-title ol-mono" href="${href('tombstone', { id: r.id })}">${r.target}</a></span>
-          <span class="admin-list-meta">${
+          }<a class="ol-list-title ol-mono" href="${href('tombstone', { id: r.id })}">${r.target}</a></span>
+          <span class="ol-list-meta">${
             r.kind === 'forget'
               ? html`<span>${t('tombstones.coversCount', { entries: n(r.entries), events: n(r.events) })}</span>${r.inEffect ? '' : html`<span>${t('tombstones.restored')}</span>`}`
               : ''
-          }${r.reason ? html`<span class="admin-list-reason">${clip(r.reason, 80)}</span>` : ''}${time(r.createdAt)}</span>
+          }${r.reason ? html`<span class="ol-truncate">${clip(r.reason, 80)}</span>` : ''}${time(r.createdAt)}</span>
         </li>`,
           )}</ul>`,
   });

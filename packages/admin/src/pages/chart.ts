@@ -1,9 +1,10 @@
 /**
- * A stacked column chart, drawn on the server as SVG: no script, no inline style. Series take their
- * colour from classes (`admin-series-<slot>`, see admin.css), in a fixed order that keeps
- * neighbouring segments apart for colour-blind readers too. Each column carries a `<title>` with
- * its numbers (the browser shows it on hover), the chart a title and a summary for assistive
- * technology, and a table with every number follows it, folded.
+ * A stacked column chart, drawn on the server as SVG with the design system's chart classes: no
+ * script, no inline style. Series take their colour from classes (`ol-series-<slot>`, the design
+ * system's chart palette), in a fixed order that keeps neighbouring segments apart for colour-blind
+ * readers too. Each column carries a `<title>` with its numbers (the browser shows it on hover), the
+ * chart a title and a summary for assistive technology, and a table with every number follows it,
+ * folded.
  */
 import type { Ctx } from '../context.js';
 import { fmtCompact, fmtNumber } from '../context.js';
@@ -80,7 +81,7 @@ export function stackedColumns(
 
   const grid = ticks.map(
     (v) =>
-      html`<line class="admin-chart-grid" x1="${LEFT}" x2="${W - RIGHT}" y1="${r1(y(v))}" y2="${r1(y(v))}"/><text class="admin-chart-tick" x="${LEFT - 6}" y="${r1(y(v) + 3.5)}" text-anchor="end">${fmtCompact(v, ctx.lang)}</text>`,
+      html`<line class="ol-chart-grid" x1="${LEFT}" x2="${W - RIGHT}" y1="${r1(y(v))}" y2="${r1(y(v))}"/><text class="ol-chart-tick" x="${LEFT - 6}" y="${r1(y(v) + 3.5)}" text-anchor="end">${fmtCompact(v, ctx.lang)}</text>`,
   );
 
   const columns = o.columns.map((c, i) => {
@@ -96,7 +97,7 @@ export function stackedColumns(
       const last = j === parts.length - 1;
       // A gap the colour of the surface parts each segment from the one above it.
       const h = Math.max(1, bottom - top - (last ? 0 : GAP));
-      const cls = `admin-chart-bar admin-series-${slot(p.k)}`;
+      const cls = `ol-chart-bar ol-series-${slot(p.k)}`;
       return last
         ? html`<path class="${cls}" d="${topRounded(x, bottom - h, barW, h)}"/>`
         : html`<rect class="${cls}" x="${r1(x)}" y="${r1(bottom - h)}" width="${r1(barW)}" height="${r1(h)}"/>`;
@@ -109,29 +110,29 @@ export function stackedColumns(
     const lastColumn = i === o.columns.length - 1;
     const label =
       i % o.labelEvery === (o.columns.length - 1) % o.labelEvery
-        ? html`<text class="admin-chart-label" x="${r1(lastColumn ? x + barW : x + barW / 2)}" y="${H - 8}" text-anchor="${lastColumn ? 'end' : 'middle'}">${c.label}</text>`
+        ? html`<text class="ol-chart-label" x="${r1(lastColumn ? x + barW : x + barW / 2)}" y="${H - 8}" text-anchor="${lastColumn ? 'end' : 'middle'}">${c.label}</text>`
         : '';
-    return html`<g class="admin-chart-col"><title>${tip}</title><rect class="admin-chart-hit" x="${r1(LEFT + i * step)}" y="${TOP}" width="${r1(step)}" height="${plotH}"/>${segments}${label}</g>`;
+    return html`<g class="ol-chart-col"><title>${tip}</title><rect class="ol-chart-hit" x="${r1(LEFT + i * step)}" y="${TOP}" width="${r1(step)}" height="${plotH}"/>${segments}${label}</g>`;
   });
 
   const legend = o.series.map((s, k) => {
     const total = o.columns.reduce((sum, c) => sum + (c.values[s.key] ?? 0), 0);
-    return html`<li><span class="admin-swatch admin-series-${slot(k)}" aria-hidden="true"></span><span>${s.label}</span><span class="admin-legend-value">${n(total)}</span></li>`;
+    return html`<li><span class="ol-swatch ol-series-${slot(k)}" aria-hidden="true"></span><span>${s.label}</span><span class="ol-legend-value">${n(total)}</span></li>`;
   });
 
-  return html`<figure class="admin-chart">
-      <svg class="admin-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-labelledby="${o.id}-title ${o.id}-desc" focusable="false">
+  return html`<figure class="ol-chart">
+      <svg class="ol-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-labelledby="${o.id}-title ${o.id}-desc" focusable="false">
         <title id="${o.id}-title">${o.title}</title>
         <desc id="${o.id}-desc">${o.summary}</desc>
         ${grid}
         ${columns}
-        <line class="admin-chart-axis" x1="${LEFT}" x2="${W - RIGHT}" y1="${TOP + plotH}" y2="${TOP + plotH}"/>
+        <line class="ol-chart-axis" x1="${LEFT}" x2="${W - RIGHT}" y1="${TOP + plotH}" y2="${TOP + plotH}"/>
       </svg>
-      <figcaption class="admin-chart-caption">
-        <ul class="admin-legend">${legend}</ul>
+      <figcaption class="ol-chart-caption">
+        <ul class="ol-legend">${legend}</ul>
         <p class="ol-hint">${o.summary}</p>
       </figcaption>
-      <details class="ol-details admin-chart-table">
+      <details class="ol-details ol-chart-table">
         <summary>${o.tableLabel}</summary>
         <div class="ol-table-wrap"><table class="ol-table ol-table-compact">
           <thead><tr><th>${o.columnHeading}</th>${o.series.map((s) => html`<th class="ol-num">${s.label}</th>`)}<th class="ol-num">${o.totalHeading}</th></tr></thead>
@@ -146,9 +147,10 @@ export function stackedColumns(
 
 /**
  * A bar for one value among others, such as a project's share of the busiest one's events: a
- * single-series mark, drawn as SVG so that its length needs no inline style.
+ * meter in the first series' colour, which assistive technology reads as a value of a range.
  */
 export function shareBar(value: number, max: number, label: string): SafeHtml {
-  const w = max > 0 ? Math.max(value > 0 ? 1.5 : 0, (value / max) * 100) : 0;
-  return html`<svg class="admin-share" viewBox="0 0 100 6" preserveAspectRatio="none" role="img" aria-label="${label}"><rect class="admin-share-track" width="100" height="6" rx="3"/><rect class="admin-share-bar admin-series-1" width="${r1(w)}" height="6" rx="3"/></svg>`;
+  const top = max > 0 ? max : 1;
+  const v = Math.min(Math.max(0, value), top);
+  return html`<meter class="ol-meter ol-meter-series ol-series-1" min="0" max="${top}" value="${v}" aria-label="${label}">${label}</meter>`;
 }

@@ -238,7 +238,7 @@ export function snippet(ctx: Ctx, id: string, label: string, code: string): Safe
 
 /** The agent a session or event comes from, as a small tag that never wraps. */
 export function sourceBadge(source: string): SafeHtml {
-  return html`<span class="ol-badge ol-badge-outline admin-source">${source}</span>`;
+  return html`<span class="ol-badge ol-badge-outline ol-badge-mono">${source}</span>`;
 }
 
 /** Where a session's page is. */
@@ -263,7 +263,8 @@ export function sessionName(ctx: Ctx, s: Pick<SessionRow, 'title' | 'prompt'>, m
 
 /**
  * Chips: small, muted notes in a flow of content, such as a command an agent ran or context it
- * injected. With a detail, the chip opens to show it.
+ * injected, with the label in monospace. With a detail, the chip opens to show it, and the extras
+ * (a badge, the event's link) go under it.
  */
 export function chip(
   ctx: Ctx,
@@ -272,19 +273,17 @@ export function chip(
     label: HtmlValue;
     detail?: string | null;
     extra?: HtmlValue;
-    tone?: 'danger';
   },
 ): SafeHtml {
-  const cls = `admin-chip${o.tone ? ` admin-chip-${o.tone}` : ''}`;
-  const head = html`${icon(ctx, o.icon, 'sm')}<span class="admin-chip-label">${o.label}</span>`;
+  const head = html`${icon(ctx, o.icon, 'sm')}<span class="ol-chip-label">${o.label}</span>`;
   return o.detail
-    ? html`<details class="${cls}"><summary>${head}</summary><pre class="admin-chip-detail">${o.detail}</pre>${o.extra ?? ''}</details>`
-    : html`<span class="${cls}">${head}${o.extra ?? ''}</span>`;
+    ? html`<details class="ol-chip ol-chip-mono"><summary>${head}</summary><pre class="ol-chip-detail">${o.detail}</pre>${o.extra ? html`<div class="ol-chip-foot">${o.extra}</div>` : ''}</details>`
+    : html`<span class="ol-chip ol-chip-mono">${head}${o.extra ?? ''}</span>`;
 }
 
 /** A small link to an event's page, its provenance included: an icon, with the id as its title. */
 export function eventLink(ctx: Ctx, id: string): SafeHtml {
-  return html`<a class="admin-event-link" href="${href('event', { id })}" title="${id}" aria-label="${ctx.t('event.open', { id })}">${icon(ctx, 'link', 'sm')}</a>`;
+  return html`<a class="ol-quiet-link" href="${href('event', { id })}" title="${id}" aria-label="${ctx.t('event.open', { id })}">${icon(ctx, 'link', 'sm')}</a>`;
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -379,10 +379,10 @@ describe('origin ui: pages', () => {
     const session = await b.get(`/admin/session?source=fake&id=${SESSION}`);
     expect(session.text).toContain('&lt;img src=x onerror=alert(1)&gt;');
     // The session by turns: the prompt, and the agent's reply rendered as Markdown, as text.
-    expect(session.text).toContain('<li class="admin-turn" id="turn-1">');
+    expect(session.text).toContain('<li class="ol-card admin-turn" id="turn-1">');
     expect(session.text).toContain('<div class="admin-prompt-text">Keep the schema simple.</div>');
     expect(session.text).toMatch(
-      /<div class="admin-md"><p>&lt;img src=x onerror=alert\(1\)&gt;<\/p><\/div>/,
+      /<div class="ol-prose ol-prose-sm"><p>&lt;img src=x onerror=alert\(1\)&gt;<\/p><\/div>/,
     );
     expect(session.text).toContain(`href="/admin/event?id=${encodeURIComponent(EVENT)}"`);
     for (const p of [`&turn=1&tools=1`, `&turn=99&part=3`, `&turn=x`]) {
@@ -403,7 +403,7 @@ describe('origin ui: pages', () => {
     expect(overview).toContain('Latest forgets and restores');
     // The timeline by day, filtered by name.
     const timeline = (await b.get('/admin/sessions?q=SCHEMA')).text;
-    expect(timeline).toContain('class="admin-day-row"');
+    expect(timeline).toContain('<tr class="ol-table-group"><th colspan="7" scope="rowgroup">');
     expect(timeline).toContain('Keep the schema simple.');
     expect((await b.get('/admin/sessions?q=nothing-like-it')).text).toContain('No sessions match');
     expect((await b.api('GET', 'sessions?q=schema')).json().sessions).toMatchObject([
@@ -439,14 +439,19 @@ describe('origin ui: pages', () => {
     await syncSource({ db, home: tmp }, fakeAdapter(path.join(tmp, 'agent')));
     const page = (await b.get(`/admin/session?source=fake&id=${SESSION}`)).text;
     expect(pageProblems(page)).toEqual([]);
-    expect(page).toContain('<li class="admin-turn" id="turn-2">');
+    expect(page).toContain('<li class="ol-card admin-turn" id="turn-2">');
     expect(page).not.toContain('id="turn-3"');
-    expect(page).toContain('<span class="admin-chip admin-chip-command" title="Command">');
     expect(page).toContain(
-      '<span class="admin-chip-label">/review PR 12 &lt;img src=x onerror=alert(1)&gt;</span>',
+      '<span class="ol-chip ol-chip-accent ol-chip-lg ol-chip-mono" title="Command">',
     );
-    // /clear stays a note of the first turn; the reply's table is a table.
-    expect(page).toContain('<span class="admin-chip-label">/clear</span>');
+    expect(page).toContain(
+      '<span class="ol-chip-label">/review PR 12 &lt;img src=x onerror=alert(1)&gt;</span>',
+    );
+    // /clear stays a note of the first turn, linked to its event; the reply's table is a table.
+    expect(page).toMatch(
+      /<span class="ol-chip ol-chip-mono">.*?<span class="ol-chip-label">\/clear<\/span><a class="ol-quiet-link" href="\/admin\/event\?id=fake%3Aevt-clear" title="fake:evt-clear" aria-label="[^"]+">/s,
+    );
+    expect(page).toContain('<div class="ol-prose-table"><table>');
     expect(page).toContain('<td><code>x | y</code></td><td>2</td>');
     expect(page).not.toContain('<img src=x');
   });

@@ -34,13 +34,13 @@ const LANG = /^[\w+#.-]{1,32}$/;
 const blank = (line: string) => line.trim() === '';
 const indentOf = (line: string) => line.length - line.trimStart().length;
 
-/** Render Markdown text as safe markup, wrapped in `.admin-md`. */
+/** Render Markdown text as safe markup, as the design system's prose (`.ol-prose`). */
 export function markdown(text: string): SafeHtml {
   const lines = text
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .map((l) => l.replace(/\t/g, '    '));
-  return html`<div class="admin-md">${blocks(lines, 0)}</div>`;
+  return html`<div class="ol-prose ol-prose-sm">${blocks(lines, 0)}</div>`;
 }
 
 interface ListItemStart {
@@ -112,7 +112,7 @@ function blocks(lines: string[], depth: number): SafeHtml[] {
       i++; // the closing fence, or the end
       const lang = fence[2] ?? '';
       out.push(
-        html`<div class="ol-code admin-md-code">${LANG.test(lang) ? html`<div class="ol-code-label">${lang}</div>` : ''}<pre><code>${body.join('\n')}</code></pre></div>`,
+        html`<div class="ol-code">${LANG.test(lang) ? html`<div class="ol-code-label">${lang}</div>` : ''}<pre><code>${body.join('\n')}</code></pre></div>`,
       );
       continue;
     }
@@ -123,10 +123,10 @@ function blocks(lines: string[], depth: number): SafeHtml[] {
       const content = inline(heading[2] ?? '', 0, true);
       out.push(
         level === 1
-          ? html`<h4 class="admin-md-h">${content}</h4>`
+          ? html`<h4>${content}</h4>`
           : level === 2
-            ? html`<h5 class="admin-md-h">${content}</h5>`
-            : html`<h6 class="admin-md-h">${content}</h6>`,
+            ? html`<h5>${content}</h5>`
+            : html`<h6>${content}</h6>`,
       );
       i++;
       continue;
@@ -174,7 +174,7 @@ function blocks(lines: string[], depth: number): SafeHtml[] {
         while (i < lines.length && !blank(lines[i] ?? '') && (lines[i] ?? '').includes('|')) {
           rows.push(lines[i++] ?? '');
         }
-        out.push(html`<pre class="admin-md-text">${rows.join('\n')}</pre>`);
+        out.push(html`<pre>${rows.join('\n')}</pre>`);
         continue;
       }
       const body: string[][] = [];
@@ -206,7 +206,7 @@ function blocks(lines: string[], depth: number): SafeHtml[] {
 // ---------------------------------------------------------------------------------------------
 // Tables (GitHub's pipe tables)
 
-type Align = 'left' | 'center' | 'right' | null;
+type Align = 'start' | 'center' | 'end' | null;
 
 /** A table cell longer than this many characters wraps; shorter ones keep to one line. */
 const WRAP_CELL = 40;
@@ -246,7 +246,7 @@ function delimiterRow(line: string): Align[] | null {
   return cells.map((c) => {
     const left = c.startsWith(':');
     const right = c.endsWith(':');
-    return left && right ? 'center' : right ? 'right' : left ? 'left' : null;
+    return left && right ? 'center' : right ? 'end' : left ? 'start' : null;
   });
 }
 
@@ -255,13 +255,13 @@ function table(header: string[], align: Align[], body: string[][]): SafeHtml {
   const cell = (tag: 'th' | 'td', text: string, a: Align) => {
     const content = inline(text, 0, true);
     // Cells keep to one line, so a wide table scrolls; only long text wraps.
-    const names = [a ? `admin-md-${a}` : '', text.length > WRAP_CELL ? 'admin-md-wrap' : '']
+    const names = [a ? `ol-align-${a}` : '', text.length > WRAP_CELL ? 'ol-cell-wrap' : '']
       .filter(Boolean)
       .join(' ');
     const cls = names ? html` class="${names}"` : '';
     return tag === 'th' ? html`<th${cls}>${content}</th>` : html`<td${cls}>${content}</td>`;
   };
-  return html`<div class="admin-md-table"><table><thead><tr>${header.map((h, k) => cell('th', h, align[k] ?? null))}</tr></thead>${
+  return html`<div class="ol-prose-table"><table><thead><tr>${header.map((h, k) => cell('th', h, align[k] ?? null))}</tr></thead>${
     body.length === 0
       ? ''
       : html`<tbody>${body.map(
@@ -388,7 +388,7 @@ function count(s: string, c: string): number {
 }
 
 function link(href: string, label: HtmlValue, shown: string | null): SafeHtml {
-  return html`<a class="admin-md-link" href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>${
+  return html`<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>${
     shown === null ? '' : html` <span class="admin-md-url">${shown}</span>`
   }`;
 }

@@ -122,16 +122,13 @@ describe('brand', () => {
 
   it('adds to the design system with its tokens only, never literal colours', () => {
     const css = fs.readFileSync(path.join(PACKAGE_ROOT, 'assets', 'admin.css'), 'utf8');
-    const all = css.replace(/\/\*[\s\S]*?\*\//g, '');
-    // The one exception: the chart palette, eight categorical colours the kit does not have yet,
-    // each a light and a dark value, in one block and nowhere else.
-    const palette = /^body \{([^}]*)\}/m.exec(all)?.[1] ?? '';
-    const slots = palette.match(/--admin-series-\d: light-dark\([^;]*\);/g) ?? [];
-    expect(slots).toHaveLength(8);
-    expect(palette.replace(/--admin-series-\d: light-dark\([^;]*\);/g, '').trim()).toBe('');
-    const rules = all.replace(/^body \{[^}]*\}/m, '');
-    expect(rules).not.toMatch(/#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab|lab|lch)\(/i);
+    const rules = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(rules).not.toMatch(
+      /#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|hwb|oklch|oklab|lab|lch|color|light-dark)\(/i,
+    );
     expect(rules).not.toMatch(/@import|url\(/i);
+    // No custom properties of its own: colours, sizes, and the chart palette are the kit's tokens.
+    expect(rules).not.toMatch(/(?:^|[;{\s])--[\w-]+\s*:/);
     expect(rules).toContain('var(--ol-');
   });
 });
