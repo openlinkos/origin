@@ -162,6 +162,20 @@ describe('turns', () => {
     expect(turn?.reply?.id).toBe(last.id);
   });
 
+  it('keep later results of a call with the call, the latest giving its status', () => {
+    // Claude Code's background agents answer once when they start and once when launched.
+    const p = user('Fork a review.');
+    const a = call('Agent', '{"description":"review"}', { toolUseId: 'toolu_f' });
+    const first = result('Fork started — processing in background', { toolUseId: 'toolu_f' });
+    const second = result('Agent failed to launch', { toolUseId: 'toolu_f', isError: true });
+    const [turn] = groupTurns([p, a, first, second], [{ id: p.id }], 1);
+    const tools = (turn?.work ?? []).flatMap((i) => (i.type === 'tool' ? [i.tool] : []));
+    expect(tools.map((t) => [t.name, t.result?.id, t.more.map((r) => r.id), t.status])).toEqual([
+      ['Agent', first.id, [second.id], 'error'],
+    ]);
+    expect(turn?.tools).toMatchObject({ calls: 1, error: 1 });
+  });
+
   it('keep the agent’s messages on the way in the work, and its last one as the reply', () => {
     const p = user('Refactor it.');
     const m1 = reply('Let me look first.');

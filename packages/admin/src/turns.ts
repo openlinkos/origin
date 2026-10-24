@@ -26,6 +26,12 @@ export interface ToolRun {
   input: string;
   call: EventRow | null;
   result: EventRow | null;
+  /**
+   * Results that came after the first for the same call, in order: Claude Code's background agents
+   * answer once when they start and once when they are launched.
+   */
+  more: EventRow[];
+  /** The status of the latest result. */
   status: ToolStatus;
 }
 
@@ -374,6 +380,7 @@ export function groupTurns(
         input,
         call: e,
         result: null,
+        more: [],
         status: 'pending',
       };
       const key = callKey(e);
@@ -382,9 +389,14 @@ export function groupTurns(
       items.push({ type: 'tool', tool, subAgent });
     } else if (e.kind === 'tool_result') {
       const key = callKey(e);
-      let tool = key !== null ? byKey.get(key) : unkeyed.shift();
-      if (tool && tool.result !== null) tool = undefined;
-      if (key !== null) byKey.delete(key);
+      const known = key !== null ? byKey.get(key) : undefined;
+      if (known && known.result !== null) {
+        // A later result for a call that has one already.
+        known.more.push(e);
+        known.status = resultStatus(e);
+        continue;
+      }
+      const tool = known ?? (key === null ? unkeyed.shift() : undefined);
       if (tool) {
         tool.result = e;
         tool.status = resultStatus(e);
@@ -398,6 +410,7 @@ export function groupTurns(
             input: '',
             call: null,
             result: e,
+            more: [],
             status: resultStatus(e),
           },
           subAgent,

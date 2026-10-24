@@ -113,10 +113,9 @@ function inputText(input: string): string {
 function toolRow(ctx: Ctx, item: Extract<TurnItem, { type: 'tool' }>): SafeHtml {
   const t = ctx.t;
   const tool = item.tool;
+  const last = tool.more.at(-1) ?? tool.result;
   const took =
-    tool.call && tool.result && tool.result.ts >= tool.call.ts
-      ? fmtSpan(tool.result.ts - tool.call.ts, t)
-      : '';
+    tool.call && last && last.ts >= tool.call.ts ? fmtSpan(last.ts - tool.call.ts, t) : '';
   const status = t(`turn.status.${tool.status}`);
   return html`<li class="admin-tool" data-status="${tool.status}"${item.subAgent ? html` data-subagent="true"` : ''}>
       <details>
@@ -138,6 +137,7 @@ function toolRow(ctx: Ctx, item: Extract<TurnItem, { type: 'tool' }>): SafeHtml 
               ? html`<div class="ol-code ol-code-wrap"><div class="ol-code-label">${t('turn.result')}${eventLink(ctx, tool.result.id)}</div><pre>${tool.result.text}</pre></div>`
               : html`<p class="ol-hint">${t('turn.noResult')}</p>`
           }
+          ${tool.more.map((r) => html`<div class="ol-code ol-code-wrap"><div class="ol-code-label">${t('turn.result')}${eventLink(ctx, r.id)}</div><pre>${r.text}</pre></div>`)}
         </div>
       </details>
     </li>`;
