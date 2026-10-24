@@ -35,6 +35,11 @@ export interface Entry {
    * current version (see docs/architecture.md#entries).
    */
   concurrent: boolean;
+  /**
+   * Derived from a version of an agent's native memory, such as a memory file of Claude Code (see
+   * memories.ts), rather than written through Origin.
+   */
+  imported: boolean;
 }
 
 /** A source to cite: an event id, an exact quote from an event, or both. */
@@ -77,8 +82,13 @@ export interface EntryFilter {
   /** epoch ms, inclusive, on created_at. */
   since?: number;
   until?: number;
-  /** Include superseded versions (forgotten entries are never returned). */
+  /**
+   * Include superseded versions, and entries whose validity has ended (forgotten entries are never
+   * returned).
+   */
   includeSuperseded?: boolean;
+  /** Include entries whose validity has ended: their `valid_to` has passed. */
+  includeEnded?: boolean;
   limit?: number;
   /** Rows to skip, for paging. */
   offset?: number;
@@ -97,7 +107,8 @@ const ENTRY_SELECT = `SELECT en.id, en.kind, en.text, en.confidence, en.author, 
   (SELECT o.id FROM entry o WHERE o.root = en.root ORDER BY o.created_at DESC, o.id DESC LIMIT 1)
     AS current_id,
   EXISTS (SELECT 1 FROM entry c WHERE c.supersedes = en.id) AS corrected,
-  fe.entry_id IS NOT NULL AS forgotten
+  fe.entry_id IS NOT NULL AS forgotten,
+  EXISTS (SELECT 1 FROM imported_entry i WHERE i.entry_id = en.id) AS imported
   FROM entry en
   LEFT JOIN forgotten_entry fe ON fe.entry_id = en.id`;
 
@@ -117,6 +128,7 @@ interface EntryRecord {
   current_id: string;
   corrected: number;
   forgotten: number;
+  imported: number;
 }
 
 function toEntry(r: EntryRecord): Entry {
@@ -141,6 +153,7 @@ function toEntry(r: EntryRecord): Entry {
     createdAt: r.created_at,
     status,
     concurrent: status === 'superseded' && !r.corrected,
+    imported: r.imported === 1,
   };
 }
 
@@ -174,6 +187,11 @@ export function isEntryForgotten(db: Database, id: string): boolean {
 function entryWhere(f: EntryFilter, params: unknown[]): string {
   const parts = ['fe.entry_id IS NULL'];
   if (!f.includeSuperseded) parts.push(CURRENT_VERSION);
+  if (!f.includeSuperseded && !f.includeEnded) {
+    // Ended, such as an imported memory whose file was deleted: history, no longer current.
+    parts.push('(en.valid_to IS NULL OR en.valid_to > ?)');
+    params.push(Date.now());
+  }
   if (f.kind) {
     parts.push('en.kind = ?');
     params.push(f.kind);
@@ -515,16 +533,17 @@ export function correct(db: Database, id: string, input: CorrectInput, now = Dat
   return getEntry(db, newId) as Entry;
 }
 
-/** Number of active entries per kind. */
+/** Number of active entries per kind, as listed: those whose validity has not ended. */
 export function entryCounts(db: Database): Record<EntryKind, number> {
   const counts: Record<EntryKind, number> = { memory: 0, knowledge: 0, cognition: 0 };
   const rows = db
     .prepare(
       `SELECT en.kind AS kind, COUNT(*) AS n FROM entry en
        LEFT JOIN forgotten_entry fe ON fe.entry_id = en.id
-       WHERE fe.entry_id IS NULL AND ${CURRENT_VERSION} GROUP BY en.kind`,
+       WHERE fe.entry_id IS NULL AND ${CURRENT_VERSION}
+         AND (en.valid_to IS NULL OR en.valid_to > ?) GROUP BY en.kind`,
     )
-    .all() as unknown as Array<{ kind: EntryKind; n: number }>;
+    .all(Date.now()) as unknown as Array<{ kind: EntryKind; n: number }>;
   for (const r of rows) counts[r.kind] = r.n;
   return counts;
 }

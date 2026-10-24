@@ -255,7 +255,12 @@ describe('a store of a newer Origin', () => {
 
     // A store this code would have to go back for, after a newer one migrated it.
     const other = path.join(tmp, 'other.db');
-    openDatabase(other, { migrations: counted([]) }).close();
+    const beyond: Migration[] = Array.from({ length: STORE_VERSION }, (_, i) => ({
+      version: i + 2,
+      name: `step ${i + 2}`,
+      up: () => {},
+    }));
+    openDatabase(other, { migrations: beyond }).close();
     expect(() => openDatabase(other)).toThrow(OriginError);
   });
 });

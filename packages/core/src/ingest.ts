@@ -6,6 +6,8 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { OriginError } from './errors.js';
 import { readRange } from './frames.js';
+import { storeName } from './identity.js';
+import { importMemory } from './memories.js';
 import {
   appendMirror,
   FRAME_BYTES,
@@ -314,17 +316,25 @@ export function completeLines(content: Content, start: number, end: number): Buf
 }
 
 /**
- * Parse complete lines of a raw file, insert their events, refresh the touched sessions, append
- * the lines to the file's mirror, and advance the cursor, whose tail hash after these lines is
- * `newTailHash`. Shared by local syncs and hub appends; must run inside a write transaction.
- * Returns whether frames of the mirror were sealed (see appendMirror).
+ * Parse complete lines of a raw file, insert their events, derive the entries of the native
+ * memories they carry, refresh the touched sessions, append the lines to the file's mirror, and
+ * advance the cursor, whose tail hash after these lines is `newTailHash`. Shared by local syncs and
+ * hub appends; must run inside a write transaction. Returns whether frames of the mirror were
+ * sealed (see appendMirror).
  */
 function appendLines(
   ctx: IngestContext,
   adapter: SourceAdapter,
   raw: RawFileRow,
   chunk: Buffer,
-  parse: { absPath: string; relPath: string; fileMtimeMs: number; agentVersion: string | null },
+  parse: {
+    absPath: string;
+    relPath: string;
+    fileMtimeMs: number;
+    agentVersion: string | null;
+    /** On a hub, the device that sent the file; unset for this store's own files. */
+    device?: string;
+  },
   newTailHash: string,
   stats: AppendStats,
 ): boolean {
@@ -335,13 +345,7 @@ function appendLines(
   lines.pop(); // trailing empty string
   const baseLine = raw.lines_ingested;
   const touchedSessions = new Set<string>();
-
-  const insert = ctx.db.prepare(
-    `INSERT OR IGNORE INTO event
-         (id, source, session_id, parent_id, ts, project, cwd, git_branch, role, kind, text,
-          raw_file_id, raw_line, agent_version, meta)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
+  const insert = eventInserter(ctx.db, adapter.id, raw.id, parse.agentVersion);
   // The latest title wins, except that a generated one never replaces one the user gave.
   const setTitle = ctx.db.prepare(
     `INSERT INTO session (source, session_id, title, title_manual) VALUES (?, ?, ?, ?)
@@ -370,27 +374,23 @@ function appendLines(
       continue;
     }
     if (!parsed) continue;
-    for (const ev of parsed.events) {
-      const info = insert.run(
-        `${adapter.id}:${ev.id}`,
-        adapter.id,
-        ev.sessionId,
-        ev.parentId ?? null,
-        ev.ts,
-        ev.project ?? null,
-        ev.cwd ?? null,
-        ev.gitBranch ?? null,
-        ev.role,
-        ev.kind,
-        ev.text,
-        raw.id,
-        lineNo,
-        ev.agentVersion ?? parse.agentVersion ?? null,
-        ev.meta ? JSON.stringify(ev.meta) : null,
-      );
-      if (info.changes > 0) {
-        stats.eventsAdded++;
-        touchedSessions.add(ev.sessionId);
+    for (const ev of insert(lineNo, parsed.events)) {
+      stats.eventsAdded++;
+      // A memory event belongs to no conversation: it is counted in no session.
+      if (ev.kind !== 'memory') touchedSessions.add(ev.sessionId);
+    }
+    if (parsed.memory) {
+      try {
+        const growthOrigin = storeName(ctx.db);
+        importMemory(
+          ctx.db,
+          { source: adapter.id, device: parse.device ?? growthOrigin, growthOrigin },
+          parsed.memory,
+        );
+      } catch (err) {
+        if (!(err instanceof OriginError)) throw err;
+        stats.parseErrors++;
+        ctx.log?.(`memory not imported ${parse.relPath}:${lineNo}: ${err.message}`);
       }
     }
     if (parsed.sessionTitle && parsed.sessionId) {
@@ -414,6 +414,45 @@ function appendLines(
       raw.id,
     );
   return sealed;
+}
+
+/**
+ * Inserts the events parsed from a line of a raw file, keeping those already stored (event ids are
+ * stable, so ingesting a line again adds nothing); returns the events it added.
+ */
+export function eventInserter(
+  db: Database,
+  source: string,
+  rawFileId: number,
+  agentVersion: string | null,
+): (lineNo: number, events: EventInput[]) => EventInput[] {
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO event
+         (id, source, session_id, parent_id, ts, project, cwd, git_branch, role, kind, text,
+          raw_file_id, raw_line, agent_version, meta)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  return (lineNo, events) =>
+    events.filter(
+      (ev) =>
+        insert.run(
+          `${source}:${ev.id}`,
+          source,
+          ev.sessionId,
+          ev.parentId ?? null,
+          ev.ts,
+          ev.project ?? null,
+          ev.cwd ?? null,
+          ev.gitBranch ?? null,
+          ev.role,
+          ev.kind,
+          ev.text,
+          rawFileId,
+          lineNo,
+          ev.agentVersion ?? agentVersion ?? null,
+          ev.meta ? JSON.stringify(ev.meta) : null,
+        ).changes > 0,
+    );
 }
 
 /** A chunk of a device's raw mirror, replicated to a hub (see docs/architecture.md#personal-hub). */
@@ -485,6 +524,7 @@ export function appendRemote(
             relPath,
             fileMtimeMs: typeof mtime === 'number' && Number.isFinite(mtime) ? mtime : startedAt,
             agentVersion: chunk.agentVersion ?? null,
+            device: chunk.device,
           },
           mirrorTailHash(ctx, raw, chunk.data),
           stats,
@@ -702,8 +742,9 @@ function generatedContent(
  * derived and can be rebuilt from event at any time.
  */
 export function refreshSession(db: Database, source: string, sessionId: string): void {
+  // Memory events are the versions of an agent's memory files, not part of a conversation.
   const visible =
-    'source = ? AND session_id = ? AND NOT EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_id = e.id)';
+    "source = ? AND session_id = ? AND kind <> 'memory' AND NOT EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_id = e.id)";
   const agg = db
     .prepare(
       `SELECT MIN(ts) AS started, MAX(ts) AS ended, COUNT(*) AS n FROM event e WHERE ${visible}`,

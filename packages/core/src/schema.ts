@@ -25,6 +25,8 @@
  *   corrections on different stores); `root` is the first version of the chain, fixed on insert.
  *   Status is derived, never stored. `origin` is the store that wrote the version.
  * - entry_fts: FTS5 trigram index over entries.
+ * - imported_entry: the versions of entries this store derived from native memories (see
+ *   memories.ts). Every store that parses a memory stream derives them, so they are never sent.
  * - tombstone / forgotten_entry / excluded_event: forget and restore operations (Tombstone, with a
  *   global `tmb_` id and the store it came from; a restore is a tombstone whose target is a
  *   forget's id), and what is hidden on this store: each hidden entry and event with one forget in
@@ -226,6 +228,10 @@ CREATE TABLE IF NOT EXISTS entry_source (
   PRIMARY KEY (entry_id, event_id)
 );
 CREATE INDEX IF NOT EXISTS entry_source_event ON entry_source (event_id);
+
+CREATE TABLE IF NOT EXISTS imported_entry (
+  entry_id TEXT PRIMARY KEY REFERENCES entry(id)
+);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts USING fts5(
   text,

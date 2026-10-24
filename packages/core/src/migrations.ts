@@ -1,6 +1,6 @@
 import type { Database } from './db.js';
 import { OriginError } from './errors.js';
-import { reparseTitles } from './reparse.js';
+import { reparseMemories, reparseTitles } from './reparse.js';
 import { SCHEMA } from './schema.js';
 import type { SourceAdapter } from './types.js';
 
@@ -72,6 +72,13 @@ export const MIGRATIONS: Migration[] = [
     version: 3,
     name: 'session titles from Claude Code lines that were skipped before',
     up: (ctx) => reparseTitles(ctx, 'claude-code', ['"ai-title"', '"custom-title"', '"summary"']),
+  },
+  {
+    version: 4,
+    name: 'events and entries of memory streams mirrored before they were read',
+    up: (ctx) => {
+      for (const source of ['claude-code', 'zcode', 'grok']) reparseMemories(ctx, source);
+    },
   },
 ];
 

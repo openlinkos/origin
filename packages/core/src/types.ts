@@ -1,8 +1,11 @@
 /** Event role. */
 export type Role = 'user' | 'assistant' | 'system';
 
-/** Event kind: plain message, tool call, tool result, meta (command echoes etc.), system event. */
-export type EventKind = 'message' | 'tool_use' | 'tool_result' | 'meta' | 'system';
+/**
+ * Event kind: plain message, tool call, tool result, meta (command echoes etc.), system event, or a
+ * version of one of the agent's native memories (a memory file it keeps; see NativeMemory).
+ */
+export type EventKind = 'message' | 'tool_use' | 'tool_result' | 'meta' | 'system' | 'memory';
 
 /** An event produced by an adapter (not yet stored; no source or raw locator). */
 export interface EventInput {
@@ -59,6 +62,32 @@ export interface ParsedLine {
    * Grok Build does, every title is simply the latest.
    */
   manualTitle?: boolean;
+  /**
+   * A version of one of the agent's native memories, read from this line's `memory` event: Origin
+   * imports it as an entry (see docs/architecture.md#native-memories).
+   */
+  memory?: NativeMemory;
+}
+
+/**
+ * One version of a native memory, such as one Markdown file of Claude Code's `memory/` directory,
+ * as an adapter reads it from a line of a memory stream. Every store that parses the line derives
+ * the same entry from it, under an id derived from the event's (see memories.ts).
+ */
+export interface NativeMemory {
+  /** The id of the line's event (as in `events`) the memory is read from. */
+  eventId: string;
+  /** The id of the event of the memory's previous version, or null for its first. */
+  previous: string | null;
+  /** When this version was written, or its deletion noticed (epoch ms). */
+  at: number;
+  /** The memory as of this version; null once it was deleted, or left without content. */
+  entry: {
+    kind: 'memory' | 'knowledge' | 'cognition';
+    text: string;
+    confidence: number;
+    project: string | null;
+  } | null;
 }
 
 export interface SourceFile {

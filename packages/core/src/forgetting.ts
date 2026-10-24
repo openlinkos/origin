@@ -817,25 +817,32 @@ export function applyTombstone(
 }
 
 /**
- * Cover a version that just arrived (on a hub, pushed by a device) by the forgets in effect that
- * concern it: those that cover another version of its chain, which takes it as a whole, or one of
- * the events it cites. Forgets whose coverage grows are logged again under `growthOrigin`. Must run
- * inside a write transaction, after the version is inserted.
+ * Cover a version that just arrived (on a hub, pushed by a device; on any store, derived from a
+ * memory stream) by the forgets in effect that concern it: those that cover another version of its
+ * chain, which takes it as a whole, or one of the events it cites, and those whose target is the
+ * version or one of those events, made before either was here (an entry derived from a native
+ * memory has the same id on every store, so it can be forgotten on one before another derives it).
+ * Forgets whose coverage grows are logged again under `growthOrigin`. Must run inside a write
+ * transaction, after the version is inserted.
  */
 export function coverArrival(db: Database, entryId: string, growthOrigin: string): void {
   const root = rootOf(db, entryId);
   if (!root) return;
   const concerned = db
     .prepare(
-      `SELECT t.id, t.target FROM tombstone t WHERE ${IN_EFFECT} AND t.id IN (
+      `SELECT t.id, t.target FROM tombstone t WHERE ${IN_EFFECT} AND (t.id IN (
          SELECT x.tombstone_id FROM tombstone_effect x JOIN entry en ON en.id = x.item
          WHERE x.kind = 'entry' AND en.root = ? AND en.id <> ?
          UNION
          SELECT x.tombstone_id FROM tombstone_effect x JOIN entry_source s ON s.event_id = x.item
          WHERE x.kind = 'event' AND s.entry_id = ?)
+         OR t.target = ? OR t.target IN (SELECT event_id FROM entry_source WHERE entry_id = ?))
        ORDER BY t.created_at, t.id`,
     )
-    .all(root, entryId, entryId) as unknown as Array<{ id: string; target: string }>;
+    .all(root, entryId, entryId, entryId, entryId) as unknown as Array<{
+    id: string;
+    target: string;
+  }>;
   const q = statements(db);
   const hows = db.prepare(
     `SELECT DISTINCT x.how FROM tombstone_effect x JOIN entry en ON en.id = x.item

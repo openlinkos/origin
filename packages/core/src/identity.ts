@@ -34,9 +34,20 @@ export function initStoreName(db: Database, name: string): string {
   return getSetting(db, STORE_NAME) ?? setStoreName(db, name);
 }
 
-/** Whether this store has written an entry or a tombstone under `name`. */
+/**
+ * Whether this store has written an entry or a tombstone under `name`. Entries derived from native
+ * memories do not count: they are never sent, and other stores derive their own.
+ */
 function wroteAs(db: Database, name: string): boolean {
-  return db.prepare('SELECT 1 FROM change_log WHERE origin = ? LIMIT 1').get(name) !== undefined;
+  return (
+    db
+      .prepare(
+        `SELECT 1 FROM change_log c WHERE origin = ?
+           AND NOT (kind = 'entry' AND EXISTS (SELECT 1 FROM imported_entry i WHERE i.entry_id = c.id))
+         LIMIT 1`,
+      )
+      .get(name) !== undefined
+  );
 }
 
 /** Whether the store keeps its name for good: it has written entries or tombstones under it. */

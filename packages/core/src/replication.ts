@@ -20,6 +20,7 @@ import {
   type TombstoneRecord,
 } from './forgetting.js';
 import { storeName } from './identity.js';
+import { isImportedEntry } from './memories.js';
 import { NAME_RE } from './tokens.js';
 
 /**
@@ -299,11 +300,17 @@ export interface OwnChange {
   id: string;
 }
 
-/** The entries and tombstones this store wrote itself after `after`, oldest first. */
+/**
+ * The entries and tombstones this store wrote itself after `after`, oldest first. Entries derived
+ * from native memories are not among them: every store that has the memory stream derives them
+ * (see memories.ts).
+ */
 export function ownChanges(db: Database, after: number, limit = 100): OwnChange[] {
   return db
     .prepare(
-      'SELECT seq, kind, id FROM change_log WHERE seq > ? AND origin = ? ORDER BY seq LIMIT ?',
+      `SELECT seq, kind, id FROM change_log c WHERE seq > ? AND origin = ?
+         AND NOT (kind = 'entry' AND EXISTS (SELECT 1 FROM imported_entry i WHERE i.entry_id = c.id))
+       ORDER BY seq LIMIT ?`,
     )
     .all(after, storeName(db), limit) as unknown as OwnChange[];
 }
@@ -319,6 +326,8 @@ export function unpushedOnly(db: Database, pushedThrough: number): RuleThreeJudg
     "SELECT MAX(seq) AS seq FROM change_log WHERE kind = 'entry' AND id = ?",
   );
   return (root) => {
+    // The hub derives an imported entry from the memory stream, as this store does.
+    if (isImportedEntry(db, root)) return false;
     const row = seqOf.get(root) as { seq: number | null } | undefined;
     return row?.seq == null || row.seq > pushedThrough;
   };

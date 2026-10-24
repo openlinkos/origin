@@ -2,6 +2,15 @@
 
 All notable changes to Origin are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the store format or a public interface, and its notes say what to do. The five packages (`@openlinkos/origin` and `@openlinkos/origin-core`, `-adapters`, `-mcp`, `-admin`) are released together under one version.
 
+## [Unreleased]
+
+**Upgrading.** A store is upgraded in place the first time this version opens it (format version 4). Upgrade the hub before its devices: a hub of 0.2 mirrors the memory streams a device sends without reading them, and reads them once it is upgraded, but until then a device's corrections of imported entries wait for it.
+
+### Memory
+
+- Imports the memories agents keep for themselves as entries: the memory files of Claude Code (`~/.claude/projects/<project>/memory/`), ZCode (`~/.zcode/cli/memories/`), and Grok Build (`~/.grok/memory-v2/`, and `~/.grok/memory/` of earlier versions), read and never written. Each version of a file becomes a version of one entry, citing that version of the file as its source; a deleted file ends its entry, and a file that comes back makes it current again. Every store that has a memory stream derives the same entries from it, a hub from what its devices and relays send, so these entries are never sent. MCP results, the CLI, and the admin UI mark them as imported, and a later change of the file supersedes a correction made in Origin.
+- Entries whose validity has ended (their `valid_to` has passed), such as an imported memory whose file was deleted, are left out of search and listings unless history is requested; `get` and `origin show` still show them.
+
 ## [0.2.0] - 2026-10-24
 
 Five agents archived instead of two, a local admin UI, relays, restorable forgetting, and versioned stores.
@@ -76,5 +85,6 @@ The first release.
 - `origin backup <dir>` copies a store consistently while agents keep writing.
 - Requires Node.js 22.16 or later.
 
+[Unreleased]: https://github.com/openlinkos/origin/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/openlinkos/origin/releases/tag/v0.2.0
 [0.1.0]: https://github.com/openlinkos/origin/releases/tag/v0.1.0

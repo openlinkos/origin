@@ -111,6 +111,13 @@ export {
   syncSource,
 } from './ingest.js';
 export {
+  IMPORTED_CONFIDENCE,
+  type ImportContext,
+  importedEntryId,
+  importMemory,
+  isImportedEntry,
+} from './memories.js';
+export {
   FIRST_VERSION,
   type Migration,
   type MigrationContext,
@@ -260,6 +267,7 @@ export type {
   EventKind,
   EventRow,
   GeneratedSource,
+  NativeMemory,
   ParseContext,
   ParsedLine,
   Role,
