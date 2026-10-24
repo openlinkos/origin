@@ -293,7 +293,9 @@ type FeedRole = 'user' | 'assistant' | 'tool' | 'system';
 
 function feedRole(e: Pick<EventRow, 'role' | 'kind'>): FeedRole {
   if (e.kind === 'tool_use' || e.kind === 'tool_result') return 'tool';
-  if (e.role === 'system' || e.kind === 'system' || e.kind === 'meta') return 'system';
+  if (e.role === 'system' || e.kind === 'system' || e.kind === 'meta' || e.kind === 'memory') {
+    return 'system';
+  }
   return e.role;
 }
 
@@ -310,6 +312,7 @@ export function eventLabel(ctx: Ctx, e: Pick<EventRow, 'role' | 'kind' | 'source
   if (e.kind === 'tool_use') return t('event.toolUse');
   if (e.kind === 'tool_result') return t('event.toolResult');
   if (e.kind === 'meta') return t('event.meta');
+  if (e.kind === 'memory') return t('event.memory');
   if (e.kind === 'system' || e.role === 'system') return t('event.system');
   return e.role === 'user' ? t('event.user') : e.source;
 }
@@ -359,6 +362,16 @@ export function statusBadge(ctx: Ctx, status: Entry['status']): SafeHtml {
   return badge(ctx.t(`status.${status}`), status === 'forgotten' ? 'danger' : 'neutral');
 }
 
+/** Whether an entry's validity has ended: its `valid_to` has passed. */
+export function hasEnded(e: Pick<Entry, 'validTo'>): boolean {
+  return e.validTo !== null && e.validTo <= Date.now();
+}
+
+/** What else to know about an entry at a glance: imported from a memory file, its validity ended. */
+export function entryFlags(ctx: Ctx, e: Pick<Entry, 'imported' | 'validTo'>): SafeHtml {
+  return html`${e.imported ? badge(ctx.t('flag.imported'), 'neutral') : ''}${hasEnded(e) ? badge(ctx.t('flag.ended'), 'neutral') : ''}`;
+}
+
 /** Entries as a table: the text links to the entry; kind, status, confidence, author, time. */
 export function entryTable(ctx: Ctx, entries: Entry[], textMax = 140): SafeHtml {
   const t = ctx.t;
@@ -367,7 +380,7 @@ export function entryTable(ctx: Ctx, entries: Entry[], textMax = 140): SafeHtml 
     entries.map(
       (e) => html`<tr>
         <td><a class="ol-cell-title" href="${href('entry', { id: e.id })}">${clip(e.text, textMax)}</a><span class="ol-cell-sub ol-mono">${e.id}</span></td>
-        <td><span class="ol-cluster">${kindBadge(ctx, e.kind)}${statusBadge(ctx, e.status)}</span></td>
+        <td><span class="ol-cluster">${kindBadge(ctx, e.kind)}${statusBadge(ctx, e.status)}${entryFlags(ctx, e)}</span></td>
         <td class="ol-num">${e.confidence}</td>
         <td>${e.author}</td>
         <td class="ol-nowrap">${time(e.createdAt)}</td>

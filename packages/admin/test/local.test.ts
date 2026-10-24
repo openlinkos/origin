@@ -338,6 +338,75 @@ describe('origin ui: sessions', () => {
 });
 
 describe('origin ui: pages', () => {
+  it('show an entry imported from a memory file, its file, and that it ended', async () => {
+    const memories = path.join(tmp, 'memories');
+    fs.mkdirSync(memories);
+    const versions = [
+      { id: 'm1', at: Date.UTC(2026, 9, 20, 10), file: 'notes.md', text: `Use pnpm. ${XSS}` },
+      { id: 'm2', prev: 'm1', at: Date.UTC(2026, 9, 21, 10), file: 'notes.md' },
+    ];
+    fs.writeFileSync(
+      path.join(memories, 'memory.jsonl'),
+      `${versions.map((v) => JSON.stringify(v)).join('\n')}\n`,
+    );
+    const adapter: SourceAdapter = {
+      id: 'fake',
+      displayName: 'Fake',
+      version: () => '0.0.1',
+      async discover() {
+        return [{ absPath: path.join(memories, 'memory.jsonl'), relPath: 'memory/demo.jsonl' }];
+      },
+      parseLine(line) {
+        const v = JSON.parse(line) as (typeof versions)[number] & { prev?: string };
+        const deleted = v.text === undefined;
+        return {
+          events: [
+            {
+              id: v.id,
+              sessionId: 'memory/demo',
+              ts: v.at,
+              role: 'assistant',
+              kind: 'memory',
+              text: v.text ?? '',
+              project: 'demo',
+              meta: { file: v.file, op: deleted ? 'delete' : 'write' },
+            },
+          ],
+          memory: {
+            eventId: v.id,
+            previous: v.prev ?? null,
+            at: v.at,
+            entry: deleted
+              ? null
+              : { kind: 'cognition', text: v.text as string, confidence: 0.9, project: 'demo' },
+          },
+        };
+      },
+    };
+    await syncSource({ db, home: tmp }, adapter);
+    const ended = db.prepare('SELECT id FROM entry WHERE valid_to IS NOT NULL').get() as {
+      id: string;
+    };
+
+    const local = await serveLocal();
+    const b = await local.signedIn();
+    const page = await b.get(`/admin/entry?id=${ended.id}`);
+    expect(page.status).toBe(200);
+    expect(pageProblems(page.text)).toEqual([]);
+    expect(page.text).toContain('Imported from fake&#39;s own memory file.');
+    expect(page.text).toContain('(ended)');
+    expect(page.text).toContain('<span class="ol-mono">notes.md</span>');
+    expect(page.text).toContain('The file was deleted.');
+    expect(page.text).toContain('Use pnpm. &lt;img src=x onerror=alert(1)&gt;');
+    // Ended: in the history, not among the current entries.
+    expect((await b.get('/admin/entries')).text).not.toContain(ended.id);
+    expect((await b.get('/admin/entries?history=1')).text).toContain(ended.id);
+    const event = await b.get(`/admin/event?id=${encodeURIComponent('fake:m1')}`);
+    expect(event.status).toBe(200);
+    expect(pageProblems(event.text)).toEqual([]);
+    expect(event.text).toContain('Memory file');
+  });
+
   it('render the local store with no hub-only page or link', async () => {
     const local = await serveLocal();
     const b = await local.signedIn();

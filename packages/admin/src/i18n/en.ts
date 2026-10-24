@@ -292,6 +292,8 @@ export const en = {
   'event.user': 'User',
   'event.system': 'System',
   'event.meta': 'Meta',
+  'event.memory': 'Memory file',
+  'event.memoryDeleted': 'The file was deleted.',
   'event.toolUse': 'Tool call',
   'event.toolResult': 'Tool result',
   'event.branch': 'Git branch',
@@ -331,6 +333,8 @@ export const en = {
   'status.superseded': 'superseded',
   'status.forgotten': 'forgotten',
   'status.concurrent': 'concurrent edit',
+  'flag.imported': 'imported',
+  'flag.ended': 'ended',
 
   'entries.title': 'Entries',
   'entries.help':
@@ -355,6 +359,9 @@ export const en = {
   'entry.details': 'Details',
   'entry.status': 'Status',
   'entry.valid': 'Valid',
+  'entry.ended': '(ended)',
+  'entry.imported':
+    "Imported from {agent}'s own memory file. When the file changes, its new version replaces this entry, corrections made here included.",
   'entry.sources': 'Sources ({n})',
   'entry.sourcesHelp': 'The events this entry cites, with the words it quotes.',
   'entry.historyTitle': 'Versions',

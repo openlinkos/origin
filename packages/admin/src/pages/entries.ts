@@ -15,8 +15,10 @@ import {
   alert,
   badge,
   empty,
+  entryFlags,
   entryTable,
   feedItem,
+  hasEnded,
   kindBadge,
   linkButton,
   pageHeader,
@@ -28,6 +30,18 @@ import {
   tableWrap,
 } from './components.js';
 import { csrfField, renderPage } from './layout.js';
+
+/** A version of a memory file that deleted it. */
+const memoryDeleted = (e: Pick<EventRow, 'kind' | 'meta'>) =>
+  e.kind === 'memory' && e.meta?.op === 'delete';
+
+/** The memory file a memory event is a version of, as a meta item. */
+function memoryFile(e: Pick<EventRow, 'kind' | 'meta'>): SafeHtml {
+  const file = e.meta?.file;
+  return e.kind === 'memory' && typeof file === 'string'
+    ? html`<span class="ol-mono">${file}</span>`
+    : html``;
+}
 
 function kindSelect(ctx: Ctx, id: string, current: string, withAll: boolean): SafeHtml {
   return html`<select class="ol-select" id="${id}" name="kind">${withAll ? html`<option value="">${ctx.t('filter.all')}</option>` : ''}${ENTRY_KINDS.map(
@@ -97,9 +111,10 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
     crumbs: [{ label: t('nav.entries'), href: '/admin/entries' }],
     body: html`${pageHeader(ctx, {
       title: html`<span class="ol-mono">${e.id}</span>`,
-      badges: html`${kindBadge(ctx, e.kind)}${statusBadge(ctx, e.status)}`,
+      badges: html`${kindBadge(ctx, e.kind)}${statusBadge(ctx, e.status)}${entryFlags(ctx, e)}`,
       actions: html`${e.status === 'active' ? linkButton(ctx, { href: href('correct', { id: e.id }), label: t('entry.correct'), icon: 'pencil' }) : ''}${linkButton(ctx, { href: href('forget', { id: e.id }), label: t('entry.forget'), icon: 'eraser', variant: 'danger-soft' })}`,
     })}
+    ${e.imported ? html`<div class="ol-notices">${alert(ctx, 'info', t('entry.imported', { agent: e.author.replace(/@.*$/, '') }))}</div>` : ''}
     ${e.status === 'superseded' && e.supersededBy ? html`<div class="ol-notices">${alert(ctx, 'info', html`${t(e.concurrent ? 'entry.concurrent' : 'entry.supersededBy')} <a class="ol-mono" href="${href('entry', { id: e.supersededBy })}">${e.supersededBy}</a>`)}</div>` : ''}
     <div class="ol-grid ol-grid-sidebar ol-section">
       <section class="ol-panel">
@@ -118,7 +133,7 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
           <dt>${t('entry.origin')}</dt><dd>${e.origin}</dd>
           <dt>${t('filter.project')}</dt><dd>${e.project ?? '—'}</dd>
           <dt>${t('tokens.created')}</dt><dd>${time(e.createdAt)}</dd>
-          ${e.validFrom !== null || e.validTo !== null ? html`<dt>${t('entry.valid')}</dt><dd>${time(e.validFrom)} – ${time(e.validTo)}</dd>` : ''}
+          ${e.validFrom !== null || e.validTo !== null ? html`<dt>${t('entry.valid')}</dt><dd>${time(e.validFrom)} – ${time(e.validTo)}${hasEnded(e) ? html` ${t('entry.ended')}` : ''}</dd>` : ''}
         </dl>`,
       })}
     </div>
@@ -127,8 +142,8 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
       description: t('entry.sourcesHelp'),
       body: html`<ol class="ol-feed">${d.sources.map((s) =>
         feedItem(ctx, s.event, {
-          body: clip(s.event.text, 600),
-          meta: html`<span>${s.event.project ?? s.event.source}</span>`,
+          body: memoryDeleted(s.event) ? t('event.memoryDeleted') : clip(s.event.text, 600),
+          meta: html`<span>${s.event.project ?? s.event.source}</span>${memoryFile(s.event)}`,
           extra: s.quote ? html`<blockquote class="ol-quote">${s.quote}</blockquote>` : '',
         }),
       )}</ol>`,

@@ -282,6 +282,8 @@ export const zh: Messages = {
   'event.user': '用户',
   'event.system': '系统',
   'event.meta': '元信息',
+  'event.memory': '记忆文件',
+  'event.memoryDeleted': '文件已删除。',
   'event.toolUse': '工具调用',
   'event.toolResult': '工具结果',
   'event.branch': 'Git 分支',
@@ -321,6 +323,8 @@ export const zh: Messages = {
   'status.superseded': '已取代',
   'status.forgotten': '已遗忘',
   'status.concurrent': '并发修改',
+  'flag.imported': '导入',
+  'flag.ended': '已结束',
 
   'entries.title': '条目',
   'entries.help': '由你的 Agent 或你自己保存的持久陈述。每个条目都引用它所来自的事件。',
@@ -342,6 +346,9 @@ export const zh: Messages = {
   'entry.details': '详情',
   'entry.status': '状态',
   'entry.valid': '有效期',
+  'entry.ended': '（已结束）',
+  'entry.imported':
+    '导入自 {agent} 自己的记忆文件。文件改动后，新版本会替换这条条目，包括在这里做的纠正。',
   'entry.sources': '来源（{n}）',
   'entry.sourcesHelp': '这个条目引用的事件，以及它引用的原话。',
   'entry.historyTitle': '版本',

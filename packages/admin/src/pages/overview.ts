@@ -16,6 +16,7 @@ import {
   alert,
   badge,
   empty,
+  entryFlags,
   kindBadge,
   linkButton,
   pageHeader,
@@ -254,7 +255,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
         : html`<ul class="ol-list">${o.latestEntries.map(
             (e) => html`<li>
           <a class="ol-list-title" href="${href('entry', { id: e.id })}">${clip(e.text, 120)}</a>
-          <span class="ol-list-meta">${kindBadge(ctx, e.kind)}<span>${e.author}</span>${time(e.createdAt)}</span>
+          <span class="ol-list-meta">${kindBadge(ctx, e.kind)}${entryFlags(ctx, e)}<span>${e.author}</span>${time(e.createdAt)}</span>
         </li>`,
           )}</ul>`,
   });
