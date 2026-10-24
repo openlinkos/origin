@@ -6,7 +6,9 @@ sourceHash: sha256-893580dc
 
 Origin 所有值得注意的改动都列在这里。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；1.0 之前，次版本可能改变存储格式或公开接口，它的说明会写明需要怎么做。五个包（`@openlinkos/origin` 以及 `@openlinkos/origin-core`、`-adapters`、`-mcp`、`-admin`）以同一个版本号一起发布。英文版更新日志（`CHANGELOG.md`）是 GitHub 发布说明的来源。
 
-## 未发布 {#unreleased}
+## [0.3.0] - 2026-10-24 {#_0-3-0-2026-10-24}
+
+导入各 Agent 为自己保存的记忆，检索时略去已结束的条目，并在网站上说明版本与升级。
 
 **升级。** 这个版本第一次打开库时会就地升级它（格式版本 4）。请先升级中枢，再升级它的设备：0.2 的中枢会镜像设备发来的记忆流，但不读取，升级之后才读取；在此之前，设备对导入条目的纠正要等待它。
 
@@ -101,5 +103,6 @@ Origin 所有值得注意的改动都列在这里。版本号遵循[语义化版
 - `origin backup <dir>` 能在 Agent 持续写入时一致地复制一个库。
 - 需要 Node.js 22.16 或更高版本。
 
+[0.3.0]: https://github.com/openlinkos/origin/releases/tag/v0.3.0
 [0.2.0]: https://github.com/openlinkos/origin/releases/tag/v0.2.0
 [0.1.0]: https://github.com/openlinkos/origin/releases/tag/v0.1.0

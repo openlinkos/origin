@@ -1,6 +1,6 @@
 {
   "name": "@openlinkos/origin",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The `origin` command: sync, search, and curate your AI agent memory locally, and serve it to agents over MCP.",
   "keywords": [
     "origin",

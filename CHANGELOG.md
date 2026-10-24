@@ -2,7 +2,9 @@
 
 All notable changes to Origin are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the store format or a public interface, and its notes say what to do. The five packages (`@openlinkos/origin` and `@openlinkos/origin-core`, `-adapters`, `-mcp`, `-admin`) are released together under one version.
 
-## [Unreleased]
+## [0.3.0] - 2026-10-24
+
+Imports the memories your agents keep for themselves, leaves ended entries out of search, and documents versions and upgrades on the site.
 
 **Upgrading.** A store is upgraded in place the first time this version opens it (format version 4). Upgrade the hub before its devices: a hub of 0.2 mirrors the memory streams a device sends without reading them, and reads them once it is upgraded, but until then a device's corrections of imported entries wait for it.
 
@@ -97,6 +99,6 @@ The first release.
 - `origin backup <dir>` copies a store consistently while agents keep writing.
 - Requires Node.js 22.16 or later.
 
-[Unreleased]: https://github.com/openlinkos/origin/compare/v0.2.0...HEAD
+[0.3.0]: https://github.com/openlinkos/origin/releases/tag/v0.3.0
 [0.2.0]: https://github.com/openlinkos/origin/releases/tag/v0.2.0
 [0.1.0]: https://github.com/openlinkos/origin/releases/tag/v0.1.0
