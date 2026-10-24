@@ -20,6 +20,8 @@ hero:
 features:
   - title: One memory across agents and machines
     details: Archives the sessions of Claude Code, Codex, Cursor, Grok Build, and ZCode. A self-hosted personal hub brings all your machines and cloud agents into one memory.
+  - title: Your agents' own memories, shared
+    details: The memory files that Claude Code, ZCode, and Grok Build keep for themselves become entries every agent can find, each citing the version of its file. When an agent changes or deletes a memory, the entry follows.
   - title: Provenance by default
     details: Every answer traces back to the exact line of the original session log.
   - title: Nothing lost to cleanup

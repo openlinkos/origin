@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-0740e632
+sourceHash: sha256-64d1cb59
 ---
 
 # 快速开始
@@ -7,7 +7,7 @@ sourceHash: sha256-0740e632
 Origin 运行在你的机器上：读取各 AI Agent 本来就写在磁盘上的会话记录，归档到 `~/.origin`，再通过同一个 [MCP](https://modelcontextprotocol.io) server 提供给所有 Agent。如果你在多台机器上使用 Agent，之后可以用自托管的[个人中枢](./hub.md)把它们连在一起。
 
 ::: warning 早期版本
-Origin 目前是 0.1。1.0 之前，新的次版本可能改变存储格式，[发布说明](https://github.com/openlinkos/origin/blob/master/CHANGELOG.md)会说明需要怎么做。
+Origin 还没有到 1.0。在此之前，新的次版本可能改变存储格式：库会就地升级，[升级](./upgrading.md)和[更新日志](../changelog.md)会说明需要怎么做。
 :::
 
 ## 环境要求 {#requirements}

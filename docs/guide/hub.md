@@ -28,7 +28,7 @@ docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data ghcr.io/openli
 curl http://localhost:7077/healthz
 ```
 
-Inside the container, `ORIGIN_HOME` is `/data`, and the hub listens on `0.0.0.0:7077`. Keep the `/data` volume, because it holds the whole store; to back it up, see [Backing up](./privacy.md#backing-up).
+Inside the container, `ORIGIN_HOME` is `/data`, and the hub listens on `0.0.0.0:7077`. Keep the `/data` volume, because it holds the whole store; to back it up, see [Backing up](./privacy.md#backing-up). `latest` is the latest release; for a hub you keep, pin a minor version such as `ghcr.io/openlinkos/origin:0.3`, and upgrade it as [Upgrading](./upgrading.md#upgrade-a-hub) describes.
 
 Without Docker, on any machine with Origin installed (`npm install -g @openlinkos/origin`):
 

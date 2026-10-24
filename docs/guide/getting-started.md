@@ -3,7 +3,7 @@
 Origin runs on your machine. It reads the session logs your AI agents already write to disk, archives them in `~/.origin`, and serves them to every agent through one [MCP](https://modelcontextprotocol.io) server. If you use agents on several machines, a self-hosted [personal hub](./hub.md) can bring them together later.
 
 ::: warning Early version
-Origin is at 0.1. Until 1.0, a new minor version may change the store format; its [release notes](https://github.com/openlinkos/origin/blob/master/CHANGELOG.md) say what to do.
+Origin is not at 1.0 yet. Until then, a new minor version may change the store format: stores are upgraded in place, and [Upgrading](./upgrading.md) and the [changelog](../changelog.md) say what to do.
 :::
 
 ## Requirements

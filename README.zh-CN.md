@@ -11,7 +11,7 @@
 
 各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：已支持 Claude Code、Codex、Cursor、Grok Build 与 ZCode。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。如果你在多台机器上工作，或者使用云端 Agent，可以用自托管的**个人中枢**把它们接入同一份记忆。
 
-> **状态：早期版本（0.2）。** Claude Code、Codex、Cursor、Grok Build 与 ZCode 会话的采集，MCP server、CLI、`origin ui`，以及个人中枢（含管理界面、中继和存储桶）已经端到端可用。1.0 之前，次版本可能改变存储格式；库会就地升级，[更新日志](CHANGELOG.md)会说明需要怎么做。
+> **状态：早期版本（0.3）。** Claude Code、Codex、Cursor、Grok Build 与 ZCode 会话的采集，Claude Code、ZCode 与 Grok Build 自身记忆的导入，MCP server、CLI、`origin ui`，以及个人中枢（含管理界面、中继和存储桶）已经端到端可用。1.0 之前，次版本可能改变存储格式；库会就地升级，[升级](https://origin.openlinkos.com/zh/guide/upgrading)和[更新日志](https://origin.openlinkos.com/zh/changelog)会说明需要怎么做。
 
 ## 为什么
 
@@ -81,13 +81,18 @@ Codex、Cursor、ZCode、Grok Build 的接入方式见[接入 Agent](https://ori
 完整文档在 [`docs/`](docs/) 目录中，并发布在 [origin.openlinkos.com](https://origin.openlinkos.com/zh/)：
 
 - [快速开始](https://origin.openlinkos.com/zh/guide/getting-started)：安装、归档会话、提出第一个问题
+- [核心概念](https://origin.openlinkos.com/zh/guide/concepts)：会话、条目、版本、有效期、导入的记忆与遗忘
 - [接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)：Claude Code、Codex、Cursor、ZCode、Grok Build，以及它们可用的 MCP 工具
 - [个人中枢](https://origin.openlinkos.com/zh/guide/hub)：自托管，让你所有的机器和云端 Agent 共享一份记忆
 - [管理界面](https://origin.openlinkos.com/zh/guide/admin)：在浏览器中管理中枢：启用、登录、放在 TLS 之后，或保持私有访问
-- [命令参考](https://origin.openlinkos.com/zh/guide/cli)：全部命令，附示例与环境变量
 - [隐私与数据](https://origin.openlinkos.com/zh/guide/privacy)：Origin 保存了什么、遗忘如何生效、如何清除全部数据
+- [升级](https://origin.openlinkos.com/zh/guide/upgrading)：版本、镜像标签、存储格式，以及如何升级设备和中枢
+- [常见问题](https://origin.openlinkos.com/zh/guide/troubleshooting)：常见问题及其解决方法
+- [命令参考](https://origin.openlinkos.com/zh/guide/cli)：全部命令，附示例与环境变量
+- [MCP 工具](https://origin.openlinkos.com/zh/guide/mcp)：Agent 使用的七个工具、参数与返回内容
 - [架构](https://origin.openlinkos.com/zh/architecture)：数据模型、不变量、采集、条目、MCP server 与中枢
-- [会话来源](https://origin.openlinkos.com/zh/sources)：各 Agent 的本地会话格式
+- [会话来源](https://origin.openlinkos.com/zh/sources)：各 Agent 的本地会话格式，以及它们的记忆
+- [更新日志](https://origin.openlinkos.com/zh/changelog)：每个版本改了什么
 
 ## 工作原理
 

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-a569a057
+sourceHash: sha256-6b18f544
 ---
 
 # 命令参考
@@ -117,6 +117,7 @@ The forget is kept as a record with its reason; you can restore it later with or
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code 配置目录（会话从 `<dir>/projects` 读取） |
 | `ORIGIN_CLAUDE_PROJECTS` | — | 直接指定 Claude Code 的 projects 目录 |
 | `CODEX_HOME` | `~/.codex` | Codex 的主目录（从 `sessions/` 与 `archived_sessions/` 读取会话） |
+| `GROK_HOME` | `~/.grok` | Grok Build 的主目录（从 `sessions/` 读取会话，从 `memory-v2/` 与 `memory/` 读取记忆） |
 | `ORIGIN_HUB_URL` | — | 中枢地址，覆盖 `origin hub connect` 的配置 |
 | `ORIGIN_HUB_TOKEN` | — | 中枢令牌，覆盖 `origin hub connect` 的配置 |
 | `ORIGIN_DEVICE` | 主机名 | 新库使用的名称：也就是本设备在中枢上的名称，以及它写入的内容所记录的来源库（origin） |

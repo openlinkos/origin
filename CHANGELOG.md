@@ -11,6 +11,18 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 - Imports the memories agents keep for themselves as entries: the memory files of Claude Code (`~/.claude/projects/<project>/memory/`), ZCode (`~/.zcode/cli/memories/`), and Grok Build (`~/.grok/memory-v2/`, and `~/.grok/memory/` of earlier versions), read and never written. Each version of a file becomes a version of one entry, citing that version of the file as its source; a deleted file ends its entry, and a file that comes back makes it current again. Every store that has a memory stream derives the same entries from it, a hub from what its devices and relays send, so these entries are never sent. MCP results, the CLI, and the admin UI mark them as imported, and a later change of the file supersedes a correction made in Origin.
 - Entries whose validity has ended (their `valid_to` has passed), such as an imported memory whose file was deleted, are left out of search and listings unless history is requested; `get` and `origin show` still show them.
 
+### Personal hub
+
+- The image's `latest` tag now follows releases, and the new `edge` tag the latest commit on `master`; `latest` used to follow `master`. Pin a minor version, such as `0.3`, to choose when your hub upgrades.
+
+### Documentation
+
+- New pages on the site: Concepts, MCP tools, Upgrading (versions, image tags, store formats), Troubleshooting, and this changelog, which the version in the site's navigation links to.
+
+### Fixes
+
+- A forget made on one store before another store had the entry or event it targets now covers them there once they arrive; entries imported from native memories have the same id on every store, so they can be forgotten on a device before its hub derives them.
+
 ## [0.2.0] - 2026-10-24
 
 Five agents archived instead of two, a local admin UI, relays, restorable forgetting, and versioned stores.

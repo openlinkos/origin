@@ -112,6 +112,7 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's config directory (sessions are read from `<dir>/projects`) |
 | `ORIGIN_CLAUDE_PROJECTS` | — | Override the Claude Code projects directory directly |
 | `CODEX_HOME` | `~/.codex` | Codex's home directory (rollouts are read from `sessions/` and `archived_sessions/`) |
+| `GROK_HOME` | `~/.grok` | Grok Build's home directory (sessions are read from `sessions/`, memories from `memory-v2/` and `memory/`) |
 | `ORIGIN_HUB_URL` | — | Hub URL; overrides `origin hub connect` |
 | `ORIGIN_HUB_TOKEN` | — | Hub token; overrides `origin hub connect` |
 | `ORIGIN_DEVICE` | host name | The name a new store takes: this device's name on the hub, and the origin recorded on what it writes |

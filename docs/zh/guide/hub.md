@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-cb92420b
+sourceHash: sha256-d66e73fd
 ---
 
 # 个人中枢
@@ -32,7 +32,7 @@ docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data ghcr.io/openli
 curl http://localhost:7077/healthz
 ```
 
-容器内的 `ORIGIN_HOME` 是 `/data`，中枢监听 `0.0.0.0:7077`。请保留 `/data` 卷，整个库都在里面；备份方法见[备份](./privacy.md#backing-up)。
+容器内的 `ORIGIN_HOME` 是 `/data`，中枢监听 `0.0.0.0:7077`。请保留 `/data` 卷，整个库都在里面；备份方法见[备份](./privacy.md#backing-up)。`latest` 是最新发布的版本；长期运行的中枢请固定一个次版本，比如 `ghcr.io/openlinkos/origin:0.3`，并按[升级](./upgrading.md#upgrade-a-hub)中的说明升级。
 
 不用 Docker 时，在任何装有 Origin 的机器上（`npm install -g @openlinkos/origin`）：
 
