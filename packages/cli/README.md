@@ -9,7 +9,6 @@ claude mcp add --scope user origin -- origin mcp
 ```
 
 On Windows, agents cannot start npm's `origin.cmd` directly; register `cmd /c origin mcp` instead.
-
 - [Getting started](https://origin.openlinkos.com/guide/getting-started)
 - [Connect your agents](https://origin.openlinkos.com/guide/connect-agents)
 - [Personal hub](https://origin.openlinkos.com/guide/hub) for several machines and cloud agents
