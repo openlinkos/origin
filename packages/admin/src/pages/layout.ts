@@ -9,6 +9,7 @@ export type NavKey =
   | 'sessions'
   | 'search'
   | 'entries'
+  | 'recalls'
   | 'devices'
   | 'tokens'
   | 'connect'
@@ -42,6 +43,7 @@ const NAV: Array<{ label?: MessageKey; items: NavItem[] }> = [
       { key: 'sessions', path: 'sessions', label: 'nav.sessions', icon: 'history' },
       { key: 'search', path: 'search', label: 'nav.search', icon: 'search' },
       { key: 'entries', path: 'entries', label: 'nav.entries', icon: 'book-marked' },
+      { key: 'recalls', path: 'recalls', label: 'nav.recalls', icon: 'lightbulb' },
     ],
   },
   {

@@ -24,6 +24,7 @@ import {
   forget,
   getEntry,
   getEvent,
+  getRecall,
   getSession,
   getTombstone,
   type HiddenContent,
@@ -39,6 +40,7 @@ import {
   listEntries,
   listEvents,
   listProjects,
+  listRecalls,
   listSessionEvents,
   listSessions,
   listTokens,
@@ -46,11 +48,17 @@ import {
   OriginError,
   planForget,
   planRestore,
+  type RecallItemRecord,
+  type RecallRecord,
   type RestorePlan,
   type RestoreResult,
   rawDir,
   rawLocator,
   readRawLine,
+  recallFacets,
+  recallPrompt,
+  recallSession,
+  recallsWith,
   recordAudit,
   remember,
   restore,
@@ -61,6 +69,7 @@ import {
   type StoreUsage,
   searchEntries,
   searchEvents,
+  sessionRecalls,
   sessionTurnStarts,
   stats,
   storeName,
@@ -69,6 +78,7 @@ import {
   type TombstoneSummary,
   type TurnStart,
   tombstoneCount,
+  usedRefs,
 } from '@openlinkos/origin-core';
 import { HttpError } from './http.js';
 import { dayIndex, dayKey, groupTurns, type SessionDay, type Turn } from './turns.js';
@@ -82,6 +92,8 @@ export const PAGE_SIZE = 50;
 export const HIDDEN_LIMIT = 200;
 /** A session's page shows this many turns, */
 export const TURNS_PER_PAGE = 20;
+/** The latest recalls of an entry shown on its page. */
+export const ENTRY_RECALLS = 10;
 /**
  * … and at most this many events: a page stops before the turn that would pass it, and a turn
  * longer than that is shown in parts.
@@ -190,6 +202,33 @@ export interface SessionTurns {
   next: { turn: number; part: number } | null;
   previous: { turn: number; part: number } | null;
   days: SessionDay[];
+  /** The recalls made for the session, each with the turn it was made in (0: before the first). */
+  recalls: Array<RecallView & { turn: number }>;
+}
+
+/** A recall (see docs/architecture.md#recall), with its session and what that session used. */
+export interface RecallView extends RecallRecord {
+  /** The session it was made for, when known: a hook's, or found from its id (see recallSession). */
+  session: { source: string; sessionId: string } | null;
+  /** The refs of its items that the session went on to use, as the archive shows so far. */
+  used: string[];
+}
+
+/** An item of a recall, with what it is now on this store. */
+export interface RecallItemView extends RecallItemRecord {
+  used: boolean;
+  /** The entry, current or not, unless it was forgotten or is not on this store. */
+  entry: Entry | null;
+  session: SessionRow | null;
+  /** Why the item cannot be shown, if it cannot: forgotten here, or unknown to this store. */
+  gone: 'forgotten' | 'missing' | null;
+}
+
+export interface RecallDetail {
+  recall: RecallView;
+  /** The prompt it answered, once archived, unless forgotten (prompt recalls only). */
+  prompt: EventRow | null;
+  items: RecallItemView[];
 }
 
 export interface Provenance {
@@ -212,6 +251,8 @@ export interface EntryDetail {
   entry: Entry;
   sources: EntrySource[];
   history: Entry[];
+  /** How often agents were handed the entry (any version), and the latest of those recalls. */
+  recalls: { total: number; latest: RecallView[] };
 }
 
 export interface ForgetPlan {
@@ -620,6 +661,7 @@ export class AdminService {
       turn,
       part,
       days: dayIndex(prompts),
+      recalls: this.recallTurns(session, prompts, preamble),
     };
 
     if (part > 0) {
@@ -677,6 +719,22 @@ export class AdminService {
       next,
       previous: turn > lowest ? { turn: Math.max(lowest, turn - TURNS_PER_PAGE), part: 0 } : null,
     };
+  }
+
+  /**
+   * The recalls of a session, each in its turn: a prompt's in the turn of that prompt, found by its
+   * hash, others by their time; one before the first prompt in the turn before it, or the first.
+   */
+  private recallTurns(
+    session: SessionRow,
+    prompts: TurnStart[],
+    preamble: boolean,
+  ): Array<RecallView & { turn: number }> {
+    return sessionRecalls(this.db, session.source, session.sessionId).map((r) => {
+      const ts = (r.occasion === 'prompt' ? recallPrompt(this.db, r)?.ts : undefined) ?? r.at;
+      const turn = prompts.filter((p) => p.ts <= ts).length;
+      return { ...this.recallView(r), turn: turn === 0 && !preamble ? 1 : turn };
+    });
   }
 
   private visibleEvent(id: unknown): EventRow {
@@ -762,10 +820,76 @@ export class AdminService {
       }
       throw new HttpError(404, `Unknown entry ${entryId}.`);
     }
+    const history = entryHistory(this.db, entryId);
+    const versions = new Set(history.map((v) => v.id));
+    const handed = recallsWith(this.db, [...versions], ENTRY_RECALLS);
     return {
       entry,
       sources: entrySources(this.db, entryId),
-      history: entryHistory(this.db, entryId),
+      history,
+      recalls: {
+        total: handed.total,
+        latest: handed.recalls.map((r) => this.recallView(r, versions)),
+      },
+    };
+  }
+
+  private recallView(r: RecallRecord, only?: ReadonlySet<string>): RecallView {
+    return {
+      ...r,
+      session: recallSession(this.db, r),
+      used: [...usedRefs(this.db, r, only)],
+    };
+  }
+
+  /** Recalls, newest first; those that handed nothing over only when asked. */
+  recalls(filter: { device?: string; agent?: string; all?: boolean; page?: number }): {
+    recalls: RecallView[];
+    page: number;
+    more: boolean;
+    devices: string[];
+    agents: string[];
+  } {
+    const page = Math.max(0, filter.page ?? 0);
+    const rows = listRecalls(this.db, {
+      origin: filter.device || undefined,
+      source: filter.agent || undefined,
+      includeEmpty: filter.all === true,
+      limit: PAGE_SIZE + 1,
+      offset: page * PAGE_SIZE,
+    });
+    return {
+      recalls: rows.slice(0, PAGE_SIZE).map((r) => this.recallView(r)),
+      page,
+      more: rows.length > PAGE_SIZE,
+      ...recallFacets(this.db),
+    };
+  }
+
+  /** One recall, each item with what it is now: what was handed over is read, never stored. */
+  recall(id: unknown): RecallDetail {
+    const recallId = checkId(id, 'recall id');
+    const r = getRecall(this.db, recallId);
+    if (!r) throw new HttpError(404, `Unknown recall ${recallId}.`);
+    const view = this.recallView(r);
+    const used = new Set(view.used);
+    return {
+      recall: view,
+      prompt: r.occasion === 'prompt' ? recallPrompt(this.db, r) : null,
+      items: r.items.map((item) => {
+        let entry: Entry | null = null;
+        let session: SessionRow | null = null;
+        let gone: RecallItemView['gone'] = null;
+        if (item.kind === 'entry') {
+          entry = getEntry(this.db, item.ref);
+          if (!entry) gone = isEntryForgotten(this.db, item.ref) ? 'forgotten' : 'missing';
+        } else {
+          const at = item.ref.indexOf(':');
+          session = getSession(this.db, item.ref.slice(0, at), item.ref.slice(at + 1));
+          if (!session) gone = 'missing';
+        }
+        return { ...item, used: used.has(item.ref), entry, session, gone };
+      }),
     };
   }
 

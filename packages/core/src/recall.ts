@@ -5,7 +5,7 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { CURRENT_VERSION, type EntryKind } from './entries.js';
 import { storeName } from './identity.js';
-import { findNewest } from './search.js';
+import { findNewest, searchEvents } from './search.js';
 import { getEvent, sessionPrompts, VISIBLE_EVENT } from './store.js';
 import type { EventRow } from './types.js';
 
@@ -751,6 +751,8 @@ export interface RecallRecord {
 }
 
 export interface RecallFilter {
+  /** The device the recall was made for. */
+  origin?: string;
   source?: string;
   sessionId?: string;
   /** epoch ms, inclusive. */
@@ -804,6 +806,10 @@ export function listRecalls(db: Database, filter: RecallFilter = {}): RecallReco
     parts.push('r.source = ?');
     params.push(filter.source);
   }
+  if (filter.origin) {
+    parts.push('r.origin = ?');
+    params.push(filter.origin);
+  }
   if (filter.sessionId) {
     parts.push('r.session_id = ?');
     params.push(filter.sessionId);
@@ -852,7 +858,7 @@ export function recallSession(
 ): { source: string; sessionId: string } | null {
   if (recall.source && recall.sessionId)
     return { source: recall.source, sessionId: recall.sessionId };
-  const id = findNewest(db, recall.id, 'tool_result', (text) => text.includes(recall.id));
+  const id = findNewest(db, recall.id, 'tool_result', (text) => briefIds(text).includes(recall.id));
   const event = id ? getEvent(db, id) : null;
   return event ? { source: event.source, sessionId: event.sessionId } : null;
 }
@@ -861,7 +867,11 @@ export function recallSession(
  * The refs of a recall's items that its session went on to use, as the archive shows so far: an
  * entry id, or a session id, in a later tool call or reply of the agent in that session.
  */
-export function usedRefs(db: Database, recall: RecallRecord): Set<string> {
+export function usedRefs(
+  db: Database,
+  recall: RecallRecord,
+  only?: ReadonlySet<string>,
+): Set<string> {
   const used = new Set<string>();
   const session = recallSession(db, recall);
   if (!session) return used;
@@ -872,6 +882,7 @@ export function usedRefs(db: Database, recall: RecallRecord): Set<string> {
      LIMIT 1`,
   );
   for (const item of recall.items) {
+    if (only && !only.has(item.ref)) continue;
     const needle = item.kind === 'session' ? item.ref.slice(item.ref.indexOf(':') + 1) : item.ref;
     if (find.get(session.source, session.sessionId, recall.at, needle)) used.add(item.ref);
   }
@@ -932,4 +943,73 @@ export function recallScope(
       .filter((p) => p.length > 0)
       .at(-1) ?? null;
   return { cwd: dir, root, project };
+}
+
+/**
+ * The ids of the recalls a tool result hands over: what `brief` returns, `{ "recall": "rcl_…" }`.
+ * Other mentions of a recall's id, such as `origin recalls` printed in a shell, are not its session.
+ */
+export function briefIds(text: string): string[] {
+  return [...text.matchAll(/"recall":\s*"(rcl_[0-9a-f]{12})"/g)].map((m) => m[1] as string);
+}
+
+/** Most briefs an agent is taken to have asked for in one session. */
+const SESSION_BRIEFS = 100;
+
+/**
+ * The recalls made for a session, oldest first: those its hooks recorded, and those its agent asked
+ * for with `brief`, whose ids are in its tool results.
+ */
+export function sessionRecalls(db: Database, source: string, sessionId: string): RecallRecord[] {
+  const ids = new Set(
+    (
+      db
+        .prepare('SELECT id FROM recall WHERE source = ? AND session_id = ?')
+        .all(source, sessionId) as unknown as Array<{ id: string }>
+    ).map((r) => r.id),
+  );
+  // Through the search index, so that a long session is not read for them.
+  const results = searchEvents(db, 'rcl_', {
+    source,
+    sessionId,
+    kinds: ['tool_result'],
+    order: 'recent',
+    limit: SESSION_BRIEFS,
+  });
+  for (const r of results) for (const id of briefIds(r.text)) ids.add(id);
+  return [...ids]
+    .map((id) => getRecall(db, id))
+    .filter((r): r is RecallRecord => r !== null)
+    .sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1));
+}
+
+/** The recalls that handed over any of these refs (the versions of an entry), newest first. */
+export function recallsWith(
+  db: Database,
+  refs: string[],
+  limit = 100,
+): { recalls: RecallRecord[]; total: number } {
+  if (refs.length === 0) return { recalls: [], total: 0 };
+  const matching = `SELECT DISTINCT recall_id FROM recall_item WHERE ref IN (SELECT value FROM json_each(?))`;
+  const list = JSON.stringify(refs);
+  const total = (db.prepare(`SELECT COUNT(*) AS n FROM (${matching})`).get(list) as { n: number })
+    .n;
+  const rows = db
+    .prepare(
+      `SELECT id, at, origin, source, session_id, occasion, project, cwd, prompt_hash, budget, tokens
+       FROM recall WHERE id IN (${matching}) ORDER BY at DESC, seq DESC LIMIT ?`,
+    )
+    .all(list, limit) as unknown as RecallRow[];
+  return { recalls: withItems(db, rows), total };
+}
+
+/** The devices and agents recalls were made for, for filters. */
+export function recallFacets(db: Database): { devices: string[]; agents: string[] } {
+  const column = (name: 'origin' | 'source') =>
+    (
+      db
+        .prepare(`SELECT DISTINCT ${name} AS v FROM recall WHERE ${name} IS NOT NULL ORDER BY 1`)
+        .all() as unknown as Array<{ v: string }>
+    ).map((r) => r.v);
+  return { devices: column('origin'), agents: column('source') };
 }

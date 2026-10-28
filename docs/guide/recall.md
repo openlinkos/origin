@@ -77,7 +77,7 @@ Handed over, 1 item used since:
      The API keeps v1 routes until every client has moved to v2
 ```
 
-A recall keeps only ids, scores, and a hash of the prompt, never text: what an item was is read from your store when you look, so an entry you have forgotten since shows as forgotten.
+The admin UI shows the same on its Recalls page, and marks each recall in its turn on the session's page and on the page of each entry it handed over; a device sends its recalls to its hub when it syncs, so the hub's admin UI shows every device's. A recall keeps only ids, scores, and a hash of the prompt, never text: what an item was is read from your store when you look, so an entry you have forgotten since shows as forgotten.
 
 ## How it chooses
 

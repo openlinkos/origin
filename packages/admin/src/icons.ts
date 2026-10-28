@@ -30,6 +30,7 @@ export const ICON_NAMES = [
   'languages',
   'laptop',
   'layout-dashboard',
+  'lightbulb',
   'link',
   'list',
   'loader-circle',

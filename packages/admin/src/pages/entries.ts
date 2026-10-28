@@ -30,6 +30,7 @@ import {
   tableWrap,
 } from './components.js';
 import { csrfField, renderPage } from './layout.js';
+import { recallTable } from './recalls.js';
 
 /** A version of a memory file that deleted it. */
 const memoryDeleted = (e: Pick<EventRow, 'kind' | 'meta'>) =>
@@ -165,7 +166,19 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
             ),
           })
         : ''
-    }`,
+    }
+    ${section({
+      title: t('entry.recalls', { n: fmtNumber(d.recalls.total, ctx.lang) }),
+      description: t('entry.recallsHelp'),
+      body:
+        d.recalls.total === 0
+          ? html`<p class="ol-subtle">${t('entry.recallsNone')}</p>`
+          : html`${recallTable(ctx, d.recalls.latest)}${
+              d.recalls.total > d.recalls.latest.length
+                ? html`<p class="ol-hint">${t('entry.recallsMore', { n: fmtNumber(d.recalls.total - d.recalls.latest.length, ctx.lang) })}</p>`
+                : ''
+            }`,
+    })}`,
   });
 }
 

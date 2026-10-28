@@ -179,6 +179,7 @@ export {
 } from './password.js';
 export { dbPath, originHome, parseRawPath, rawDir, remotePath } from './paths.js';
 export {
+  briefIds,
   entrySummary,
   estimateTokens,
   firstLine,
@@ -202,12 +203,15 @@ export {
   type RecallOccasion,
   type RecallPlan,
   type RecallRecord,
+  recallFacets,
   recallPrompt,
   recallScope,
   recallSession,
+  recallsWith,
   recallTerms,
   recallText,
   recordRecall,
+  sessionRecalls,
   type TermMatch,
   type TermWeights,
   termWeights,

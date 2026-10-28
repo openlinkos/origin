@@ -12,6 +12,8 @@ import {
   initStoreName,
   listAudit,
   openDatabase,
+  type RecallPlan,
+  recordRecall,
   remember,
   type SourceAdapter,
   syncSource,
@@ -405,6 +407,86 @@ describe('origin ui: pages', () => {
     expect(event.status).toBe(200);
     expect(pageProblems(event.text)).toEqual([]);
     expect(event.text).toContain('Memory file');
+  });
+
+  it('show what agents were handed, and whether they used it, by recall, entry, and turn', async () => {
+    const entry = remember(db, {
+      kind: 'cognition',
+      text: `Keep the schema simple. ${XSS}`,
+      confidence: 0.9,
+      author: 'user@laptop',
+      project: 'demo',
+      sources: [{ eventId: EVENT }],
+    });
+    const plan: RecallPlan = {
+      occasion: 'prompt',
+      source: 'fake',
+      sessionId: SESSION,
+      cwd: '/work/demo',
+      root: null,
+      project: 'demo',
+      prompt: 'Keep the schema simple.',
+      at: Date.UTC(2026, 9, 20, 9, 0, 1),
+      budget: 400,
+      tokens: 60,
+      items: [
+        {
+          rank: 1,
+          layer: 'prompt',
+          kind: 'entry',
+          ref: entry.id,
+          score: 3.25,
+          line: '',
+          tokens: 30,
+        },
+        {
+          rank: 2,
+          layer: 'prompt',
+          kind: 'entry',
+          ref: 'ent_000000000000',
+          score: 1.5,
+          line: '',
+          tokens: 30,
+        },
+      ],
+    };
+    const id = recordRecall(db, plan);
+    // The agent went on to cite the entry.
+    const agent = path.join(tmp, 'agent');
+    fs.appendFileSync(
+      path.join(agent, `${SESSION}.jsonl`),
+      `${JSON.stringify({ id: 'evt-asst-2', ts: Date.UTC(2026, 9, 20, 9, 2), role: 'assistant', text: `As ${entry.id} says, keep it simple.` })}\n`,
+    );
+    await syncSource({ db, home: tmp }, fakeAdapter(agent));
+
+    const local = await serveLocal();
+    const b = await local.signedIn();
+    const list = await b.get('/admin/recalls');
+    expect(list.status).toBe(200);
+    expect(pageProblems(list.text)).toEqual([]);
+    expect(list.text).toContain(`/admin/recall?id=${id}`);
+    expect(list.text).toContain('1 used');
+
+    const one = await b.get(`/admin/recall?id=${id}`);
+    expect(one.status).toBe(200);
+    expect(pageProblems(one.text)).toEqual([]);
+    // What was handed over is read from the store now, escaped; the prompt is found by its hash.
+    expect(one.text).toContain('Keep the schema simple. &lt;img src=x onerror=alert(1)&gt;');
+    expect(one.text).toContain(`/admin/event?id=${encodeURIComponent(EVENT)}`);
+    expect(one.text).toContain('not on this store');
+    expect(one.text).toContain('about 60 of 400 tokens');
+
+    const page = await b.get(`/admin/entry?id=${entry.id}`);
+    expect(pageProblems(page.text)).toEqual([]);
+    expect(page.text).toContain('Recalls (1)');
+    expect(page.text).toContain(`/admin/recall?id=${id}`);
+
+    const session = await b.get(`/admin/session?source=fake&id=${SESSION}`);
+    expect(pageProblems(session.text)).toEqual([]);
+    expect(session.text).toContain(`/admin/recall?id=${id}`);
+    expect(session.text).toContain('2 handed over, 1 used');
+
+    expect((await b.get('/admin/recall?id=rcl_000000000000')).status).toBe(404);
   });
 
   it('render the local store with no hub-only page or link', async () => {

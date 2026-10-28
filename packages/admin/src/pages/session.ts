@@ -21,6 +21,7 @@ import {
   sourceBadge,
 } from './components.js';
 import { renderPage } from './layout.js';
+import { recallMarker } from './recalls.js';
 
 /** A prompt longer than this shows its start, and the rest on request. */
 const PROMPT_SHOWN = 1200;
@@ -206,7 +207,12 @@ function notes(ctx: Ctx, items: TurnItem[]): HtmlValue {
   return chips.length > 0 ? html`<div class="ol-cluster">${chips}</div>` : '';
 }
 
-function turnCard(ctx: Ctx, turn: Turn, o: { open: boolean; part: number }): SafeHtml {
+function turnCard(
+  ctx: Ctx,
+  turn: Turn,
+  o: { open: boolean; part: number; recalls: SessionTurns['recalls'] },
+): SafeHtml {
+  const recalls = o.part > 0 ? [] : o.recalls.filter((r) => r.turn === turn.number);
   const t = ctx.t;
   const n = (v: number) => fmtNumber(v, ctx.lang);
   const title =
@@ -224,6 +230,7 @@ function turnCard(ctx: Ctx, turn: Turn, o: { open: boolean; part: number }): Saf
           <span class="admin-sep" aria-hidden="true">·</span><span>${t('sessions.eventCount', { n: n(turn.events) })}</span>
         </span>
       </div>
+      ${recalls.length > 0 ? html`<div class="ol-cluster" aria-label="${t('recalls.inTurn')}">${recalls.map((r) => recallMarker(ctx, r))}</div>` : ''}
       ${turn.prompt ? (turn.command !== null ? commandBlock(ctx, turn.prompt, turn.command) : promptBlock(ctx, turn.prompt)) : ''}
       ${notes(ctx, turn.lead)}
       ${workBlock(ctx, turn, o.open)}
@@ -301,7 +308,7 @@ export function sessionPage(ctx: Ctx, o: SessionTurns & { open: boolean }): void
     ${
       o.turns.length === 0
         ? html`<p class="ol-muted ol-text-sm">${t('sessions.noEvents')}</p>`
-        : html`<ol class="admin-turns">${o.turns.map((turn) => turnCard(ctx, turn, { open: o.open, part: o.part }))}</ol>`
+        : html`<ol class="admin-turns">${o.turns.map((turn) => turnCard(ctx, turn, { open: o.open, part: o.part, recalls: o.recalls }))}</ol>`
     }
     ${o.continues ? html`<p class="ol-hint admin-after">${t('turns.continues')}</p>` : ''}
     ${pagerNav}`,

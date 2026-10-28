@@ -58,6 +58,7 @@ import {
 } from './pages/entries.js';
 import { here } from './pages/layout.js';
 import { connectPage, devicePage, devicesPage, overviewPage } from './pages/overview.js';
+import { recallPage, recallsPage } from './pages/recalls.js';
 import { auditPage, signinsPage, tombstonePage, tombstonesPage } from './pages/records.js';
 import { sessionPage } from './pages/session.js';
 import { newTokenPage, revokeTokenPage, tokenCreatedPage, tokensPage } from './pages/tokens.js';
@@ -476,6 +477,15 @@ const PAGES: Route[] = [
     entriesPage(ctx, { ...r, projects: ctx.service.projects().map((p) => p.project), filter });
   }),
   page('GET', '/entry', 'session', (ctx) => entryPage(ctx, ctx.service.entry(query(ctx, 'id')))),
+  page('GET', '/recalls', 'session', (ctx) => {
+    const filter = {
+      device: query(ctx, 'device'),
+      agent: query(ctx, 'agent'),
+      all: flag(query(ctx, 'all')),
+    };
+    recallsPage(ctx, { ...ctx.service.recalls({ ...filter, page: pageParam(ctx) }), filter });
+  }),
+  page('GET', '/recall', 'session', (ctx) => recallPage(ctx, ctx.service.recall(query(ctx, 'id')))),
   page('GET', '/correct', 'session', (ctx) =>
     correctPage(ctx, 200, { entry: ctx.service.entry(query(ctx, 'id')).entry }),
   ),
@@ -734,6 +744,19 @@ const API: Route[] = [
     }),
   ),
   api('GET', 'entry', 'session', (ctx) => json(ctx, 200, ctx.service.entry(query(ctx, 'id')))),
+  api('GET', 'recalls', 'session', (ctx) =>
+    json(
+      ctx,
+      200,
+      ctx.service.recalls({
+        device: query(ctx, 'device'),
+        agent: query(ctx, 'agent'),
+        all: flag(query(ctx, 'all')),
+        page: pageParam(ctx),
+      }),
+    ),
+  ),
+  api('GET', 'recall', 'session', (ctx) => json(ctx, 200, ctx.service.recall(query(ctx, 'id')))),
   api('POST', 'correct', 'session', (ctx) =>
     json(ctx, 201, {
       entry: ctx.service.correct(actorOf(ctx), {
