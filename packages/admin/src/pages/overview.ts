@@ -1,5 +1,5 @@
 import type { Ctx } from '../context.js';
-import { clip, dayLabel, fmtBytes, fmtDuration, fmtNumber, time } from '../context.js';
+import { clip, fmtBytes, fmtCompact, fmtDuration, fmtNumber, time } from '../context.js';
 import { type HtmlValue, href, html, type SafeHtml } from '../html.js';
 import { type IconName, icon } from '../icons.js';
 import {
@@ -11,13 +11,11 @@ import {
   type Overview,
   type Snippets,
 } from '../service.js';
-import { SERIES_SLOTS, shareBar, stackedColumns } from './chart.js';
+import { stackedColumns } from './chart.js';
 import {
   alert,
   badge,
   empty,
-  entryFlags,
-  kindBadge,
   linkButton,
   pageHeader,
   panel,
@@ -25,10 +23,21 @@ import {
   sessionHref,
   sessionName,
   snippet,
-  sourceBadge,
   tableWrap,
 } from './components.js';
 import { docsUrl, renderPage } from './layout.js';
+import {
+  agentSlot,
+  agentTag,
+  box,
+  KIND_SLOTS,
+  kindTag,
+  pageBar,
+  ratioBar,
+  sparkline,
+  splitBar,
+  whenShort,
+} from './workbench.js';
 
 function deviceStatus(ctx: Ctx, d: Pick<DeviceSummary, 'stale'>): SafeHtml {
   return d.stale
@@ -51,342 +60,410 @@ function devicesTable(ctx: Ctx, devices: DeviceSummary[]): SafeHtml {
       }),
     });
   }
-  return tableWrap(
-    html`<th>${t('devices.name')}</th><th>${t('devices.lastPush')}</th><th class="ol-num">${t('devices.files')}</th><th class="ol-num">${t('devices.bytes')}</th><th>${t('devices.status')}</th>`,
-    devices.map(
+  return html`<table class="admin-table">
+    <thead><tr><th>${t('devices.name')}</th><th>${t('devices.lastPush')}</th><th class="admin-r">${t('devices.files')}</th><th class="admin-r">${t('devices.bytes')}</th><th>${t('devices.status')}</th></tr></thead>
+    <tbody>${devices.map(
       (d) => html`<tr>
-      <td><a class="ol-cell-title" href="${href('device', { name: d.device })}">${d.device}</a></td>
-      <td class="ol-nowrap">${time(d.lastUpdateAt)}</td>
-      <td class="ol-num">${fmtNumber(d.files, ctx.lang)}</td>
-      <td class="ol-num">${fmtBytes(d.bytes)}</td>
+      <td class="admin-wide"><a class="admin-cell-title" href="${href('device', { name: d.device })}">${d.device}</a></td>
+      <td>${time(d.lastUpdateAt)}</td>
+      <td class="admin-r">${fmtNumber(d.files, ctx.lang)}</td>
+      <td class="admin-r">${fmtBytes(d.bytes)}</td>
       <td>${deviceStatus(ctx, d)}</td>
     </tr>`,
-    ),
-  );
+    )}</tbody></table>`;
 }
 
 /**
  * `origin ui`: the hub this device is connected to, and when it last synced. Writes made here are
- * synced in the background, so the panel also says whether that is running or failed.
+ * synced in the background, so the box also says whether that is running or failed.
  */
-function hubPanel(ctx: Ctx, hub: HubLink | null): SafeHtml {
+function hubBox(ctx: Ctx, hub: HubLink | null): SafeHtml {
   const t = ctx.t;
   if (!hub) {
-    return panel(ctx, {
-      tag: 'aside',
+    return box({
       title: t('hub.title'),
-      icon: 'plug',
-      badge: badge(t('hub.notConnected')),
-      body: html`<p class="ol-muted ol-text-sm">${t('hub.none')}</p>`,
-      footer: html`<a href="${docsUrl(ctx, 'guide/hub')}" rel="noreferrer">${t('hub.howTo')}</a>`,
+      aside: badge(t('hub.notConnected')),
+      body: html`<p class="admin-muted">${t('hub.none')}</p>
+        <p class="admin-note"><a href="${docsUrl(ctx, 'guide/hub')}" rel="noreferrer">${t('hub.howTo')}</a></p>`,
     });
   }
-  return panel(ctx, {
-    tag: 'aside',
+  return box({
     title: t('hub.title'),
-    icon: 'plug',
-    badge: hub.syncing
+    aside: hub.syncing
       ? badge(t('hub.syncing'), 'info', { dot: true })
       : hub.lastError
         ? badge(t('hub.notSynced'), 'warning', { dot: true })
         : badge(t('hub.connected'), 'success', { dot: true }),
-    body: html`<div class="ol-stack">
-      ${hub.lastError ? alert(ctx, 'warning', t('hub.syncFailed', { error: hub.lastError })) : ''}
-      <dl class="ol-dl">
+    body: html`${hub.lastError ? alert(ctx, 'warning', t('hub.syncFailed', { error: hub.lastError })) : ''}
+      <dl class="admin-kv">
         <dt>${t('hub.url')}</dt><dd class="ol-mono ol-break">${hub.url}</dd>
         <dt>${t('hub.device')}</dt><dd>${hub.device}</dd>
         <dt>${t('hub.lastSync')}</dt><dd>${hub.lastSyncAt === null ? t('hub.never') : time(hub.lastSyncAt)}</dd>
       </dl>
-      <p class="ol-hint">${t('hub.writes')}</p>
-    </div>`,
+      <p class="admin-note">${t('hub.writes')}</p>`,
   });
 }
 
+/** A figure at the top of the overview: a total, a picture of the last 30 days, and a line about them. */
+function kpi(
+  ctx: Ctx,
+  o: {
+    href: string;
+    icon: IconName;
+    label: string;
+    value: HtmlValue;
+    figure?: HtmlValue;
+    /** The figure goes under the value, across the card, as a bar does. */
+    wide?: boolean;
+    meta: HtmlValue;
+    tone?: 'warning';
+  },
+): SafeHtml {
+  return html`<a class="admin-kpi${o.wide ? ' admin-kpi-wide' : ''}" href="${o.href}">
+    <span class="admin-kpi-label${o.tone ? ' ol-tone-warning' : ''}">${icon(ctx, o.icon, 'sm')}${o.label}</span>
+    <span class="admin-kpi-value">${o.value}</span>
+    ${o.figure ? html`<span class="admin-kpi-figure">${o.figure}</span>` : ''}
+    <span class="admin-kpi-meta">${o.meta}</span>
+  </a>`;
+}
+
+/**
+ * The overview, as a dashboard: totals with the last 30 days under each, the activity by agent, how
+ * recalls went, recent sessions, busy projects, the agents and the store's state, then the latest
+ * entries and forgets. On a hub, its devices too.
+ */
 export function overviewPage(ctx: Ctx, o: Overview): void {
   const t = ctx.t;
   const n = (v: number) => fmtNumber(v, ctx.lang);
   // `origin ui` shows this device's own store: no devices, tokens, or connection commands.
   const local = ctx.mode === 'local';
   const stale = local ? [] : o.devices.filter((d) => d.stale);
-  const latest = o.sources.reduce<number | null>(
-    (max, s) => (s.lastTs !== null && (max === null || s.lastTs > max) ? s.lastTs : max),
-    null,
-  );
   const healthy = stale.length === 0 && o.parseErrors.last24h === 0;
   const remoteMirrors = o.usage.mirrorBytes.remote > 0 || o.usage.mirrorStoredBytes.remote > 0;
-  const stat = (
-    path: string,
-    label: string,
-    iconName: IconName,
-    value: number,
-    meta: HtmlValue,
-    tone?: 'warning',
-  ) =>
-    html`<a class="ol-stat" href="${path}"><span class="ol-stat-label"><span class="${tone ? `ol-stat-icon ol-tone-${tone}` : 'ol-stat-icon'}">${icon(ctx, iconName, 'sm')}</span>${label}</span><span class="ol-stat-value">${n(value)}</span><span class="ol-stat-meta">${meta}</span></a>`;
-  // Every source keeps its colour on the page: the chart's series, and the swatches in the tables.
-  const slots = new Map(o.sources.map((s, i) => [s.source, Math.min(i + 1, SERIES_SLOTS)]));
-  const swatch = (source: string) =>
-    html`<span class="ol-swatch ol-series-${slots.get(source) ?? SERIES_SLOTS}" aria-hidden="true"></span>`;
   // On `origin ui` a device's name is plain text: there are no device pages.
   const deviceName = (name: string) =>
     local ? html`${name}` : html`<a href="${href('device', { name })}">${name}</a>`;
-
-  const noData = empty(ctx, {
-    icon: 'history',
-    title: t('overview.noSessions'),
-    text: local ? t('overview.noDataLocal') : t('overview.noData'),
-    action: local
-      ? ''
-      : linkButton(ctx, {
-          href: '/admin/connect',
-          label: t('devices.howToConnect'),
-          icon: 'plug',
-          size: 'sm',
-        }),
-  });
-
-  const activityTotal = o.activity.reduce((sum, d) => sum + d.events, 0);
+  const events30 = o.activity.reduce((sum, d) => sum + d.events, 0);
+  const sessions30 = o.sessionDays.reduce((sum, v) => sum + v, 0);
+  const r = o.recalls;
   const busiest = o.activity.reduce<ActivityDay | null>(
     (best, d) => (best === null || d.events > best.events ? d : best),
     null,
   );
-  const activity = section({
-    title: t('overview.activityTitle', { days: ACTIVITY_DAYS }),
-    description: t('overview.activityHelp'),
+  const summary = t('overview.activitySummary', {
+    n: n(events30),
+    days: ACTIVITY_DAYS,
+    day: busiest?.day ?? '—',
+    max: n(busiest?.events ?? 0),
+  });
+  const kinds = ['memory', 'knowledge', 'cognition'] as const;
+
+  const kpis = html`<section class="admin-kpis" aria-label="${t('overview.countsTitle')}">
+    ${kpi(ctx, {
+      href: '/admin/sessions',
+      icon: 'message-square',
+      label: t('overview.events'),
+      value: n(o.counts.events),
+      figure: sparkline(
+        o.activity.map((d) => d.events),
+        summary,
+      ),
+      meta: t('overview.in30', { n: n(events30) }),
+    })}
+    ${kpi(ctx, {
+      href: '/admin/sessions',
+      icon: 'history',
+      label: t('overview.sessions'),
+      value: n(o.counts.sessions),
+      figure: sparkline(o.sessionDays, t('overview.active30', { n: n(sessions30) })),
+      meta: t('overview.active30', { n: n(sessions30) }),
+    })}
+    ${kpi(ctx, {
+      href: '/admin/entries',
+      icon: 'book-marked',
+      label: t('overview.entries'),
+      value: n(o.counts.entries),
+      wide: true,
+      figure: splitBar(
+        kinds.map((k) => ({ value: o.entries[k], slot: KIND_SLOTS[k] })),
+        t('overview.entriesMeta', {
+          memory: n(o.entries.memory),
+          knowledge: n(o.entries.knowledge),
+          cognition: n(o.entries.cognition),
+        }),
+      ),
+      meta: html`${kinds.map((k) => html`<span>${kindTag(ctx, k)} <b>${n(o.entries[k])}</b></span>`)}`,
+    })}
+    ${kpi(ctx, {
+      href: '/admin/recalls',
+      icon: 'lightbulb',
+      label: t('nav.recalls'),
+      value: n(r.recalls),
+      wide: true,
+      figure: ratioBar(
+        r.used,
+        r.recalls,
+        r.recalls,
+        t('overview.recallsOccasion', { used: n(r.used), n: n(r.recalls) }),
+      ),
+      meta: t('overview.recallsMeta', { used: n(r.used), items: n(r.items) }),
+    })}
+    ${
+      local
+        ? ''
+        : kpi(ctx, {
+            href: '/admin/devices',
+            icon: 'laptop',
+            label: t('overview.devices'),
+            value: n(o.counts.devices),
+            meta:
+              stale.length > 0
+                ? t('overview.devicesStale', { n: n(stale.length) })
+                : t('overview.devicesMeta', { n: n(o.counts.activeTokens) }),
+            tone: stale.length > 0 ? 'warning' : undefined,
+          })
+    }
+  </section>`;
+
+  const agents = o.sources
+    .filter((s) => o.activity.some((d) => (d.bySource[s.source] ?? 0) > 0))
+    .sort((a, b) => agentSlot(a.source) - agentSlot(b.source));
+  const activity = box({
+    title: t('overview.activity'),
+    aside: t('overview.activityAside'),
     body:
-      activityTotal === 0
-        ? html`<p class="ol-muted ol-text-sm">${t('overview.activityNone', { days: ACTIVITY_DAYS })}</p>`
+      events30 === 0
+        ? html`<p class="admin-muted">${t('overview.activityNone', { days: ACTIVITY_DAYS })}</p>`
         : stackedColumns(ctx, {
             id: 'activity',
             title: t('overview.activityTitle', { days: ACTIVITY_DAYS }),
-            summary: t('overview.activitySummary', {
-              n: n(activityTotal),
-              days: ACTIVITY_DAYS,
-              day: busiest ? dayLabel(ctx, busiest.day, { weekday: false }) : '—',
-              max: n(busiest?.events ?? 0),
-            }),
-            series: o.sources
-              .filter((s) => o.activity.some((d) => (d.bySource[s.source] ?? 0) > 0))
-              .map((s) => ({
-                key: s.source,
-                label: s.source,
-                slot: slots.get(s.source) ?? SERIES_SLOTS,
-              })),
+            summary,
+            series: agents.map((s) => ({
+              key: s.source,
+              label: s.source,
+              slot: agentSlot(s.source),
+            })),
             columns: o.activity.map((d) => ({
-              label: dayLabel(ctx, d.day, { weekday: false }),
-              name: dayLabel(ctx, d.day, { weekday: false }),
+              label: d.day.slice(5).replace('-', '/'),
+              name: d.day,
               values: d.bySource,
             })),
             labelEvery: 7,
             columnHeading: t('overview.day'),
             totalHeading: t('overview.total'),
             tableLabel: t('overview.activityTable'),
+            hint: false,
           }),
   });
 
-  const recent = section({
+  const most = Math.max(1, ...r.byOccasion.map((x) => x.recalls));
+  const recalls = box({
+    title: t('nav.recalls'),
+    aside: t('overview.recallsAside'),
+    flush: true,
+    body:
+      r.recalls === 0
+        ? html`<div class="admin-panel-body"><p class="admin-muted">${t('overview.recallsNone')}</p>
+          <p class="admin-note"><a href="${docsUrl(ctx, 'guide/recall')}" rel="noreferrer">${t('recalls.howItWorks')}</a></p></div>`
+        : html`<ul class="admin-meters">${r.byOccasion.map(
+            (x) => html`<li>
+              <a href="${href('recalls', { occasion: x.occasion })}">${t(`recall.occasion.${x.occasion}`)}</a>
+              ${ratioBar(x.used, x.recalls, most, t('overview.recallsOccasion', { used: n(x.used), n: n(x.recalls) }))}
+              <span class="admin-meter-value"><b>${n(x.used)}</b> / ${n(x.recalls)}</span>
+            </li>`,
+          )}</ul>
+          <div class="admin-figures">
+            <div><b>${Math.round((r.used / r.recalls) * 100)}%</b><span>${t('overview.recallRate')}</span></div>
+            <div><b>${(r.items / r.recalls).toFixed(1)}</b><span>${t('overview.recallItems')}</span></div>
+            <div><b>${n(Math.round(r.tokens / r.recalls))}</b><span>${t('overview.recallTokens')}</span></div>
+          </div>`,
+  });
+
+  const recent = box({
     title: t('overview.recentTitle'),
-    actions: linkButton(ctx, {
-      href: '/admin/sessions',
-      label: t('overview.allSessions'),
-      variant: 'ghost',
-      size: 'sm',
-    }),
+    aside: html`<a href="/admin/sessions">${t('overview.allSessions')}</a>`,
+    flush: true,
     body:
       o.recent.length === 0
-        ? html`<p class="ol-muted ol-text-sm">${t('overview.noSessions')}</p>`
-        : html`<ul class="ol-list">${o.recent.map(
-            (s) => html`<li>
-          <a class="ol-list-title" href="${sessionHref(s)}">${sessionName(ctx, s, 90)}</a>
-          <span class="ol-list-meta">${sourceBadge(s.source)}${s.project ? html`<span>${s.project}</span>` : ''}${time(s.endedAt)}</span>
-        </li>`,
-          )}</ul>`,
+        ? html`<div class="admin-panel-body"><p class="admin-muted">${t('overview.noSessions')}</p></div>`
+        : html`<table class="admin-table">
+      <thead><tr><th>${t('sessions.titleColumn')}</th><th>${t('facet.agent')}</th><th>${t('filter.project')}</th><th class="admin-r">${t('overview.events')}</th><th class="admin-r">${t('sessions.lastActive')}</th></tr></thead>
+      <tbody>${o.recent.map(
+        (s) => html`<tr>
+        <td class="admin-wide"><a class="admin-cell-title" href="${sessionHref(s)}">${sessionName(ctx, s, 90)}</a></td>
+        <td>${agentTag(s.source)}</td>
+        <td>${s.project ?? html`<span class="admin-faint">—</span>`}</td>
+        <td class="admin-r">${n(s.eventCount)}</td>
+        <td class="admin-r">${whenShort(ctx, s.endedAt)}</td>
+      </tr>`,
+      )}</tbody></table>`,
   });
 
-  const topProject = o.projects[0]?.events ?? 0;
-  const projects = section({
-    title: t('overview.projectsTitle', { days: ACTIVITY_DAYS }),
+  const top = o.projects[0]?.events ?? 0;
+  const projects = box({
+    title: t('overview.projects'),
+    aside: t('overview.projectsAside'),
+    flush: true,
     body:
       o.projects.length === 0
-        ? html`<p class="ol-muted ol-text-sm">${t('overview.projectsNone', { days: ACTIVITY_DAYS })}</p>`
-        : html`<ul class="ol-list">${o.projects.map(
+        ? html`<div class="admin-panel-body"><p class="admin-muted">${t('overview.projectsNone', { days: ACTIVITY_DAYS })}</p></div>`
+        : html`<ul class="admin-meters">${o.projects.map(
             (p) => html`<li>
-          <span class="ol-list-row"><a class="ol-list-title" href="${href('sessions', { project: p.project })}">${p.project}</a><span class="ol-list-value">${t('overview.projectEvents', { n: n(p.events) })}</span></span>
-          ${shareBar(p.events, topProject, t('overview.projectEvents', { n: n(p.events) }))}
-          <span class="ol-list-meta"><span>${t('overview.projectSessions', { n: n(p.sessions) })}</span>${time(p.lastAt)}</span>
-        </li>`,
+              <a href="${href('sessions', { project: p.project })}" title="${t('overview.projectSessions', { n: n(p.sessions) })}">${p.project}</a>
+              ${ratioBar(0, p.events, top, t('overview.projectEvents', { n: n(p.events) }))}
+              <span class="admin-meter-value">${fmtCompact(p.events, ctx.lang)}</span>
+            </li>`,
           )}</ul>`,
   });
 
-  const sources = section({
+  const sources = box({
     title: t('overview.sourcesTitle'),
-    description: local ? t('overview.sourcesHelpLocal') : t('overview.sourcesHelp'),
+    flush: true,
     body:
       o.sources.length === 0
-        ? noData
-        : tableWrap(
-            html`<th>${t('overview.source')}</th><th>${t('overview.agentVersion')}</th><th>${t('overview.latest')}</th><th>${t('overview.lastIngest')}</th><th class="ol-num">${t('overview.sessions')}</th><th class="ol-num">${t('overview.events')}</th><th class="ol-num">${t('overview.parseErrors7d')}</th>`,
-            o.sources.map(
-              (s) =>
-                html`<tr>
-              <td class="ol-nowrap"><span class="ol-legend-item">${swatch(s.source)}<a class="ol-cell-title" href="${href('sessions', { source: s.source })}">${s.source}</a></span></td>
-              <td class="ol-nowrap">${s.agentVersion ? html`<span class="ol-mono">${s.agentVersion}</span>` : html`<span class="ol-subtle">—</span>`}</td>
-              <td class="ol-nowrap">${time(s.lastTs)}</td>
-              <td class="ol-nowrap">${time(s.lastSyncAt)}</td>
-              <td class="ol-num">${n(s.sessions)}</td>
-              <td class="ol-num">${n(s.events)}</td>
-              <td class="ol-num">${s.parseErrors7d > 0 ? badge(n(s.parseErrors7d), 'warning') : html`<span class="ol-subtle">0</span>`}</td>
-            </tr>`,
-            ),
-          ),
+        ? html`<div class="admin-panel-body">${empty(ctx, {
+            icon: 'history',
+            title: t('overview.noSessions'),
+            text: local ? t('overview.noDataLocal') : t('overview.noData'),
+            action: local
+              ? ''
+              : linkButton(ctx, {
+                  href: '/admin/connect',
+                  label: t('devices.howToConnect'),
+                  icon: 'plug',
+                  size: 'sm',
+                }),
+          })}</div>`
+        : html`<table class="admin-table">
+      <thead><tr><th>${t('overview.source')}</th><th>${t('overview.agentVersion')}</th><th class="admin-r">${t('overview.latest')}</th><th class="admin-r">${t('overview.lastIngest')}</th><th class="admin-r">${t('overview.sessions')}</th><th class="admin-r">${t('overview.events')}</th><th class="admin-r">${t('overview.parseErrors7d')}</th></tr></thead>
+      <tbody>${o.sources.map(
+        (s) => html`<tr>
+        <td class="admin-wide"><a class="admin-cell-title" href="${href('sessions', { agent: s.source })}">${agentTag(s.source)}</a></td>
+        <td>${s.agentVersion ? html`<span class="ol-mono">${s.agentVersion}</span>` : html`<span class="admin-faint">—</span>`}</td>
+        <td class="admin-r">${whenShort(ctx, s.lastTs)}</td>
+        <td class="admin-r">${whenShort(ctx, s.lastSyncAt)}</td>
+        <td class="admin-r">${n(s.sessions)}</td>
+        <td class="admin-r">${n(s.events)}</td>
+        <td class="admin-r">${s.parseErrors7d > 0 ? html`<span class="admin-bad">${n(s.parseErrors7d)}</span>` : html`<span class="admin-faint">0</span>`}</td>
+      </tr>`,
+      )}</tbody></table>`,
   });
 
-  const entries = section({
+  const status = box({
+    title: t('overview.healthTitle'),
+    aside: healthy
+      ? badge(t('overview.healthOk'), 'success', { dot: true })
+      : badge(t('overview.healthCheck'), 'warning', { dot: true }),
+    body: html`<dl class="admin-kv">
+      <dt>${t('overview.parseErrors')}</dt>
+      <dd>${t('overview.parseErrorsValue', { day: n(o.parseErrors.last24h), week: n(o.parseErrors.last7d) })}</dd>
+      ${o.parseErrors.bySource7d.map(
+        (e) =>
+          html`<dt class="admin-kv-sub">${e.source} ${e.device ? deviceName(e.device) : html`<span class="admin-faint">${t('overview.local')}</span>`}</dt><dd>${n(e.parseErrors)}</dd>`,
+      )}
+      <dt>${t('overview.version')}</dt><dd>${o.version}</dd>
+      <dt>${t('overview.uptime')}</dt><dd>${fmtDuration(o.uptimeMs, t)}</dd>
+    </dl>`,
+  });
+
+  const storage = box({
+    title: t('overview.storageTitle'),
+    body: html`<dl class="admin-kv">
+      <dt>${t('overview.database')}</dt><dd>${fmtBytes(o.usage.databaseBytes)}</dd>
+      <dt class="admin-kv-sub">${t('overview.wal')}</dt><dd>${fmtBytes(o.usage.walBytes)}</dd>
+      <dt>${t('overview.mirrorsDisk')}</dt><dd>${fmtBytes(o.usage.mirrorDiskBytes)}</dd>
+      ${
+        o.usage.bucket
+          ? html`<dt>${t('overview.mirrorsBucket')}</dt><dd>${fmtBytes(o.usage.bucket.frameBytes)}<span class="admin-cell-sub ol-mono">${o.usage.bucket.location}</span></dd>`
+          : ''
+      }
+      <dt>${t('overview.mirrorsLocal')}</dt><dd>${t('overview.mirrorSize', { stored: fmtBytes(o.usage.mirrorStoredBytes.local), size: fmtBytes(o.usage.mirrorBytes.local) })}</dd>
+      ${
+        local && !remoteMirrors
+          ? ''
+          : html`<dt>${t('overview.mirrorsRemote')}</dt><dd>${t('overview.mirrorSize', { stored: fmtBytes(o.usage.mirrorStoredBytes.remote), size: fmtBytes(o.usage.mirrorBytes.remote) })}</dd>`
+      }
+      <dt>${t('overview.freeDisk')}</dt><dd>${fmtBytes(o.usage.freeDiskBytes)}</dd>
+    </dl>`,
+  });
+
+  const entries = box({
     title: t('overview.latestEntries'),
-    actions: linkButton(ctx, {
-      href: '/admin/entries',
-      label: t('overview.allEntries'),
-      variant: 'ghost',
-      size: 'sm',
-    }),
+    aside: html`<a href="/admin/entries">${t('overview.allEntries')}</a>`,
+    flush: true,
     body:
       o.latestEntries.length === 0
-        ? html`<p class="ol-muted ol-text-sm">${t('entries.noneYet')}</p>`
-        : html`<ul class="ol-list">${o.latestEntries.map(
+        ? html`<div class="admin-panel-body"><p class="admin-muted">${t('entries.noneYet')}</p></div>`
+        : html`<ul class="admin-rows">${o.latestEntries.map(
             (e) => html`<li>
-          <a class="ol-list-title" href="${href('entry', { id: e.id })}">${clip(e.text, 120)}</a>
-          <span class="ol-list-meta">${kindBadge(ctx, e.kind)}${entryFlags(ctx, e)}<span>${e.author}</span>${time(e.createdAt)}</span>
-        </li>`,
+              ${kindTag(ctx, e.kind)}
+              <a class="admin-cell-title" href="${href('entry', { id: e.id })}">${clip(e.text, 160)}</a>
+              <span class="admin-rows-end">${whenShort(ctx, e.createdAt)}</span>
+            </li>`,
           )}</ul>`,
   });
 
-  const forgets = section({
+  const forgets = box({
     title: t('overview.latestTombstones'),
-    actions: linkButton(ctx, {
-      href: '/admin/tombstones',
-      label: t('overview.allTombstones'),
-      variant: 'ghost',
-      size: 'sm',
-    }),
+    aside: html`<a href="/admin/tombstones">${t('overview.allTombstones')}</a>`,
+    flush: true,
     body:
       o.latestTombstones.length === 0
-        ? html`<p class="ol-muted ol-text-sm">${t('tombstones.none')}</p>`
-        : html`<ul class="ol-list">${o.latestTombstones.map(
-            (r) => html`<li>
-          <span class="ol-list-row">${
-            r.kind === 'restore'
-              ? badge(t('tombstones.kind.restore'), 'success', { square: true })
-              : badge(t('tombstones.kind.forget'), 'danger', { square: true })
-          }<a class="ol-list-title ol-mono" href="${href('tombstone', { id: r.id })}">${r.target}</a></span>
-          <span class="ol-list-meta">${
-            r.kind === 'forget'
-              ? html`<span>${t('tombstones.coversCount', { entries: n(r.entries), events: n(r.events) })}</span>${r.inEffect ? '' : html`<span>${t('tombstones.restored')}</span>`}`
-              : ''
-          }${r.reason ? html`<span class="ol-truncate">${clip(r.reason, 80)}</span>` : ''}${time(r.createdAt)}</span>
-        </li>`,
+        ? html`<div class="admin-panel-body"><p class="admin-muted">${t('tombstones.none')}</p></div>`
+        : html`<ul class="admin-rows">${o.latestTombstones.map(
+            (x) => html`<li>
+              ${
+                x.kind === 'restore'
+                  ? html`<span class="admin-good">${t('tombstones.kind.restore')}</span>`
+                  : html`<span class="admin-bad">${t('tombstones.kind.forget')}</span>`
+              }
+              <a class="admin-cell-title" href="${href('tombstone', { id: x.id })}">${x.reason ? clip(x.reason, 120) : html`<span class="ol-mono">${x.target}</span>`}</a>
+              ${
+                x.kind === 'forget'
+                  ? html`<span class="admin-rows-end">${t('tombstones.coversCount', { entries: n(x.entries), events: n(x.events) })}${x.inEffect ? '' : html`, ${t('tombstones.restored')}`}</span>`
+                  : ''
+              }
+              <span class="admin-rows-end">${whenShort(ctx, x.createdAt)}</span>
+            </li>`,
           )}</ul>`,
-  });
-
-  const storage = panel(ctx, {
-    tag: 'aside',
-    title: t('overview.storageTitle'),
-    icon: 'database',
-    body: html`<dl class="ol-dl">
-            <dt>${t('overview.database')}</dt><dd>${fmtBytes(o.usage.databaseBytes)}</dd>
-            <dt class="ol-dl-sub">${t('overview.wal')}</dt><dd>${fmtBytes(o.usage.walBytes)}</dd>
-            <dt>${t('overview.mirrorsDisk')}</dt><dd>${fmtBytes(o.usage.mirrorDiskBytes)}</dd>
-            ${
-              o.usage.bucket
-                ? html`<dt>${t('overview.mirrorsBucket')}</dt><dd>${fmtBytes(o.usage.bucket.frameBytes)}<span class="ol-cell-sub ol-mono ol-break">${o.usage.bucket.location}</span></dd>`
-                : ''
-            }
-            <dt>${t('overview.mirrorsLocal')}</dt><dd>${t('overview.mirrorSize', { stored: fmtBytes(o.usage.mirrorStoredBytes.local), size: fmtBytes(o.usage.mirrorBytes.local) })}</dd>
-            ${
-              local && !remoteMirrors
-                ? ''
-                : html`<dt>${t('overview.mirrorsRemote')}</dt><dd>${t('overview.mirrorSize', { stored: fmtBytes(o.usage.mirrorStoredBytes.remote), size: fmtBytes(o.usage.mirrorBytes.remote) })}</dd>`
-            }
-            <dt>${t('overview.freeDisk')}</dt><dd>${fmtBytes(o.usage.freeDiskBytes)}</dd>
-          </dl>`,
-  });
-
-  const health = panel(ctx, {
-    tag: 'aside',
-    title: t('overview.healthTitle'),
-    icon: 'activity',
-    badge: healthy
-      ? badge(t('overview.healthOk'), 'success')
-      : badge(t('overview.healthCheck'), 'warning'),
-    body: html`<dl class="ol-dl">
-            <dt>${t('overview.parseErrors')}</dt>
-            <dd>${t('overview.parseErrorsValue', { day: n(o.parseErrors.last24h), week: n(o.parseErrors.last7d) })}</dd>
-            ${o.parseErrors.bySource7d.map(
-              (r) =>
-                html`<dt class="ol-dl-sub">${r.source} ${r.device ? deviceName(r.device) : html`<span class="ol-subtle">${t('overview.local')}</span>`}</dt><dd>${n(r.parseErrors)}</dd>`,
-            )}
-            <dt>${t('overview.version')}</dt><dd>${o.version}</dd>
-            <dt>${t('overview.uptime')}</dt><dd>${fmtDuration(o.uptimeMs, t)}</dd>
-          </dl>`,
   });
 
   renderPage(ctx, 200, {
     title: t('nav.overview'),
     nav: 'overview',
-    body: html`${pageHeader(ctx, {
+    body: html`${pageBar(ctx, {
       title: t('overview.title'),
-      description: local ? t('overview.descriptionLocal') : t('overview.description'),
       actions: local
         ? ''
-        : html`${linkButton(ctx, { href: '/admin/connect', label: t('nav.connect'), icon: 'plug' })}${linkButton(ctx, { href: '/admin/tokens/new', label: t('tokens.create'), icon: 'plus', variant: 'primary' })}`,
+        : html`${linkButton(ctx, { href: '/admin/connect', label: t('nav.connect'), icon: 'plug', size: 'sm' })}${linkButton(ctx, { href: '/admin/tokens/new', label: t('tokens.create'), icon: 'plus', variant: 'primary', size: 'sm' })}`,
     })}
     ${
       stale.length > 0 || o.parseErrors.last24h > 0
-        ? html`<div class="ol-notices">
+        ? html`<div class="admin-notices">
       ${stale.length > 0 ? alert(ctx, 'warning', t('overview.staleDevices', { n: stale.length })) : ''}
       ${o.parseErrors.last24h > 0 ? alert(ctx, 'warning', t('overview.parseErrors24h', { n: o.parseErrors.last24h })) : ''}
     </div>`
         : ''
     }
-    <section class="ol-section">
-      <h2 class="ol-sr-only">${t('overview.countsTitle')}</h2>
-      <div class="ol-stats">
-        ${stat('/admin/sessions', t('overview.events'), 'message-square', o.counts.events, t('overview.eventsMeta', { n: n(o.sources.length) }))}
-        ${stat('/admin/sessions', t('overview.sessions'), 'history', o.counts.sessions, latest === null ? t('overview.noSessions') : html`${t('overview.latestActivity')} ${time(latest)}`)}
-        ${stat('/admin/entries', t('overview.entries'), 'book-marked', o.counts.entries, t('overview.entriesMeta', { memory: n(o.entries.memory), knowledge: n(o.entries.knowledge), cognition: n(o.entries.cognition) }))}
-        ${local ? '' : stat('/admin/devices', t('overview.devices'), 'laptop', o.counts.devices, t('overview.devicesMeta', { n: n(o.counts.activeTokens) }), stale.length > 0 ? 'warning' : undefined)}
-        ${stat('/admin/tombstones', t('overview.tombstones'), 'eraser', o.counts.tombstones, t('overview.tombstonesMeta'))}
-      </div>
-    </section>
-    <div class="ol-grid ol-grid-sidebar ol-section">
-      <div class="admin-main-column">
-        ${o.sources.length === 0 ? sources : activity}
-        ${o.sources.length === 0 ? '' : html`<div class="ol-grid ol-grid-2 ol-section">${recent}${projects}</div>`}
-        ${o.sources.length === 0 ? '' : sources}
-        ${
-          local
-            ? ''
-            : section({
-                title: t('overview.devicesTitle'),
-                description: t('devices.help'),
-                actions:
-                  o.devices.length > 0
-                    ? linkButton(ctx, {
-                        href: '/admin/devices',
-                        label: t('overview.allDevices'),
-                        variant: 'ghost',
-                        size: 'sm',
-                      })
-                    : '',
-                body: devicesTable(ctx, o.devices),
-              })
-        }
-        <div class="ol-grid ol-grid-2 ol-section">${entries}${forgets}</div>
-      </div>
-      <div class="ol-grid">
-        ${local ? hubPanel(ctx, o.hub) : ''}
-        ${health}
-        ${storage}
-      </div>
+    ${kpis}
+    <div class="admin-dash">
+      <div class="admin-dash-stack">${activity}${recent}${sources}</div>
+      <div class="admin-dash-stack">${recalls}${projects}${local ? hubBox(ctx, o.hub) : ''}${status}${storage}</div>
+      ${
+        local
+          ? ''
+          : box({
+              title: t('overview.devicesTitle'),
+              aside:
+                o.devices.length > 0
+                  ? html`<a href="/admin/devices">${t('overview.allDevices')}</a>`
+                  : '',
+              flush: true,
+              cls: 'admin-dash-full',
+              body: devicesTable(ctx, o.devices),
+            })
+      }
+      <div class="admin-dash-half">${entries}${forgets}</div>
     </div>`,
   });
 }

@@ -407,12 +407,12 @@ describe('pages', () => {
     expect(overview).toMatch(/<symbol id="i-layout-dashboard" viewBox="0 0 24 24"><rect /);
     // Signed in: the app shell with its navigation, error pages included; signed out (and on
     // unknown paths, where the session is not read), the sign-in card and never the shell.
-    expect(overview).toContain('<a class="ol-nav-item" href="/admin/" aria-current="page">');
+    expect(overview).toContain('<a href="/admin/" aria-current="page">');
     expect(signedIn[4]?.status).toBe(404);
-    expect(signedIn[4]?.text).toContain('class="ol-app"');
+    expect(signedIn[4]?.text).toContain('class="admin-app"');
     for (const page of anonymous) {
       expect(page.text).toContain('class="ol-auth-card"');
-      expect(page.text).not.toContain('class="ol-app"');
+      expect(page.text).not.toContain('class="admin-app"');
     }
     expect(signedIn[5]?.text).toContain('class="ol-auth-card"');
   });
@@ -484,12 +484,12 @@ describe('breadcrumb', () => {
     const b = new Browser(base);
     await b.login(PASSWORD);
     const crumbs = (text: string) =>
-      /<ol class="ol-breadcrumb">([\s\S]*?)<\/ol>/
+      /<ol class="admin-crumbs">([\s\S]*?)<\/ol>/
         .exec(text)?.[1]
         ?.replace(/<[^>]+>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
-    expect(crumbs((await b.get('/admin/audit')).text)).toBe('Security Audit log');
+    expect(crumbs((await b.get('/admin/audit')).text)).toBe('Settings Audit log');
     expect(crumbs((await b.get('/admin/')).text)).toBe('Overview');
     const host = new URL(base).host;
     for (const path of ['/admin/', '/admin/sessions', '/admin/login']) {

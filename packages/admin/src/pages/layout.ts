@@ -1,4 +1,4 @@
-import type { Ctx } from '../context.js';
+import { type Ctx, fmtNumber } from '../context.js';
 import { type HtmlValue, href, html, type SafeHtml } from '../html.js';
 import { sendHtml } from '../http.js';
 import { HTML_LANG, type MessageKey } from '../i18n/index.js';
@@ -34,29 +34,22 @@ function navFor(ctx: Ctx): typeof NAV {
   );
 }
 
-/** The sidebar: groups of pages named by task. */
+/** The sidebar: the memory first, then the settings. Search is in the top bar. */
 const NAV: Array<{ label?: MessageKey; items: NavItem[] }> = [
-  { items: [{ key: 'overview', path: '', label: 'nav.overview', icon: 'layout-dashboard' }] },
   {
-    label: 'nav.groupMemory',
     items: [
+      { key: 'overview', path: '', label: 'nav.overview', icon: 'layout-dashboard' },
       { key: 'sessions', path: 'sessions', label: 'nav.sessions', icon: 'history' },
-      { key: 'search', path: 'search', label: 'nav.search', icon: 'search' },
-      { key: 'entries', path: 'entries', label: 'nav.entries', icon: 'book-marked' },
       { key: 'recalls', path: 'recalls', label: 'nav.recalls', icon: 'lightbulb' },
+      { key: 'entries', path: 'entries', label: 'nav.entries', icon: 'book-marked' },
     ],
   },
   {
-    label: 'nav.groupConnect',
+    label: 'nav.groupSettings',
     items: [
       { key: 'devices', path: 'devices', label: 'nav.devices', icon: 'laptop', hubOnly: true },
       { key: 'tokens', path: 'tokens', label: 'nav.tokens', icon: 'key-round', hubOnly: true },
       { key: 'connect', path: 'connect', label: 'nav.connect', icon: 'plug', hubOnly: true },
-    ],
-  },
-  {
-    label: 'nav.groupSecurity',
-    items: [
       { key: 'tombstones', path: 'tombstones', label: 'nav.tombstones', icon: 'eraser' },
       { key: 'audit', path: 'audit', label: 'nav.audit', icon: 'scroll-text' },
       {
@@ -142,67 +135,104 @@ export interface PageOptions {
 }
 
 /**
- * The page's place in the navigation: its sidebar group, the pages above it, then the page. The
- * group is plain text, since it is not a page; the host is left to the browser's address bar.
+ * The page's place: its group in the sidebar, the pages above it, then the page; the host is left to
+ * the address bar.
  */
 function breadcrumb(ctx: Ctx, o: PageOptions): SafeHtml {
-  const crumbs = o.crumbs ?? [];
   const group = NAV.find((g) => g.items.some((i) => i.key === o.nav))?.label;
-  return html`<nav aria-label="${ctx.t('nav.breadcrumb')}"><ol class="ol-breadcrumb">
+  return html`<nav aria-label="${ctx.t('nav.breadcrumb')}"><ol class="admin-crumbs">
       ${group ? html`<li>${ctx.t(group)}</li>` : ''}
-      ${crumbs.map((c) => html`<li>${c.href ? html`<a href="${c.href}">${c.label}</a>` : c.label}</li>`)}
+      ${(o.crumbs ?? []).map((c) => html`<li>${c.href ? html`<a href="${c.href}">${c.label}</a>` : c.label}</li>`)}
       <li><span aria-current="page">${o.title}</span></li>
     </ol></nav>`;
 }
 
+/** How long ago, in words: just now, minutes, hours, or days. */
+export function ago(ctx: Ctx, ts: number): string {
+  const minutes = Math.max(0, Math.floor((ctx.now - ts) / 60_000));
+  if (minutes < 1) return ctx.t('ago.now');
+  if (minutes < 60) return ctx.t('ago.minutes', { n: minutes });
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return ctx.t('ago.hours', { n: hours });
+  return ctx.t('ago.days', { n: Math.floor(hours / 24) });
+}
+
+/** The sidebar's foot: on a device, its hub; on a hub, its devices. */
+function storeStatus(ctx: Ctx): SafeHtml {
+  const t = ctx.t;
+  if (ctx.mode === 'hub') {
+    const devices = ctx.service.devices(ctx.now);
+    const stale = devices.some((d) => d.stale);
+    return html`<a class="admin-side-row" href="/admin/devices"><span class="admin-dot${stale ? ' admin-dot-warn' : ''}"></span>${t('side.devices', { n: devices.length })}</a>`;
+  }
+  const hub = ctx.service.hub();
+  if (!hub)
+    return html`<div class="admin-side-row"><span class="admin-dot admin-dot-off"></span>${t('side.noHub')}</div>`;
+  if (hub.syncing)
+    return html`<div class="admin-side-row"><span class="admin-dot"></span>${t('side.syncing')}</div>`;
+  if (hub.lastError) {
+    return html`<div class="admin-side-row" title="${hub.lastError}"><span class="admin-dot admin-dot-warn"></span>${t('side.syncFailed')}</div>`;
+  }
+  return html`<div class="admin-side-row"><span class="admin-dot"></span>${
+    hub.lastSyncAt === null
+      ? t('side.notSynced')
+      : t('side.synced', { ago: ago(ctx, hub.lastSyncAt) })
+  }</div>`;
+}
+
+/** Where this store is: this device, with a way to its hub, or the hub. */
+function storeSwitch(ctx: Ctx): HtmlValue {
+  if (ctx.mode === 'hub') return '';
+  const hub = ctx.service.hub();
+  if (!hub) return '';
+  return html`<div class="admin-seg"><span aria-current="true">${icon(ctx, 'laptop')}${ctx.t('top.local')}</span><a href="${`${hub.url.replace(/\/+$/, '')}/admin/`}" rel="noreferrer" target="_blank">${icon(ctx, 'server')}${ctx.t('top.hub')}</a></div>`;
+}
+
 function appShell(ctx: Ctx, o: PageOptions): SafeHtml {
   const t = ctx.t;
+  const counts = ctx.service.navCounts();
+  const count = (key: NavKey) =>
+    key === 'sessions' || key === 'recalls' || key === 'entries' ? counts[key] : null;
   return html`<a class="ol-skip-link" href="#main">${t('nav.skip')}</a>
-<div class="ol-app">
-  <aside class="ol-sidebar">
-    <input type="checkbox" id="nav-toggle" class="ol-nav-toggle">
-    <div class="ol-sidebar-head">
-      <a class="ol-brand" href="/admin/">${logo(ctx, 22)}<span>Origin</span></a>
-      <span class="ol-brand-tag">${ctx.mode === 'local' ? t('app.local') : t('app.admin')}</span>
-      <label for="nav-toggle" class="ol-btn ol-btn-ghost ol-btn-icon ol-nav-toggle-button">${icon(ctx, 'menu')}<span class="ol-sr-only">${t('nav.menu')}</span></label>
-    </div>
-    <nav class="ol-nav" aria-label="${t('nav.label')}">
+<div class="admin-app">
+  <aside class="admin-side">
+    <a class="admin-brand" href="/admin/">${logo(ctx, 20)}<span>Origin</span><span class="admin-brand-tag">${ctx.mode === 'local' ? t('app.local') : t('app.hub')}</span></a>
+    <nav class="admin-nav" aria-label="${t('nav.label')}">
       ${navFor(ctx).map(
-        (group) => html`<div class="ol-nav-group">
-        ${group.label ? html`<div class="ol-nav-label">${t(group.label)}</div>` : ''}
-        ${group.items.map(
-          (n) =>
-            html`<a class="ol-nav-item" href="${href(n.path)}"${n.key === o.nav ? html` aria-current="page"` : ''}>${icon(ctx, n.icon)}${t(n.label)}</a>`,
-        )}
-      </div>`,
+        (
+          group,
+        ) => html`${group.label ? html`<div class="admin-nav-label">${t(group.label)}</div>` : ''}
+        ${group.items.map((n) => {
+          const c = count(n.key);
+          return html`<a href="${href(n.path)}"${n.key === o.nav ? html` aria-current="page"` : ''}>${icon(ctx, n.icon)}${t(n.label)}${c === null ? '' : html`<span class="admin-nav-count">${fmtNumber(c, ctx.lang)}</span>`}</a>`;
+        })}`,
       )}
     </nav>
-    <div class="ol-sidebar-foot">
-      ${themeForm(ctx, false)}
-      <div class="ol-cluster">
-        ${languageForm(ctx, 'ol-btn ol-btn-ghost ol-btn-sm')}
-        <form method="post" action="/admin/logout">${csrfField(ctx)}<button type="submit" class="ol-btn ol-btn-ghost ol-btn-sm">${icon(ctx, 'log-out', 'sm')}${t('auth.signOut')}</button></form>
-      </div>
+    <div class="admin-side-foot">
+      ${storeStatus(ctx)}
+      <div class="admin-side-row">${themeForm(ctx, true)}${languageForm(ctx, 'ol-btn ol-btn-ghost ol-btn-sm')}</div>
+      <div class="admin-side-row"><form method="post" action="/admin/logout">${csrfField(ctx)}<button type="submit" class="ol-btn ol-btn-ghost ol-btn-sm">${icon(ctx, 'log-out', 'sm')}${t('auth.signOut')}</button></form><a class="admin-faint" href="${docsUrl(ctx)}" rel="noreferrer">Origin ${ctx.version}</a></div>
     </div>
   </aside>
-  <div class="ol-main">
-    <header class="ol-topbar">
+  <div class="admin-main">
+    <header class="admin-top">
       ${breadcrumb(ctx, o)}
-      ${
-        o.nav === 'search'
-          ? ''
-          : html`<div class="ol-topbar-actions">
-        <form class="ol-search" method="get" action="/admin/search" role="search">
-          ${icon(ctx, 'search')}
-          <input class="ol-input" type="search" name="q" placeholder="${t('search.quick')}" aria-label="${t('nav.search')}">
-        </form>
-      </div>`
-      }
+      <div class="admin-top-tools">
+        ${
+          o.nav === 'search'
+            ? ''
+            : html`<form class="admin-search" method="get" action="/admin/search" role="search">
+          ${icon(ctx, 'search', 'sm')}
+          <input type="search" name="q" placeholder="${t('search.quick')}" aria-label="${t('nav.search')}">
+          <kbd class="admin-kbd">/</kbd>
+        </form>`
+        }
+        ${storeSwitch(ctx)}
+      </div>
     </header>
-    <main class="ol-content" id="main" tabindex="-1">
+    <main class="admin-page" id="main" tabindex="-1">
 ${o.body}
     </main>
-    <footer class="ol-footer"><span>Origin ${ctx.version}</span><a href="${docsUrl(ctx)}" rel="noreferrer">${t('app.docs')}</a></footer>
   </div>
 </div>`;
 }

@@ -84,8 +84,27 @@ function rawLines(): void {
   }
 }
 
+/**
+ * Scroll a session's outline to the turn shown, which may be far down a long session. Only the
+ * outline scrolls; the page stays where it is.
+ */
+function outlineToCurrent(): void {
+  for (const list of document.querySelectorAll<HTMLElement>('.admin-outline')) {
+    const current = list.querySelector<HTMLElement>(':scope > [aria-current="true"]');
+    if (!current) continue;
+    const above = current.offsetTop - list.offsetTop;
+    if (
+      above < list.scrollTop ||
+      above + current.offsetHeight > list.scrollTop + list.clientHeight
+    ) {
+      list.scrollTop = Math.max(0, above - list.clientHeight / 3);
+    }
+  }
+}
+
 localTimes();
 copyButtons();
 rawLines();
+outlineToCurrent();
 
 export {};

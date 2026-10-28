@@ -13,6 +13,14 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 - `origin agents` shows how each agent on the machine is connected. `origin agents connect` registers Origin's MCP server with each, and adds the recall hooks to Claude Code and Codex: it shows the changes first, and makes them with `--yes`, backing up each file, touching only Origin's own entries. `origin agents disconnect` removes them.
 - A device sends the recalls it made to its hub when it syncs, so the hub holds every device's. Upgrade the hub first: one from before recalls refuses them, and they wait on the device until it is upgraded.
 
+### Admin UI
+
+- The admin UI, on a hub and with `origin ui`, is laid out as a workbench: a sidebar with counts, a bar at the top with breadcrumbs, search, and on a device a way to its hub, and denser pages, in version 0.5.1 of the OpenLinkOS design system.
+- The overview is a dashboard: figures with the last 30 days under each, events per day by agent, how recalls went by occasion, recent sessions, active projects, the agents, and the state of the store.
+- Sessions, entries, and recalls are lists with filters on the left, each with how many it would leave, and time ranges above; sessions and recalls have a histogram of the last 30 days by agent, and sessions can be sorted by latest activity, events, or length. Links that filtered the timeline by `source` still work.
+- A session's page is a trace: an outline of its turns with their tool calls, failures, recalls, and durations, which can be narrowed to the turns with recalls or with failures; the turn shown opens into its steps, placed in time, and is shown in full beside the outline. The index of days and the expanded view are gone.
+- A recall's page shows the text the agent was handed, rebuilt from the store as it is now, how its budget was spent, and the other recalls of its session.
+
 ## [0.3.0] - 2026-10-24
 
 Imports the memories your agents keep for themselves, leaves ended entries out of search, and documents versions and upgrades on the site.

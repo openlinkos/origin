@@ -234,7 +234,7 @@ describe('origin ui: the sign-in link', () => {
     );
     const page = await b.get('/admin/');
     expect(page.status).toBe(200);
-    expect(page.text).toContain('class="ol-app"');
+    expect(page.text).toContain('class="admin-app"');
 
     // Used up: another browser gets nothing; the signed-in one is just sent on.
     const other = new Browser(base);
@@ -397,7 +397,7 @@ describe('origin ui: pages', () => {
     expect(pageProblems(page.text)).toEqual([]);
     expect(page.text).toContain('Imported from fake&#39;s own memory file.');
     expect(page.text).toContain('(ended)');
-    expect(page.text).toContain('<span class="ol-mono">notes.md</span>');
+    expect(page.text).toContain('<span class="ol-mono admin-faint">notes.md</span>');
     expect(page.text).toContain('The file was deleted.');
     expect(page.text).toContain('Use pnpm. &lt;img src=x onerror=alert(1)&gt;');
     // Ended: in the history, not among the current entries.
@@ -465,7 +465,7 @@ describe('origin ui: pages', () => {
     expect(list.status).toBe(200);
     expect(pageProblems(list.text)).toEqual([]);
     expect(list.text).toContain(`/admin/recall?id=${id}`);
-    expect(list.text).toContain('1 used');
+    expect(list.text).toContain('<span class="admin-good">1</span>');
 
     const one = await b.get(`/admin/recall?id=${id}`);
     expect(one.status).toBe(200);
@@ -475,16 +475,20 @@ describe('origin ui: pages', () => {
     expect(one.text).toContain(`/admin/event?id=${encodeURIComponent(EVENT)}`);
     expect(one.text).toContain('not on this store');
     expect(one.text).toContain('about 60 of 400 tokens');
+    // The text the agent was handed, rebuilt: what is no longer on this store is left out.
+    expect(one.text).toContain(`<pre class="admin-handed" id="handed">Origin recall ${id}:`);
+    expect(one.text).toContain('1 item is left out');
 
     const page = await b.get(`/admin/entry?id=${entry.id}`);
     expect(pageProblems(page.text)).toEqual([]);
-    expect(page.text).toContain('Recalls (1)');
+    expect(page.text).toContain('Recalls<span class="admin-bar-count">1</span>');
     expect(page.text).toContain(`/admin/recall?id=${id}`);
 
     const session = await b.get(`/admin/session?source=fake&id=${SESSION}`);
     expect(pageProblems(session.text)).toEqual([]);
     expect(session.text).toContain(`/admin/recall?id=${id}`);
-    expect(session.text).toContain('2 handed over, 1 used');
+    expect(session.text).toContain('2 items, about');
+    expect(session.text).toContain('1 used');
 
     expect((await b.get('/admin/recall?id=rcl_000000000000')).status).toBe(404);
   });
@@ -507,7 +511,10 @@ describe('origin ui: pages', () => {
       `/admin/event-raw?id=${encodeURIComponent(EVENT)}`,
       '/admin/search?q=schema',
       '/admin/entries',
+      '/admin/entries?kind=memory&origin=written&q=schema&range=7d&history=1',
       `/admin/entry?id=${entry.id}`,
+      '/admin/recalls',
+      '/admin/recalls?occasion=start&handed=none&range=all',
       `/admin/correct?id=${entry.id}`,
       `/admin/remember?event=${encodeURIComponent(EVENT)}`,
       `/admin/forget?id=${entry.id}`,
@@ -517,12 +524,12 @@ describe('origin ui: pages', () => {
       const res = await b.get(p);
       expect(res.status, p).toBe(200);
       expect(pageProblems(res.text), p).toEqual([]);
-      expect(res.text, p).toContain('<span class="ol-brand-tag">Local</span>');
+      expect(res.text, p).toContain('<span class="admin-brand-tag">Local</span>');
       expect(res.text, p).not.toMatch(/href="\/admin\/(tokens|devices?|connect|signins|reauth)\b/);
       expect(res.text, p).not.toContain('<img src=x');
     }
     const overview = (await b.get('/admin/')).text;
-    expect(overview).toContain('href="/admin/sessions?source=fake"');
+    expect(overview).toContain('href="/admin/sessions?agent=fake"');
     expect(overview).not.toContain('Raw mirrors, from devices');
     const api = (await b.api('GET', 'overview')).json();
     expect(api.counts).toMatchObject({ events: 2, sessions: 1, entries: 1 });
@@ -530,7 +537,9 @@ describe('origin ui: pages', () => {
     const session = await b.get(`/admin/session?source=fake&id=${SESSION}`);
     expect(session.text).toContain('&lt;img src=x onerror=alert(1)&gt;');
     // The session by turns: the prompt, and the agent's reply rendered as Markdown, as text.
-    expect(session.text).toContain('<li class="ol-card admin-turn" id="turn-1">');
+    expect(session.text).toContain(
+      '<section class="admin-trace-detail" id="detail" aria-label="Turn 1">',
+    );
     expect(session.text).toContain('<div class="admin-prompt-text">Keep the schema simple.</div>');
     expect(session.text).toMatch(
       /<div class="ol-prose ol-prose-sm"><p>&lt;img src=x onerror=alert\(1\)&gt;<\/p><\/div>/,
@@ -554,14 +563,15 @@ describe('origin ui: pages', () => {
     expect(overview).toContain('Latest forgets and restores');
     // The timeline by day, filtered by name.
     const timeline = (await b.get('/admin/sessions?q=SCHEMA')).text;
-    expect(timeline).toContain('<tr class="ol-table-group"><th colspan="7" scope="rowgroup">');
+    expect(timeline).toContain('<table class="admin-table">');
+    expect(timeline).toContain(`href="/admin/session?source=fake&amp;id=${SESSION}"`);
     expect(timeline).toContain('Keep the schema simple.');
     expect((await b.get('/admin/sessions?q=nothing-like-it')).text).toContain('No sessions match');
     expect((await b.api('GET', 'sessions?q=schema')).json().sessions).toMatchObject([
       { sessionId: SESSION, prompt: 'Keep the schema simple.', turns: 1 },
     ]);
     const zh = await b.get('/admin/', { 'Accept-Language': 'zh-CN' });
-    expect(zh.text).toContain('<span class="ol-brand-tag">本机</span>');
+    expect(zh.text).toContain('<span class="admin-brand-tag">本机</span>');
   });
 
   it('show a command the agent acted on as the prompt of its own turn', async () => {
@@ -590,8 +600,9 @@ describe('origin ui: pages', () => {
     await syncSource({ db, home: tmp }, fakeAdapter(path.join(tmp, 'agent')));
     const page = (await b.get(`/admin/session?source=fake&id=${SESSION}`)).text;
     expect(pageProblems(page)).toEqual([]);
-    expect(page).toContain('<li class="ol-card admin-turn" id="turn-2">');
-    expect(page).not.toContain('id="turn-3"');
+    // Two turns in the outline, the latest shown.
+    expect(page).toContain('<section class="admin-trace-detail" id="detail" aria-label="Turn 2">');
+    expect(page.match(/class="admin-outline-row"/g)).toHaveLength(2);
     expect(page).toContain(
       '<span class="ol-chip ol-chip-accent ol-chip-lg ol-chip-mono" title="Command">',
     );
@@ -599,7 +610,9 @@ describe('origin ui: pages', () => {
       '<span class="ol-chip-label">/review PR 12 &lt;img src=x onerror=alert(1)&gt;</span>',
     );
     // /clear stays a note of the first turn, linked to its event; the reply's table is a table.
-    expect(page).toMatch(
+    const first = (await b.get(`/admin/session?source=fake&id=${SESSION}&turn=1`)).text;
+    expect(pageProblems(first)).toEqual([]);
+    expect(first).toMatch(
       /<span class="ol-chip ol-chip-mono">.*?<span class="ol-chip-label">\/clear<\/span><a class="ol-quiet-link" href="\/admin\/event\?id=fake%3Aevt-clear" title="fake:evt-clear" aria-label="[^"]+">/s,
     );
     expect(page).toContain('<div class="ol-prose-table"><table>');

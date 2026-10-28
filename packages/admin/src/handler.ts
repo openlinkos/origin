@@ -62,8 +62,18 @@ import { recallPage, recallsPage } from './pages/recalls.js';
 import { auditPage, signinsPage, tombstonePage, tombstonesPage } from './pages/records.js';
 import { sessionPage } from './pages/session.js';
 import { newTokenPage, revokeTokenPage, tokenCreatedPage, tokensPage } from './pages/tokens.js';
+import { queryAll } from './pages/workbench.js';
 import { CheckQueue, type LimiterOptions, LOGIN_LIMITS, LoginLimiter } from './ratelimit.js';
-import { AdminService, type HubLink } from './service.js';
+import {
+  AdminService,
+  type EntryBoardFilter,
+  type HubLink,
+  type RecallBoardFilter,
+  SESSION_RANGES,
+  SESSION_SORTS,
+  type SessionBoardFilter,
+  TRACE_SHOWS,
+} from './service.js';
 import { MemorySessions, type SessionStore, SignInLink, storedSessions } from './sessions.js';
 
 export interface AdminOptions {
@@ -176,6 +186,65 @@ function turnParam(ctx: Ctx, name: 'turn' | 'part'): number | undefined {
   const value = query(ctx, name);
   const n = Number(value);
   return value !== '' && Number.isInteger(n) && n >= 0 && n < 10_000_000 ? n : undefined;
+}
+
+/** One of a few values of a query parameter, or the default. */
+function choice<T extends string>(ctx: Ctx, name: string, values: readonly T[], fallback: T): T {
+  const v = query(ctx, name);
+  return (values as readonly string[]).includes(v) ? (v as T) : fallback;
+}
+
+/** The filters of the sessions page, from its query. */
+function sessionFilter(ctx: Ctx): SessionBoardFilter {
+  return {
+    agents: [...queryAll(ctx, 'agent'), ...queryAll(ctx, 'source')]
+      .slice(0, 20)
+      .map((v) => v.slice(0, 64)),
+    projects: queryAll(ctx, 'project')
+      .slice(0, 50)
+      .map((v) => v.slice(0, 200)),
+    range: choice(ctx, 'range', SESSION_RANGES, '30d'),
+    q: query(ctx, 'q').trim().slice(0, 200),
+    recalled: flag(query(ctx, 'recalled')),
+    name: choice(ctx, 'name', ['any', 'titled', 'provisional'] as const, 'any'),
+    sort: choice(ctx, 'sort', SESSION_SORTS, 'recent'),
+    page: pageParam(ctx),
+  };
+}
+
+function entryFilter(ctx: Ctx): EntryBoardFilter {
+  const few = (name: string, max: number) =>
+    queryAll(ctx, name)
+      .slice(0, max)
+      .map((v) => v.slice(0, 200));
+  return {
+    kinds: few('kind', 3),
+    projects: few('project', 50),
+    authors: few('author', 20),
+    origin: choice(ctx, 'origin', ['any', 'imported', 'written'] as const, 'any'),
+    recalled: flag(query(ctx, 'recalled')),
+    history: flag(query(ctx, 'history')),
+    range: choice(ctx, 'range', SESSION_RANGES, 'all'),
+    q: query(ctx, 'q').trim().slice(0, 200),
+    page: pageParam(ctx),
+  };
+}
+
+function recallFilter(ctx: Ctx): RecallBoardFilter {
+  const few = (name: string) =>
+    queryAll(ctx, name)
+      .slice(0, 20)
+      .map((v) => v.slice(0, 64));
+  return {
+    agents: few('agent'),
+    occasions: few('occasion'),
+    devices: few('device'),
+    range: choice(ctx, 'range', SESSION_RANGES, '30d'),
+    handed: flag(query(ctx, 'all'))
+      ? 'any'
+      : choice(ctx, 'handed', ['some', 'none', 'any'] as const, 'some'),
+    page: pageParam(ctx),
+  };
 }
 
 const turnOptions = (ctx: Ctx) => ({
@@ -441,21 +510,14 @@ const PAGES: Route[] = [
   ),
 
   page('GET', '/sessions', 'session', (ctx) => {
-    const filter = {
-      source: query(ctx, 'source'),
-      project: query(ctx, 'project'),
-      q: query(ctx, 'q').trim().slice(0, 200),
-    };
-    const r = ctx.service.sessions({ ...filter, page: pageParam(ctx) });
-    sessionsPage(ctx, {
-      ...r,
-      sources: ctx.service.sources(),
-      projects: ctx.service.projects().map((p) => p.project),
-      filter,
-    });
+    const filter = sessionFilter(ctx);
+    sessionsPage(ctx, { ...ctx.service.sessionBoard(filter, ctx.now), filter });
   }),
   page('GET', '/session', 'session', (ctx) => {
-    const r = ctx.service.sessionTurns(query(ctx, 'source'), query(ctx, 'id'), turnOptions(ctx));
+    const r = ctx.service.sessionTrace(query(ctx, 'source'), query(ctx, 'id'), {
+      ...turnOptions(ctx),
+      show: choice(ctx, 'show', TRACE_SHOWS, 'all'),
+    });
     sessionPage(ctx, { ...r, open: flag(query(ctx, 'tools')) });
   }),
   page('GET', '/event', 'session', (ctx) => eventPage(ctx, ctx.service.event(query(ctx, 'id')))),
@@ -468,22 +530,13 @@ const PAGES: Route[] = [
   }),
 
   page('GET', '/entries', 'session', (ctx) => {
-    const filter = {
-      kind: query(ctx, 'kind'),
-      project: query(ctx, 'project'),
-      history: flag(query(ctx, 'history')),
-    };
-    const r = ctx.service.entries({ ...filter, page: pageParam(ctx) });
-    entriesPage(ctx, { ...r, projects: ctx.service.projects().map((p) => p.project), filter });
+    const filter = entryFilter(ctx);
+    entriesPage(ctx, { ...ctx.service.entryBoard(filter, ctx.now), filter });
   }),
   page('GET', '/entry', 'session', (ctx) => entryPage(ctx, ctx.service.entry(query(ctx, 'id')))),
   page('GET', '/recalls', 'session', (ctx) => {
-    const filter = {
-      device: query(ctx, 'device'),
-      agent: query(ctx, 'agent'),
-      all: flag(query(ctx, 'all')),
-    };
-    recallsPage(ctx, { ...ctx.service.recalls({ ...filter, page: pageParam(ctx) }), filter });
+    const filter = recallFilter(ctx);
+    recallsPage(ctx, { ...ctx.service.recallBoard(filter, ctx.now), filter });
   }),
   page('GET', '/recall', 'session', (ctx) => recallPage(ctx, ctx.service.recall(query(ctx, 'id')))),
   page('GET', '/correct', 'session', (ctx) =>

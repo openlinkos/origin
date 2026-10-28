@@ -119,6 +119,19 @@ export function fmtSpan(ms: number, t: Translate): string {
   return fmtDuration(ms, t);
 }
 
+/** A duration in a few characters, for narrow columns: 0.4s, 38s, 4m 12s, 2h 5m, 3d 4h. */
+export function fmtSpanShort(ms: number): string {
+  if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return s % 60 === 0 || m >= 10 ? `${m}m` : `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 === 0 ? `${h}h` : `${h}h ${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return h % 24 === 0 ? `${d}d` : `${d}d ${h % 24}h`;
+}
+
 /** A number in a few characters: 950, 1.2K, 34K, 1.5M. */
 export function fmtCompact(n: number, lang: Lang): string {
   return new Intl.NumberFormat(lang === 'zh' ? 'zh-CN' : 'en-US', {

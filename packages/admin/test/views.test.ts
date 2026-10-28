@@ -375,3 +375,112 @@ describe('the overview', () => {
     expect(JSON.stringify(o)).not.toContain('secret plan');
   });
 });
+
+describe('the workbench lists', () => {
+  const board = {
+    agents: [] as string[],
+    projects: [] as string[],
+    range: 'all' as const,
+    q: '',
+    recalled: false,
+    name: 'any' as const,
+    sort: 'recent' as const,
+    page: 0,
+  };
+
+  it('filter sessions by agent and project, counting each facet as if it alone were open', async () => {
+    write([{ id: 'a1', session: 'a', ts: NOW - 3 * DAY, project: 'web', text: 'Fix the form' }]);
+    write([{ id: 'b1', session: 'b', ts: NOW - 1000, project: 'api', text: 'Add a route' }]);
+    write([{ id: 'c1', session: 'c', ts: NOW - 2000, project: 'web', text: 'Ship it' }], 'other');
+    await sync();
+    await sync('other');
+    const all = service.sessionBoard(board, NOW);
+    expect(all.rows.map((r) => r.sessionId)).toEqual(['b', 'c', 'a']);
+    expect(all.facets.agents).toEqual([
+      { value: 'fake', count: 2 },
+      { value: 'other', count: 1 },
+    ]);
+    const web = service.sessionBoard({ ...board, projects: ['web'] }, NOW);
+    expect(web.rows.map((r) => r.sessionId)).toEqual(['c', 'a']);
+    // The agents facet counts under the project filter; the projects facet ignores its own.
+    expect(web.facets.agents).toEqual([
+      { value: 'fake', count: 1 },
+      { value: 'other', count: 1 },
+    ]);
+    expect(web.facets.projects.map((p) => p.value)).toEqual(['web', 'api']);
+    expect(service.sessionBoard({ ...board, range: 'today' }, NOW).ranges).toMatchObject({
+      all: 3,
+    });
+    expect(service.sessionBoard({ ...board, agents: ['other'] }, NOW).total).toBe(1);
+  });
+
+  it('show a session as a trace: every turn with its calls and failures, the latest in full', async () => {
+    write(conversation(3, NOW - DAY));
+    write([
+      {
+        id: 'x',
+        session: 's',
+        ts: NOW - DAY + 3 * 60_000 + 10,
+        kind: 'tool_result',
+        text: 'boom',
+        meta: { callId: 'k3', isError: true },
+      },
+    ]);
+    await sync();
+    const trace = service.sessionTrace('fake', 's');
+    expect(trace.number).toBe(3);
+    expect(trace.outline.map((t) => [t.number, t.label, t.tools])).toEqual([
+      [0, null, 0],
+      [1, 'Prompt 1', 1],
+      [2, 'Prompt 2', 1],
+      [3, 'Prompt 3', 1],
+    ]);
+    expect(trace.steps.map((s) => s.kind)).toEqual(['prompt', 'tool', 'reply']);
+    expect(trace.steps[1]).toMatchObject({ label: 'Read', count: 1 });
+    expect(service.sessionTrace('fake', 's', { turn: 1 })).toMatchObject({
+      number: 1,
+      previous: 0,
+      next: 2,
+    });
+  });
+
+  it('filter entries by kind, origin, and text, older versions only when asked', async () => {
+    write([{ id: 'e1', session: 'e', ts: NOW - DAY }]);
+    await sync();
+    const cite = [{ eventId: 'fake:e1' }];
+    const kept = remember(db, {
+      kind: 'cognition',
+      text: 'Prefer small commits',
+      confidence: 0.9,
+      author: 'claude-code@laptop',
+      sources: cite,
+    });
+    remember(db, {
+      kind: 'knowledge',
+      text: 'The hub listens on 7077',
+      confidence: 1,
+      author: 'user@laptop',
+      sources: cite,
+    });
+    const f = {
+      kinds: [] as string[],
+      projects: [] as string[],
+      authors: [] as string[],
+      origin: 'any' as const,
+      recalled: false,
+      history: false,
+      range: 'all' as const,
+      q: '',
+      page: 0,
+    };
+    const all = service.entryBoard(f, NOW);
+    expect(all.total).toBe(2);
+    expect(all.facets.authors.map((a) => a.value).sort()).toEqual(['claude-code', 'user']);
+    expect(all.facets.written).toBe(2);
+    expect(service.entryBoard({ ...f, kinds: ['cognition'] }, NOW).rows.map((e) => e.id)).toEqual([
+      kept.id,
+    ]);
+    expect(service.entryBoard({ ...f, q: 'HUB' }, NOW).total).toBe(1);
+    expect(service.entryBoard({ ...f, origin: 'imported' }, NOW).total).toBe(0);
+  });
+});

@@ -1,27 +1,20 @@
 /**
- * A session's page: its turns, one card each. A card shows the prompt, the tool run folded into
- * one line that opens to a row per call, and the agent's last reply as Markdown. Command echoes and
- * injected context are small notes, and each item links to its event's page for provenance.
+ * A session's page, as a trace: an outline of its turns, the one shown opened into its steps, and
+ * that turn in full: the prompt, the recalls made in it, the tool run folded into one line that opens
+ * to a row per call, and the agent's last reply as Markdown. Command echoes and injected context are
+ * small notes, and each item links to its event's page for provenance.
  */
-import type { EventRow } from '@openlinkos/origin-core';
+import { type EventRow, entrySummary } from '@openlinkos/origin-core';
 import type { Ctx } from '../context.js';
-import { dayLabel, fmtNumber, fmtSpan, time } from '../context.js';
-import { type HtmlValue, html, type SafeHtml } from '../html.js';
+import { fmtNumber, fmtSpan, fmtSpanShort, time } from '../context.js';
+import { type HtmlValue, href, html, type SafeHtml } from '../html.js';
 import { type IconName, icon } from '../icons.js';
 import { markdown } from '../markdown.js';
-import type { SessionTurns } from '../service.js';
+import type { SessionTrace, TraceStep, TraceTurn } from '../service.js';
 import type { Note, ToolRun, ToolSummary, Turn, TurnItem } from '../turns.js';
-import {
-  badge,
-  chip,
-  eventLink,
-  pageHeader,
-  sessionHref,
-  sessionName,
-  sourceBadge,
-} from './components.js';
+import { badge, chip, eventLink, linkButton, sessionHref, sessionName } from './components.js';
 import { renderPage } from './layout.js';
-import { recallMarker } from './recalls.js';
+import { agentTag, facts, linkChips, pageBar } from './workbench.js';
 
 /** A prompt longer than this shows its start, and the rest on request. */
 const PROMPT_SHOWN = 1200;
@@ -207,110 +200,176 @@ function notes(ctx: Ctx, items: TurnItem[]): HtmlValue {
   return chips.length > 0 ? html`<div class="ol-cluster">${chips}</div>` : '';
 }
 
-function turnCard(
-  ctx: Ctx,
-  turn: Turn,
-  o: { open: boolean; part: number; recalls: SessionTurns['recalls'] },
-): SafeHtml {
-  const recalls = o.part > 0 ? [] : o.recalls.filter((r) => r.turn === turn.number);
-  const t = ctx.t;
-  const n = (v: number) => fmtNumber(v, ctx.lang);
-  const title =
-    turn.number === 0
-      ? t('turn.before')
-      : o.part > 0
-        ? t('turn.titlePart', { n: n(turn.number), part: n(o.part + 1) })
-        : t('turn.title', { n: n(turn.number) });
-  return html`<li class="ol-card admin-turn" id="turn-${turn.number}">
-      <div class="admin-turn-head">
-        <h2 class="admin-turn-title"><a href="#turn-${turn.number}">${title}</a></h2>
-        <span class="admin-turn-meta">
-          ${time(turn.startedAt)}
-          <span class="admin-sep" aria-hidden="true">·</span><span title="${t('turn.durationHelp')}">${fmtSpan(turn.endedAt - turn.startedAt, t)}</span>
-          <span class="admin-sep" aria-hidden="true">·</span><span>${t('sessions.eventCount', { n: n(turn.events) })}</span>
-        </span>
-      </div>
-      ${recalls.length > 0 ? html`<div class="ol-cluster" aria-label="${t('recalls.inTurn')}">${recalls.map((r) => recallMarker(ctx, r))}</div>` : ''}
-      ${turn.prompt ? (turn.command !== null ? commandBlock(ctx, turn.prompt, turn.command) : promptBlock(ctx, turn.prompt)) : ''}
-      ${notes(ctx, turn.lead)}
-      ${workBlock(ctx, turn, o.open)}
-      ${turn.reply ? messageBlock(ctx, turn.reply, { subAgent: false, cls: 'admin-reply' }) : ''}
-      ${notes(ctx, turn.trail)}
-    </li>`;
+const STEP_ICON: Record<TraceStep['kind'], IconName> = {
+  prompt: 'user',
+  recall: 'lightbulb',
+  tool: 'wrench',
+  reply: 'bot',
+};
+
+/** A duration as a bar, on a log scale against the longest turn, so short turns still show. */
+function durationBar(ms: number, longest: number): SafeHtml {
+  const width = longest <= 0 ? 0 : (Math.log1p(ms / 1000) / Math.log1p(longest / 1000)) * 100;
+  return html`<svg class="admin-bar-track" viewBox="0 0 100 4" focusable="false" aria-hidden="true"><rect class="admin-bar-fill" width="${Math.max(2, Math.round(width))}" height="4" rx="2"/></svg>`;
 }
 
-export function sessionPage(ctx: Ctx, o: SessionTurns & { open: boolean }): void {
+/** Where a step falls in its turn: a mark for each call, as wide as it took. */
+function spanBar(step: TraceStep): SafeHtml {
+  return html`<svg class="admin-span-track" viewBox="0 0 100 8" preserveAspectRatio="none" focusable="false" aria-hidden="true">${step.spans.map(
+    ([a, b]) =>
+      html`<rect class="admin-span admin-span-${step.kind}" x="${Math.min(98.5, Math.round(a * 1000) / 10)}" width="${Math.max(1.5, Math.round((b - a) * 1000) / 10)}" y="1" height="6" rx="1"/>`,
+  )}</svg>`;
+}
+
+/** The outline's row for a turn, with the steps of the one shown beneath it. */
+function outlineRow(ctx: Ctx, o: SessionTrace, t: TraceTurn, longest: number): SafeHtml {
+  const n = (v: number) => fmtNumber(v, ctx.lang);
+  const tr = ctx.t;
+  const current = t.number === o.number;
+  const label =
+    t.number === 0
+      ? html`<span class="admin-faint">${tr('turn.before')}</span>`
+      : t.label
+        ? t.label
+        : html`<span class="admin-faint">—</span>`;
+  const steps = current
+    ? html`<ol class="admin-steps">${o.steps.map(
+        (s) => html`<li class="admin-step">
+          <span class="admin-step-name">${icon(ctx, STEP_ICON[s.kind], 'sm')}${s.kind === 'tool' ? s.label : tr(`step.${s.kind}`)}${s.count > 1 ? html`<span class="admin-faint">×${n(s.count)}</span>` : ''}${s.failed > 0 ? html`<span class="admin-bad">${tr('trace.failed', { n: n(s.failed) })}</span>` : ''}</span>
+          ${spanBar(s)}
+        </li>`,
+      )}</ol>`
+    : '';
+  return html`<li${current ? html` aria-current="true"` : ''}>
+    <a class="admin-outline-row" href="${sessionHref(o.session, { turn: t.number, show: o.show === 'all' ? null : o.show })}#detail">
+      <span class="admin-outline-n">${t.number === 0 ? '' : n(t.number)}</span>
+      <span class="admin-outline-label">${t.recalls > 0 ? html`<span class="admin-recall-dot" title="${tr('trace.recalled', { n: n(t.recalls) })}"></span>` : ''}<span class="admin-outline-text">${label}</span></span>
+      <span class="admin-outline-meta">${t.tools > 0 ? html`<span title="${tr('trace.calls', { n: n(t.tools) })}">${icon(ctx, 'wrench', 'sm')}${n(t.tools)}</span>` : ''}${t.failed > 0 ? html`<span class="admin-bad" title="${tr('trace.failed', { n: n(t.failed) })}">${icon(ctx, 'circle-x', 'sm')}${n(t.failed)}</span>` : ''}</span>
+      ${durationBar(t.duration, longest)}
+      <span class="admin-outline-time" title="${fmtSpan(t.duration, tr)}">${fmtSpanShort(t.duration)}</span>
+    </a>
+    ${steps}
+  </li>`;
+}
+
+/** A recall made in the turn: when, how much, and its items as they are now. */
+function recallCard(ctx: Ctx, r: SessionTrace['recalls'][number]): SafeHtml {
+  const t = ctx.t;
+  const n = (v: number) => fmtNumber(v, ctx.lang);
+  const used = new Set(r.used);
+  return html`<section class="admin-recall-card">
+    <header>
+      ${icon(ctx, 'lightbulb', 'sm')}
+      <a class="admin-recall-link" href="${href('recall', { id: r.id })}">${t(`recall.occasion.${r.occasion}`)}</a>
+      <span class="admin-faint">${t('trace.recallSize', { n: n(r.items.length), tokens: n(r.tokens), budget: n(r.budget) })}</span>
+      ${used.size > 0 ? html`<span class="admin-good">${t('recalls.usedCount', { n: n(used.size) })}</span>` : ''}
+    </header>
+    <ul>${r.views.map(
+      (i) => html`<li>
+        <span class="admin-recall-layer">${t(`recall.layer.${i.layer}`)}</span>
+        <span class="admin-recall-text">${
+          i.gone
+            ? html`<span class="admin-faint">${t(`recall.gone.${i.gone}`)}</span>`
+            : i.entry
+              ? html`<a href="${href('entry', { id: i.entry.id })}">${entrySummary(i.entry.text)}</a>`
+              : i.session
+                ? html`<a href="${sessionHref(i.session)}">${sessionName(ctx, i.session, 120)}</a>`
+                : i.ref
+        }</span>
+        ${i.score === null ? '' : html`<span class="admin-faint admin-num">${i.score.toFixed(2)}</span>`}
+        ${used.has(i.ref) ? html`<span class="admin-good">${t('recall.usedYes')}</span>` : ''}
+      </li>`,
+    )}</ul>
+  </section>`;
+}
+
+/** The turn shown: its prompt, its recalls, its work folded into one row, and its reply. */
+function turnDetail(ctx: Ctx, o: SessionTrace, open: boolean): SafeHtml {
+  const t = ctx.t;
+  const n = (v: number) => fmtNumber(v, ctx.lang);
+  const turn = o.turn;
+  const step = (to: number | null, label: string, name: IconName) =>
+    to === null
+      ? html`<span class="ol-btn ol-btn-secondary ol-btn-sm" aria-disabled="true">${icon(ctx, name, 'sm')}${label}</span>`
+      : html`<a class="ol-btn ol-btn-secondary ol-btn-sm" href="${sessionHref(o.session, { turn: to, show: o.show === 'all' ? null : o.show })}#detail">${icon(ctx, name, 'sm')}${label}</a>`;
+  const title =
+    o.number === 0
+      ? t('turn.before')
+      : o.part > 0
+        ? t('turn.titlePart', { n: n(o.number), part: n(o.part + 1) })
+        : t('turn.title', { n: n(o.number) });
+  if (!turn) {
+    return html`<section class="admin-trace-detail" id="detail"><p class="admin-muted">${t('sessions.noEvents')}</p></section>`;
+  }
+  return html`<section class="admin-trace-detail" id="detail" aria-label="${title}">
+    <div class="admin-detail-head">
+      <h2>${title}</h2>
+      <span class="admin-fact">${icon(ctx, 'clock', 'sm')}${time(turn.startedAt)}</span>
+      <span class="admin-fact">${icon(ctx, 'timer', 'sm')}${fmtSpan(turn.endedAt - turn.startedAt, t)}</span>
+      ${turn.tools.calls > 0 ? html`<span class="admin-fact">${t('trace.calls', { n: n(turn.tools.calls) })}</span>` : ''}
+      <span class="admin-detail-nav">${step(o.previous, t('trace.previous'), 'chevron-left')}${step(o.next, t('trace.next'), 'chevron-right')}</span>
+    </div>
+    ${notes(ctx, turn.lead)}
+    ${turn.prompt ? (turn.command !== null ? commandBlock(ctx, turn.prompt, turn.command) : promptBlock(ctx, turn.prompt)) : ''}
+    ${o.part === 0 ? o.recalls.map((r) => recallCard(ctx, r)) : ''}
+    ${workBlock(ctx, turn, open)}
+    ${turn.reply ? messageBlock(ctx, turn.reply, { subAgent: false, cls: 'admin-reply' }) : ''}
+    ${notes(ctx, turn.trail)}
+    ${
+      o.continues
+        ? html`<p class="admin-after">${linkButton(ctx, { href: `${sessionHref(o.session, { turn: o.number, part: o.part + 1 })}#detail`, label: t('trace.morePart'), size: 'sm' })}</p>`
+        : ''
+    }
+  </section>`;
+}
+
+/**
+ * A session as a trace: its facts, an outline of its turns on the left (the one shown opens into
+ * its steps, placed in time), and the turn shown on the right.
+ */
+export function sessionPage(ctx: Ctx, o: SessionTrace & { open: boolean }): void {
   const t = ctx.t;
   const s = o.session;
   const n = (v: number) => fmtNumber(v, ctx.lang);
+  const longest = Math.max(0, ...o.outline.map((x) => x.duration));
+  const show = (value: SessionTrace['show'], label: string, count?: number) => ({
+    label,
+    href: sessionHref(s, { turn: o.number, show: value === 'all' ? null : value }),
+    current: o.show === value,
+    count,
+  });
   const name = s.title ?? s.prompt ?? t('sessions.untitled');
-  const link = (to: { turn: number; part: number }, anchor = '') =>
-    `${sessionHref(s, { turn: to.turn, part: to.part || null, tools: o.open })}${anchor}`;
-  const shown = o.turns.filter((x) => x.number > 0);
-  const firstShown = shown[0]?.number;
-  const lastShown = shown.at(-1)?.number;
-  const prompts = o.total - (o.preamble ? 1 : 0);
-  // A link without href is not focusable; aria-disabled dims it.
-  const step = (to: SessionTurns['next'], label: string) =>
-    to === null
-      ? html`<a class="ol-btn ol-btn-secondary ol-btn-sm" aria-disabled="true">${label}</a>`
-      : html`<a class="ol-btn ol-btn-secondary ol-btn-sm" href="${link(to)}">${label}</a>`;
-  const pagerNav =
-    o.previous === null && o.next === null
-      ? ''
-      : html`<nav class="ol-pager" aria-label="${t('pager.label')}"><span>${
-          firstShown === undefined
-            ? ''
-            : t('turns.range', {
-                from: n(firstShown),
-                to: n(lastShown ?? firstShown),
-                n: n(prompts),
-              })
-        }</span><span class="ol-pager-links">${step(o.previous, t('turns.earlier'))}${step(o.next, t('turns.later'))}</span></nav>`;
-  const view = (open: boolean, label: string) =>
-    html`<a href="${sessionHref(s, { turn: o.turn, part: o.part || null, tools: open })}"${o.open === open ? html` aria-current="true"` : ''}>${label}</a>`;
   renderPage(ctx, 200, {
     title: name,
     nav: 'sessions',
     crumbs: [{ label: t('nav.sessions'), href: '/admin/sessions' }],
-    body: html`${pageHeader(ctx, {
-      title: s.title ? s.title : sessionName(ctx, s, 200),
-      meta: [
-        sourceBadge(s.source),
-        s.project ? html`${icon(ctx, 'folder', 'sm')}${s.project}` : '',
-        html`${icon(ctx, 'clock', 'sm')}${time(s.startedAt)} – ${time(s.endedAt)}`,
-        html`${icon(ctx, 'list', 'sm')}${t('sessions.turnCount', { n: n(prompts) })}`,
-        html`${icon(ctx, 'message-square', 'sm')}${t('sessions.eventCount', { n: n(s.eventCount) })}`,
-      ],
-    })}
-    <details class="ol-details admin-session-ids">
-      <summary>${t('sessions.details')}</summary>
-      <dl class="ol-dl">
-        <dt>${t('sessions.id')}</dt><dd class="ol-mono">${s.sessionId}</dd>
-        <dt>${t('sessions.cwd')}</dt><dd class="ol-mono">${s.cwd ?? '—'}</dd>
-      </dl>
-    </details>
-    <div class="admin-session-bar">
-      ${
-        o.days.length > 1
-          ? html`<nav class="admin-days" aria-label="${t('turns.days')}">${icon(ctx, 'calendar', 'sm')}<ol class="ol-cluster">${o.days.map(
-              (d) =>
-                // A day is current when some of its turns are on this page.
-                html`<li><a class="ol-chip" href="${link({ turn: d.turn, part: 0 }, `#turn-${d.turn}`)}"${firstShown !== undefined && d.turn <= (lastShown ?? firstShown) && d.turn + d.turns - 1 >= firstShown ? html` aria-current="true"` : ''}>${dayLabel(ctx, d.day, { weekday: false })}<span class="admin-times">${n(d.turns)}</span></a></li>`,
-            )}</ol></nav>`
-          : html`<span></span>`
-      }
-      <div class="ol-segmented" role="group" aria-label="${t('turns.view')}">
-        ${view(false, t('turns.folded'))}${view(true, t('turns.expanded'))}
-      </div>
-    </div>
-    ${pagerNav}
-    ${
-      o.turns.length === 0
-        ? html`<p class="ol-muted ol-text-sm">${t('sessions.noEvents')}</p>`
-        : html`<ol class="admin-turns">${o.turns.map((turn) => turnCard(ctx, turn, { open: o.open, part: o.part, recalls: o.recalls }))}</ol>`
-    }
-    ${o.continues ? html`<p class="ol-hint admin-after">${t('turns.continues')}</p>` : ''}
-    ${pagerNav}`,
+    body: html`${pageBar(ctx, { title: s.title ? s.title : sessionName(ctx, s, 160) })}
+    ${facts(ctx, [
+      { value: agentTag(s.source) },
+      s.project ? { icon: 'folder', value: s.project } : null,
+      { icon: 'clock', value: html`${time(s.startedAt)} – ${time(s.endedAt)}` },
+      { label: t('sessions.turns'), value: n(o.total) },
+      { label: t('overview.events'), value: n(s.eventCount) },
+      { label: t('trace.toolCalls'), value: n(o.totals.tools) },
+      o.totals.recalls > 0
+        ? {
+            label: t('nav.recalls'),
+            value: t('trace.recallTotals', { n: n(o.totals.recalls), used: n(o.totals.used) }),
+          }
+        : null,
+    ])}
+    <div class="admin-trace">
+      <nav class="admin-trace-outline" aria-label="${t('trace.outline')}">
+        <div class="admin-trace-tabs">${linkChips(ctx, [
+          show('all', t('trace.all')),
+          show('recalled', t('trace.withRecalls'), o.totals.withRecalls),
+          show('failed', t('trace.withFailures'), o.totals.withFailures),
+        ])}</div>
+        ${o.earlier !== null ? html`<a class="admin-outline-more" href="${sessionHref(s, { turn: o.earlier, show: o.show === 'all' ? null : o.show })}">${t('trace.earlier')}</a>` : ''}
+        <ol class="admin-outline">${o.outline.map((x) => outlineRow(ctx, o, x, longest))}</ol>
+        ${o.later !== null ? html`<a class="admin-outline-more" href="${sessionHref(s, { turn: o.later, show: o.show === 'all' ? null : o.show })}">${t('trace.later')}</a>` : ''}
+      </nav>
+      ${turnDetail(ctx, o, o.open)}
+    </div>`,
   });
 }

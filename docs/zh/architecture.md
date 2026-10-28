@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-94a54693
+sourceHash: sha256-8216c714
 ---
 
 # 架构
@@ -81,8 +81,8 @@ agent session logs on disk ──scan──▶ Raw (append-only mirror)
  agents ◀── MCP (stdio): brief · search · timeline · get · sources · remember · correct · forget
  agents ◀── hooks: origin recall (session start · prompt): a brief, and the entries a prompt matches
  people ◀── CLI `origin`: sync · status · timeline · search · show · entries · correct · forget · forgotten · restore · recall · recalls
- people ◀── admin UI (hub, /admin): overview · timeline · search · entries · remember · correct · forget · restore · tokens
- people ◀── origin ui (device, 127.0.0.1): overview · timeline · search · entries · remember · correct · forget · restore
+ people ◀── admin UI (hub, /admin): overview · sessions · recalls · search · entries · remember · correct · forget · restore · tokens
+ people ◀── origin ui (device, 127.0.0.1): overview · sessions · recalls · search · entries · remember · correct · forget · restore
 ```
 
 使用个人中枢时，每台设备都保有一份完整的、属于自己的库，离线时也照常可用。它把原始镜像发送给中枢（由中枢用同样的适配器解析），也把自己写下的条目和遗忘记录（遗忘与恢复）发送给中枢；它从中枢收到的只有遗忘记录。设备上的 Agent 使用本地的 `origin mcp`，它根据设备自己的库作答，并合并中枢的回答；云端 Agent 则使用中枢的 HTTP 端点：
@@ -400,7 +400,7 @@ Claude Code、ZCode 和 Grok Build 都维护自己的记忆：由 Agent 原地�
 
 **预算。** 每项一行：条目的 id 和第一行，或者会话的这些信息，截到约 40 个 token，上面有一行说明，告诉 Agent 用 `get` 加 id 获取其余内容，并且用户在本会话中说的话优先。一份简报最多占 800 个 token，一个提示的匹配最多 400 个，按每个 CJK 字符一个 token、其他字符每四个一个 token 估算；放不下的会被略去。
 
-**记录。** 每一次召回（包括什么都没匹配到的）都是 `recall` 中的一行，它的各项在 `recall_item` 中：一个 id（`rcl_…`）、时间、进行召回的库、Agent 及其会话、时机（`start`、`prompt`，或者 `request`，表示 Agent 用 `brief` 请求）、项目和目录、预算和用掉的 token，以及每一项的排名、层、类型（条目或会话）、id、分数和大小。召回不保存任何文本，提示只存哈希，这样遗忘隐藏的内容不会仍从记录中显示出来（不变量 2）：每一项是什么，在显示召回时才从库中读取，已遗忘的显示为已遗忘。两张表都是只追加的。设备会把自己所做的召回发送给中枢（见[复制](#replication-raw-mirrors-entries-and-tombstones-up-tombstones-down)），所以中枢保存着每台设备的召回。`origin recalls` 列出召回，`origin show rcl_…` 显示一次召回，包括它回应的提示（会话中具有该哈希的用户消息，归档之后才能找到），以及每一项本会话之后是否用上了：它的 id 是否出现在该会话中 Agent 之后的工具调用或回复里。
+**记录。** 每一次召回（包括什么都没匹配到的）都是 `recall` 中的一行，它的各项在 `recall_item` 中：一个 id（`rcl_…`）、时间、进行召回的库、Agent 及其会话、时机（`start`、`prompt`，或者 `request`，表示 Agent 用 `brief` 请求）、项目和目录、预算和用掉的 token，以及每一项的排名、层、类型（条目或会话）、id、分数和大小。召回不保存任何文本，提示只存哈希，这样遗忘隐藏的内容不会仍从记录中显示出来（不变量 2）：每一项是什么，在显示召回时才从库中读取，已遗忘的显示为已遗忘；管理界面也以同样的方式重建交给 Agent 的文本（`rebuildRecall`），只用仍然可见的内容，之后遗忘的不显示。两张表都是只追加的。设备会把自己所做的召回发送给中枢（见[复制](#replication-raw-mirrors-entries-and-tombstones-up-tombstones-down)），所以中枢保存着每台设备的召回。`origin recalls` 列出召回，`origin show rcl_…` 显示一次召回，包括它回应的提示（会话中具有该哈希的用户消息，归档之后才能找到），以及每一项本会话之后是否用上了：它的 id 是否出现在该会话中 Agent 之后的工具调用或回复里。
 
 **Hook。** Claude Code 和 Codex 发送同样的 hook 事件，也读取同样的回答；`origin agents connect` 把 hook 加到它们的设置中，并把 Origin 的 MCP server 注册到每个已安装的 Agent，事先显示要做的修改，并备份每个文件。`origin recall` 只加载核心和适配器，以便快速启动，而且从不妨碍 Agent：出现任何故障时，它什么都不输出，在标准错误中说明原因，并以 0 退出；它最多等待 3 秒获取库的写锁。它只读取本设备的库，所以其他设备上写下的条目暂时不会被召回；中继不保存条目，不交出任何内容。
 

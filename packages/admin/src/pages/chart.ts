@@ -66,6 +66,8 @@ export function stackedColumns(
     columnHeading: string;
     totalHeading: string;
     tableLabel: string;
+    /** Show the summary under the legend too, not only to assistive technology. */
+    hint?: boolean;
   },
 ): SafeHtml {
   const n = (v: number) => fmtNumber(v, ctx.lang);
@@ -130,7 +132,7 @@ export function stackedColumns(
       </svg>
       <figcaption class="ol-chart-caption">
         <ul class="ol-legend">${legend}</ul>
-        <p class="ol-hint">${o.summary}</p>
+        ${o.hint === false ? '' : html`<p class="ol-hint">${o.summary}</p>`}
       </figcaption>
       <details class="ol-details ol-chart-table">
         <summary>${o.tableLabel}</summary>
@@ -143,14 +145,4 @@ export function stackedColumns(
         </table></div>
       </details>
     </figure>`;
-}
-
-/**
- * A bar for one value among others, such as a project's share of the busiest one's events: a
- * meter in the first series' colour, which assistive technology reads as a value of a range.
- */
-export function shareBar(value: number, max: number, label: string): SafeHtml {
-  const top = max > 0 ? max : 1;
-  const v = Math.min(Math.max(0, value), top);
-  return html`<meter class="ol-meter ol-meter-series ol-series-1" min="0" max="${top}" value="${v}" aria-label="${label}">${label}</meter>`;
 }

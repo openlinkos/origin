@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Ctx } from '../src/context.js';
-import { niceCeil, shareBar, stackedColumns } from '../src/pages/chart.js';
+import { niceCeil, stackedColumns } from '../src/pages/chart.js';
 
 const ctx = { lang: 'en' } as Ctx;
 
@@ -61,15 +61,5 @@ describe('the stacked column chart', () => {
       1, 1, 8, 10, 20, 30, 8000, 10_000, 50_000,
     ]);
     expect(chart([{ codex: 6474 }])).toContain('>8K</text>');
-  });
-
-  it('draws share bars as meters in the first series colour, with attributes only', () => {
-    expect(shareBar(5, 10, '5 events').value).toBe(
-      '<meter class="ol-meter ol-meter-series ol-series-1" min="0" max="10" value="5" aria-label="5 events">5 events</meter>',
-    );
-    // A meter needs a range: with nothing to compare, it is empty.
-    expect(shareBar(0, 0, 'none').value).toContain('min="0" max="1" value="0"');
-    expect(shareBar(12, 10, 'over').value).toContain('max="10" value="10"');
-    expect(shareBar(1, 4, '<b>').value).toContain('aria-label="&lt;b&gt;">&lt;b&gt;</meter>');
   });
 });

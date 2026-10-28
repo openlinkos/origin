@@ -6,19 +6,22 @@ import {
   type Entry,
   type EntryKind,
   type EventRow,
+  entrySummary,
   type SessionRow,
   TOMBSTONE_ID_RE,
 } from '@openlinkos/origin-core';
 import type { Ctx } from '../context.js';
-import { clip, query, time } from '../context.js';
+import { clip, fmtNumber, query, time } from '../context.js';
 import { type HtmlValue, href, html, type SafeHtml } from '../html.js';
 import { type IconName, icon } from '../icons.js';
+import { kindTag, whenShort } from './workbench.js';
 
 export type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger' | 'info';
 
 /**
- * The head of a page: its title (with badges after it, if any), a description, facts about the
- * object shown (`meta`, separate items), and at most one primary action among `actions`.
+ * The head of a page, as the workbench's pages start (see workbench.ts): a row with its title,
+ * badges, and actions, at most one of them primary; facts about the object shown (`meta`), each in
+ * its own chip; and a description, as one small line.
  */
 export function pageHeader(
   _ctx: Ctx,
@@ -31,30 +34,24 @@ export function pageHeader(
   },
 ): SafeHtml {
   const meta = (o.meta ?? []).filter((m) => m !== '' && m !== null && m !== undefined);
-  return html`<div class="ol-page-header">
-      <div class="ol-page-heading">
-        <h1 class="ol-page-title">${o.badges ? html`<span class="ol-title-row">${o.title}${o.badges}</span>` : o.title}</h1>
-        ${o.description ? html`<p class="ol-page-description">${o.description}</p>` : ''}
-        ${meta.length > 0 ? html`<ul class="ol-page-meta">${meta.map((m) => html`<li>${m}</li>`)}</ul>` : ''}
-      </div>
-      ${o.actions ? html`<div class="ol-page-actions">${o.actions}</div>` : ''}
-    </div>`;
+  return html`<div class="admin-bar">
+      <h1>${o.title}</h1>${o.badges ?? ''}
+      ${o.actions ? html`<div class="admin-bar-actions">${o.actions}</div>` : ''}
+    </div>
+    ${meta.length > 0 ? html`<div class="admin-facts">${meta.map((m) => html`<span class="admin-fact">${m}</span>`)}</div>` : ''}
+    ${o.description ? html`<p class="admin-lede">${o.description}</p>` : ''}`;
 }
 
-/** A region of a page: a heading with an optional description and actions, then its content. */
+/** A region of a page, as a titled box: its heading and actions, a note, then its content. */
 export function section(o: {
   title: HtmlValue;
   description?: HtmlValue;
   actions?: HtmlValue;
   body: HtmlValue;
 }): SafeHtml {
-  return html`<section class="ol-section">
-      <div class="ol-section-header">
-        <h2 class="ol-section-title">${o.title}</h2>
-        ${o.description ? html`<p class="ol-section-description">${o.description}</p>` : ''}
-        ${o.actions ? html`<div class="ol-section-actions">${o.actions}</div>` : ''}
-      </div>
-      ${o.body}
+  return html`<section class="admin-panel admin-section">
+      <header class="admin-panel-head"><h2>${o.title}</h2>${o.actions ? html`<div class="admin-panel-head-aside">${o.actions}</div>` : ''}</header>
+      <div class="admin-panel-body">${o.description ? html`<p class="admin-section-note">${o.description}</p>` : ''}${o.body}</div>
     </section>`;
 }
 
@@ -71,10 +68,10 @@ export function panel(
     tag?: 'section' | 'aside';
   },
 ): SafeHtml {
-  const inner = html`<div class="ol-panel-header"><h2 class="ol-panel-title">${o.icon ? icon(ctx, o.icon) : ''}${o.title}</h2>${o.badge ?? ''}</div>
-      <div class="ol-panel-body">${o.body}</div>
-      ${o.footer ? html`<div class="ol-panel-footer">${o.footer}</div>` : ''}`;
-  const cls = o.danger ? 'ol-panel ol-panel-danger' : 'ol-panel';
+  const inner = html`<header class="admin-panel-head"><h2>${o.icon ? icon(ctx, o.icon, 'sm') : ''}${o.title}</h2>${o.badge ? html`<div class="admin-panel-head-aside">${o.badge}</div>` : ''}</header>
+      <div class="admin-panel-body">${o.body}</div>
+      ${o.footer ? html`<div class="admin-panel-foot">${o.footer}</div>` : ''}`;
+  const cls = o.danger ? 'admin-panel admin-panel-danger' : 'admin-panel';
   return o.tag === 'aside'
     ? html`<aside class="${cls}">${inner}</aside>`
     : html`<section class="${cls}">${inner}</section>`;
@@ -155,8 +152,9 @@ export function empty(
     </div>`;
 }
 
+/** A table in a frame of its own, or edge to edge in a box. */
 export function tableWrap(head: HtmlValue, rows: HtmlValue, cls = ''): SafeHtml {
-  return html`<div class="ol-table-wrap"><table class="ol-table${cls ? ` ${cls}` : ''}">
+  return html`<div class="admin-table-frame"><table class="admin-table${cls ? ` ${cls}` : ''}">
       <thead><tr>${head}</tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
@@ -173,14 +171,11 @@ export function pager(ctx: Ctx, page: number, more: boolean): SafeHtml {
     const qs = params.toString();
     return `${ctx.url.pathname}${qs ? `?${qs}` : ''}`;
   };
-  // A link without href is not focusable; aria-disabled dims it.
-  const step = (to: number | null, label: string) =>
+  const step = (to: number | null, label: string, name: IconName) =>
     to === null
-      ? html`<a class="ol-btn ol-btn-secondary ol-btn-sm" aria-disabled="true">${label}</a>`
-      : html`<a class="ol-btn ol-btn-secondary ol-btn-sm" href="${link(to)}">${label}</a>`;
-  const prev = step(page > 0 ? page - 1 : null, t('pager.previous'));
-  const next = step(more ? page + 1 : null, t('pager.next'));
-  return html`<nav class="ol-pager" aria-label="${t('pager.label')}"><span>${t('pager.page', { n: page + 1 })}</span><span class="ol-pager-links">${prev}${next}</span></nav>`;
+      ? html`<span aria-hidden="true">${icon(ctx, name, 'sm')}</span>`
+      : html`<a href="${link(to)}" aria-label="${label}">${icon(ctx, name, 'sm')}</a>`;
+  return html`<nav class="admin-pager" aria-label="${t('pager.label')}"><span>${t('pager.page', { n: page + 1 })}</span><span class="admin-pager-links">${step(page > 0 ? page - 1 : null, t('pager.previous'), 'chevron-left')}${step(more ? page + 1 : null, t('pager.next'), 'chevron-right')}</span></nav>`;
 }
 
 /** `before` parameter for lists paged by a numeric id (the audit log). */
@@ -201,7 +196,7 @@ export function olderLink(ctx: Ctx, lastId: number | string | undefined, more: b
   const older = more && lastId !== undefined;
   if (!paged && !older) return html``;
   const t = ctx.t;
-  return html`<nav class="ol-pager" aria-label="${t('pager.label')}"><span></span><span class="ol-pager-links">${
+  return html`<nav class="admin-pager" aria-label="${t('pager.label')}"><span></span><span class="admin-pager-text">${
     paged
       ? html`<a class="ol-btn ol-btn-secondary ol-btn-sm" href="${ctx.url.pathname}">${t('pager.newest')}</a>`
       : ''
@@ -235,11 +230,6 @@ export function snippet(ctx: Ctx, id: string, label: string, code: string): Safe
 
 // ---------------------------------------------------------------------------------------------
 // Sessions
-
-/** The agent a session or event comes from, as a small tag that never wraps. */
-export function sourceBadge(source: string): SafeHtml {
-  return html`<span class="ol-badge ol-badge-outline ol-badge-mono">${source}</span>`;
-}
 
 /** Where a session's page is. */
 export function sessionHref(
@@ -372,19 +362,29 @@ export function entryFlags(ctx: Ctx, e: Pick<Entry, 'imported' | 'validTo'>): Sa
   return html`${e.imported ? badge(ctx.t('flag.imported'), 'neutral') : ''}${hasEnded(e) ? badge(ctx.t('flag.ended'), 'neutral') : ''}`;
 }
 
-/** Entries as a table: the text links to the entry; kind, status, confidence, author, time. */
-export function entryTable(ctx: Ctx, entries: Entry[], textMax = 140): SafeHtml {
+/**
+ * Entries as a table: the text links to the entry, with its id under it; its kind, project,
+ * author, confidence, and time; and how often it was recalled, when given.
+ */
+export function entryTable(
+  ctx: Ctx,
+  entries: Array<Entry & { recalls?: number }>,
+  textMax = 140,
+): SafeHtml {
   const t = ctx.t;
-  return tableWrap(
-    html`<th>${t('entries.text')}</th><th>${t('entries.kind')}</th><th class="ol-num">${t('entries.confidence')}</th><th>${t('entries.author')}</th><th>${t('tokens.created')}</th>`,
-    entries.map(
+  const n = (v: number) => fmtNumber(v, ctx.lang);
+  const recalls = entries.some((e) => e.recalls !== undefined);
+  return html`<table class="admin-table">
+    <thead><tr><th>${t('entries.text')}</th><th>${t('entries.kind')}</th><th>${t('filter.project')}</th><th>${t('entries.author')}</th><th class="admin-r">${t('entries.confidence')}</th>${recalls ? html`<th class="admin-r">${t('nav.recalls')}</th>` : ''}<th class="admin-r">${t('tokens.created')}</th></tr></thead>
+    <tbody>${entries.map(
       (e) => html`<tr>
-        <td><a class="ol-cell-title" href="${href('entry', { id: e.id })}">${clip(e.text, textMax)}</a><span class="ol-cell-sub ol-mono">${e.id}</span></td>
-        <td><span class="ol-cluster">${kindBadge(ctx, e.kind)}${statusBadge(ctx, e.status)}${entryFlags(ctx, e)}</span></td>
-        <td class="ol-num">${e.confidence}</td>
-        <td>${e.author}</td>
-        <td class="ol-nowrap">${time(e.createdAt)}</td>
-      </tr>`,
-    ),
-  );
+      <td class="admin-wide"><a class="admin-cell-title" href="${href('entry', { id: e.id })}">${clip(entrySummary(e.text), textMax)}</a><span class="admin-cell-sub"><span class="ol-mono">${e.id}</span>${statusBadge(ctx, e.status)}${hasEnded(e) ? badge(ctx.t('flag.ended'), 'neutral') : ''}</span></td>
+      <td>${kindTag(ctx, e.kind)}</td>
+      <td>${e.project ?? html`<span class="admin-faint">—</span>`}</td>
+      <td>${e.author.replace(/@.*$/, '')}</td>
+      <td class="admin-r">${e.confidence}</td>
+      ${recalls ? html`<td class="admin-r">${e.recalls ? n(e.recalls) : html`<span class="admin-faint">—</span>`}</td>` : ''}
+      <td class="admin-r">${whenShort(ctx, e.createdAt)}</td>
+    </tr>`,
+    )}</tbody></table>`;
 }
