@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { recallScope } from '@openlinkos/origin-core';
 import { createHubLink } from './hub-link.js';
 import { agentName, run } from './server.js';
 import {
@@ -11,6 +12,7 @@ import {
   registerOriginTools,
   startWatch,
   TOOL_NAMES,
+  type ToolArgs,
   type ToolHandlers,
   type ToolName,
   toolError,
@@ -54,6 +56,8 @@ export interface RelayServerOptions {
   log?: (message: string) => void;
   /** Override `fetch` (tests). */
   fetch?: typeof fetch;
+  /** The directory this server runs in, which `brief` is for by default (process.cwd()). */
+  cwd?: string;
 }
 
 export interface RelayServer {
@@ -134,9 +138,14 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       return toolResult(answer.value);
     });
 
-  const handlers = Object.fromEntries(
-    TOOL_NAMES.map((name) => [name, forward(name)]),
-  ) as unknown as ToolHandlers;
+  const handlers = {
+    ...Object.fromEntries(TOOL_NAMES.map((name) => [name, forward(name)])),
+    // The hub cannot see this machine's disk: it is told the work tree, as the project's directory.
+    brief: (args: ToolArgs<'brief'>) => {
+      const scope = recallScope(args.cwd?.trim() || opts.cwd || process.cwd());
+      return forward('brief')({ ...args, cwd: scope.root ?? scope.cwd });
+    },
+  } as unknown as ToolHandlers;
   registerOriginTools(mcp, handlers);
 
   return {

@@ -6,6 +6,7 @@ import { z } from 'zod';
 /** Guidance sent to agents in the MCP `initialize` response. */
 export const INSTRUCTIONS = `Origin is the user's local, cross-agent memory: an append-only archive of their sessions with AI coding agents, plus durable entries — memory (what happened), knowledge (stable facts), and cognition (the user's preferences, methods, goals, and boundaries).
 
+- When you start a task, call \`brief\` with your working directory, unless a note headed \`Origin recall\` already gave you one: it lists the user's preferences, the project's latest decisions and facts, and its latest sessions, one line each. Use \`get\` on the ids that matter.
 - To answer questions about past work, decisions, or reasons, use \`search\` and \`timeline\`, then \`get\` or \`sources\` to read the original text. Cite entry and event ids.
 - When you learn something that will matter in future sessions — a decision and its reason, a stable fact, a preference of the user — save it with \`remember\`, citing the events it comes from: event ids from search/timeline, or an exact quote from this conversation.
 - Entries marked \`imported\` mirror an agent's own memory files (such as Claude Code's memory directory); a later version of the file supersedes a correction made here. Entries whose validity has ended are left out of search unless you ask for one by id.
@@ -36,8 +37,21 @@ interface ToolSpec {
 
 const readOnly = { readOnlyHint: true, openWorldHint: false } as const;
 
-/** The seven tools, defined once and shared by the local servers and the forwarding proxy. */
+/** The eight tools, defined once and shared by the local servers and the forwarding proxy. */
 export const TOOL_SPECS = {
+  brief: {
+    title: 'Brief',
+    description:
+      "What the user's memory holds for where you work, one line per item: their preferences and boundaries, the project's latest decisions and facts, and its latest sessions with any agent; with `about`, also the entries that match it. Call it when you start a task, unless you were already given an Origin recall.",
+    inputSchema: {
+      cwd: z
+        .string()
+        .optional()
+        .describe("Your working directory (default: the directory Origin's server runs in)"),
+      about: z.string().optional().describe("What the task is about, in the user's words"),
+    },
+    annotations: readOnly,
+  },
   search: {
     title: 'Search memory',
     description:

@@ -9,6 +9,7 @@ import {
   exportEntry,
   getEntry,
   getEvent,
+  getRecall,
   initStoreName,
   openDatabase,
   receiveEntry,
@@ -103,9 +104,36 @@ const ids = (items: Array<{ id: string }>) => items.map((x) => x.id);
 const byId = <T extends { id: string }>(items: T[]) => new Map(items.map((x) => [x.id, x]));
 
 describe('origin mcp on a connected device', () => {
+  it("briefs from the device's own store, as its hooks do", async () => {
+    const cwd = path.join(tmp('origin-work-'), 'demo');
+    fs.mkdirSync(cwd);
+    const mine = remember(db, {
+      kind: 'cognition',
+      text: 'Keep the device store local and fast.',
+      confidence: 0.9,
+      author: 'test',
+      project: 'demo',
+      sources: [{ eventId: 'fake:d1' }],
+    });
+    const theirs = remember(hub.db, {
+      kind: 'cognition',
+      text: 'Keep commit messages short.',
+      confidence: 0.9,
+      author: 'test',
+      project: 'demo',
+      sources: [{ eventId: 'fake:h1' }],
+    });
+    await connect({ cwd });
+    const r = await call('brief', {});
+    expect(r.json.text).toContain(mine.id);
+    expect(r.json.text).not.toContain(theirs.id);
+    expect(getRecall(db, r.json.recall)).toMatchObject({ origin: 'laptop', source: 'agent-x' });
+    expect(getRecall(hub.db, r.json.recall)).toBeNull();
+  });
+
   it('merges search results from both stores, once each, labelled', async () => {
     await connect();
-    expect((await agent.listTools()).tools).toHaveLength(7);
+    expect((await agent.listTools()).tools).toHaveLength(8);
     const r = await call('search', { query: 'Keep' });
     expect(r.note).toBeNull();
     const events = byId<{ id: string; origin: string }>(r.json.events);

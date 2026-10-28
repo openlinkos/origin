@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { Database } from '@openlinkos/origin-core';
 import {
+  briefIn,
   correctIn,
   forgetIn,
   getById,
@@ -51,6 +52,11 @@ export interface OriginServerOptions {
   device?: string;
   /** Author recorded on entries; defaults to `<agent>@<device>`, the agent being the MCP client. */
   author?: () => string;
+  /**
+   * The directory this server runs in, on the agent's machine: `brief` is for it unless the agent
+   * says otherwise, and finds its work tree on disk. A hub has none (see briefIn).
+   */
+  cwd?: string;
 }
 
 export interface OriginServer {
@@ -85,8 +91,14 @@ function localHandlers(
   home: string,
   refresh: (force?: boolean) => Promise<void>,
   author: () => string,
+  here: string | null,
 ): ToolHandlers {
   return {
+    brief: (args) =>
+      run(async () => {
+        await refresh();
+        return toolResult(briefIn(db, args, author(), here));
+      }),
     search: (args) =>
       run(async () => {
         await refresh();
@@ -121,7 +133,7 @@ export function createOriginServer(opts: OriginServerOptions): OriginServer {
   );
   const author =
     opts.author ?? (() => (opts.device ? `${agentName(mcp)}@${opts.device}` : agentName(mcp)));
-  registerOriginTools(mcp, localHandlers(opts.db, opts.home, refresh, author));
+  registerOriginTools(mcp, localHandlers(opts.db, opts.home, refresh, author, opts.cwd ?? null));
   let unwatch = () => {};
   return {
     mcp,
@@ -148,7 +160,7 @@ export function createOriginServer(opts: OriginServerOptions): OriginServer {
  * background, and ingest one last time when the agent leaves.
  */
 export async function serveStdio(opts: OriginServerOptions): Promise<void> {
-  const server = createOriginServer(opts);
+  const server = createOriginServer({ ...opts, cwd: opts.cwd ?? process.cwd() });
   const closed = new Promise<void>((resolve) => {
     server.mcp.server.onclose = () => resolve();
   });

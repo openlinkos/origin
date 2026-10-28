@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-402d4fe6
+sourceHash: sha256-217cb0bc
 ---
 
 # 接入 Agent
@@ -59,6 +59,7 @@ Grok 默认合并 `~/.claude.json` 中的 MCP server，所以完成上面的 Cla
 
 | 工具 | 作用 |
 |---|---|
+| `brief` | Agent 工作之处有用的内容：你的偏好、项目的决定和事实，以及它最近的会话（[召回](./recall.md)） |
 | `search` | 全文检索条目与会话事件，按相关度排序；不带查询词时列出最近的条目 |
 | `timeline` | 某个时间段内的会话，或单个会话内的消息 |
 | `get` | 条目及其来源与历史，或事件的完整正文 |
@@ -67,7 +68,7 @@ Grok 默认合并 `~/.claude.json` 中的 MCP server，所以完成上面的 Cla
 | `correct` | 用纠正后的版本替换条目 |
 | `forget` | 在每个库中隐藏条目或事件，并附上你的原因；只有你明确要求时 Agent 才会使用，也只有你能恢复 |
 
-server 会告诉 Agent 如何使用这些工具，你只需用自然语言提问。它在回答前会同步新的会话记录，所以 Agent 甚至能引用你一分钟前说的话。Agent 运行期间，Origin 还会在后台每分钟收取一次新的记录行，并在 Agent 退出时再收取一次。工具的完整说明见[架构](../architecture.md#mcp-server)。使用 Claude Code 时，Origin 还能在每个会话开始时和每个提示时，把有用的内容交给 Agent：见[召回](./recall.md)。
+server 会告诉 Agent 如何使用这些工具，你只需用自然语言提问。它在回答前会同步新的会话记录，所以 Agent 甚至能引用你一分钟前说的话。Agent 运行期间，Origin 还会在后台每分钟收取一次新的记录行，并在 Agent 退出时再收取一次。工具的完整说明见[架构](../architecture.md#mcp-server)。Origin 还会把 Agent 工作之处有用的内容交给它：Claude Code 通过它的 hook，在每个会话开始时和每个提示时；其他 Agent 通过 `brief`。见[召回](./recall.md)。
 
 ## 使用个人中枢 {#using-a-personal-hub}
 

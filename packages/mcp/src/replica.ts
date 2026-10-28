@@ -11,6 +11,7 @@ import {
 } from '@openlinkos/origin-core';
 import { createHubLink, type HubAnswer } from './hub-link.js';
 import {
+  briefIn,
   correctIn,
   forgetIn,
   type GetResult,
@@ -74,6 +75,8 @@ export interface ReplicaOptions {
   log?: (message: string) => void;
   /** Override `fetch` (tests). */
   fetch?: typeof fetch;
+  /** The directory this server runs in, which `brief` is for by default (process.cwd()). */
+  cwd?: string;
 }
 
 export interface ReplicaServer {
@@ -102,11 +105,12 @@ export interface ReplicaServer {
 
 /**
  * The stdio MCP server of a device connected to a hub (see docs/architecture.md#mcp-server). It
- * serves the seven tools from the device's own store, as without a hub, and completes read tools
+ * serves the eight tools from the device's own store, as without a hub, and completes read tools
  * with the hub's answers: both are asked at once, the results are merged and labelled `local` or
  * `hub`, and a hub that does not answer in time is left out with a note. Writes land in the local
  * store and are then synced up; `correct` and `forget` of something only the hub has are done on
- * the hub.
+ * the hub. `brief` reads the device's store alone, like an agent's hooks (see
+ * docs/architecture.md#recall).
  */
 export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
   const { db, home } = opts;
@@ -226,6 +230,12 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
   };
 
   const handlers: ToolHandlers = {
+    brief: (args) =>
+      run(async () => {
+        await ingest();
+        const author = `${agentName(mcp)}@${opts.device}`;
+        return toolResult(briefIn(db, args, author, opts.cwd ?? process.cwd()));
+      }),
     search: (args) =>
       run(() =>
         read<SearchResult>(

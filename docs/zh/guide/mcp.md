@@ -1,10 +1,10 @@
 ---
-sourceHash: sha256-0829dc6f
+sourceHash: sha256-51677628
 ---
 
 # MCP 工具
 
-Origin 通过 [Model Context Protocol](https://modelcontextprotocol.io) 提供七个工具：四个用来读取归档和条目，三个用来写条目和遗忘。本页是给把 Origin 接入 Agent、或在它之上开发的人看的参考；只想接入 Agent，请看[接入 Agent](./connect-agents.md)。
+Origin 通过 [Model Context Protocol](https://modelcontextprotocol.io) 提供八个工具：`brief` 把 Agent 工作之处有用的内容交给它，四个用来读取归档和条目，三个用来写条目和遗忘。本页是给把 Origin 接入 Agent、或在它之上开发的人看的参考；只想接入 Agent，请看[接入 Agent](./connect-agents.md)。
 
 ## 接入方式 {#reaching-origin}
 
@@ -22,7 +22,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
   --header "Authorization: Bearer ogn_…" --header "X-Origin-Client: claude-code"
 ```
 
-服务器在 MCP 的 `instructions` 里告诉 Agent 怎样使用这些工具：回答关于过去工作的问题前先检索和阅读，并引用条目和事件的 id；记下决定及其理由、稳定的事实和用户的偏好，并引用它们出自的事件；把标为 `imported` 的条目看作某个 Agent 自己记忆文件的镜像；纠正有误的条目；只在用户要求时遗忘，并带上用户给的原因。
+服务器在 MCP 的 `instructions` 里告诉 Agent 怎样使用这些工具：开始任务时，如果召回还没有给过简报，就调用 `brief`；回答关于过去工作的问题前先检索和阅读，并引用条目和事件的 id；记下决定及其理由、稳定的事实和用户的偏好，并引用它们出自的事件；把标为 `imported` 的条目看作某个 Agent 自己记忆文件的镜像；纠正有误的条目；只在用户要求时遗忘，并带上用户给的原因。
 
 ## 约定 {#conventions}
 
@@ -52,6 +52,28 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 **事件**有 `id`、`time`、`source`、`project`、`session`（会话 id）、`role`（`user`、`assistant` 或 `system`）、`kind`（`message`、`tool_use`、`tool_result`、`meta`、`system`，或表示记忆文件某个版本的 `memory`）和 `text`；`text` 按工具截断到不同长度，末尾注明截掉了多少字符。
 
 **会话**有 `session`、`source`、`project`、`title`（Agent 给它起的标题，没有则为 null）、`prompt`（没有标题的会话的第一条提示，截到 80 个字符）、`started`、`ended` 和 `events`（可见事件的数量）。
+
+## brief {#brief}
+
+用户的记忆中与 Agent 工作之处有关的内容，每项一行：一份简报，包括用户的偏好与边界、项目最新的决定和事实、这个项目最近与任意 Agent 的会话；加上 `about` 时，还有与它匹配的条目。它就是 Agent 的 hook 会拿到的内容（见[召回](./recall.md)），供 hook 无法交出内容的 Agent 使用，也以同样的方式记录为一次召回。
+
+| 参数 | 类型 | 默认值 | 含义 |
+|---|---|---|---|
+| `cwd` | 字符串 | server 运行所在的目录 | Agent 的工作目录：包含它的 git 工作树，或者这个目录本身，就是项目。中枢看不到 Agent 的磁盘，所以按原样使用这个目录，而且必须提供 |
+| `about` | 字符串 | 无 | 任务是关于什么的，用用户的话说：会加上与它匹配的条目 |
+
+它返回 `{ recall, text }`：召回的 id，以及各项内容，上面有一行说明如何阅读；如果用户的记忆中还没有这个项目的内容，就是一行这样的说明。在已接入中枢的设备上，`brief` 只读取设备的库；中继把它交给中枢，以自己运行所在的工作树作为 `cwd`，中枢把这次召回记录为为该设备所做。
+
+```json
+{ "cwd": "/home/dana/code/demo-app", "about": "the release workflow" }
+```
+
+```json
+{
+  "recall": "rcl_8b2f4e1a9c0d",
+  "text": "Origin recall rcl_8b2f4e1a9c0d: a brief from the user's cross-agent memory (project demo-app), one line each. Call Origin's `get` with an entry id for its full text and sources, or `timeline` with a session id to read that session. Entries can be outdated; the user's words in this session come first.\n\nThe user's preferences and boundaries:\n- ent_5f0c2a9e41b7 Run the full test suite before pushing\n\nProject demo-app:\n- ent_3f9a1c2b7d4e (2026-10-20) Releases are tagged from master once CI passes on Ubuntu and Windows."
+}
+```
 
 ## search {#search}
 
@@ -308,7 +330,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 Agent 能找到并引用刚刚说过的话，因为 `origin mcp` 会边运行边读取 Agent 的日志：
 
 - 启动时，它在后台读入所有来源；在连接了中枢的设备上，还会与中枢同步。
-- `search` 和 `timeline` 先读入新的日志行，最多每 10 秒一次。在连接了中枢的设备上，`get` 和 `sources` 也会这样做，并且每次读取还会与中枢同步，最多每 10 秒一次，等待中枢的时间不超过中枢超时。
+- `brief`、`search` 和 `timeline` 先读入新的日志行，最多每 10 秒一次。在连接了中枢的设备上，`get` 和 `sources` 也会这样做，并且每次读取还会与中枢同步，最多每 10 秒一次，等待中枢的时间不超过中枢超时。
 - `remember` 和 `correct` 总是先读入新行；在连接了中枢的设备上，之后会立即与中枢同步。
 - 在后台，它每 60 秒查看一次有没有新的日志行（`ORIGIN_WATCH_INTERVAL_MS`；设为 `0` 则关闭），只有日志文件有变化时才读入和同步。
 - Agent 退出时，它再读入并同步一次，最多 5 秒。

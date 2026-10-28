@@ -1,6 +1,6 @@
 /**
- * Origin MCP (see docs/architecture.md): the seven tools (search · timeline · get · sources ·
- * remember · correct · forget) served over stdio, over stateless HTTP for a hub, over stdio on a
+ * Origin MCP (see docs/architecture.md): the eight tools (brief · search · timeline · get · sources
+ * · remember · correct · forget) served over stdio, over stateless HTTP for a hub, over stdio on a
  * device connected to a hub, from its own store merged with the hub's answers, or over stdio on a
  * relay, forwarded to its hub.
  */

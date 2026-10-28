@@ -53,6 +53,7 @@ import {
   rawLocator,
   readRawLine,
   recallPrompt,
+  recallSession,
   recordAudit,
   relayPending,
   revokeToken,
@@ -986,12 +987,13 @@ function showRecall(ctx: Ctx, id: string): number {
     return 1;
   }
   const used = usedRefs(ctx.db, r);
+  const session = recallSession(ctx.db, r);
   console.log(`Recall      ${r.id}`);
   console.log(`Time        ${fmtDateTime(r.at)}, at ${OCCASIONS[r.occasion]}`);
-  console.log(`Agent       ${r.source ?? '—'}${r.sessionId ? `, session ${r.sessionId}` : ''}`);
+  console.log(`Agent       ${r.source ?? '—'}${session ? `, session ${session.sessionId}` : ''}`);
   console.log(`Project     ${r.project ?? '—'}${r.cwd ? ` (${r.cwd})` : ''}`);
   console.log(`Device      ${r.origin}`);
-  if (r.promptHash) {
+  if (r.promptHash && r.occasion === 'prompt') {
     const prompt = recallPrompt(ctx.db, r);
     console.log(
       `Prompt      ${prompt ? `${oneLine(prompt.text, 100)}\n            ↳ ${prompt.id}` : 'not in the archive (not yet, or forgotten)'}`,

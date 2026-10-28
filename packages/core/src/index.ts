@@ -201,6 +201,8 @@ export {
   type RecallPlan,
   type RecallRecord,
   recallPrompt,
+  recallScope,
+  recallSession,
   recallTerms,
   recallText,
   recordRecall,
@@ -208,6 +210,7 @@ export {
   type TermWeights,
   termWeights,
   usedRefs,
+  workTree,
 } from './recall.js';
 export {
   lastRelayed,

@@ -17,8 +17,12 @@ import {
   listSessions,
   OriginError,
   parseTime,
+  planRecall,
   rawLocator,
   readRawLine,
+  recallScope,
+  recallText,
+  recordRecall,
   remember,
   searchEntries,
   searchEvents,
@@ -26,7 +30,7 @@ import {
 import type { ToolArgs } from './tools.js';
 
 /**
- * The seven tools against one store, returning plain JSON values (see docs/architecture.md#mcp-server).
+ * The eight tools against one store, returning plain JSON values (see docs/architecture.md#mcp-server).
  * Caller errors (bad input, unknown or forgotten ids) are thrown as OriginError. The servers wrap
  * these: the local ones as they are, a connected device's merged with its hub's answers.
  */
@@ -343,5 +347,57 @@ export function forgetIn(db: Database, args: ToolArgs<'forget'>, author: string)
     tombstone: r.tombstoneId,
     forgotten_entries: r.entries,
     excluded_events: r.events.length,
+  };
+}
+
+export interface BriefResult {
+  /** The recall's id: what it handed over is recorded (see docs/architecture.md#recall). */
+  recall: string;
+  /** One line per item, as an agent's hook is handed them. */
+  text: string;
+}
+
+/** The agents Origin reads, by source id. */
+const AGENT_SOURCES = ['claude-code', 'codex', 'cursor', 'grok', 'zcode'];
+/** What MCP clients add to an agent's name, such as `codex-mcp-client`. */
+const CLIENT_SUFFIX = /[-_ ](?:mcp[-_ ]client|client|cli|vscode|desktop|app)$/;
+
+/** The source id of the agent behind an MCP client's name, or the name itself. */
+export function sourceOfAgent(name: string): string {
+  const base = name.toLowerCase().replace(CLIENT_SUFFIX, '');
+  return AGENT_SOURCES.includes(base) ? base : name;
+}
+
+/**
+ * The brief an agent asks for, recorded as a recall made for its device. `here` is the directory
+ * the server runs in on the agent's machine, whose disk it can read; a hub has none, and takes the
+ * agent's `cwd` as it is. `author` is `<agent>@<device>`.
+ */
+export function briefIn(
+  db: Database,
+  args: ToolArgs<'brief'>,
+  author: string,
+  here: string | null,
+): BriefResult {
+  const dir = args.cwd?.trim() || here;
+  if (!dir) {
+    throw new OriginError(
+      'Pass `cwd`, your working directory: the hub cannot tell where you work.',
+    );
+  }
+  const at = author.lastIndexOf('@');
+  const plan = planRecall(db, {
+    occasion: 'request',
+    source: sourceOfAgent(at < 0 ? author : author.slice(0, at)),
+    prompt: args.about ?? null,
+    ...recallScope(dir, { onDisk: here !== null }),
+  });
+  const recall = recordRecall(db, plan, { origin: at < 0 ? undefined : author.slice(at + 1) });
+  const where = plan.project ? `project ${plan.project}` : 'this directory';
+  return {
+    recall,
+    text:
+      recallText(plan, recall) ||
+      `Origin recall ${recall}: the user's memory holds nothing for ${where} yet.`,
   };
 }

@@ -5,10 +5,12 @@ import {
   type Database,
   openMemoryDatabase,
   planRecall,
+  recallScope,
   recordRecall,
+  workTree,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hookInput, hookOutput, scopeOf, workTree } from '../src/recall.js';
+import { hookInput, hookOutput } from '../src/recall.js';
 
 let dir: string;
 let db: Database;
@@ -30,12 +32,12 @@ describe('recall hooks', () => {
     fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
     fs.mkdirSync(sub, { recursive: true });
     expect(workTree(sub)).toBe(repo);
-    expect(scopeOf(sub)).toEqual({ cwd: sub, root: repo, project: 'acme' });
+    expect(recallScope(sub)).toEqual({ cwd: sub, root: repo, project: 'acme' });
     // Outside a work tree (unless the temporary directory is in one), the directory itself.
     const plain = path.join(dir, 'notes');
     fs.mkdirSync(plain);
     const root = workTree(plain);
-    expect(scopeOf(plain)).toEqual({
+    expect(recallScope(plain)).toEqual({
       cwd: plain,
       root,
       project: path.basename(root ?? plain),
@@ -43,7 +45,7 @@ describe('recall hooks', () => {
   });
 
   it('ask for a brief when a session starts and for matches with each prompt', () => {
-    const scope = scopeOf(dir);
+    const scope = recallScope(dir);
     const start = {
       hook_event_name: 'SessionStart',
       source: 'startup',

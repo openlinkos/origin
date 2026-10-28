@@ -1,12 +1,12 @@
 ---
-sourceHash: sha256-dfc482ea
+sourceHash: sha256-3d31aaca
 ---
 
 # 召回
 
 会话开始时，以及你每发出一个提示时，Origin 可以把它已经知道、而在当下有用的内容交给你的 Agent：先是一份简报，包括你的偏好、项目的决定和事实，以及这个项目最近与你的各个 Agent 的会话；然后是与你的提示相关的条目。它通过 Agent 的 hook 工作，不调用任何模型，并记录下每一次交出的内容，所以你能看到 Agent 拿到了什么、有没有用上。
 
-目前召回支持 Claude Code。
+Claude Code 通过它的 hook 获得召回。其他 Agent 通过 Origin 的 MCP server 请求（见[其他 Agent](#other-agents)）。
 
 ## Agent 会拿到什么 {#what-an-agent-is-handed}
 
@@ -46,6 +46,10 @@ Latest sessions in acme, any agent (source, time, session id):
 ```
 
 在 Claude Code 中用 `/hooks` 可以看到它们。同时保留 Origin 的 MCP server 注册（见[接入 Agent](./connect-agents.md)），这样 Agent 才能用 `get` 获取拿到的条目。hook 用时不到一秒；出现任何问题时，它不交出任何内容，Claude Code 照常继续。
+
+## 其他 Agent {#other-agents}
+
+hook 无法交出内容的 Agent，例如 Grok Build、ZCode 和 Cursor，以及目前的 Codex，会自己请求简报：Origin 的 MCP server 有一个 `brief` 工具，它的说明会告诉 Agent 在开始任务时带上工作目录调用它。它们拿到同样的简报，加上 `about` 时还有与任务匹配的条目（见 [MCP 工具](./mcp.md#brief)）。除了[注册 Origin](./connect-agents.md)，不需要别的设置。这样的召回与 hook 的一样有记录；它的会话之后根据 Agent 日志中的召回 id 找到。
 
 ## 预览 {#preview}
 
@@ -90,5 +94,5 @@ Handed over, 1 item used since:
 
 ## 限制 {#limits}
 
-- 召回只读取本设备的库：你在其他设备上写下的条目暂时不会被召回，中继不交出任何内容。
+- 召回只读取本设备的库：你在其他设备上写下的条目暂时不会被召回。在中继上，hook 不交出任何内容，`brief` 由中枢作答。
 - 召回交出的内容会进入 Agent 的对话，就像 Agent 读到的任何内容一样，并留在 Agent 自己的会话记录中。之后遗忘一个条目，会让它不再出现在以后的召回中，但不会把它从已经拿到它的对话中移除。

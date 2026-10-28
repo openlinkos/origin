@@ -1,6 +1,6 @@
 # MCP tools
 
-Origin serves seven tools over the [Model Context Protocol](https://modelcontextprotocol.io): four to read the archive and the entries, and three to write entries and forget. This page is the reference for anyone who registers Origin with an agent or builds on it; to simply connect an agent, see [Connect your agents](./connect-agents.md).
+Origin serves eight tools over the [Model Context Protocol](https://modelcontextprotocol.io): `brief`, which hands an agent what matters where it works, four to read the archive and the entries, and three to write entries and forget. This page is the reference for anyone who registers Origin with an agent or builds on it; to simply connect an agent, see [Connect your agents](./connect-agents.md).
 
 ## Reaching Origin {#reaching-origin}
 
@@ -18,7 +18,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
   --header "Authorization: Bearer ogn_…" --header "X-Origin-Client: claude-code"
 ```
 
-The server's MCP `instructions` tell agents how to use the tools: search and read before answering questions about past work and cite entry and event ids; remember decisions with their reasons, stable facts, and preferences of the user, citing the events they come from; treat entries marked `imported` as mirrors of an agent's own memory files; correct entries that are wrong; and forget only when the user asks, with their reason.
+The server's MCP `instructions` tell agents how to use the tools: call `brief` when they start a task, unless a recall already gave them one; search and read before answering questions about past work and cite entry and event ids; remember decisions with their reasons, stable facts, and preferences of the user, citing the events they come from; treat entries marked `imported` as mirrors of an agent's own memory files; correct entries that are wrong; and forget only when the user asks, with their reason.
 
 ## Conventions {#conventions}
 
@@ -48,6 +48,28 @@ An **entry** in a result has these fields:
 An **event** has `id`, `time`, `source`, `project`, `session` (the session id), `role` (`user`, `assistant`, or `system`), `kind` (`message`, `tool_use`, `tool_result`, `meta`, `system`, or `memory` for a version of a memory file), and `text`, cut to a length that depends on the tool, with the number of characters cut noted at the end.
 
 A **session** has `session`, `source`, `project`, `title` (the title its agent gave it, or null), `prompt` (for a session without a title, its first prompt, cut to 80 characters), `started`, `ended`, and `events` (the number of its visible events).
+
+## brief {#brief}
+
+What the user's memory holds for where the agent works, one line per item: a brief of the user's preferences and boundaries, the project's latest decisions and facts, and its latest sessions with any agent, and with `about`, the entries that match it. It is what an agent's hooks are handed (see [Recall](./recall.md)), for agents whose hooks cannot hand anything over, and it is recorded the same way, as a recall.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `cwd` | string | the directory the server runs in | The agent's working directory: the git work tree that holds it, or the directory itself, is the project. A hub cannot see the agent's disk, so it takes the directory as it is, and needs it |
+| `about` | string | none | What the task is about, in the user's words: adds the entries that match it |
+
+It returns `{ recall, text }`: the recall's id, and the items under a header that says how to read them, or a line saying that the user's memory holds nothing for the project yet. On a device connected to a hub, `brief` reads the device's store only; a relay hands it to the hub with the work tree it runs in as `cwd`, and the hub records the recall as made for the device.
+
+```json
+{ "cwd": "/home/dana/code/demo-app", "about": "the release workflow" }
+```
+
+```json
+{
+  "recall": "rcl_8b2f4e1a9c0d",
+  "text": "Origin recall rcl_8b2f4e1a9c0d: a brief from the user's cross-agent memory (project demo-app), one line each. Call Origin's `get` with an entry id for its full text and sources, or `timeline` with a session id to read that session. Entries can be outdated; the user's words in this session come first.\n\nThe user's preferences and boundaries:\n- ent_5f0c2a9e41b7 Run the full test suite before pushing\n\nProject demo-app:\n- ent_3f9a1c2b7d4e (2026-10-20) Releases are tagged from master once CI passes on Ubuntu and Windows."
+}
+```
 
 ## search {#search}
 
@@ -304,7 +326,7 @@ There is **no tool to restore**: a forget is a record that only the user can und
 Agents can find and cite what was said a moment ago, because `origin mcp` reads the agents' logs as it goes:
 
 - When it starts, it ingests every source in the background, and on a connected device syncs with the hub.
-- `search` and `timeline` first ingest new lines, at most every 10 seconds. On a connected device, `get` and `sources` do too, and every read also syncs with the hub, at most every 10 seconds, waiting for it no longer than the hub timeout.
+- `brief`, `search`, and `timeline` first ingest new lines, at most every 10 seconds. On a connected device, `get` and `sources` do too, and every read also syncs with the hub, at most every 10 seconds, waiting for it no longer than the hub timeout.
 - `remember` and `correct` always ingest first, and on a connected device sync with the hub right after.
 - In the background, it looks for new log lines every 60 seconds (`ORIGIN_WATCH_INTERVAL_MS`; `0` turns this off), and ingests and syncs only if a log file changed.
 - When the agent exits, it ingests and syncs once more, for at most 5 seconds.

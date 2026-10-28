@@ -2,7 +2,7 @@
 
 When a session starts, and with each prompt you send, Origin can hand your agent what it already knows that matters there: a short brief of your preferences, the project's decisions and facts, and its latest sessions with any of your agents; then the entries your prompt is about. It works through the agent's hooks, calls no model, and records every time it hands something over, so you can see what an agent was given and whether it used it.
 
-Recall works with Claude Code for now.
+Claude Code gets recall through its hooks. Other agents ask for it through Origin's MCP server (see [Other agents](#other-agents)).
 
 ## What an agent is handed
 
@@ -42,6 +42,10 @@ Add two hooks to `~/.claude/settings.json`, next to any hooks you already have, 
 ```
 
 `/hooks` in Claude Code lists them. Keep Origin registered as an MCP server too (see [Connect your agents](./connect-agents.md)), so that the agent can `get` what it is handed. The hook takes a fraction of a second; if anything goes wrong, it hands nothing over and Claude Code carries on.
+
+## Other agents
+
+Agents whose hooks cannot hand anything over, such as Grok Build, ZCode, and Cursor, and Codex for now, ask for a brief themselves: Origin's MCP server has a `brief` tool, and its instructions tell agents to call it with their working directory when they start a task. They get the same brief, and with `about`, the entries that match the task (see [MCP tools](./mcp.md#brief)). No setup is needed beyond [registering Origin](./connect-agents.md). Such a recall is recorded like a hook's; its session is found later, from the recall's id in the agent's log.
 
 ## Preview
 
@@ -86,5 +90,5 @@ The rules are described in [Architecture](../architecture.md#recall).
 
 ## Limits
 
-- Recall reads this device's store only: entries written on your other devices are not recalled yet, and a relay hands nothing over.
+- Recall reads this device's store only: entries written on your other devices are not recalled yet. On a relay, hooks hand nothing over, and `brief` is answered by the hub.
 - What recall hands over enters the agent's conversation, as anything the agent reads does, and stays in the agent's own session log. Forgetting an entry later keeps it out of every later recall, not out of conversations that already had it.

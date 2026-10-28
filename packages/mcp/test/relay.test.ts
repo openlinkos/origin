@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { getEntry, getEvent, syncSource } from '@openlinkos/origin-core';
+import { getEntry, getEvent, getRecall, remember, syncSource } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeAdapter, line } from '../../core/test/helpers.js';
 import { createRelayServer, type RelayServerOptions } from '../src/index.js';
@@ -58,7 +58,7 @@ const call = async (name: string, args: Record<string, unknown>) =>
 describe('origin mcp on a relay', () => {
   it('answers every read from the hub, once the new log lines have reached it', async () => {
     await connect();
-    expect((await (agent as Client).listTools()).tools).toHaveLength(7);
+    expect((await (agent as Client).listTools()).tools).toHaveLength(8);
     // Written to the agent's log a moment ago: only the hub can find it, once it has been sent.
     fs.writeFileSync(
       path.join(logs, 'now.jsonl'),
@@ -106,6 +106,33 @@ describe('origin mcp on a relay', () => {
     const gone = await call('forget', { id: 'fake:e2', reason: 'test' });
     expect(gone.json.excluded_events).toBe(1);
     expect(getEvent(hub.db, 'fake:e2')).toBeNull();
+  });
+
+  it('asks the hub for a brief on the work tree it runs in', async () => {
+    const repo = path.join(logs, 'demo');
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'src'));
+    fs.writeFileSync(path.join(logs, 's1.jsonl'), line('e1', 's1', 1000, 'user', 'Ship small.'));
+    await syncSource({ db: hub.db, home: hub.home }, fakeAdapter(logs));
+    remember(hub.db, {
+      kind: 'cognition',
+      text: 'Ship small changes, one at a time.',
+      confidence: 0.9,
+      author: 'test',
+      project: 'demo',
+      sources: [{ eventId: 'fake:e1' }],
+    });
+    await connect({ cwd: path.join(repo, 'src') });
+    const r = await call('brief', {});
+    expect(r.json.text).toContain('Ship small changes, one at a time.');
+    // The hub cannot see this machine's disk: it was told the work tree, and records it as made
+    // for this device.
+    expect(getRecall(hub.db, r.json.recall)).toMatchObject({
+      origin: 'laptop',
+      source: 'agent-x',
+      project: 'demo',
+      cwd: repo,
+    });
   });
 
   it('says that a relay cannot answer or write while its hub is unreachable', async () => {

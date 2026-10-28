@@ -1,8 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { CURRENT_VERSION, type EntryKind } from './entries.js';
 import { storeName } from './identity.js';
+import { findNewest } from './search.js';
 import { getEvent, sessionPrompts, VISIBLE_EVENT } from './store.js';
 import type { EventRow } from './types.js';
 
@@ -527,11 +530,11 @@ function draftOf(
 /** Placeholder for the id in the header, as long as a real one, to estimate the header's size. */
 const ID_PLACEHOLDER = 'rcl_000000000000';
 
-const HEADINGS: Record<RecallLayer, (project: string | null) => string> = {
+const HEADINGS: Record<RecallLayer, (plan: RecallPlan) => string> = {
   cognition: () => 'The user’s preferences and boundaries:',
-  project: (p) => `Project ${p}:`,
-  sessions: (p) => `Latest sessions in ${p}, any agent (source, time, session id):`,
-  prompt: () => 'Matching this prompt:',
+  project: (p) => `Project ${p.project}:`,
+  sessions: (p) => `Latest sessions in ${p.project}, any agent (source, time, session id):`,
+  prompt: (p) => (p.occasion === 'prompt' ? 'Matching this prompt:' : 'Matching the task:'),
 };
 
 function header(plan: Pick<RecallPlan, 'occasion' | 'project'>, id: string): string {
@@ -598,7 +601,7 @@ function fit(plan: RecallPlan, drafts: Draft[]): void {
   let used = estimateTokens(header(plan, ID_PLACEHOLDER));
   let layer: RecallLayer | null = null;
   for (const d of drafts) {
-    const heading = d.layer !== layer ? estimateTokens(HEADINGS[d.layer](plan.project)) : 0;
+    const heading = d.layer !== layer ? estimateTokens(HEADINGS[d.layer](plan)) : 0;
     const tokens = estimateTokens(d.line);
     if (used + heading + tokens > plan.budget) continue;
     used += heading + tokens;
@@ -615,7 +618,7 @@ export function recallText(plan: RecallPlan, id: string): string {
   let layer: RecallLayer | null = null;
   for (const item of plan.items) {
     if (item.layer !== layer) {
-      lines.push('', HEADINGS[item.layer](plan.project));
+      lines.push('', HEADINGS[item.layer](plan));
       layer = item.layer;
     }
     lines.push(item.line);
@@ -640,7 +643,14 @@ export function promptHash(prompt: string): string {
  * return its id. Only ids, scores, and sizes are kept: the text can always be rebuilt from what is
  * still visible.
  */
-export function recordRecall(db: Database, plan: RecallPlan): string {
+export function recordRecall(
+  db: Database,
+  plan: RecallPlan,
+  opts: {
+    /** The device the recall is for, when this store answers for another (a hub, for a relay). */
+    origin?: string;
+  } = {},
+): string {
   const id = `rcl_${randomBytes(6).toString('hex')}`;
   transaction(
     db,
@@ -652,7 +662,7 @@ export function recordRecall(db: Database, plan: RecallPlan): string {
       ).run(
         id,
         plan.at,
-        storeName(db),
+        opts.origin ?? storeName(db),
         plan.source,
         plan.sessionId,
         plan.occasion,
@@ -792,12 +802,29 @@ export function getRecall(db: Database, id: string): RecallRecord | null {
 }
 
 /**
+ * The session a recall was made for: the one it recorded (a hook knows its session), or, for an
+ * agent that asked through MCP, which does not say, the session whose log holds the recall's id in
+ * a tool result, once archived.
+ */
+export function recallSession(
+  db: Database,
+  recall: RecallRecord,
+): { source: string; sessionId: string } | null {
+  if (recall.source && recall.sessionId)
+    return { source: recall.source, sessionId: recall.sessionId };
+  const id = findNewest(db, recall.id, 'tool_result', (text) => text.includes(recall.id));
+  const event = id ? getEvent(db, id) : null;
+  return event ? { source: event.source, sessionId: event.sessionId } : null;
+}
+
+/**
  * The refs of a recall's items that its session went on to use, as the archive shows so far: an
  * entry id, or a session id, in a later tool call or reply of the agent in that session.
  */
 export function usedRefs(db: Database, recall: RecallRecord): Set<string> {
   const used = new Set<string>();
-  if (!recall.source || !recall.sessionId) return used;
+  const session = recallSession(db, recall);
+  if (!session) return used;
   const find = db.prepare(
     `SELECT 1 FROM event e
      WHERE e.source = ? AND e.session_id = ? AND e.ts >= ? AND e.role = 'assistant'
@@ -806,7 +833,7 @@ export function usedRefs(db: Database, recall: RecallRecord): Set<string> {
   );
   for (const item of recall.items) {
     const needle = item.kind === 'session' ? item.ref.slice(item.ref.indexOf(':') + 1) : item.ref;
-    if (find.get(recall.source, recall.sessionId, recall.at, needle)) used.add(item.ref);
+    if (find.get(session.source, session.sessionId, recall.at, needle)) used.add(item.ref);
   }
   return used;
 }
@@ -835,4 +862,34 @@ export function recallPrompt(db: Database, recall: RecallRecord): EventRow | nul
     ) as unknown as Array<{ id: string; text: string }>;
   const hit = rows.find((r) => promptHash(r.text) === recall.promptHash);
   return hit ? getEvent(db, hit.id) : null;
+}
+
+/** The top of the git work tree that holds `dir`, or null. */
+export function workTree(dir: string): string | null {
+  let at = path.resolve(dir);
+  for (;;) {
+    if (fs.existsSync(path.join(at, '.git'))) return at;
+    const up = path.dirname(at);
+    if (up === at) return null;
+    at = up;
+  }
+}
+
+/**
+ * The scope of a recall made in a working directory: the directory, the work tree that holds it,
+ * and the project's name, the last segment of either, as adapters name projects. Only a process on
+ * the agent's machine can look for the work tree (`onDisk`); a hub takes the directory as it is.
+ */
+export function recallScope(
+  cwd: string,
+  opts: { onDisk?: boolean } = {},
+): Pick<RecallInput, 'cwd' | 'root' | 'project'> {
+  const dir = opts.onDisk === false ? cwd : path.resolve(cwd);
+  const root = opts.onDisk === false ? null : workTree(dir);
+  const project =
+    (root ?? dir)
+      .split(/[\\/]+/)
+      .filter((p) => p.length > 0)
+      .at(-1) ?? null;
+  return { cwd: dir, root, project };
 }

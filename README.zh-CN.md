@@ -27,7 +27,7 @@ Origin 以**人**而不是工具为中心：
 
 ## 功能
 
-- **MCP server**（`origin mcp`），七个工具：`search`、`timeline`、`get`、`sources`、`remember`、`correct`、`forget`。它会自动同步，Agent 看到的总是最新会话。
+- **MCP server**（`origin mcp`），八个工具：`brief`、`search`、`timeline`、`get`、`sources`、`remember`、`correct`、`forget`。它会自动同步，Agent 看到的总是最新会话。
 - **条目**分三类：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。每条都带来源、置信度和版本历史。
 - **导入原生记忆**：Claude Code、ZCode 和 Grok Build 为自己保存的记忆文件会被导入为条目，每条都引用它所来自的文件版本：Agent 修改一条记忆，条目随之更新；删除一条记忆，条目随之结束。
 - **按相关度排序的全文检索**：覆盖会话和条目，支持中文子串检索（SQLite FTS5 trigram）。
@@ -89,7 +89,7 @@ Codex、Cursor、ZCode、Grok Build 的接入方式见[接入 Agent](https://ori
 - [升级](https://origin.openlinkos.com/zh/guide/upgrading)：版本、镜像标签、存储格式，以及如何升级设备和中枢
 - [常见问题](https://origin.openlinkos.com/zh/guide/troubleshooting)：常见问题及其解决方法
 - [命令参考](https://origin.openlinkos.com/zh/guide/cli)：全部命令，附示例与环境变量
-- [MCP 工具](https://origin.openlinkos.com/zh/guide/mcp)：Agent 使用的七个工具、参数与返回内容
+- [MCP 工具](https://origin.openlinkos.com/zh/guide/mcp)：Agent 使用的八个工具、参数与返回内容
 - [架构](https://origin.openlinkos.com/zh/architecture)：数据模型、不变量、采集、条目、MCP server 与中枢
 - [会话来源](https://origin.openlinkos.com/zh/sources)：各 Agent 的本地会话格式，以及它们的记忆
 - [更新日志](https://origin.openlinkos.com/zh/changelog)：每个版本改了什么

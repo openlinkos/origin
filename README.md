@@ -27,7 +27,7 @@ Origin puts **you** at the center instead of the tool:
 
 ## Features
 
-- **MCP server** (`origin mcp`) with seven tools: `search`, `timeline`, `get`, `sources`, `remember`, `correct`, `forget`. It syncs automatically, so agents always see the latest sessions.
+- **MCP server** (`origin mcp`) with eight tools: `brief`, `search`, `timeline`, `get`, `sources`, `remember`, `correct`, `forget`. It syncs automatically, so agents always see the latest sessions.
 - **Entries** in three kinds: `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries). Each carries its sources, a confidence, and a version history.
 - **Native memory import.** The memory files that Claude Code, ZCode, and Grok Build keep for themselves are imported as entries, each citing the version of its file: when the agent changes a memory, the entry follows, and when it deletes one, the entry ends.
 - **Relevance-ranked full-text search** across sessions and entries, including CJK substring search (SQLite FTS5 trigram).
@@ -89,7 +89,7 @@ The full documentation lives in [`docs/`](docs/) and is published at [origin.ope
 - [Upgrading](docs/guide/upgrading.md): versions, image tags, store formats, and how to upgrade a device and a hub
 - [Troubleshooting](docs/guide/troubleshooting.md): common problems and their fixes
 - [CLI reference](docs/guide/cli.md): every command, with examples and environment variables
-- [MCP tools](docs/guide/mcp.md): the seven tools agents use, their parameters, and what they return
+- [MCP tools](docs/guide/mcp.md): the eight tools agents use, their parameters, and what they return
 - [Architecture](docs/architecture.md): data model, invariants, ingestion, entries, the MCP server, and the hub
 - [Session sources](docs/sources.md): the on-disk formats of each agent, and of their memories
 - [Changelog](CHANGELOG.md): what changed in each release

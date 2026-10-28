@@ -3,10 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { type Database, openDatabase, syncSource } from '@openlinkos/origin-core';
+import { type Database, getRecall, openDatabase, syncSource } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fakeAdapter, line } from '../../core/test/helpers.js';
 import { createOriginServer } from '../src/index.js';
+import { sourceOfAgent } from '../src/local.js';
 
 let home: string;
 let src: string;
@@ -53,11 +54,46 @@ async function call(name: string, args: Record<string, unknown>) {
 }
 
 describe('origin MCP server', () => {
-  it('exposes the seven tools', async () => {
+  it('exposes the eight tools', async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ['correct', 'forget', 'get', 'remember', 'search', 'sources', 'timeline'].sort(),
+      ['brief', 'correct', 'forget', 'get', 'remember', 'search', 'sources', 'timeline'].sort(),
     );
+  });
+
+  it('briefs an agent on where it works, and records the recall for its device', async () => {
+    await call('remember', {
+      kind: 'cognition',
+      text: 'Keep every store local, in SQLite.',
+      confidence: 0.9,
+      project: 'demo',
+      sources: [{ quote: 'so it stays local' }],
+    });
+    // A server without a directory of its own, like a hub, takes the agent's as it is.
+    const r = await call('brief', { cwd: '/home/dana/code/demo' });
+    expect(r.json.recall).toMatch(/^rcl_[0-9a-f]{12}$/);
+    expect(r.json.text).toContain('Keep every store local, in SQLite.');
+    expect(getRecall(db, r.json.recall)).toMatchObject({
+      occasion: 'request',
+      source: 'test-agent',
+      origin: 'laptop',
+      project: 'demo',
+      cwd: '/home/dana/code/demo',
+      sessionId: null,
+    });
+    const elsewhere = await call('brief', { cwd: '/home/dana/code/other' });
+    expect(elsewhere.json.text).toContain('holds nothing for project other');
+    const nowhere = await call('brief', {});
+    expect(nowhere).toMatchObject({ isError: true });
+    expect(nowhere.text).toContain('Pass `cwd`');
+  });
+
+  it("knows the agents Origin reads behind their MCP clients' names", () => {
+    expect(sourceOfAgent('claude-code')).toBe('claude-code');
+    expect(sourceOfAgent('codex-mcp-client')).toBe('codex');
+    expect(sourceOfAgent('Cursor-VSCode')).toBe('cursor');
+    expect(sourceOfAgent('grok-cli')).toBe('grok');
+    expect(sourceOfAgent('claude-ai')).toBe('claude-ai');
   });
 
   it('syncs before reading, so new session lines are searchable', async () => {

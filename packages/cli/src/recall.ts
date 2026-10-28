@@ -1,7 +1,6 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { allAdapters, KNOWN_SOURCE_IDS, projectFromCwd } from '@openlinkos/origin-adapters';
+import { allAdapters, KNOWN_SOURCE_IDS } from '@openlinkos/origin-adapters';
 import {
   type Database,
   dbPath,
@@ -15,6 +14,7 @@ import {
   planRecall,
   type RecallInput,
   type RecallPlan,
+  recallScope,
   recallText,
   recordRecall,
 } from '@openlinkos/origin-core';
@@ -39,24 +39,6 @@ Hooks: ${HOOK_AGENTS.join(', ')}`;
 /** How long a hook waits for the store's write lock before handing nothing over. */
 const HOOK_BUSY_MS = 3_000;
 
-/** The top of the git work tree that holds `dir`, or null. */
-export function workTree(dir: string): string | null {
-  let at = path.resolve(dir);
-  for (;;) {
-    if (fs.existsSync(path.join(at, '.git'))) return at;
-    const up = path.dirname(at);
-    if (up === at) return null;
-    at = up;
-  }
-}
-
-/** The scope of a recall made in `cwd`: the directory, its work tree, and the project's name. */
-export function scopeOf(cwd: string): Pick<RecallInput, 'cwd' | 'root' | 'project'> {
-  const resolved = path.resolve(cwd);
-  const root = workTree(resolved);
-  return { cwd: resolved, root, project: projectFromCwd(root ?? resolved) };
-}
-
 /** The event a Claude Code hook reads on standard input, as far as recall needs it. */
 interface ClaudeHookEvent {
   hook_event_name?: string;
@@ -78,7 +60,7 @@ export function hookInput(
 ): RecallInput | null {
   const sessionId = event.session_id?.toLowerCase() ?? null;
   if (!event.cwd) return null;
-  const scope = { source: agent, sessionId, ...scopeOf(event.cwd) };
+  const scope = { source: agent, sessionId, ...recallScope(event.cwd) };
   if (event.hook_event_name === 'SessionStart') {
     if (event.source === 'resume' && sessionId && hasRecalled(db, agent, sessionId)) return null;
     return { occasion: 'start', ...scope };
@@ -183,7 +165,7 @@ export async function main(argv: string[]): Promise<number> {
       occasion: prompt ? 'prompt' : 'start',
       source: values.agent ?? null,
       prompt,
-      ...scopeOf(values.cwd ?? process.cwd()),
+      ...recallScope(values.cwd ?? process.cwd()),
     });
     printPreview(plan);
     return 0;

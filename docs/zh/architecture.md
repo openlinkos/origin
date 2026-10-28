@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-cc4b5ce7
+sourceHash: sha256-a996b3ef
 ---
 
 # 架构
@@ -78,7 +78,7 @@ agent session logs on disk ──scan──▶ Raw (append-only mirror)
                                         ▼
                                   Event store (SQLite + FTS5) ◀── Entries · Tombstones
                                         │
- agents ◀── MCP (stdio): search · timeline · get · sources · remember · correct · forget
+ agents ◀── MCP (stdio): brief · search · timeline · get · sources · remember · correct · forget
  agents ◀── hooks: origin recall (session start · prompt): a brief, and the entries a prompt matches
  people ◀── CLI `origin`: sync · status · timeline · search · show · entries · correct · forget · forgotten · restore · recall · recalls
  people ◀── admin UI (hub, /admin): overview · timeline · search · entries · remember · correct · forget · restore · tokens
@@ -357,6 +357,7 @@ Claude Code、ZCode 和 Grok Build 都维护自己的记忆：由 Agent 原地�
 
 | 工具 | 用途 |
 |---|---|
+| `brief` | 用户的记忆中与 Agent 工作之处有关的内容，即召回交出的内容，并记录为一次召回（见[召回](#recall)） |
 | `search` | 对条目和事件做全文检索；不带查询词时列出最近的条目。过滤条件：范围、类型、时间段、来源、项目、工具事件 |
 | `timeline` | 某个时间段内的会话（默认 7 天），每个会话带有它的标题，没有标题时带有它的第一条提示（见[会话的名称](#search-and-timeline)）；或单个会话的事件 |
 | `get` | 条目及其来源和版本历史，或事件及其完整正文 |
@@ -365,18 +366,18 @@ Claude Code、ZCode 和 Grok Build 都维护自己的记忆：由 Agent 原地�
 | `correct` | 用纠正后的版本取代一个条目 |
 | `forget` | 按上述规则隐藏一个条目或事件，并附上用户给出的原因；仅在用户明确要求时使用。没有用于恢复的工具：只有主人能恢复，方式是 CLI 或管理界面 |
 
-- **新鲜度。** server 在启动时采集所有来源，在 `search` 和 `timeline` 之前也会采集（最多每 10 秒一次；在连接了中枢的设备上，`get` 和 `sources` 之前也会），在 `remember` 和 `correct` 之前则总会采集，因此 Agent 能引用它当前所在对话中的记录行。
+- **新鲜度。** server 在启动时采集所有来源，在 `brief`、`search` 和 `timeline` 之前也会采集（最多每 10 秒一次；在连接了中枢的设备上，`get` 和 `sources` 之前也会），在 `remember` 和 `correct` 之前则总会采集，因此 Agent 能引用它当前所在对话中的记录行。
 - **Agent 运行期间。** server 还会每 60 秒查看一次有没有新的记录行（`ORIGIN_WATCH_INTERVAL_MS`；设为 0 则关闭），这样 Agent 最后一次调用工具之后写下的内容也能进入库和中枢，而不必等到下一个 Agent 启动。每次查看会把各记录文件的大小和修改时间与上次采集时比较，不读取文件内容，只有发生变化时才采集。查看在后台进行，与其他刷新使用同一套闸门，所以一次只查看一次，也绝不会与另一次同步重叠；工具调用不会等待它，除非本来就需要刷新；耗时较长的采集也会在各个事务之间让工具调用先执行。
 - **Agent 离开时。** 标准输入结束，或者 server 收到 SIGTERM、SIGINT 或 SIGHUP 时，它会再采集一次，已接入中枢时还会与中枢同步，最多等待 5 秒，然后退出。Agent 如果直接杀掉 server，就会跳过这一步；下一次启动时会补上。
 - **在已接入中枢的设备上。** server 仍然根据设备自己的库作答，读取类工具（`search`、`timeline`、`get`、`sources`）会同时询问中枢的 `/mcp`。两边的结果会合并、按 id 去重，并标上 `origin: "local"`（本设备有这一项）或 `"hub"`。无论中枢返回什么，设备已经遗忘的内容都不会显示；同一个条目的多个版本中，只列出按[条目](#entries)中的规则确定的当前版本；`get` 会合并两个库中该条目的历史。对于设备没有的 id，`get` 和 `sources` 由中枢作答。如果中枢在 2 秒内（`ORIGIN_HUB_TIMEOUT_MS`）没有回应，或者无法连接，工具就只根据设备作答，并附加第二段文本，说明这次没有询问中枢。agent 一完成初始化，server 就建立到中枢的连接，这样第一次读取不必把这段时间花在 TLS 握手和 MCP 初始化上。
 - **已接入中枢的设备上的写入**先落到设备的库中，再同步上去。server 在读取类工具之前与中枢同步（最多每 10 秒一次），每次写入后、每次后台查看发现新的记录行后、以及 Agent 离开时也会同步，而且为了等待中枢而推迟回答的时间不会超过超时时限。失败的同步会在下一次后台查看时重试。对于设备没有的条目或事件，`correct` 和 `forget` 会在中枢上执行；连不上中枢时，它们会失败并给出清楚的错误说明。
 - **在中继上。** 每个工具都交给中枢的 `/mcp`，中枢的回答原样返回，不带 `origin` 标签。在此之前，server 先把 Agent 新增的记录行发送给中枢：读取类工具之前最多每 10 秒一次，最多等待中枢超时时限；每次写入之前都会发送，最多等待 15 秒，这样条目就能引用刚刚说过的内容。由于它自己没有回答，它最多等待中枢的回答 15 秒；连不上中枢时，工具会失败，并说明中继离线时无法作答。记录文件有变化时，它每分钟也会发送一次新的行，Agent 离开时再发送一次（见[中继](#relays)）。
-- **引导。** server 的 MCP `instructions` 会告诉 Agent 何时检索、何时记住（带理由的决定、稳定的事实、偏好），`forget` 需要明确的请求和用户给出的原因，只有用户能恢复被遗忘的内容，以及导入的条目对应某个 Agent 自己的记忆文件，所以文件之后的变化会取代在 Origin 中做的纠正。结果中的条目会说明自己是否为导入的（`imported`）。
+- **引导。** server 的 MCP `instructions` 会告诉 Agent：开始任务时，如果召回还没有给过它简报，就调用 `brief`；何时检索、何时记住（带理由的决定、稳定的事实、偏好），`forget` 需要明确的请求和用户给出的原因，只有用户能恢复被遗忘的内容，以及导入的条目对应某个 Agent 自己的记忆文件，所以文件之后的变化会取代在 Origin 中做的纠正。结果中的条目会说明自己是否为导入的（`imported`）。
 - **错误。** 无效输入、未知 id 和已遗忘的 id 会以工具错误的形式返回，并附带可读的说明。
 
 ## 召回 {#recall}
 
-召回是 Origin 不经询问就交给 Agent 的内容：会话开始时的一份简报，以及与每个提示匹配的条目。Agent 通过它们的 hook 运行召回（`origin recall --hook <agent>`，见[召回](guide/recall.md)）。召回不调用任何模型，每一次都有记录。
+召回是 Origin 不经询问就交给 Agent 的内容：会话开始时的一份简报，以及与每个提示匹配的条目。Agent 通过它们的 hook 运行召回（`origin recall --hook <agent>`，见[召回](guide/recall.md)）；hook 无法交出内容的 Agent，则用 MCP 工具 `brief` 主动请求。召回不调用任何模型，每一次都有记录。
 
 **范围。** 召回针对一个工作目录。它的项目是包含这个目录的 git 工作树；不在工作树中时，就是这个目录本身；项目名是它的最后一段，与归档中一致。从记忆文件导入的条目属于这个文件所对应的目录，会话属于它的工作目录，所以两个同名的检出能够区分开，主目录也不会把它下面的项目都算作自己的；通过 Origin 写下的条目属于它写明的项目。
 
@@ -399,9 +400,11 @@ Claude Code、ZCode 和 Grok Build 都维护自己的记忆：由 Agent 原地�
 
 **预算。** 每项一行：条目的 id 和第一行，或者会话的这些信息，截到约 40 个 token，上面有一行说明，告诉 Agent 用 `get` 加 id 获取其余内容，并且用户在本会话中说的话优先。一份简报最多占 800 个 token，一个提示的匹配最多 400 个，按每个 CJK 字符一个 token、其他字符每四个一个 token 估算；放不下的会被略去。
 
-**记录。** 每一次召回（包括什么都没匹配到的）都是 `recall` 中的一行，它的各项在 `recall_item` 中：一个 id（`rcl_…`）、时间、进行召回的库、Agent 及其会话、时机（`start` 或 `prompt`；`request` 留给自己请求简报的 Agent）、项目和目录、预算和用掉的 token，以及每一项的排名、层、类型（条目或会话）、id、分数和大小。召回不保存任何文本，提示只存哈希，这样遗忘隐藏的内容不会仍从记录中显示出来（不变量 2）：每一项是什么，在显示召回时才从库中读取，已遗忘的显示为已遗忘。两张表都是只追加的。`origin recalls` 列出召回，`origin show rcl_…` 显示一次召回，包括它回应的提示（会话中具有该哈希的用户消息，归档之后才能找到），以及每一项本会话之后是否用上了：它的 id 是否出现在该会话中 Agent 之后的工具调用或回复里。
+**记录。** 每一次召回（包括什么都没匹配到的）都是 `recall` 中的一行，它的各项在 `recall_item` 中：一个 id（`rcl_…`）、时间、进行召回的库、Agent 及其会话、时机（`start`、`prompt`，或者 `request`，表示 Agent 用 `brief` 请求）、项目和目录、预算和用掉的 token，以及每一项的排名、层、类型（条目或会话）、id、分数和大小。召回不保存任何文本，提示只存哈希，这样遗忘隐藏的内容不会仍从记录中显示出来（不变量 2）：每一项是什么，在显示召回时才从库中读取，已遗忘的显示为已遗忘。两张表都是只追加的。`origin recalls` 列出召回，`origin show rcl_…` 显示一次召回，包括它回应的提示（会话中具有该哈希的用户消息，归档之后才能找到），以及每一项本会话之后是否用上了：它的 id 是否出现在该会话中 Agent 之后的工具调用或回复里。
 
 **Hook。** `origin recall` 只加载核心和适配器，以便快速启动，而且从不妨碍 Agent：出现任何故障时，它什么都不输出，在标准错误中说明原因，并以 0 退出；它最多等待 3 秒获取库的写锁。它只读取本设备的库，所以其他设备上写下的条目暂时不会被召回；中继不保存条目，不交出任何内容。
+
+**通过 MCP。** `brief` 交出一份简报，加上 `about` 时还有与它匹配的条目，记录为时机为 `request` 的一次召回。由 Agent 运行的 server 作答：在设备上根据设备的库作答，已接入中枢的设备也不询问中枢，与 hook 一致；中继把它交给中枢，以自己的工作树作为目录，中枢看不到 Agent 的磁盘，所以按原样使用这个目录，并把这次召回记录为为该设备所做。MCP 调用不说明会话，所以这类召回不记录会话；它的会话是日志中有某个工具结果含有这次召回 id 的那个会话，归档之后才能找到。
 
 ## 个人中枢 {#personal-hub}
 
@@ -442,7 +445,7 @@ Claude Code、ZCode 和 Grok Build 都维护自己的记忆：由 Agent 原地�
 | 方法与路径 | 用途 |
 |---|---|
 | `GET /healthz` | `{ "ok": true, "version": … }`，无需鉴权 |
-| `POST /mcp` | MCP Streamable HTTP，无状态，JSON 响应；与 stdio server 相同的七个工具 |
+| `POST /mcp` | MCP Streamable HTTP，无状态，JSON 响应；与 stdio server 相同的八个工具 |
 | `GET /v1/device` | `{ device, hub }`：令牌所属的设备（即令牌名）和中枢的名称 |
 | `GET /v1/cursors?device=<name>` | 令牌所属设备的每个文件在中枢上的字节游标 |
 | `POST /v1/ingest` | 追加一个块：JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }`，其中 `data` 为 base64，`offset` 按镜像未压缩的内容计算（中继发送的是文件的内容，二者相同）；请求体可以使用 gzip 编码。返回 `200 { bytes, eventsAdded, … }`，偏移量不匹配时返回 `409 { bytes }` |

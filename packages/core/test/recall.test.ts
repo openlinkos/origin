@@ -15,6 +15,8 @@ import {
   planRecall,
   type RecallInput,
   recallPrompt,
+  recallScope,
+  recallSession,
   recallTerms,
   recallText,
   recordRecall,
@@ -56,7 +58,7 @@ interface Message {
   role: 'user' | 'assistant';
   text: string;
   cwd: string;
-  kind?: 'message' | 'tool_use';
+  kind?: 'message' | 'tool_use' | 'tool_result';
 }
 
 /** A line of a memory stream: a version of an agent's memory file of a working directory. */
@@ -453,5 +455,57 @@ describe('recall with a prompt', () => {
     // A forgotten prompt is no longer found.
     forget(db, 'claude:s2-1', { reason: 'asked to', author: 'test' });
     expect(recallPrompt(db, recall)).toBeNull();
+  });
+
+  it("finds the session of an agent that asked through MCP by the recall's id in its log", async () => {
+    await seed();
+    const caddy = note('Keep both mirror repositories: the caching one and the Caddy one', null);
+    const plan = planRecall(db, inRepo({ occasion: 'request', sessionId: null, now: NOW - DAY }));
+    const id = recordRecall(db, plan, { origin: 'desktop' });
+    const recall = getRecall(db, id);
+    if (!recall) throw new Error('recorded');
+    expect(recall).toMatchObject({ origin: 'desktop', sessionId: null, occasion: 'request' });
+    expect(recallSession(db, recall)).toBeNull();
+
+    const at = NOW - DAY;
+    say('codex', {
+      id: 'c1',
+      session: 'c',
+      ts: at + 1,
+      role: 'user',
+      kind: 'tool_result',
+      text: `{"recall":"${id}"}`,
+      cwd: REPO,
+    });
+    say('codex', {
+      id: 'c2',
+      session: 'c',
+      ts: at + 2,
+      role: 'assistant',
+      text: `Per ${caddy}, keep both.`,
+      cwd: REPO,
+    });
+    await sync('codex');
+    expect(recallSession(db, recall)).toEqual({ source: 'codex', sessionId: 'c' });
+    expect(usedRefs(db, recall)).toEqual(new Set([caddy]));
+  });
+});
+
+describe('the scope of a recall', () => {
+  it('is the work tree that holds the directory, looked up on disk only where asked', () => {
+    const repo = path.join(logs, 'acme');
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'src'));
+    expect(recallScope(path.join(repo, 'src'))).toEqual({
+      cwd: path.join(repo, 'src'),
+      root: repo,
+      project: 'acme',
+    });
+    // A hub cannot see the agent's disk: the directory is the project.
+    expect(recallScope('C:\\work\\acme', { onDisk: false })).toEqual({
+      cwd: 'C:\\work\\acme',
+      root: null,
+      project: 'acme',
+    });
   });
 });
