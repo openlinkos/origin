@@ -87,6 +87,20 @@ describe('recall hooks', () => {
     });
   });
 
+  it('read the events of Codex as those of Claude Code: the same fields', () => {
+    const event = {
+      hook_event_name: 'UserPromptSubmit',
+      session_id: 'T-1',
+      cwd: dir,
+      prompt: 'Ship it',
+    };
+    expect(hookInput(db, 'codex', event)).toMatchObject({
+      occasion: 'prompt',
+      source: 'codex',
+      sessionId: 't-1',
+    });
+  });
+
   it('answer in the form Claude Code reads', () => {
     expect(JSON.parse(hookOutput('UserPromptSubmit', 'Origin recall rcl_1: …'))).toEqual({
       hookSpecificOutput: {

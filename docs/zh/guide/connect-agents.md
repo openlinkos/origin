@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-217cb0bc
+sourceHash: sha256-40c6f3bc
 ---
 
 # 接入 Agent
@@ -13,6 +13,22 @@ sourceHash: sha256-217cb0bc
 | Cursor | ✅ | ✅ | 依据 Cursor 文档 |
 | ZCode | ✅ | ✅ | 依据 ZCode 文档 |
 | Grok Build | ✅ | ✅ | 已注册 |
+
+## 一次接好所有 Agent {#connect-them-all-at-once}
+
+`origin agents` 显示这台机器上装了哪些 Agent，以及每个是怎样接入的。`origin agents connect` 把 Origin 的 MCP server 注册到其中每一个，并为 Claude Code 和 Codex 加上[召回](./recall.md)的 hook。它先显示会改什么，加上 `--yes` 才真的修改，每个文件改之前都会在旁边备份；它只添加和删除 Origin 自己的那一项，`origin agents disconnect` 会把它们去掉。写出 Agent 的名字就只处理这些，例如 `origin agents connect codex`。改完之后，为每个 Agent 开始一个新会话；Codex 只有在你用 `/hooks` 信任新的 hook 之后才会运行它们。
+
+```console
+$ origin agents connect
+origin agents connect would:
+  codex: register the MCP server in /home/dana/.codex/config.toml
+  codex: add the recall hooks (SessionStart, UserPromptSubmit) to /home/dana/.codex/hooks.json
+  cursor: register the MCP server in /home/dana/.cursor/mcp.json
+
+Run again with --yes to make these changes; each file is backed up next to it first.
+```
+
+下面各节说明它为每个 Agent 写入了什么，方便手动设置。
 
 ## Claude Code {#claude-code}
 

@@ -1,12 +1,12 @@
 ---
-sourceHash: sha256-f85f83fc
+sourceHash: sha256-bb569174
 ---
 
 # 召回
 
 会话开始时，以及你每发出一个提示时，Origin 可以把它已经知道、而在当下有用的内容交给你的 Agent：先是一份简报，包括你的偏好、项目的决定和事实，以及这个项目最近与你的各个 Agent 的会话；然后是与你的提示相关的条目。它通过 Agent 的 hook 工作，不调用任何模型，并记录下每一次交出的内容，所以你能看到 Agent 拿到了什么、有没有用上。
 
-Claude Code 通过它的 hook 获得召回。其他 Agent 通过 Origin 的 MCP server 请求（见[其他 Agent](#other-agents)）。
+Claude Code 和 Codex 通过它们的 hook 获得召回。其他 Agent 通过 Origin 的 MCP server 请求（见[其他 Agent](#other-agents)）。
 
 ## Agent 会拿到什么 {#what-an-agent-is-handed}
 
@@ -28,9 +28,11 @@ Latest sessions in acme, any agent (source, time, session id):
 - codex 2026-10-27 18:02 0199a1b2-7c3d-4e5f-8a6b-9c0d1e2f3a4b: Migrate the billing client to v2; last prompt: run the integration tests again
 ```
 
-## 为 Claude Code 设置 {#set-up-claude-code}
+## 设置 hook {#set-up-the-hooks}
 
-在 `~/.claude/settings.json` 中加入两个 hook（与你已有的 hook 并列），然后开始一个新的 Claude Code 会话：
+`origin agents connect` 会把它们连同 Origin 的 MCP server 一起，加到每个已安装且支持的 Agent 中：它先显示会改什么，加上 `--yes` 才修改，每个文件改之前都会先备份（见[接入 Agent](./connect-agents.md#connect-them-all-at-once)）。改完之后，为每个 Agent 开始一个新会话；Codex 只有在你用 `/hooks` 信任新的 hook 之后才会运行它们。
+
+要手动添加，就把两个 hook 放进 Claude Code 的 `~/.claude/settings.json`，或者 Codex 的 `~/.codex/hooks.json`（把 `claude-code` 换成 `codex`），与你已有的 hook 并列：
 
 ```json
 {
@@ -45,11 +47,11 @@ Latest sessions in acme, any agent (source, time, session id):
 }
 ```
 
-在 Claude Code 中用 `/hooks` 可以看到它们。同时保留 Origin 的 MCP server 注册（见[接入 Agent](./connect-agents.md)），这样 Agent 才能用 `get` 获取拿到的条目。hook 用时不到一秒；出现任何问题时，它不交出任何内容，Claude Code 照常继续。
+在两个 Agent 中用 `/hooks` 都可以看到它们。同时保留 Origin 的 MCP server 注册，这样 Agent 才能用 `get` 获取拿到的条目。hook 用时不到一秒；出现任何问题时，它不交出任何内容，Agent 照常继续。
 
 ## 其他 Agent {#other-agents}
 
-hook 无法交出内容的 Agent，例如 Grok Build、ZCode 和 Cursor，以及目前的 Codex，会自己请求简报：Origin 的 MCP server 有一个 `brief` 工具，它的说明会告诉 Agent 在开始任务时带上工作目录调用它。它们拿到同样的简报，加上 `about` 时还有与任务匹配的条目（见 [MCP 工具](./mcp.md#brief)）。除了[注册 Origin](./connect-agents.md)，不需要别的设置。这样的召回与 hook 的一样有记录；它的会话之后根据 Agent 日志中的召回 id 找到。
+hook 无法交出内容的 Agent，也就是 Grok Build、ZCode 和 Cursor，会自己请求简报：Origin 的 MCP server 有一个 `brief` 工具，它的说明会告诉 Agent 在开始任务时带上工作目录调用它。它们拿到同样的简报，加上 `about` 时还有与任务匹配的条目（见 [MCP 工具](./mcp.md#brief)）。除了[注册 Origin](./connect-agents.md)，不需要别的设置。这样的召回与 hook 的一样有记录；它的会话之后根据 Agent 日志中的召回 id 找到。
 
 ## 预览 {#preview}
 

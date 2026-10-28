@@ -10,10 +10,11 @@ Origin 所有值得注意的改动都列在这里。版本号遵循[语义化版
 
 ### 召回 {#recall}
 
-- 召回不经询问，把在 Agent 工作的地方有用的内容交给它：会话开始时，一份简报，包括用户的偏好、项目最新的决定和事实，以及这个项目最近与任意 Agent 的会话；每个提示，第一行与提示有足够罕见的共同词的条目。匹配基于词汇，不调用模型；一份简报不超过约 800 个 token，一个提示的匹配不超过 400 个；Agent 不会拿到它从自己的文件加载的记忆。Claude Code 通过它的 `SessionStart` 和 `UserPromptSubmit` hook 运行召回（`origin recall --hook claude-code`），指南的「召回」一页说明了如何设置。
+- 召回不经询问，把在 Agent 工作的地方有用的内容交给它：会话开始时，一份简报，包括用户的偏好、项目最新的决定和事实，以及这个项目最近与任意 Agent 的会话；每个提示，第一行与提示有足够罕见的共同词的条目。匹配基于词汇，不调用模型；一份简报不超过约 800 个 token，一个提示的匹配不超过 400 个；Agent 不会拿到它从自己的文件加载的记忆。Claude Code 和 Codex 通过它们的 `SessionStart` 和 `UserPromptSubmit` hook 运行召回（`origin recall --hook claude-code`，或 `codex`），指南的「召回」一页说明了如何设置。
 - 每一次召回都有记录，只记 id，从不记文本：`origin recalls` 列出召回，`origin show rcl_…` 显示一次召回，包括它回应的提示和本会话之后用上的项。只运行 `origin recall` 会预览 Agent 会拿到什么，不做任何记录。
-- Origin 的 MCP server 新增第八个工具 `brief`：给 hook 无法交出内容的 Agent（例如 Grok Build、ZCode、Cursor，以及目前的 Codex）同样的简报，加上 `about` 时还有与它匹配的条目。server 的说明会告诉 Agent 在开始任务时调用它，除非召回已经给过它简报。每次调用都记录为一次召回，它的会话根据 Agent 日志中的召回 id 找到。
+- Origin 的 MCP server 新增第八个工具 `brief`：给 hook 无法交出内容的 Agent（Grok Build、ZCode 和 Cursor）同样的简报，加上 `about` 时还有与它匹配的条目。server 的说明会告诉 Agent 在开始任务时调用它，除非召回已经给过它简报。每次调用都记录为一次召回，它的会话根据 Agent 日志中的召回 id 找到。
 - 管理界面新增「召回」页：每一次召回交出了什么（按现在的样子显示），以及会话是否用上了。条目的页面列出交出过它的召回，会话的页面在每次召回所在的那一轮显示它。
+- `origin agents` 显示本机每个 Agent 的接入情况。`origin agents connect` 把 Origin 的 MCP server 注册到每个 Agent，并为 Claude Code 和 Codex 加上召回 hook：它先显示要做的修改，加上 `--yes` 才执行，每个文件都先备份，只动 Origin 自己的那一项。`origin agents disconnect` 会把它们去掉。
 - 设备同步时会把自己所做的召回发送给中枢，所以中枢保存着每台设备的召回。请先升级中枢：旧版中枢不接收召回，召回会留在设备上，等它升级后再发送。
 
 ## [0.3.0] - 2026-10-24 {#_0-3-0-2026-10-24}

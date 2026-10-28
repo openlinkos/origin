@@ -85,6 +85,7 @@ import {
   type TimelineResult,
   WATCH_INTERVAL_MS,
 } from '@openlinkos/origin-mcp';
+import { cmdAgents } from './agents.js';
 import { cmdForget, cmdForgotten, cmdRestore, type ForgettingCtx } from './forgetting.js';
 import { count, oneLine, table } from './format.js';
 import { BUCKET_OPTIONS, bucketFlags, setUpFrames } from './hub/bucket.js';
@@ -126,6 +127,7 @@ Usage:
   origin projects                                        Known project names
   origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
   origin mcp                                             Run the MCP server over stdio (forwards to the hub when connected)
+  origin agents    [connect | disconnect] [<agent>...] [--yes]   Register Origin, and its recall hooks, with the agents here
   origin ui        [--port 7079] [--no-open]             Browse and curate this store in your browser, on 127.0.0.1
 
 Personal hub:
@@ -190,6 +192,8 @@ export async function main(argv: string[]): Promise<number> {
     console.log(VERSION);
     return 0;
   }
+  // Agents' own configuration only: the store is not needed.
+  if (command === 'agents') return cmdAgents(rest);
   const home = originHome();
   // Opening the store upgrades an older one. A migration may parse mirrored lines again, with the
   // adapters, and read their sealed frames, which a hub may keep in a bucket.

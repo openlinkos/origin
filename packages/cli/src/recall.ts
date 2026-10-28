@@ -28,7 +28,7 @@ import { setUpFrames } from './hub/bucket.js';
  */
 
 /** Agents whose hooks `origin recall --hook` answers. */
-export const HOOK_AGENTS = ['claude-code'] as const;
+export const HOOK_AGENTS = ['claude-code', 'codex'] as const;
 export type HookAgent = (typeof HOOK_AGENTS)[number];
 
 const USAGE = `Usage:
@@ -39,8 +39,11 @@ Hooks: ${HOOK_AGENTS.join(', ')}`;
 /** How long a hook waits for the store's write lock before handing nothing over. */
 const HOOK_BUSY_MS = 3_000;
 
-/** The event a Claude Code hook reads on standard input, as far as recall needs it. */
-interface ClaudeHookEvent {
+/**
+ * The event a hook reads on standard input, as far as recall needs it. Claude Code and Codex send
+ * the same fields, and read the same answer.
+ */
+interface HookEvent {
   hook_event_name?: string;
   session_id?: string;
   cwd?: string;
@@ -53,11 +56,7 @@ interface ClaudeHookEvent {
  * The recall a hook event asks for, or null when it asks for none: a session that resumes already
  * had its brief (it is in its transcript).
  */
-export function hookInput(
-  db: Database,
-  agent: HookAgent,
-  event: ClaudeHookEvent,
-): RecallInput | null {
+export function hookInput(db: Database, agent: HookAgent, event: HookEvent): RecallInput | null {
   const sessionId = event.session_id?.toLowerCase() ?? null;
   if (!event.cwd) return null;
   const scope = { source: agent, sessionId, ...recallScope(event.cwd) };
@@ -71,7 +70,7 @@ export function hookInput(
   return null;
 }
 
-/** What a Claude Code hook prints for the agent to read: the text as `additionalContext`. */
+/** What a hook prints for the agent to read: the text as `additionalContext`. */
 export function hookOutput(eventName: string, text: string): string {
   return JSON.stringify({
     hookSpecificOutput: { hookEventName: eventName, additionalContext: text },
@@ -91,7 +90,7 @@ function openStore(home: string): Database {
 async function runHook(agent: HookAgent): Promise<number> {
   let db: Database | null = null;
   try {
-    const event = JSON.parse(fs.readFileSync(0, 'utf8')) as ClaudeHookEvent;
+    const event = JSON.parse(fs.readFileSync(0, 'utf8')) as HookEvent;
     db = openStore(originHome());
     // A relay keeps no entries; the hub's are not recalled from here yet.
     if (isRelay(db)) return 0;

@@ -2,7 +2,7 @@
 
 When a session starts, and with each prompt you send, Origin can hand your agent what it already knows that matters there: a short brief of your preferences, the project's decisions and facts, and its latest sessions with any of your agents; then the entries your prompt is about. It works through the agent's hooks, calls no model, and records every time it hands something over, so you can see what an agent was given and whether it used it.
 
-Claude Code gets recall through its hooks. Other agents ask for it through Origin's MCP server (see [Other agents](#other-agents)).
+Claude Code and Codex get recall through their hooks. Other agents ask for it through Origin's MCP server (see [Other agents](#other-agents)).
 
 ## What an agent is handed
 
@@ -24,9 +24,11 @@ Latest sessions in acme, any agent (source, time, session id):
 - codex 2026-10-27 18:02 0199a1b2-7c3d-4e5f-8a6b-9c0d1e2f3a4b: Migrate the billing client to v2; last prompt: run the integration tests again
 ```
 
-## Set up Claude Code
+## Set up the hooks
 
-Add two hooks to `~/.claude/settings.json`, next to any hooks you already have, then start a new Claude Code session:
+`origin agents connect` adds them, with Origin's MCP server, to every agent installed that takes them: it shows what it would change, and changes it with `--yes`, backing up each file first (see [Connect your agents](./connect-agents.md#connect-them-all-at-once)). Start a new session of each agent afterwards; Codex runs new hooks only once you trust them, with `/hooks`.
+
+To add them by hand, put two hooks in `~/.claude/settings.json` for Claude Code, or in `~/.codex/hooks.json` for Codex with `codex` in place of `claude-code`, next to any hooks you already have:
 
 ```json
 {
@@ -41,11 +43,11 @@ Add two hooks to `~/.claude/settings.json`, next to any hooks you already have, 
 }
 ```
 
-`/hooks` in Claude Code lists them. Keep Origin registered as an MCP server too (see [Connect your agents](./connect-agents.md)), so that the agent can `get` what it is handed. The hook takes a fraction of a second; if anything goes wrong, it hands nothing over and Claude Code carries on.
+`/hooks` in either agent lists them. Keep Origin registered as an MCP server too, so that the agent can `get` what it is handed. The hook takes a fraction of a second; if anything goes wrong, it hands nothing over and the agent carries on.
 
 ## Other agents
 
-Agents whose hooks cannot hand anything over, such as Grok Build, ZCode, and Cursor, and Codex for now, ask for a brief themselves: Origin's MCP server has a `brief` tool, and its instructions tell agents to call it with their working directory when they start a task. They get the same brief, and with `about`, the entries that match the task (see [MCP tools](./mcp.md#brief)). No setup is needed beyond [registering Origin](./connect-agents.md). Such a recall is recorded like a hook's; its session is found later, from the recall's id in the agent's log.
+Agents whose hooks cannot hand anything over, Grok Build, ZCode, and Cursor, ask for a brief themselves: Origin's MCP server has a `brief` tool, and its instructions tell agents to call it with their working directory when they start a task. They get the same brief, and with `about`, the entries that match the task (see [MCP tools](./mcp.md#brief)). No setup is needed beyond [registering Origin](./connect-agents.md). Such a recall is recorded like a hook's; its session is found later, from the recall's id in the agent's log.
 
 ## Preview
 

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-d000242f
+sourceHash: sha256-d72310c9
 ---
 
 # 命令参考
@@ -21,6 +21,7 @@ origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 
 origin projects                                        已知的项目名
 origin backup    <dir>                                 把数据库和原始镜像备份到 <dir>（增量）
 origin mcp                                             以 stdio 运行 MCP server（接入中枢后补充中枢的回答）
+origin agents    [connect | disconnect] [<agent>...] [--yes]   把 Origin 及其召回 hook 接入本机的 Agent
 origin ui        [--port 7079] [--no-open]             在浏览器中浏览和管理本库，只监听 127.0.0.1
 
 origin serve     [--host 127.0.0.1] [--port 7077]      把本库作为个人中枢运行（MCP over HTTP）
@@ -79,7 +80,7 @@ Sources:
 
 ## 召回 {#recall}
 
-`origin recall` 显示 Agent 在当前目录（或 `--cwd` 指定的目录）会拿到什么：新会话的简报，或者加上 `--prompt` 时与提示匹配的条目。`--agent` 按该 Agent 会拿到的样子显示，不含它自己加载的记忆。它不做任何记录。Claude Code 的 hook 运行 `origin recall --hook claude-code`，它从标准输入读取 hook 的事件，记录交出的内容，并输出给 Agent。`origin recalls` 按从新到旧列出 Agent 拿到过什么（加 `--all` 还会列出什么都没交出的召回），`origin show rcl_…` 显示一次召回，包括它回应的提示和本会话之后用上的项。见[召回](./recall.md)。
+`origin recall` 显示 Agent 在当前目录（或 `--cwd` 指定的目录）会拿到什么：新会话的简报，或者加上 `--prompt` 时与提示匹配的条目。`--agent` 按该 Agent 会拿到的样子显示，不含它自己加载的记忆。它不做任何记录。`origin agents connect` 会设置好这些 hook（见[接入 Agent](./connect-agents.md#connect-them-all-at-once)）。Claude Code 和 Codex 的 hook 运行 `origin recall --hook claude-code` 或 `--hook codex`，它从标准输入读取 hook 的事件，记录交出的内容，并输出给 Agent。`origin recalls` 按从新到旧列出 Agent 拿到过什么（加 `--all` 还会列出什么都没交出的召回），`origin show rcl_…` 显示一次召回，包括它回应的提示和本会话之后用上的项。见[召回](./recall.md)。
 
 ## 纠正与遗忘 {#correcting-and-forgetting}
 

@@ -30,6 +30,7 @@ Origin 以**人**而不是工具为中心：
 - **MCP server**（`origin mcp`），八个工具：`brief`、`search`、`timeline`、`get`、`sources`、`remember`、`correct`、`forget`。它会自动同步，Agent 看到的总是最新会话。
 - **条目**分三类：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。每条都带来源、置信度和版本历史。
 - **导入原生记忆**：Claude Code、ZCode 和 Grok Build 为自己保存的记忆文件会被导入为条目，每条都引用它所来自的文件版本：Agent 修改一条记忆，条目随之更新；删除一条记忆，条目随之结束。
+- **召回**：会话开始时和每个提示时，Agent 会拿到它工作之处有用的内容：你的偏好、项目最新的决定和事实、这个项目最近与任意 Agent 的会话，以及提示所涉及的条目，每项一行，挑选时不调用模型。Claude Code 和 Codex 通过 hook 获得，其他 Agent 通过 `brief` 工具获得；`origin agents connect` 会把这些设置好。每一次召回都有记录，所以你能看到 Agent 拿到了什么、有没有用上。
 - **按相关度排序的全文检索**：覆盖会话和条目，支持中文子串检索（SQLite FTS5 trigram）。
 - **增量、幂等的采集**：只读新增字节；源文件被改写时作为新代次保存；透明读取 zstd 压缩的记录；多个进程同时同步也安全。
 - **CLI**：浏览时间线，查看任意条目或事件直到原文行，纠正条目，以及遗忘和恢复。

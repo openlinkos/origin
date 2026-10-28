@@ -17,6 +17,7 @@ origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 
 origin projects                                        Known project names
 origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
 origin mcp                                             Run the MCP server over stdio (adds the hub's answers when connected)
+origin agents    [connect | disconnect] [<agent>...] [--yes]   Register Origin, and its recall hooks, with the agents here
 origin ui        [--port 7079] [--no-open]             Browse and curate this store in your browser, on 127.0.0.1
 
 origin serve     [--host 127.0.0.1] [--port 7077]      Run this store as a personal hub (MCP over HTTP)
@@ -74,7 +75,7 @@ Sources:
 
 ## Recall
 
-`origin recall` shows what an agent would be handed in the current directory, or in `--cwd`: the brief of a new session, or, with `--prompt`, the entries a prompt matches. `--agent` shows it as that agent would get it, without the memories it loads itself. It records nothing. Claude Code's hooks run `origin recall --hook claude-code`, which reads the hook's event on standard input, records what it hands over, and prints it for the agent. `origin recalls` lists what agents were handed, newest first (`--all` also lists recalls that handed nothing over), and `origin show rcl_…` shows one, with the prompt it answered and the items the session went on to use. See [Recall](./recall.md).
+`origin recall` shows what an agent would be handed in the current directory, or in `--cwd`: the brief of a new session, or, with `--prompt`, the entries a prompt matches. `--agent` shows it as that agent would get it, without the memories it loads itself. It records nothing. `origin agents connect` sets up the hooks (see [Connect your agents](./connect-agents.md#connect-them-all-at-once)). Claude Code's and Codex's hooks run `origin recall --hook claude-code` or `--hook codex`, which reads the hook's event on standard input, records what it hands over, and prints it for the agent. `origin recalls` lists what agents were handed, newest first (`--all` also lists recalls that handed nothing over), and `origin show rcl_…` shows one, with the prompt it answered and the items the session went on to use. See [Recall](./recall.md).
 
 ## Correcting and forgetting
 

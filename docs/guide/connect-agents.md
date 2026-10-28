@@ -10,6 +10,22 @@ Every agent launches the same stdio server, `origin mcp`, which `npm install -g 
 | ZCode | ✅ | ✅ | Per ZCode's docs |
 | Grok Build | ✅ | ✅ | Registration |
 
+## Connect them all at once
+
+`origin agents` shows the agents installed on this machine and how each is connected. `origin agents connect` registers Origin's MCP server with each of them, and adds the [recall](./recall.md) hooks to Claude Code and Codex. It shows what it would change, and changes it only with `--yes`, backing up each file next to it first; it adds and removes only Origin's own entries, and `origin agents disconnect` removes them again. Name agents to connect only those, such as `origin agents connect codex`. Start a new session of each agent afterwards; Codex runs new hooks only once you trust them, with `/hooks`.
+
+```console
+$ origin agents connect
+origin agents connect would:
+  codex: register the MCP server in /home/dana/.codex/config.toml
+  codex: add the recall hooks (SessionStart, UserPromptSubmit) to /home/dana/.codex/hooks.json
+  cursor: register the MCP server in /home/dana/.cursor/mcp.json
+
+Run again with --yes to make these changes; each file is backed up next to it first.
+```
+
+The sections below show what it writes for each agent, to do it by hand.
+
 ## Claude Code
 
 ```bash
