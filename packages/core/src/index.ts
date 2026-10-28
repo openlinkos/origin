@@ -203,6 +203,7 @@ export {
   type RecallOccasion,
   type RecallPlan,
   type RecallRecord,
+  rebuildRecall,
   recallFacets,
   recallPrompt,
   recallScope,

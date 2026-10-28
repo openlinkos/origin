@@ -17,6 +17,8 @@ import {
   parseReplicaRecall,
   planRecall,
   type RecallInput,
+  type RecallRecord,
+  rebuildRecall,
   recallPrompt,
   recallScope,
   recallSession,
@@ -357,6 +359,25 @@ describe('a brief', () => {
     const got = refs(inRepo({ source: 'claude', sessionId: 's1' }));
     expect(got).toEqual([`cognition:${fixed.id}`]);
     expect(got.join(' ')).not.toContain(ended);
+  });
+
+  it('is rebuilt as it was handed over, less what was forgotten since', async () => {
+    await seed();
+    const pref = note('Approve releases only when the user asks', 'origin');
+    const fact = note('Releases publish with provenance', 'origin', 'knowledge', 'claude:s1-2');
+    const plan = planRecall(db, inRepo());
+    const id = recordRecall(db, plan);
+    const recall = getRecall(db, id) as RecallRecord;
+    const now = rebuildRecall(db, recall);
+    expect(now.text).toBe(recallText(plan, id));
+    expect(now.missing).toEqual([]);
+    expect(now.lines.get(pref)).toBe(`- ${pref} Approve releases only when the user asks`);
+    forget(db, fact, { reason: 'asked to', author: 'test' });
+    const after = rebuildRecall(db, recall);
+    expect(after.missing).toEqual([fact]);
+    expect(after.text).not.toContain(fact);
+    expect(after.text).not.toContain('Releases publish');
+    expect(after.text).toContain(pref);
   });
 
   it('keeps within its budget, header and headings included', async () => {

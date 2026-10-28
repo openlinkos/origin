@@ -626,6 +626,112 @@ export function recallText(plan: RecallPlan, id: string): string {
   return lines.join('\n');
 }
 
+/**
+ * The text a recorded recall handed over, rebuilt from what the store holds now: each item's line
+ * as planning writes it, from its entry or session as it is now, and a session's prompts and time
+ * as they were at the recall. An item forgotten or gone since is left out, its ref in `missing`;
+ * nothing hidden is ever shown.
+ */
+export function rebuildRecall(
+  db: Database,
+  recall: RecallRecord,
+): { text: string; lines: Map<string, string>; missing: string[] } {
+  const plan: RecallPlan = {
+    occasion: recall.occasion,
+    source: recall.source,
+    sessionId: recall.sessionId,
+    cwd: recall.cwd,
+    root: recall.cwd,
+    project: recall.project,
+    prompt: null,
+    at: recall.at,
+    budget: recall.budget,
+    tokens: recall.tokens,
+    items: [],
+  };
+  const entry = db.prepare(
+    `SELECT en.id, en.kind, en.text, en.project, en.author, en.created_at,
+       EXISTS (SELECT 1 FROM imported_entry i WHERE i.entry_id = en.id) AS imported,
+       (SELECT e.cwd FROM imported_entry i JOIN entry_source s ON s.entry_id = i.entry_id
+          JOIN event e ON e.id = s.event_id
+        WHERE i.entry_id = en.id AND e.kind = 'memory' LIMIT 1) AS home
+     FROM entry en
+     WHERE en.id = ? AND NOT EXISTS (SELECT 1 FROM forgotten_entry fe WHERE fe.entry_id = en.id)`,
+  );
+  const session = db.prepare(
+    `SELECT s.title, (SELECT MAX(e.ts) FROM event e
+         WHERE e.source = s.source AND e.session_id = s.session_id AND e.ts <= ? AND ${VISIBLE_EVENT}) AS at
+     FROM session s WHERE s.source = ? AND s.session_id = ?`,
+  );
+  const lines = new Map<string, string>();
+  const missing: string[] = [];
+  for (const item of recall.items) {
+    if (item.kind === 'entry') {
+      const r = entry.get(item.ref) as
+        | {
+            id: string;
+            kind: EntryKind;
+            text: string;
+            project: string | null;
+            author: string;
+            created_at: number;
+            imported: number;
+            home: string | null;
+          }
+        | undefined;
+      if (!r) {
+        missing.push(item.ref);
+        continue;
+      }
+      const c: Candidate = {
+        id: r.id,
+        kind: r.kind,
+        text: r.text,
+        project: r.project,
+        author: r.author,
+        createdAt: r.created_at,
+        imported: r.imported === 1,
+        home: r.home,
+      };
+      lines.set(item.ref, entryLine(c, item.layer, plan));
+      continue;
+    }
+    const at = item.ref.indexOf(':');
+    const source = item.ref.slice(0, at);
+    const id = item.ref.slice(at + 1);
+    const r = session.get(recall.at, source, id) as
+      | { title: string | null; at: number | null }
+      | undefined;
+    const prompts = r ? sessionPrompts(db, source, id).filter((p) => p.ts <= recall.at) : [];
+    const name = r?.title ?? prompts[0]?.prompt ?? null;
+    if (!r || r.at === null || !name) {
+      missing.push(item.ref);
+      continue;
+    }
+    const last = prompts.at(-1)?.prompt ?? null;
+    const tail =
+      last && last !== name && [...last].length >= 6
+        ? `; last prompt: ${cutTokens(last, SUMMARY_TOKENS / 2)}`
+        : '';
+    lines.set(
+      item.ref,
+      `- ${source} ${minute(r.at)} ${id}: ${cutTokens(name, SUMMARY_TOKENS)}${tail}`,
+    );
+  }
+  const shown = recall.items.filter((i) => lines.has(i.ref));
+  if (shown.length === 0) return { text: '', lines, missing };
+  const out = [header(plan, recall.id)];
+  let layer: RecallLayer | null = null;
+  for (const item of shown) {
+    if (item.layer !== layer) {
+      out.push('', HEADINGS[item.layer](plan));
+      layer = item.layer;
+    }
+    out.push(lines.get(item.ref) as string);
+  }
+  return { text: out.join('\n'), lines, missing };
+}
+
 /** Recall ids: `rcl_` and random hex, unique across stores. */
 export const RECALL_ID_RE = /^rcl_[0-9a-f]{12}$/;
 
