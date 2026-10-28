@@ -10,8 +10,10 @@ import {
   NAME_RE,
   OriginError,
   parseReplicaEntry,
+  parseReplicaRecall,
   parseTombstoneRecord,
   receiveEntry,
+  receiveRecall,
   receiveTombstone,
   remoteCursors,
   type SourceAdapter,
@@ -172,6 +174,15 @@ async function handle(
       sendJson(res, 200, { applied, pending: null });
       return;
     }
+    case '/v1/recalls': {
+      requireMethod(req, 'POST');
+      const { device, records } = await replicaBody(opts, req, caller.name, 'recalls');
+      const recalls = records.map(parseReplicaRecall);
+      checkOrigins(recalls, device);
+      for (const r of recalls) receiveRecall(opts.db, r);
+      sendJson(res, 200, { applied: recalls.length });
+      return;
+    }
     case '/v1/tombstones': {
       if (req.method === 'POST') {
         const { device, records } = await replicaBody(opts, req, caller.name, 'tombstones');
@@ -231,7 +242,7 @@ async function replicaBody(
   opts: HubOptions,
   req: http.IncomingMessage,
   token: string,
-  field: 'entries' | 'tombstones',
+  field: 'entries' | 'tombstones' | 'recalls',
 ): Promise<{ device: string; records: unknown[] }> {
   const body = await readJson(req);
   if (typeof body !== 'object' || body === null) throw new HttpError(400, 'Invalid body.');

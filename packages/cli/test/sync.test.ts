@@ -14,6 +14,7 @@ import {
   forget,
   getEntry,
   getEvent,
+  getRecall,
   getSetting,
   initStoreName,
   isEntryForgotten,
@@ -21,6 +22,8 @@ import {
   listEvents,
   localRawFiles,
   openDatabase,
+  planRecall,
+  recordRecall,
   remember,
   restore,
   setSetting,
@@ -30,7 +33,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HubConfig } from '../src/hub/config.js';
 import { createHubServer } from '../src/hub/server.js';
-import { lastHubSync, pushedKey, syncFailedKey, syncWithHub } from '../src/hub/sync.js';
+import { lastHubSync, pushedKey, recallsKey, syncFailedKey, syncWithHub } from '../src/hub/sync.js';
 
 const fixtures = fileURLToPath(
   new URL('../../adapters/test/fixtures/claude-code/', import.meta.url),
@@ -106,6 +109,37 @@ const changeCount = (db: Database) =>
   (db.prepare('SELECT COUNT(*) AS n FROM change_log').get() as { n: number }).n;
 
 describe('device to hub replication', () => {
+  it('sends the recalls made here, once, and keeps them while the hub is too old for them', async () => {
+    note(deviceDb, USER_EVENT, 'The user checks the repository status first.');
+    const first = recordRecall(
+      deviceDb,
+      planRecall(deviceDb, { occasion: 'start', source: 'claude-code', sessionId: 's1' }),
+    );
+    const second = recordRecall(
+      deviceDb,
+      planRecall(deviceDb, {
+        occasion: 'prompt',
+        source: 'claude-code',
+        sessionId: 's1',
+        prompt: 'repository status',
+      }),
+    );
+
+    // A hub from before recalls answers 404: they wait.
+    const old: typeof fetch = (input, init) =>
+      String(input).endsWith('/v1/recalls')
+        ? Promise.resolve(new Response(JSON.stringify({ error: 'Not found.' }), { status: 404 }))
+        : fetch(input, init);
+    expect(await sync(old)).toMatchObject({ recallsPushed: null });
+    expect(getSetting(deviceDb, recallsKey(hub))).toBeNull();
+    expect(getRecall(hubDb, first)).toBeNull();
+
+    expect(await sync()).toMatchObject({ recallsPushed: 2 });
+    expect(getRecall(hubDb, first)).toEqual(getRecall(deviceDb, first));
+    expect(getRecall(hubDb, second)).toEqual(getRecall(deviceDb, second));
+    expect(await sync()).toMatchObject({ recallsPushed: 0 });
+  });
+
   it('uploads what was written offline once the hub is back, once', async () => {
     const a = note(deviceDb, USER_EVENT, 'The user checks the repository status first.');
     const b = correct(deviceDb, a.id, {

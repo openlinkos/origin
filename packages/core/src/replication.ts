@@ -21,12 +21,21 @@ import {
 } from './forgetting.js';
 import { storeName } from './identity.js';
 import { isImportedEntry } from './memories.js';
+import {
+  getRecall,
+  insertRecall,
+  RECALL_ID_RE,
+  RECALL_OCCASIONS,
+  type RecallItemRecord,
+  type RecallOccasion,
+  type RecallRecord,
+} from './recall.js';
 import { NAME_RE } from './tokens.js';
 
 /**
  * Replication between a device and its hub (see docs/architecture.md#personal-hub). A device sends
- * the entries and tombstones (forgets and restores) it wrote, in the order of its change log; the
- * hub sends back only tombstones. Everything that arrives over the network is validated field by
+ * the entries and tombstones (forgets and restores) it wrote, in the order of its change log, and
+ * the recalls it made; the hub sends back only tombstones. Everything that arrives over the network is validated field by
  * field first.
  */
 
@@ -336,4 +345,80 @@ export function unpushedOnly(db: Database, pushedThrough: number): RuleThreeJudg
 /** Whether a version of this store should still be sent: forgotten entries never leave it. */
 export function shouldSendEntry(db: Database, id: string): boolean {
   return !isEntryForgotten(db, id);
+}
+
+/** Most items one recall may hand over (see LAYER_MAX in recall.ts, with room to grow). */
+const MAX_RECALL_ITEMS = 100;
+const RECALL_LAYERS = ['cognition', 'project', 'sessions', 'prompt'];
+
+function checkCount(value: unknown, what: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 1e6) {
+    invalid(what);
+  }
+  return value;
+}
+
+/** A recall as a device sent it (see docs/architecture.md#recall), or an OriginError. */
+export function parseReplicaRecall(value: unknown): RecallRecord {
+  if (!isRecord(value)) invalid('recall');
+  const id = value.id;
+  if (typeof id !== 'string' || !RECALL_ID_RE.test(id)) invalid('recall id');
+  const occasion = value.occasion;
+  if (!(RECALL_OCCASIONS as readonly unknown[]).includes(occasion)) invalid(`occasion of ${id}`);
+  const promptHash = checkOptionalString(value.promptHash, `prompt hash of ${id}`, 64);
+  if (promptHash !== null && !/^[0-9a-f]{32}$/.test(promptHash)) invalid(`prompt hash of ${id}`);
+  if (!Array.isArray(value.items) || value.items.length > MAX_RECALL_ITEMS)
+    invalid(`items of ${id}`);
+  const items = value.items.map((item: unknown, i: number): RecallItemRecord => {
+    const what = `item ${i + 1} of ${id}`;
+    if (!isRecord(item) || item.rank !== i + 1) invalid(what);
+    if (!RECALL_LAYERS.includes(item.layer as string)) invalid(what);
+    if (item.kind !== 'entry' && item.kind !== 'session') invalid(what);
+    const score = item.score ?? null;
+    if (score !== null && (typeof score !== 'number' || !Number.isFinite(score))) invalid(what);
+    return {
+      rank: i + 1,
+      layer: item.layer as RecallItemRecord['layer'],
+      kind: item.kind,
+      ref: checkString(item.ref, what, MAX_ID),
+      score,
+      tokens: checkCount(item.tokens, what),
+    };
+  });
+  return {
+    id,
+    at: checkTime(value.at, `time of ${id}`),
+    origin: checkStoreName(value.origin, `origin of ${id}`),
+    source: checkOptionalString(value.source, `agent of ${id}`, 200),
+    sessionId: checkOptionalString(value.sessionId, `session of ${id}`, MAX_ID),
+    occasion: occasion as RecallOccasion,
+    project: checkOptionalString(value.project, `project of ${id}`, MAX_ID),
+    cwd: checkOptionalString(value.cwd, `directory of ${id}`, 4096),
+    promptHash,
+    budget: checkCount(value.budget, `budget of ${id}`),
+    tokens: checkCount(value.tokens, `tokens of ${id}`),
+    items,
+  };
+}
+
+/**
+ * Store a recall a device made (on a hub). Idempotent by id; the same id with a different body is
+ * refused. A recall holds only ids, so it needs nothing else to be here first.
+ */
+export function receiveRecall(db: Database, r: RecallRecord): 'applied' | 'exists' {
+  return transaction(
+    db,
+    () => {
+      const existing = getRecall(db, r.id);
+      if (existing) {
+        if (JSON.stringify(existing) !== JSON.stringify(r)) {
+          throw new ConflictError(`Recall ${r.id} already exists with different content.`);
+        }
+        return 'exists';
+      }
+      insertRecall(db, r);
+      return 'applied';
+    },
+    { immediate: true },
+  );
 }

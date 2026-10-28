@@ -52,6 +52,8 @@ async function relay(opts: RelaySyncOptions): Promise<RelaySyncResult> {
     tombstonesPushed: 0,
     waiting: null,
     tombstonesApplied: 0,
+    // A relay keeps no recalls: its agents' hooks hand nothing over, and the hub records briefs.
+    recallsPushed: 0,
     sources: [],
     failed: [],
   };

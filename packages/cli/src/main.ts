@@ -276,11 +276,16 @@ async function syncAll(ctx: Ctx): Promise<void> {
 /** One line about a sync with the hub. */
 function describeHubSync(hub: HubConfig, r: HubSyncResult): string {
   const lines = [
-    `Hub ${hub.url} (as ${hub.device}): sent ${count(r.files, 'file')} (${fmtBytes(r.bytes)}, ${count(r.eventsAdded, 'new event')}), ${count(r.entriesPushed, 'entry', 'entries')}, and ${count(r.tombstonesPushed, 'tombstone')}; applied ${count(r.tombstonesApplied, 'tombstone')} from the hub.`,
+    `Hub ${hub.url} (as ${hub.device}): sent ${count(r.files, 'file')} (${fmtBytes(r.bytes)}, ${count(r.eventsAdded, 'new event')}), ${count(r.entriesPushed, 'entry', 'entries')}, ${count(r.tombstonesPushed, 'tombstone')}, and ${count(r.recallsPushed ?? 0, 'recall')}; applied ${count(r.tombstonesApplied, 'tombstone')} from the hub.`,
   ];
   if (r.waiting) {
     lines.push(
       `Entry ${r.waiting.id} waits until the hub has ${r.waiting.missing.join(', ')}; it is sent again on the next sync.`,
+    );
+  }
+  if (r.recallsPushed === null) {
+    lines.push(
+      'The hub does not keep recalls yet; they wait here, and are sent once it runs this version of Origin.',
     );
   }
   return lines.join('\n');

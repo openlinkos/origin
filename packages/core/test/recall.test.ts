@@ -12,6 +12,9 @@ import {
   listRecalls,
   matchTerms,
   openDatabase,
+  openMemoryDatabase,
+  ownRecalls,
+  parseReplicaRecall,
   planRecall,
   type RecallInput,
   recallPrompt,
@@ -19,6 +22,7 @@ import {
   recallSession,
   recallTerms,
   recallText,
+  receiveRecall,
   recordRecall,
   remember,
   type SourceAdapter,
@@ -507,5 +511,39 @@ describe('the scope of a recall', () => {
       root: null,
       project: 'acme',
     });
+  });
+});
+
+describe('replicating recalls', () => {
+  it('sends the recalls a store made, validated, and stores them once on the hub', async () => {
+    await seed();
+    note('Approve releases only when the user asks', 'origin');
+    const id = recordRecall(db, planRecall(db, inRepo()));
+    recordRecall(db, planRecall(db, inRepo()), { origin: 'desktop' }); // made for another device
+    const own = ownRecalls(db, 0);
+    expect(own.map((r) => r.recall.id)).toEqual([id]);
+    expect(ownRecalls(db, own[0]?.seq ?? 0)).toEqual([]);
+
+    const sent = JSON.parse(JSON.stringify(own[0]?.recall));
+    const hub = openMemoryDatabase();
+    try {
+      expect(receiveRecall(hub, parseReplicaRecall(sent))).toBe('applied');
+      expect(receiveRecall(hub, parseReplicaRecall(sent))).toBe('exists');
+      expect(getRecall(hub, id)).toEqual(getRecall(db, id));
+      const changed = { ...sent, tokens: sent.tokens + 1 };
+      expect(() => receiveRecall(hub, parseReplicaRecall(changed))).toThrow(/different content/);
+    } finally {
+      hub.close();
+    }
+    for (const bad of [
+      { ...sent, id: 'rcl_nothex000000' },
+      { ...sent, occasion: 'later' },
+      { ...sent, promptHash: 'abc' },
+      { ...sent, items: [{ ...sent.items[0], rank: 2 }] },
+      { ...sent, items: [{ ...sent.items[0], layer: 'secret' }] },
+      { ...sent, origin: 'Not A Name' },
+    ]) {
+      expect(() => parseReplicaRecall(bad)).toThrow(/Invalid/);
+    }
   });
 });

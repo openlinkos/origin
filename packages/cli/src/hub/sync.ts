@@ -8,6 +8,7 @@ import {
   localRawFiles,
   type OwnChange,
   ownChanges,
+  ownRecalls,
   parseTombstoneRecord,
   type ReplicaEntry,
   readMirrorLines,
@@ -23,6 +24,8 @@ import type { HubConfig } from './config.js';
 const CHUNK_BYTES = 1024 * 1024;
 /** Changes sent per request. */
 const CHANGES_PER_REQUEST = 100;
+/** Recalls sent per request. */
+const RECALLS_PER_REQUEST = 200;
 
 export interface HubSyncOptions {
   db: Database;
@@ -44,11 +47,15 @@ export interface HubSyncResult {
   waiting: { id: string; missing: string[] } | null;
   /** Tombstones from the hub that changed something here. */
   tombstonesApplied: number;
+  /** Recalls made here that the hub received; null if the hub does not keep recalls yet. */
+  recallsPushed: number | null;
 }
 
 /** Settings keys of a device's cursors for one hub. */
 export const pushedKey = (hub: HubConfig) => `hub.pushed:${hub.url}`;
 export const pulledKey = (hub: HubConfig) => `hub.pulled:${hub.url}`;
+/** How far a device has sent its recalls to a hub: a sequence number of its recall table. */
+export const recallsKey = (hub: HubConfig) => `hub.recalls:${hub.url}`;
 /** When the last sync with this hub finished, in milliseconds, for `origin ui` and `origin status`. */
 export const syncedKey = (hub: HubConfig) => `hub.synced:${hub.url}`;
 /** The last sync with this hub that failed: `{ at, error }`, as JSON. */
@@ -114,7 +121,7 @@ export async function recordHubSync<T>(
  * Sync this device with its hub (see docs/architecture.md#personal-hub): send the raw mirror bytes
  * the hub does not have yet, then the entries and tombstones written here after the push cursor,
  * then apply the hub's tombstones after the pull cursor (invariant 2, recorded forgetting, across
- * replicas). Each cursor is saved after every successful request, so an interrupted sync resumes
+ * replicas), then send the recalls made here after their cursor. Each cursor is saved after every successful request, so an interrupted sync resumes
  * where it stopped, and running it again is a no-op. When it finished, or why it failed, is recorded
  * (lastHubSync).
  */
@@ -129,10 +136,12 @@ export async function syncWithHub(opts: HubSyncOptions): Promise<HubSyncResult> 
       tombstonesPushed: 0,
       waiting: null,
       tombstonesApplied: 0,
+      recallsPushed: 0,
     };
     await pushMirrors(opts, call, result);
     await pushChanges(opts, call, result);
     await pullTombstones(opts, call, result);
+    await pushRecalls(opts, call, result);
     return result;
   });
 }
@@ -279,6 +288,32 @@ export async function pullTombstones(opts: HubSyncOptions, call: Call, result: H
       setSetting(opts.db, key, String(after));
     }
     if (page.more !== true) break;
+  }
+}
+
+/**
+ * Send the recalls made here (see docs/architecture.md#recall), oldest first. A hub from before
+ * recalls answers 404: they wait here, cursor and all, until it is upgraded.
+ */
+export async function pushRecalls(opts: HubSyncOptions, call: Call, result: HubSyncResult) {
+  const key = recallsKey(opts.hub);
+  let after = Number(getSetting(opts.db, key) ?? '0');
+  for (;;) {
+    const page = ownRecalls(opts.db, after, RECALLS_PER_REQUEST);
+    if (page.length === 0) break;
+    const reply = (await call(
+      'POST',
+      '/v1/recalls',
+      { device: opts.hub.device, recalls: page.map((p) => p.recall) },
+      [404],
+    )) as { applied?: unknown };
+    if (typeof reply.applied !== 'number') {
+      result.recallsPushed = null;
+      return;
+    }
+    result.recallsPushed = (result.recallsPushed ?? 0) + page.length;
+    after = page[page.length - 1]?.seq ?? after;
+    setSetting(opts.db, key, String(after));
   }
 }
 

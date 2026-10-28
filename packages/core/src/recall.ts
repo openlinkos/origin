@@ -652,37 +652,77 @@ export function recordRecall(
   } = {},
 ): string {
   const id = `rcl_${randomBytes(6).toString('hex')}`;
-  transaction(
-    db,
-    () => {
-      db.prepare(
-        `INSERT INTO recall (id, at, origin, source, session_id, occasion, project, cwd, prompt_hash,
-                             budget, tokens)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        id,
-        plan.at,
-        opts.origin ?? storeName(db),
-        plan.source,
-        plan.sessionId,
-        plan.occasion,
-        plan.project,
-        plan.cwd,
-        plan.prompt ? promptHash(plan.prompt) : null,
-        plan.budget,
-        plan.tokens,
-      );
-      const insert = db.prepare(
-        `INSERT INTO recall_item (recall_id, rank, layer, kind, ref, score, tokens)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      );
-      for (const item of plan.items) {
-        insert.run(id, item.rank, item.layer, item.kind, item.ref, item.score, item.tokens);
-      }
-    },
-    { immediate: true },
-  );
+  const record: RecallRecord = {
+    id,
+    at: plan.at,
+    origin: opts.origin ?? storeName(db),
+    source: plan.source,
+    sessionId: plan.sessionId,
+    occasion: plan.occasion,
+    project: plan.project,
+    cwd: plan.cwd,
+    promptHash: plan.prompt ? promptHash(plan.prompt) : null,
+    budget: plan.budget,
+    tokens: plan.tokens,
+    items: plan.items.map(({ rank, layer, kind, ref, score, tokens }) => ({
+      rank,
+      layer,
+      kind,
+      ref,
+      score,
+      tokens,
+    })),
+  };
+  transaction(db, () => insertRecall(db, record), { immediate: true });
   return id;
+}
+
+/** Insert a recall and its items. Must run inside a write transaction. */
+export function insertRecall(db: Database, r: RecallRecord): void {
+  db.prepare(
+    `INSERT INTO recall (id, at, origin, source, session_id, occasion, project, cwd, prompt_hash,
+                         budget, tokens)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    r.id,
+    r.at,
+    r.origin,
+    r.source,
+    r.sessionId,
+    r.occasion,
+    r.project,
+    r.cwd,
+    r.promptHash,
+    r.budget,
+    r.tokens,
+  );
+  const insert = db.prepare(
+    `INSERT INTO recall_item (recall_id, rank, layer, kind, ref, score, tokens)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const item of r.items) {
+    insert.run(r.id, item.rank, item.layer, item.kind, item.ref, item.score, item.tokens);
+  }
+}
+
+/**
+ * The recalls this store made, after a sequence number, oldest first: what a device sends its hub
+ * (see docs/architecture.md#replication-raw-mirrors-entries-and-tombstones-up-tombstones-down).
+ */
+export function ownRecalls(
+  db: Database,
+  after: number,
+  limit = 200,
+): Array<{ seq: number; recall: RecallRecord }> {
+  const rows = db
+    .prepare(
+      `SELECT seq, id, at, origin, source, session_id, occasion, project, cwd, prompt_hash, budget,
+              tokens
+       FROM recall WHERE seq > ? AND origin = ? ORDER BY seq LIMIT ?`,
+    )
+    .all(after, storeName(db), limit) as unknown as Array<RecallRow & { seq: number }>;
+  const recalls = withItems(db, rows);
+  return rows.map((r, i) => ({ seq: r.seq, recall: recalls[i] as RecallRecord }));
 }
 
 export interface RecallItemRecord {
