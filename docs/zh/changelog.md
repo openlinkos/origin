@@ -6,6 +6,13 @@ sourceHash: sha256-893580dc
 
 Origin 所有值得注意的改动都列在这里。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；1.0 之前，次版本可能改变存储格式或公开接口，它的说明会写明需要怎么做。五个包（`@openlinkos/origin` 以及 `@openlinkos/origin-core`、`-adapters`、`-mcp`、`-admin`）以同一个版本号一起发布。英文版更新日志（`CHANGELOG.md`）是 GitHub 发布说明的来源。
 
+## 未发布 {#unreleased}
+
+### 召回 {#recall}
+
+- 召回不经询问，把在 Agent 工作的地方有用的内容交给它：会话开始时，一份简报，包括用户的偏好、项目最新的决定和事实，以及这个项目最近与任意 Agent 的会话；每个提示，第一行与提示有足够罕见的共同词的条目。匹配基于词汇，不调用模型；一份简报不超过约 800 个 token，一个提示的匹配不超过 400 个；Agent 不会拿到它从自己的文件加载的记忆。Claude Code 通过它的 `SessionStart` 和 `UserPromptSubmit` hook 运行召回（`origin recall --hook claude-code`），指南的「召回」一页说明了如何设置。
+- 每一次召回都有记录，只记 id，从不记文本：`origin recalls` 列出召回，`origin show rcl_…` 显示一次召回，包括它回应的提示和本会话之后用上的项。只运行 `origin recall` 会预览 Agent 会拿到什么，不做任何记录。
+
 ## [0.3.0] - 2026-10-24 {#_0-3-0-2026-10-24}
 
 导入各 Agent 为自己保存的记忆，检索时略去已结束的条目，并在网站上说明版本与升级。

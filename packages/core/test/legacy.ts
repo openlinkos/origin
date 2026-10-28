@@ -72,6 +72,8 @@ export function downgradeToV1(file: string): void {
     db.exec('DROP INDEX IF EXISTS tombstone_target');
     db.exec('DROP INDEX IF EXISTS event_user_message');
     db.exec('DROP TABLE IF EXISTS imported_entry');
+    db.exec('DROP TABLE IF EXISTS recall_item');
+    db.exec('DROP TABLE IF EXISTS recall');
     db.exec("UPDATE session SET title = NULL WHERE source = 'claude-code'");
     db.exec('PRAGMA user_version = 0');
     const reference = legacyStore(':memory:');

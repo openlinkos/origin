@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-890133ff
+sourceHash: sha256-cc4b5ce7
 ---
 
 # 架构
@@ -22,6 +22,7 @@ sourceHash: sha256-890133ff
 - [遗忘](#forgetting)
 - [检索与时间线](#search-and-timeline)
 - [MCP server](#mcp-server)
+- [召回](#recall)
 - [个人中枢](#personal-hub)
 - [待解决的问题](#open-questions)
 - [相关工作](#prior-art)
@@ -66,6 +67,7 @@ Origin 区分三类持久条目。每个条目都带有自己的来源，并且�
 | **Raw**（原始镜像） | 原始记录文件的只追加镜像，或适配器从数据库写出的记录的只追加镜像，以 zstd 帧存储 | 来源、原始路径、代次、字节 / 行游标、尾部哈希（生成的来源存的是它的令牌）、已封存的帧 |
 | **Event**（事件） | 规范化后的对话事件：用户消息、助手消息、工具调用、工具结果；或者 Agent 保存的某个记忆文件的一个版本（见[原生记忆](#native-memories)） | id、来源、会话、时间戳、项目、cwd、git 分支、角色、类型、正文、原始定位 |
 | **Entry**（条目） | 一条持久的 `memory` / `knowledge` / `cognition` 陈述 | id（`ent_…`）、类型、正文、置信度、作者、项目、来源（事件 id + 引文）、supersedes、root（它的第一个版本）、valid_from / valid_to、created_at、origin（写入它的库）；状态（`active` / `superseded` / `forgotten`）由推导得出，从不存储；`imported`（这个版本是否派生自原生记忆）同样如此 |
+| **Recall**（召回） | Origin 在会话开始时或随提示，不经询问交给 Agent 的内容（见[召回](#recall)） | id（`rcl_…`）、时间、origin（进行召回的库）、Agent、会话、时机、项目和目录、提示的哈希、预算和 token 数；每一项的排名、层、条目或会话 id、分数和大小 |
 | **Tombstone**（遗忘记录） | 一次遗忘或一次恢复的记录 | id（`tmb_…`）、目标（遗忘的目标是条目或事件 id；恢复的目标是一次遗忘的 id）、原因、作者（已知时）、时间、origin（创建它的库）；对遗忘而言，还有它在每个库中覆盖的内容 |
 
 ## 数据流 {#data-flow}
@@ -77,7 +79,8 @@ agent session logs on disk ──scan──▶ Raw (append-only mirror)
                                   Event store (SQLite + FTS5) ◀── Entries · Tombstones
                                         │
  agents ◀── MCP (stdio): search · timeline · get · sources · remember · correct · forget
- people ◀── CLI `origin`: sync · status · timeline · search · show · entries · correct · forget · forgotten · restore
+ agents ◀── hooks: origin recall (session start · prompt): a brief, and the entries a prompt matches
+ people ◀── CLI `origin`: sync · status · timeline · search · show · entries · correct · forget · forgotten · restore · recall · recalls
  people ◀── admin UI (hub, /admin): overview · timeline · search · entries · remember · correct · forget · restore · tokens
  people ◀── origin ui (device, 127.0.0.1): overview · timeline · search · entries · remember · correct · forget · restore
 ```
@@ -173,6 +176,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 | `tombstone`, `forgotten_entry`, `excluded_event` | 遗忘与恢复，每条都有一个全局 id（`tmb_` 加随机十六进制，与 `ent_` id 相同）和它的 `origin`；以及本库中被隐藏的内容，每个被隐藏的条目和事件都记有一次覆盖它的、生效中的遗忘 |
 | `tombstone_effect` | 每次遗忘在本库中覆盖的内容，一个条目或事件可以被多次遗忘覆盖：按它的目标经规则得出、按它的中枢所列、按发送它的设备所报，或按规则 3（见[遗忘](#forgetting)） |
 | `tombstone_meta` | 每条遗忘记录的作者（已知时） |
+| `recall`, `recall_item` | 本库进行的每一次召回，以及它交出了什么，只记 id，从不记文本（见[召回](#recall)）；触发器拒绝更新和删除 |
 | `change_log` | 本库写入或收到的条目和遗忘记录的只追加序列（序号、类型、id、origin、时间），由触发器填写；触发器拒绝任何更新和删除。复制游标指向这个序列 |
 | `api_token` | 中枢访问令牌：名称（设备的令牌即设备名）和 SHA-256 哈希，从不保存令牌本身 |
 | `setting` | 少量键值状态，只属于各自的库，从不复制：库的名称和模式、设备的复制游标及其上次与中枢同步的时间、中继上每个来源文件的一个游标，以及中枢上管理密码的 scrypt 哈希和存放其已封存帧的存储桶（如果有） |
@@ -370,6 +374,35 @@ Claude Code、ZCode 和 Grok Build 都维护自己的记忆：由 Agent 原地�
 - **引导。** server 的 MCP `instructions` 会告诉 Agent 何时检索、何时记住（带理由的决定、稳定的事实、偏好），`forget` 需要明确的请求和用户给出的原因，只有用户能恢复被遗忘的内容，以及导入的条目对应某个 Agent 自己的记忆文件，所以文件之后的变化会取代在 Origin 中做的纠正。结果中的条目会说明自己是否为导入的（`imported`）。
 - **错误。** 无效输入、未知 id 和已遗忘的 id 会以工具错误的形式返回，并附带可读的说明。
 
+## 召回 {#recall}
+
+召回是 Origin 不经询问就交给 Agent 的内容：会话开始时的一份简报，以及与每个提示匹配的条目。Agent 通过它们的 hook 运行召回（`origin recall --hook <agent>`，见[召回](guide/recall.md)）。召回不调用任何模型，每一次都有记录。
+
+**范围。** 召回针对一个工作目录。它的项目是包含这个目录的 git 工作树；不在工作树中时，就是这个目录本身；项目名是它的最后一段，与归档中一致。从记忆文件导入的条目属于这个文件所对应的目录，会话属于它的工作目录，所以两个同名的检出能够区分开，主目录也不会把它下面的项目都算作自己的；通过 Origin 写下的条目属于它写明的项目。
+
+- 其他项目的记忆和知识从不交出。认知（用户的偏好、方法、目标和边界）在哪里都成立，但简报只包含本项目的认知和不属于任何项目的认知：某个项目的 Agent 记忆文件很少说明它在别处是否也成立，所以其他项目的认知只有在提示与它匹配时才会交出。
+- 只交出当前的条目：没有被取代、遗忘、结束，也不是尚未开始的。
+- Agent 不会拿到从它自己为本项目保存的记忆文件导入的条目，这些文件它自己会加载。
+
+**会话开始时**（新的、清空后的或压缩后的会话；已经有过简报的恢复会话不再给），一份简报：
+
+- 认知：先是本项目的，再是不属于任何项目的，从新到旧，最多 5 条；
+- 本项目的记忆和知识，从新到旧，最多 5 条；
+- 本项目最近 30 天内结束的、与任意 Agent 的会话（本会话除外），最多 3 个：Agent、时间、会话 id、标题或第一条提示，以及最后一条提示。
+
+**每个提示**，与它匹配的条目，最多 5 条。匹配是基于词汇的，结果确定：
+
+- **词。** CJK 之外的单词（字母、数字和 `_`；`linkos.io` 这样的名称既整体算一个词，也按各部分算），以及按平台（ICU）分词得到的 CJK 词；分词器不认识某个词而留下单字时，用相邻两字组成的词对代替，按一半计。停用词会去掉，项目自己的名字也会去掉。
+- **匹配什么。** 条目的第一行，它说明条目是关于什么的；正文几乎总能在某处匹配上提示。
+- **权重。** 一个词的权重是它在用户自己的话（归档中用户最近的 1,000 条提示）和条目第一行中的逆文档频率，所以用户一直在说的词权重很低。
+- **阈值。** 当条目含有的提示中的词，权重加起来超过最罕见的词的权重（两个罕见的词，或者几个常见的词），而且它的 BM25 分数至少是最佳匹配的 40% 时，条目才算匹配。本会话上一次简报之后已经交出的条目会被略去。
+
+**预算。** 每项一行：条目的 id 和第一行，或者会话的这些信息，截到约 40 个 token，上面有一行说明，告诉 Agent 用 `get` 加 id 获取其余内容，并且用户在本会话中说的话优先。一份简报最多占 800 个 token，一个提示的匹配最多 400 个，按每个 CJK 字符一个 token、其他字符每四个一个 token 估算；放不下的会被略去。
+
+**记录。** 每一次召回（包括什么都没匹配到的）都是 `recall` 中的一行，它的各项在 `recall_item` 中：一个 id（`rcl_…`）、时间、进行召回的库、Agent 及其会话、时机（`start` 或 `prompt`；`request` 留给自己请求简报的 Agent）、项目和目录、预算和用掉的 token，以及每一项的排名、层、类型（条目或会话）、id、分数和大小。召回不保存任何文本，提示只存哈希，这样遗忘隐藏的内容不会仍从记录中显示出来（不变量 2）：每一项是什么，在显示召回时才从库中读取，已遗忘的显示为已遗忘。两张表都是只追加的。`origin recalls` 列出召回，`origin show rcl_…` 显示一次召回，包括它回应的提示（会话中具有该哈希的用户消息，归档之后才能找到），以及每一项本会话之后是否用上了：它的 id 是否出现在该会话中 Agent 之后的工具调用或回复里。
+
+**Hook。** `origin recall` 只加载核心和适配器，以便快速启动，而且从不妨碍 Agent：出现任何故障时，它什么都不输出，在标准错误中说明原因，并以 0 退出；它最多等待 3 秒获取库的写锁。它只读取本设备的库，所以其他设备上写下的条目暂时不会被召回；中继不保存条目，不交出任何内容。
+
 ## 个人中枢 {#personal-hub}
 
 中枢就是一个普通的 Origin 库，只是额外运行了 `origin serve`。它是自托管、单租户的：一个人，以及这个人的设备和 Agent。中枢中没有任何部分依赖特定的托管服务商；发布的容器镜像 `ghcr.io/openlinkos/origin` 可以在任何地方运行它。
@@ -465,6 +498,7 @@ Claude Code、ZCode 和 Grok Build 都维护自己的记忆：由 Agent 原地�
 
 - **低成本的认知。** 如何在没有专门抽取流水线的情况下，构建并维护一个关于这个人的模型？目前由 Agent 在注意到某些东西时自行写入认知条目。这是否足够，仍是一个悬而未决的问题。
 - **与原生记忆互通。** Origin 单向导入 Claude Code、ZCode 和 Grok Build 的记忆（见[原生记忆](#native-memories)）。尚未设计的有：把条目写回 Agent 的记忆文件，以及导入 Codex 的记忆（启用后，它在 `~/.codex/memories/` 下自行合并的摘要）；Cursor 已不再在磁盘上保存记忆。
+- **召回的质量与范围。** 召回匹配的是词，所以会漏掉用别的说法或别的语言表达同一件事的条目，也仍会交出一些与提示只有常见词相同的条目（见[召回](#recall)）。如何根据召回记录和 Agent 之后用上了什么来评判召回的内容，还没有设计；在不拖慢 Agent 处理提示的前提下，从中枢召回其他设备写下的条目，也还没有设计。
 - **变更通知。** `origin mcp` 在 Agent 运行期间每分钟比较一次文件的大小和时间来查看新的记录行，并在 Agent 离开时再同步一次，所以只要设备上的 Agent 使用 Origin，就不需要定时任务。尚待解决的是：不使用 Origin 的 Agent 写下的行，以及 Agent 直接杀掉 server 之后写下的行，要等到下一个 Agent 或 `origin sync`；改为监听文件而不是每分钟查看可以缩短延迟，但文件监听在某些平台上并不可靠。
 - **中继与 Agent 的清理。** 中继不保留尚未发送的内容的副本。如果它的中枢无法连接的时间超过了某个 Agent 保留记录的时间，这些会话就会丢失。中继会在那之前发出警告（见[中继](#relays)），但无法阻止它发生：为面临删除的记录保留副本尚未设计。目前只知道 Claude Code 的保留期限，而且只读取它的用户设置，不读取优先级更高的托管设置；其他 Agent 只在一周没有同步之后才会收到警告。
 - **用过时的版本恢复。** 设备按它持有的条目版本判断规则 3。当另一个库在中枢上纠正了设备的某个条目时，一次恢复可能让设备继续隐藏这个条目，而中枢显示它，直到之后又有遗忘或恢复涉及它。把条目下发给设备，或者把中枢的判断与遗忘覆盖的内容分开发送，可以解决这个问题；两者都尚未设计。

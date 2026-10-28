@@ -18,6 +18,7 @@ This document describes Origin's current design: the problem it targets, the dat
 - [Forgetting](#forgetting)
 - [Search and timeline](#search-and-timeline)
 - [MCP server](#mcp-server)
+- [Recall](#recall)
 - [Personal hub](#personal-hub)
 - [Open questions](#open-questions)
 - [Prior art](#prior-art)
@@ -62,6 +63,7 @@ Origin distinguishes three kinds of durable entries. Every entry carries its sou
 | **Raw** | Append-only mirror of an original log file, or of the records an adapter writes out of a database, stored in zstd frames | source, original path, generation, byte/line cursor, tail hash (for a generated source, its token), sealed frames |
 | **Event** | A normalized conversation event: user message, assistant message, tool call, tool result; or a version of a memory file an agent keeps (see [Native memories](#native-memories)) | id, source, session, timestamp, project, cwd, git branch, role, kind, text, raw locator |
 | **Entry** | A durable `memory` / `knowledge` / `cognition` statement | id (`ent_…`), kind, text, confidence, author, project, sources (event ids + quotes), supersedes, root (its first version), valid_from / valid_to, created_at, origin (the store that wrote it); status (`active` / `superseded` / `forgotten`) is derived, never stored, and so is `imported`, whether the version was derived from a native memory |
+| **Recall** | What Origin handed an agent unasked, when a session started or with a prompt (see [Recall](#recall)) | id (`rcl_…`), time, origin (the store that made it), agent, session, occasion, project and directory, a hash of the prompt, budget and tokens; for each item its rank, layer, entry or session id, score, and size |
 | **Tombstone** | Record of a forget or a restore | id (`tmb_…`), target (an entry or event id for a forget; a forget's id for a restore), reason, author (when known), time, origin (the store that created it); for a forget, what it covers on each store |
 
 ## Data flow
@@ -73,7 +75,8 @@ agent session logs on disk ──scan──▶ Raw (append-only mirror)
                                   Event store (SQLite + FTS5) ◀── Entries · Tombstones
                                         │
  agents ◀── MCP (stdio): search · timeline · get · sources · remember · correct · forget
- people ◀── CLI `origin`: sync · status · timeline · search · show · entries · correct · forget · forgotten · restore
+ agents ◀── hooks: origin recall (session start · prompt): a brief, and the entries a prompt matches
+ people ◀── CLI `origin`: sync · status · timeline · search · show · entries · correct · forget · forgotten · restore · recall · recalls
  people ◀── admin UI (hub, /admin): overview · timeline · search · entries · remember · correct · forget · restore · tokens
  people ◀── origin ui (device, 127.0.0.1): overview · timeline · search · entries · remember · correct · forget · restore
 ```
@@ -169,6 +172,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 | `tombstone`, `forgotten_entry`, `excluded_event` | Forgets and restores, each with a global id (`tmb_` and random hex, like `ent_` ids) and its `origin`; and what is hidden on this store, each hidden entry and event with one forget in effect that covers it |
 | `tombstone_effect` | What each forget covers on this store, several forgets per item: by the rules from its target, as its hub listed it, as a device reported it, or by rule 3 (see [Forgetting](#forgetting)) |
 | `tombstone_meta` | The author of each tombstone, when known |
+| `recall`, `recall_item` | Each recall this store made and what it handed over, by id, never text (see [Recall](#recall)); triggers reject updates and deletes |
 | `change_log` | Append-only sequence of the entries and tombstones this store has written or received (sequence number, kind, id, origin, time), filled by triggers; triggers reject updates and deletes. Replication cursors point into it |
 | `api_token` | Hub access tokens: name (for a device, the device's name) and SHA-256 hash, never the token itself |
 | `setting` | Small key-value state, local to each store and never replicated: the store's name and mode, a device's replication cursors and when it last synced with its hub, on a relay one cursor per source file, and on a hub the scrypt hash of the admin password and the bucket that holds its sealed frames, if any |
@@ -366,6 +370,35 @@ The timeline lists sessions by time, or the events of one session in order (tool
 - **Guidance.** The server's MCP `instructions` tell agents when to search, when to remember (decisions with reasons, stable facts, preferences), that `forget` needs an explicit request and the user's reason, that only the user can restore what was forgotten, and that an imported entry mirrors an agent's own memory file, so a later change of the file supersedes a correction made in Origin. Entries in results say whether they are `imported`.
 - **Errors.** Invalid input, unknown ids, and forgotten ids come back as tool errors with a readable message.
 
+## Recall
+
+Recall is what Origin hands an agent without being asked: a short brief when a session starts, and the entries that match each prompt. Agents run it from their hooks (`origin recall --hook <agent>`, see [Recall](guide/recall.md)). No model is called, and every recall is recorded.
+
+**Scope.** A recall is made for a working directory. Its project is the git work tree that holds the directory, or, outside a work tree, the directory itself; the project's name is its last segment, as in the archive. An entry imported from a memory file belongs to the directory the file was kept for, and a session to its working directory, so two checkouts with the same name are told apart and a home directory does not take in the projects below it; an entry written through Origin belongs to the project it names.
+
+- Memory and knowledge of another project are never handed over. Cognition (the user's preferences, methods, goals, and boundaries) holds everywhere, but a brief only has this project's and that of no project: an agent's memory file of one project rarely says whether it holds elsewhere, so cognition of other projects comes only when a prompt matches it.
+- Only current entries are handed over: not superseded, forgotten, ended, or yet to start.
+- An agent is not handed the entries imported from its own memory files of this project, which it loads itself.
+
+**At the start of a session** (a new, cleared, or compacted one; a resumed session that already had a brief gets none), a brief:
+
+- cognition: this project's, then that of no project, newest first, at most 5;
+- this project's memory and knowledge, newest first, at most 5;
+- this project's latest sessions with any agent, other than this one, that ended in the last 30 days, at most 3: agent, time, session id, title or first prompt, and last prompt.
+
+**With each prompt**, the entries that match it, at most 5. Matching is lexical and deterministic:
+
+- **Terms.** Words outside CJK (letters, digits, and `_`; a name such as `linkos.io` counts whole as well as in parts), and CJK words as the platform (ICU) segments them; where the segmenter knows no word and leaves single letters, pairs of adjacent letters stand in, and count half. Stop words are dropped, and so is the project's own name.
+- **What is matched.** An entry's first line, which says what it is about; its body would match most prompts somewhere.
+- **Weights.** A term weighs its inverse document frequency over the user's own words, their latest 1,000 prompts in the archive, and the entries' first lines, so what the user says all the time weighs little.
+- **Threshold.** An entry matches when the weights of the prompt's terms it holds add up to more than the weight of the rarest term (two rare terms, or several common ones), and its BM25 score is at least 40% of the best match's. Entries handed to the session since its last brief are left out.
+
+**Budget.** One line per item: an entry's id and its first line, or a session's, cut to about 40 tokens, under a header that tells the agent to `get` an id for the rest and that the user's words in the session come first. A brief takes at most 800 tokens and a prompt's matches 400, estimated at one token per CJK character and one per four other characters; what does not fit is left out.
+
+**Records.** Every recall, one that matched nothing included, is a row of `recall`, with its items in `recall_item`: an id (`rcl_…`), the time, the store that made it, the agent and its session, the occasion (`start` or `prompt`; `request` is kept for agents that ask for a brief themselves), the project and directory, the budget and the tokens used, and for each item its rank, layer, kind (entry or session), id, score, and size. A recall keeps no text, the prompt only as a hash, so that a forget hides nothing a record could still show (invariant 2): what an item was is read from the store when the recall is shown, and a forgotten one shows as forgotten. Both tables are append-only. `origin recalls` lists recalls and `origin show rcl_…` shows one, with the prompt it answered (the session's user message with that hash, once archived) and, for each item, whether the session went on to use it: its id in a later tool call or reply of the agent in that session.
+
+**Hooks.** `origin recall` loads only the core and the adapters, so that it starts quickly, and never stands in the agent's way: on any failure it prints nothing, says why on standard error, and exits 0; it waits at most 3 seconds for the store's write lock. It reads this device's store only, so entries written on other devices are not recalled yet; a relay, which keeps no entries, hands nothing over.
+
 ## Personal hub
 
 A hub is an ordinary Origin store that also runs `origin serve`. It is self-hosted and single-tenant: one person, their devices, their agents. Nothing in the hub is specific to any hosting provider; the published container image `ghcr.io/openlinkos/origin` runs it anywhere.
@@ -461,6 +494,7 @@ The hub can serve a web interface for its owner. It is off by default, and it is
 
 - **Cognition at low cost.** How do we build and maintain a model of the person without a dedicated extraction pipeline? For now, agents write cognition entries themselves when they notice something. Whether that is enough is still an open question.
 - **Native memory interop.** Origin imports the memories of Claude Code, ZCode, and Grok Build, one way (see [Native memories](#native-memories)). Not designed yet: writing entries back into agents' memory files, and importing Codex's memories (the summaries it merges under `~/.codex/memories/` when they are enabled); Cursor no longer keeps memories on disk.
+- **Recall quality and reach.** Recall matches words, so it misses an entry that says the same thing in other words or another language, and still hands over some that share only common words with a prompt (see [Recall](#recall)). How to judge what it hands over, from its records and what agents went on to use, is not designed yet; nor is recalling entries other devices wrote, from the hub, without slowing an agent's prompts.
 - **Change notification.** `origin mcp` looks for new log lines every minute while an agent runs, comparing file sizes and times, and syncs once more when the agent leaves, so a device needs no scheduled task while its agents use Origin. What remains: lines written by agents that do not use Origin, or after an agent that kills its server, wait for the next agent or `origin sync`; and watching files rather than looking every minute would cut the delay, but file watching is unreliable on some platforms.
 - **Relays and agents' cleanup.** A relay keeps no copy of what it has not sent yet. If its hub stays unreachable for longer than an agent keeps its logs, those sessions are lost. A relay warns before that happens (see [Relays](#relays)), but cannot prevent it: keeping a copy of the logs at risk is not designed yet. Only Claude Code's retention is known, and only from its user settings, not from managed settings, which take precedence; other agents get a warning only after a week without a sync.
 - **Restoring with stale versions.** A device decides rule 3 with the versions of an entry it holds. When another store has corrected one of its entries on the hub, a restore can leave the device hiding that entry while the hub shows it, until a later forget or restore concerns it again. Sending entries down, or the hub's decisions separately from what a forget covers, would close this; neither is designed.

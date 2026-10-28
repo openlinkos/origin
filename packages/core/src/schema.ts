@@ -40,6 +40,10 @@
  *   forgotten_entry and excluded_event when the database is opened (BACKFILL_EFFECTS).
  * - change_log: append-only sequence of the entries and tombstones this store has received or
  *   written, filled by triggers; replication cursors point into it.
+ * - recall / recall_item: each time this store handed an agent entries or sessions unasked (see
+ *   recall.ts), and what it handed, by id, with each item's layer, score, and size. Only ids and
+ *   a hash of the prompt, never text, so that a forget hides nothing a recall could still show.
+ *   Append-only: triggers reject updates and deletes.
  * - api_token: hub access tokens (name and SHA-256 hash; the token itself is never stored).
  * - setting: small key-value state, local to this store and never replicated: the store's name,
  *   a device's replication cursors, or the scrypt hash of the hub's admin password.
@@ -300,6 +304,46 @@ CREATE TRIGGER IF NOT EXISTS change_log_no_update BEFORE UPDATE ON change_log BE
 END;
 CREATE TRIGGER IF NOT EXISTS change_log_no_delete BEFORE DELETE ON change_log BEGIN
   SELECT RAISE(ABORT, 'change_log is append-only');
+END;
+
+CREATE TABLE IF NOT EXISTS recall (
+  seq         INTEGER PRIMARY KEY,
+  id          TEXT    NOT NULL UNIQUE,
+  at          INTEGER NOT NULL,
+  origin      TEXT    NOT NULL,
+  source      TEXT,
+  session_id  TEXT,
+  occasion    TEXT    NOT NULL CHECK (occasion IN ('start', 'prompt', 'request')),
+  project     TEXT,
+  cwd         TEXT,
+  prompt_hash TEXT,
+  budget      INTEGER NOT NULL,
+  tokens      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS recall_at      ON recall (at);
+CREATE INDEX IF NOT EXISTS recall_session ON recall (source, session_id, seq);
+CREATE TABLE IF NOT EXISTS recall_item (
+  recall_id TEXT    NOT NULL REFERENCES recall(id),
+  rank      INTEGER NOT NULL,
+  layer     TEXT    NOT NULL CHECK (layer IN ('cognition', 'project', 'sessions', 'prompt')),
+  kind      TEXT    NOT NULL CHECK (kind IN ('entry', 'session')),
+  ref       TEXT    NOT NULL,
+  score     REAL,
+  tokens    INTEGER NOT NULL,
+  PRIMARY KEY (recall_id, rank)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS recall_item_ref ON recall_item (ref);
+CREATE TRIGGER IF NOT EXISTS recall_no_update BEFORE UPDATE ON recall BEGIN
+  SELECT RAISE(ABORT, 'recall is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS recall_no_delete BEFORE DELETE ON recall BEGIN
+  SELECT RAISE(ABORT, 'recall is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS recall_item_no_update BEFORE UPDATE ON recall_item BEGIN
+  SELECT RAISE(ABORT, 'recall_item is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS recall_item_no_delete BEFORE DELETE ON recall_item BEGIN
+  SELECT RAISE(ABORT, 'recall_item is append-only');
 END;
 
 CREATE TABLE IF NOT EXISTS api_token (

@@ -63,7 +63,7 @@ Grok merges the MCP servers in `~/.claude.json` by default, so the Claude Code r
 | `correct` | Replace an entry with a corrected version |
 | `forget` | Hide an entry or event on every store, with your reason; agents only use it when you ask, and only you can restore it |
 
-The server tells agents how to use these tools, so you can simply ask questions in plain language. It syncs new session lines before answering, so an agent can even cite what you said a minute ago. While an agent runs, Origin also picks up new lines every minute in the background, and once more when the agent exits. The tools are specified in [Architecture](../architecture.md#mcp-server).
+The server tells agents how to use these tools, so you can simply ask questions in plain language. It syncs new session lines before answering, so an agent can even cite what you said a minute ago. While an agent runs, Origin also picks up new lines every minute in the background, and once more when the agent exits. The tools are specified in [Architecture](../architecture.md#mcp-server). With Claude Code, Origin can also hand the agent what matters at the start of each session and with each prompt: see [Recall](./recall.md).
 
 ## Using a personal hub
 

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-9f31c837
+sourceHash: sha256-402d4fe6
 ---
 
 # 接入 Agent
@@ -67,7 +67,7 @@ Grok 默认合并 `~/.claude.json` 中的 MCP server，所以完成上面的 Cla
 | `correct` | 用纠正后的版本替换条目 |
 | `forget` | 在每个库中隐藏条目或事件，并附上你的原因；只有你明确要求时 Agent 才会使用，也只有你能恢复 |
 
-server 会告诉 Agent 如何使用这些工具，你只需用自然语言提问。它在回答前会同步新的会话记录，所以 Agent 甚至能引用你一分钟前说的话。Agent 运行期间，Origin 还会在后台每分钟收取一次新的记录行，并在 Agent 退出时再收取一次。工具的完整说明见[架构](../architecture.md#mcp-server)。
+server 会告诉 Agent 如何使用这些工具，你只需用自然语言提问。它在回答前会同步新的会话记录，所以 Agent 甚至能引用你一分钟前说的话。Agent 运行期间，Origin 还会在后台每分钟收取一次新的记录行，并在 Agent 退出时再收取一次。工具的完整说明见[架构](../architecture.md#mcp-server)。使用 Claude Code 时，Origin 还能在每个会话开始时和每个提示时，把有用的内容交给 Agent：见[召回](./recall.md)。
 
 ## 使用个人中枢 {#using-a-personal-hub}
 

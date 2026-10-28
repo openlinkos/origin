@@ -6,12 +6,14 @@ origin status                                          Per-source counts, entrie
 origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
 origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
 origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
-origin show      <id>                                  Show an entry or an event, with its original source
+origin show      <id>                                  Show an entry, an event (with its original source), or a recall
 origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
 origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
 origin forget    <id> --reason <text> [--yes]          Hide an entry or event on every store, as a record (needs --yes)
 origin forgotten [--limit 50]                          Forgets and restores, newest first, with their reasons
 origin restore   <tombstone-id> --reason <text> [--yes]  Bring back what a forget hid (needs --yes)
+origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   What an agent would be handed there; --hook <agent> answers its hooks
+origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   What agents were handed, newest first
 origin projects                                        Known project names
 origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
 origin mcp                                             Run the MCP server over stdio (adds the hub's answers when connected)
@@ -32,7 +34,7 @@ origin push                                            Same as origin sync (kept
 - **Source ids** are `claude-code`, `codex`, `cursor`, `grok`, and `zcode`.
 - **Entry kinds** are `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries).
 - **Entries** listed and found are the current ones. Superseded versions, and entries whose validity has ended (such as an imported memory whose file was deleted), appear with `origin entries --history` and in `origin show`. Entries imported from the memory files agents keep for themselves are marked as imported.
-- **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, and `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting and restoring leave.
+- **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting and restoring leave, and `rcl_7d2e9a0b1c3f` for recalls.
 
 ## Searching
 
@@ -69,6 +71,10 @@ Sources:
       “not add migrations yet”
       ↳ claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
 ```
+
+## Recall
+
+`origin recall` shows what an agent would be handed in the current directory, or in `--cwd`: the brief of a new session, or, with `--prompt`, the entries a prompt matches. `--agent` shows it as that agent would get it, without the memories it loads itself. It records nothing. Claude Code's hooks run `origin recall --hook claude-code`, which reads the hook's event on standard input, records what it hands over, and prints it for the agent. `origin recalls` lists what agents were handed, newest first (`--all` also lists recalls that handed nothing over), and `origin show rcl_…` shows one, with the prompt it answered and the items the session went on to use. See [Recall](./recall.md).
 
 ## Correcting and forgetting
 

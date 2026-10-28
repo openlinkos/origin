@@ -2,6 +2,13 @@
 
 All notable changes to Origin are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the store format or a public interface, and its notes say what to do. The five packages (`@openlinkos/origin` and `@openlinkos/origin-core`, `-adapters`, `-mcp`, `-admin`) are released together under one version.
 
+## [Unreleased]
+
+### Recall
+
+- Recall hands an agent what matters where it works, without being asked: when a session starts, a brief of the user's preferences, the project's latest decisions and facts, and its latest sessions with any agent; with each prompt, the entries whose first line shares rare enough words with it. Matching is lexical and calls no model, a brief stays within about 800 tokens and a prompt's matches within 400, and an agent is not handed the memories it loads from its own files. Claude Code runs it from its `SessionStart` and `UserPromptSubmit` hooks (`origin recall --hook claude-code`); the Recall page of the guide shows how to set them up.
+- Every recall is recorded, by id and never by text: `origin recalls` lists them, and `origin show rcl_…` shows one, with the prompt it answered and the items the session went on to use. `origin recall` alone previews what an agent would be handed, and records nothing.
+
 ## [0.3.0] - 2026-10-24
 
 Imports the memories your agents keep for themselves, leaves ended entries out of search, and documents versions and upgrades on the site.
@@ -99,6 +106,7 @@ The first release.
 - `origin backup <dir>` copies a store consistently while agents keep writing.
 - Requires Node.js 22.16 or later.
 
+[Unreleased]: https://github.com/openlinkos/origin/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/openlinkos/origin/releases/tag/v0.3.0
 [0.2.0]: https://github.com/openlinkos/origin/releases/tag/v0.2.0
 [0.1.0]: https://github.com/openlinkos/origin/releases/tag/v0.1.0
