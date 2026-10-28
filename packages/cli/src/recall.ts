@@ -12,6 +12,7 @@ import {
   openDatabase,
   originHome,
   planRecall,
+  promptTitle,
   type RecallInput,
   type RecallPlan,
   recallScope,
@@ -64,7 +65,9 @@ export function hookInput(db: Database, agent: HookAgent, event: HookEvent): Rec
     if (event.source === 'resume' && sessionId && hasRecalled(db, agent, sessionId)) return null;
     return { occasion: 'start', ...scope };
   }
-  if (event.hook_event_name === 'UserPromptSubmit' && event.prompt?.trim()) {
+  // Only what the user typed: not what an agent hands in as a prompt, such as a background task's
+  // notice wrapped in tags, which the archive does not take for a prompt either (see promptTitle).
+  if (event.hook_event_name === 'UserPromptSubmit' && event.prompt && promptTitle(event.prompt)) {
     return { occasion: 'prompt', prompt: event.prompt, ...scope };
   }
   return null;

@@ -65,6 +65,9 @@ describe('recall hooks', () => {
       sessionId: 'abc',
     });
     expect(hookInput(db, 'claude-code', { ...prompt, prompt: '  ' })).toBeNull();
+    // A notice an agent hands in as a prompt is not the user's.
+    const notice = '<task-notification>\n<status>completed</status>\n</task-notification>';
+    expect(hookInput(db, 'claude-code', { ...prompt, prompt: notice })).toBeNull();
     expect(hookInput(db, 'claude-code', { ...prompt, hook_event_name: 'Stop' })).toBeNull();
     expect(hookInput(db, 'claude-code', { ...start, cwd: undefined })).toBeNull();
   });

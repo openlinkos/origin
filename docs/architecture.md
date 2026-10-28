@@ -387,7 +387,7 @@ Recall is what Origin hands an agent without being asked: a short brief when a s
 - this project's memory and knowledge, newest first, at most 5;
 - this project's latest sessions with any agent, other than this one, that ended in the last 30 days, at most 3: agent, time, session id, title or first prompt, and last prompt.
 
-**With each prompt**, the entries that match it, at most 5. Matching is lexical and deterministic:
+**With each prompt** the user typed, the entries that match it, at most 5; what an agent hands in as a prompt, such as a background task's notice wrapped in tags, gets nothing, as it is no prompt in the archive either (see [Session names](#search-and-timeline)). Matching is lexical and deterministic:
 
 - **Terms.** Words outside CJK (letters, digits, and `_`; a name such as `linkos.io` counts whole as well as in parts), and CJK words as the platform (ICU) segments them; where the segmenter knows no word and leaves single letters, pairs of adjacent letters stand in, and count half. Stop words are dropped, and so is the project's own name.
 - **What is matched.** An entry's first line, which says what it is about; its body would match most prompts somewhere.
