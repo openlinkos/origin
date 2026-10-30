@@ -1,6 +1,6 @@
 {
   "name": "@openlinkos/origin-admin",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Origin admin UI: a server-rendered web interface for the owner of a self-hosted Origin hub, and for a device's own store with origin ui.",
   "keywords": [
     "origin",
@@ -39,7 +39,7 @@
     "@openlinkos/origin-core": "workspace:*"
   },
   "devDependencies": {
-    "@openlinkos/ui": "0.6.0"
+    "@openlinkos/ui": "0.6.1"
   },
   "engines": {
     "node": ">=22.16"

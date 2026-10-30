@@ -1,6 +1,6 @@
 {
   "name": "@openlinkos/origin-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Origin MCP server (stdio): search, timeline, sources, and remember/correct/forget for any MCP-capable agent.",
   "keywords": [
     "origin",

@@ -11,7 +11,7 @@
 
 各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：已支持 Claude Code、Codex、Cursor、Grok Build 与 ZCode。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。如果你在多台机器上工作，或者使用云端 Agent，可以用自托管的**个人中枢**把它们接入同一份记忆。
 
-> **状态：早期版本（0.3）。** Claude Code、Codex、Cursor、Grok Build 与 ZCode 会话的采集，Claude Code、ZCode 与 Grok Build 自身记忆的导入，MCP server、CLI、`origin ui`，以及个人中枢（含管理界面、中继和存储桶）已经端到端可用。1.0 之前，次版本可能改变存储格式；库会就地升级，[升级](https://origin.openlinkos.com/zh/guide/upgrading)和[更新日志](https://origin.openlinkos.com/zh/changelog)会说明需要怎么做。
+> **状态：早期版本（0.4）。** Claude Code、Codex、Cursor、Grok Build 与 ZCode 会话的采集，Claude Code、ZCode 与 Grok Build 自身记忆的导入，会话开始时和每个提示的召回，MCP server、CLI、`origin ui`，以及个人中枢（含管理界面、中继和存储桶）已经端到端可用。1.0 之前，次版本可能改变存储格式；库会就地升级，[升级](https://origin.openlinkos.com/zh/guide/upgrading)和[更新日志](https://origin.openlinkos.com/zh/changelog)会说明需要怎么做。
 
 ## 为什么
 

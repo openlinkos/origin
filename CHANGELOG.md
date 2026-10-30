@@ -2,7 +2,11 @@
 
 All notable changes to Origin are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the store format or a public interface, and its notes say what to do. The five packages (`@openlinkos/origin` and `@openlinkos/origin-core`, `-adapters`, `-mcp`, `-admin`) are released together under one version.
 
-## [Unreleased]
+## [0.4.0] - 2026-10-30
+
+Hands your agents what matters without being asked, connects the agents on a machine with one command, and redesigns the admin UI as a workbench that adapts to every window.
+
+**Upgrading.** The store format stays at version 4; the first time this version opens a store, it adds the tables of recalls. Upgrade the hub before its devices: a hub of 0.3 refuses the recalls a device sends, and they wait on the device until the hub is upgraded. Agents that use Origin's MCP server see the new `brief` tool once they restart.
 
 ### Recall
 
@@ -15,12 +19,13 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 
 ### Admin UI
 
-- The admin UI, on a hub and with `origin ui`, is laid out as a workbench: a sidebar with counts, a bar at the top with breadcrumbs, search, and on a device a way to its hub, and denser pages, in version 0.6.0 of the OpenLinkOS design system.
+- The admin UI, on a hub and with `origin ui`, is laid out as a workbench: a sidebar with counts, a bar at the top with breadcrumbs, search, and on a device a way to its hub, and denser pages, in version 0.6.1 of the OpenLinkOS design system.
 - It adapts to the window instead of squeezing pages. Between 860 and 1200 pixels the sidebar is a column of icons; narrower, it opens from a menu button. A list's filters, a session's turns, and a page's details fold into panes that open from a button, or below the content, rather than disappearing; the filters that are on show above a list as tags that remove them; wide tables become rows that name each value; and chart labels keep their size at every width. The theme, the language, and signing out moved into a Preferences menu at the foot of the sidebar.
 - The overview is a dashboard: figures with the last 30 days under each, events per day by agent, how recalls went by occasion, recent sessions, active projects, the agents, and the state of the store.
 - Sessions, entries, and recalls are lists with filters on the left, each with how many it would leave, and time ranges above; sessions and recalls have a histogram of the last 30 days by agent, and sessions can be sorted by latest activity, events, or length. Links that filtered the timeline by `source` still work.
 - A session's page is a trace: an outline of its turns with their tool calls, failures, recalls, and durations, which can be narrowed to the turns with recalls or with failures; the turn shown opens into its steps, placed in time, and is shown in full beside the outline. The index of days and the expanded view are gone.
 - A recall's page shows the text the agent was handed, rebuilt from the store as it is now, how its budget was spent, and the other recalls of its session.
+- A device's page lists its files 50 at a time, the most recently updated first, by file name with the folder under it, instead of all at once.
 
 ## [0.3.0] - 2026-10-24
 

@@ -11,7 +11,7 @@ English | [简体中文](README.zh-CN.md)
 
 Origin archives the sessions your AI agents already write to disk into a single local store. Claude Code, Codex, Cursor, Grok Build, and ZCode are supported. Through one [MCP](https://modelcontextprotocol.io) server, it gives every agent the same memory. Whichever tool you open can look up what you decided last week and why, trace it to the exact original line, and save what it learns for next time. If you work on several machines or with cloud agents, a self-hosted **personal hub** brings them all into the same memory.
 
-> **Status: early (0.3).** Ingestion of Claude Code, Codex, Cursor, Grok Build, and ZCode sessions, the import of the memories Claude Code, ZCode, and Grok Build keep, the MCP server, the CLI, `origin ui`, and the personal hub with its admin UI, relays, and bucket storage work end to end. Before 1.0, a minor version may change the store format; stores are upgraded in place, and [Upgrading](https://origin.openlinkos.com/guide/upgrading) and the [changelog](CHANGELOG.md) say what to do.
+> **Status: early (0.4).** Ingestion of Claude Code, Codex, Cursor, Grok Build, and ZCode sessions, the import of the memories Claude Code, ZCode, and Grok Build keep, recall when a session starts and with each prompt, the MCP server, the CLI, `origin ui`, and the personal hub with its admin UI, relays, and bucket storage work end to end. Before 1.0, a minor version may change the store format; stores are upgraded in place, and [Upgrading](https://origin.openlinkos.com/guide/upgrading) and the [changelog](CHANGELOG.md) say what to do.
 
 ## Why
 

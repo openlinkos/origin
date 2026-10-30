@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-677962a3
+sourceHash: sha256-0c895981
 ---
 
 # 升级
@@ -41,23 +41,23 @@ Origin 需要 Node.js 22.16 或更高版本；某个版本可能提高这个最�
 
 | 标签 | 指向 |
 |---|---|
-| `0.3.0` | 这个版本本身，不会变化 |
-| `0.3` | 0.3 的最新修订版本 |
+| `0.4.0` | 这个版本本身，不会变化 |
+| `0.4` | 0.4 的最新修订版本 |
 | `latest` | 最新发布的版本 |
 | `edge` | `master` 上最新的提交，尚未发布 |
 
-请固定一个次版本，比如 `0.3`，在你决定升级时再改它；`latest` 会在新的次版本发布后立刻指向它，而新的次版本可能会升级你的库。升级用 Docker 运行的中枢：
+请固定一个次版本，比如 `0.4`，在你决定升级时再改它；`latest` 会在新的次版本发布后立刻指向它，而新的次版本可能会升级你的库。升级用 Docker 运行的中枢：
 
 ```bash
-docker pull ghcr.io/openlinkos/origin:0.3
+docker pull ghcr.io/openlinkos/origin:0.4
 docker rm -f origin-hub
-docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data ghcr.io/openlinkos/origin:0.3
+docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data ghcr.io/openlinkos/origin:0.4
 docker logs origin-hub     # shows the upgrade of the store, if any
 ```
 
 保留同一个 `/data` 卷和同样的环境变量（管理界面、存储桶、客户端 IP 请求头）。用 npm 安装的中枢，升级方式与设备相同，之后重启 `origin serve`。
 
-**先升级中枢，再升级它的设备。** 较新的设备可能发送较旧的中枢还读不懂的内容，比如 0.3 新增的记忆流：中枢会保存它们，并在升级之后读取，但在此之前，对它尚未读取的内容所做的纠正要等待它。较新版本的中枢可以正常服务较旧版本的设备。
+**先升级中枢，再升级它的设备。** 较新的设备可能发送较旧的中枢还读不懂的内容，比如 0.3 新增的记忆流：中枢会保存它们，并在升级之后读取，但在此之前，对它尚未读取的内容所做的纠正要等待它。0.3 的中枢不接收 0.4 新增的召回记录，设备会保留它们，直到中枢升级。较新版本的中枢可以正常服务较旧版本的设备。
 
 ## 你的库 {#your-store}
 
@@ -68,6 +68,7 @@ docker logs origin-hub     # shows the upgrade of the store, if any
 | 0.1.0 | 1 | — |
 | 0.2.0 | 3 | 记录格式版本；记录会话名称是否由用户设定；从已归档的行中读取 Claude Code 会话的标题 |
 | 0.3.0 | 4 | 读取中枢在能读懂记忆流之前归档的记忆流（见[原生记忆](../sources.md#native-memories)） |
+| 0.4.0 | 4 | 新增召回记录的表；格式和已存的内容都不变 |
 
 格式 2 和 3 都是 0.2.0 引入的。每一步的细节见[架构](../architecture.md#migrations)。
 
@@ -81,13 +82,13 @@ npm 包带有来源证明，把每个包和构建它的 GitHub Actions 运行关
 
 ```bash
 npm audit signatures            # in a project that depends on @openlinkos/origin
-npm view @openlinkos/origin@0.3.0 dist.attestations
+npm view @openlinkos/origin@0.4.0 dist.attestations
 ```
 
 镜像在构建时附带了来源证明和 SBOM：
 
 ```bash
-docker buildx imagetools inspect ghcr.io/openlinkos/origin:0.3.0 --format '{{json .Provenance}}'
+docker buildx imagetools inspect ghcr.io/openlinkos/origin:0.4.0 --format '{{json .Provenance}}'
 ```
 
 每个版本在 [GitHub](https://github.com/openlinkos/origin/releases) 上也有一个发布页，附有更新日志中的说明。
