@@ -18,7 +18,6 @@ import {
   empty,
   linkButton,
   pageIntro,
-  panel,
   section,
   sessionHref,
   sessionName,
@@ -32,6 +31,7 @@ import {
   box,
   KIND_SLOTS,
   kindTag,
+  listPager,
   ratioBar,
   sparkline,
   splitBar,
@@ -479,9 +479,24 @@ export function devicesPage(ctx: Ctx, devices: DeviceSummary[]): void {
   });
 }
 
+/** The last part of a path, and what comes before it, whichever the separator. */
+const lastSeparator = (p: string) => Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+const fileName = (p: string) => p.slice(lastSeparator(p) + 1);
+const folderOf = (p: string) => p.slice(0, Math.max(0, lastSeparator(p)));
+
+/** A device's files a page lists, the most recently updated first. */
+const DEVICE_FILES = 50;
+
+/**
+ * A device: how its pushes went in the last 7 days and its details, then the files it mirrored,
+ * the most recently updated first, a page at a time (a device can have thousands).
+ */
 export function devicePage(ctx: Ctx, d: DeviceDetail): void {
   const t = ctx.t;
   const n = (v: number) => fmtNumber(v, ctx.lang);
+  const page = Math.max(0, Number.parseInt(ctx.url.searchParams.get('page') ?? '0', 10) || 0);
+  const files = [...d.files].sort((x, y) => y.updatedAt - x.updatedAt);
+  const shown = files.slice(page * DEVICE_FILES, (page + 1) * DEVICE_FILES);
   renderPage(ctx, 200, {
     title: d.device.device,
     nav: 'devices',
@@ -489,46 +504,51 @@ export function devicePage(ctx: Ctx, d: DeviceDetail): void {
     heading: d.device.device,
     badges: deviceStatus(ctx, d.device),
     body: html`${pageIntro(ctx, { description: t('devices.help') })}
-    <div class="ol-grid ol-grid-sidebar ol-section">
-      ${section({
-        title: t('devices.health7d'),
-        body:
-          d.health.length === 0
-            ? html`<p class="ol-muted ol-text-sm">${t('devices.noPushes7d')}</p>`
-            : tableWrap(
-                html`<th>${t('overview.source')}</th><th class="ol-num">${t('devices.pushes')}</th><th class="ol-num">${t('devices.lines')}</th><th class="ol-num">${t('overview.events')}</th><th class="ol-num">${t('overview.parseErrors')}</th>`,
-                d.health.map(
-                  (h) =>
-                    html`<tr><td class="ol-cell-title">${h.source}</td><td class="ol-num">${n(h.runs)}</td><td class="ol-num">${n(h.linesRead)}</td><td class="ol-num">${n(h.eventsAdded)}</td><td class="ol-num">${h.parseErrors > 0 ? badge(n(h.parseErrors), 'warning') : '0'}</td></tr>`,
+    <div class="ol-layout-supporting">
+      <div class="ol-stack">
+        ${section({
+          title: t('devices.health7d'),
+          body:
+            d.health.length === 0
+              ? html`<p class="admin-muted">${t('devices.noPushes7d')}</p>`
+              : tableWrap(
+                  html`<th>${t('overview.source')}</th><th class="ol-num">${t('devices.pushes')}</th><th class="ol-num">${t('devices.lines')}</th><th class="ol-num">${t('overview.events')}</th><th class="ol-num">${t('overview.parseErrors')}</th>`,
+                  d.health.map(
+                    (h) =>
+                      html`<tr><td>${agentTag(h.source)}</td><td class="ol-num" data-label="${t('devices.pushes')}">${n(h.runs)}</td><td class="ol-num" data-label="${t('devices.lines')}">${n(h.linesRead)}</td><td class="ol-num" data-label="${t('overview.events')}">${n(h.eventsAdded)}</td><td class="ol-num" data-label="${t('overview.parseErrors')}">${h.parseErrors > 0 ? badge(n(h.parseErrors), 'warning') : '0'}</td></tr>`,
+                  ),
+                  'ol-table-stack',
                 ),
-              ),
-      })}
-      ${panel(ctx, {
-        tag: 'aside',
-        title: t('devices.details'),
-        icon: 'laptop',
-        body: html`<dl class="ol-dl">
-          <dt>${t('devices.lastPush')}</dt><dd>${time(d.device.lastUpdateAt)}</dd>
-          <dt>${t('devices.files')}</dt><dd>${n(d.device.files)}</dd>
-          <dt>${t('devices.bytes')}</dt><dd>${fmtBytes(d.device.bytes)}</dd>
-          <dt>${t('devices.token')}</dt><dd>${
-            d.token
-              ? html`${d.token.name} ${d.token.revokedAt === null ? badge(t('tokens.active'), 'success', { dot: true }) : badge(t('tokens.revoked'))}<span class="ol-cell-sub">${t('tokens.lastUsed')} ${time(d.token.lastUsedAt)}</span>`
-              : html`<span class="ol-subtle">${t('devices.noToken')}</span>`
-          }</dd>
-        </dl>`,
-      })}
-    </div>
-    ${section({
-      title: t('devices.filesTitle'),
-      body: tableWrap(
-        html`<th>${t('overview.source')}</th><th>${t('devices.originalPath')}</th><th class="ol-num">${t('devices.generation')}</th><th class="ol-num">${t('devices.lines')}</th><th class="ol-num">${t('devices.bytes')}</th><th>${t('devices.updated')}</th>`,
-        d.files.map(
-          (f) =>
-            html`<tr><td class="ol-nowrap">${f.source}</td><td class="ol-mono ol-break">${f.originalPath}</td><td class="ol-num">${f.generation}</td><td class="ol-num">${n(f.lines)}</td><td class="ol-num">${fmtBytes(f.bytes)}</td><td class="ol-nowrap">${time(f.updatedAt)}</td></tr>`,
-        ),
-      ),
-    })}`,
+        })}
+        ${box({
+          title: html`${t('devices.filesTitle')}<span class="ol-count">${n(files.length)}</span>`,
+          flush: true,
+          body: html`${tableWrap(
+            html`<th>${t('devices.originalPath')}</th><th>${t('overview.source')}</th><th class="ol-num">${t('devices.generation')}</th><th class="ol-num">${t('devices.lines')}</th><th class="ol-num">${t('devices.bytes')}</th><th class="ol-num">${t('devices.updated')}</th>`,
+            shown.map(
+              (f) =>
+                html`<tr><td class="admin-wide" title="${f.originalPath}"><span class="admin-cell-title ol-mono">${fileName(f.originalPath)}</span><span class="admin-cell-sub ol-mono">${folderOf(f.originalPath)}</span></td><td>${agentTag(f.source)}</td><td class="ol-num" data-label="${t('devices.generation')}">${f.generation}</td><td class="ol-num" data-label="${t('devices.lines')}">${n(f.lines)}</td><td class="ol-num" data-label="${t('devices.bytes')}">${fmtBytes(f.bytes)}</td><td class="ol-num">${whenShort(ctx, f.updatedAt)}</td></tr>`,
+            ),
+            'ol-table-stack',
+          )}${listPager(ctx, { page, size: DEVICE_FILES, shown: shown.length, total: files.length, more: (page + 1) * DEVICE_FILES < files.length })}`,
+        })}
+      </div>
+      <div class="ol-stack">
+        ${box({
+          title: t('devices.details'),
+          body: html`<dl class="ol-dl">
+            <dt>${t('devices.lastPush')}</dt><dd>${time(d.device.lastUpdateAt)}</dd>
+            <dt>${t('devices.files')}</dt><dd>${n(d.device.files)}</dd>
+            <dt>${t('devices.bytes')}</dt><dd>${fmtBytes(d.device.bytes)}</dd>
+            <dt>${t('devices.token')}</dt><dd>${
+              d.token
+                ? html`${d.token.name} ${d.token.revokedAt === null ? badge(t('tokens.active'), 'success', { dot: true }) : badge(t('tokens.revoked'))}<span class="admin-cell-sub">${t('tokens.lastUsed')} ${time(d.token.lastUsedAt)}</span>`
+                : html`<span class="admin-faint">${t('devices.noToken')}</span>`
+            }</dd>
+          </dl>`,
+        })}
+      </div>
+    </div>`,
   });
 }
 

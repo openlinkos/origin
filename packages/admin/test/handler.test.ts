@@ -529,3 +529,30 @@ describe('language', () => {
     expect((await b.get('/admin/login')).text).toContain('<html lang="zh-CN"');
   });
 });
+
+describe('a device', () => {
+  it('lists its files a page at a time, the most recently updated first', async () => {
+    const insert = db.prepare(
+      `INSERT INTO raw_file (source, path, generation, mirror, bytes_ingested, lines_ingested, first_seen_at, updated_at)
+       VALUES ('claude-code', ?, 1, ?, 100, 2, ?, ?)`,
+    );
+    for (let i = 0; i < 60; i++) {
+      const name = `@laptop:/home/dana/.claude/projects/demo/s${String(i).padStart(2, '0')}.jsonl`;
+      insert.run(name, `m${i}`, clock - 60_000, clock - (60 - i) * 1000);
+    }
+    const base = await serve();
+    const b = new Browser(base);
+    await b.login(PASSWORD);
+    const first = await b.get('/admin/device?name=laptop');
+    expect(first.status).toBe(200);
+    expect(pageProblems(first.text)).toEqual([]);
+    expect(first.text).toContain('1–50 of 60');
+    expect(first.text).toContain('s59.jsonl');
+    expect(first.text).not.toContain('s09.jsonl');
+    expect(first.text.indexOf('s59.jsonl')).toBeLessThan(first.text.indexOf('s58.jsonl'));
+    const second = await b.get('/admin/device?name=laptop&page=1');
+    expect(second.text).toContain('51–60 of 60');
+    expect(second.text).toContain('s00.jsonl');
+    expect(second.text).not.toContain('s59.jsonl');
+  });
+});
