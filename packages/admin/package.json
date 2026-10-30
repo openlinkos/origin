@@ -39,7 +39,7 @@
     "@openlinkos/origin-core": "workspace:*"
   },
   "devDependencies": {
-    "@openlinkos/ui": "0.5.1"
+    "@openlinkos/ui": "0.6.0"
   },
   "engines": {
     "node": ">=22.16"

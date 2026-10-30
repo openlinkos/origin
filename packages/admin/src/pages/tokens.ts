@@ -10,7 +10,7 @@ import {
   copyButton,
   empty,
   linkButton,
-  pageHeader,
+  pageIntro,
   panel,
   submitButton,
   tableWrap,
@@ -23,16 +23,14 @@ export function tokensPage(ctx: Ctx, tokens: TokenInfo[], notice?: string): void
   renderPage(ctx, 200, {
     title: t('nav.tokens'),
     nav: 'tokens',
-    body: html`${pageHeader(ctx, {
-      title: t('tokens.title'),
-      description: t('tokens.help'),
-      actions: linkButton(ctx, {
-        href: '/admin/tokens/new',
-        label: t('tokens.create'),
-        icon: 'plus',
-        variant: 'primary',
-      }),
-    })}
+    heading: t('tokens.title'),
+    actions: linkButton(ctx, {
+      href: '/admin/tokens/new',
+      label: t('tokens.create'),
+      icon: 'plus',
+      variant: 'primary',
+    }),
+    body: html`${pageIntro(ctx, { description: t('tokens.help') })}
     ${notice ? html`<div class="ol-notices">${alert(ctx, 'success', notice)}</div>` : ''}
     ${
       tokens.length === 0
@@ -69,7 +67,8 @@ export function newTokenPage(ctx: Ctx, status: number, o: { name?: string; error
     title: t('tokens.create'),
     nav: 'tokens',
     crumbs: [{ label: t('nav.tokens'), href: '/admin/tokens' }],
-    body: html`${pageHeader(ctx, { title: t('tokens.create'), description: t('tokens.createHelp') })}
+    heading: t('tokens.create'),
+    body: html`${pageIntro(ctx, { description: t('tokens.createHelp') })}
     <form method="post" action="/admin/tokens" class="ol-form">
       ${csrfField(ctx)}
       <div class="ol-field">
@@ -95,16 +94,14 @@ export function tokenCreatedPage(
     title: t('tokens.createdTitle'),
     nav: 'tokens',
     crumbs: [{ label: t('nav.tokens'), href: '/admin/tokens' }],
-    body: html`${pageHeader(ctx, {
-      title: t('tokens.createdTitle'),
-      actions: linkButton(ctx, {
-        href: '/admin/tokens',
-        label: t('tokens.done'),
-        icon: 'check',
-        variant: 'primary',
-      }),
-    })}
-    <section class="ol-section ol-stack">
+    heading: t('tokens.createdTitle'),
+    actions: linkButton(ctx, {
+      href: '/admin/tokens',
+      label: t('tokens.done'),
+      icon: 'check',
+      variant: 'primary',
+    }),
+    body: html`<section class="ol-section ol-stack">
       ${alert(ctx, 'warning', t('tokens.shownOnce', { name: o.name }))}
       <div class="ol-field">
         <span class="ol-label">${t('tokens.token')}</span>
@@ -127,8 +124,8 @@ export function revokeTokenPage(
     title: t('tokens.revokeTitle'),
     nav: 'tokens',
     crumbs: [{ label: t('nav.tokens'), href: '/admin/tokens' }],
-    body: html`${pageHeader(ctx, { title: t('tokens.revokeTitle') })}
-    ${panel(ctx, {
+    heading: t('tokens.revokeTitle'),
+    body: html`${panel(ctx, {
       danger: true,
       title: t('tokens.revokeButton', { name: o.name }),
       icon: 'triangle-alert',

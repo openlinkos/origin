@@ -1,7 +1,7 @@
 import type { Ctx } from '../context.js';
 import { html } from '../html.js';
 import { SIGN_IN_LINK_MS } from '../sessions.js';
-import { alert, linkButton, pageHeader } from './components.js';
+import { alert, linkButton, pageIntro } from './components.js';
 import { brand, csrfField, renderPage } from './layout.js';
 
 /** The password field and the submit button of the sign-in and re-authentication forms. */
@@ -99,7 +99,8 @@ export function errorPage(ctx: Ctx, status: number, message: string): void {
   }
   renderPage(ctx, status, {
     title,
-    body: html`${pageHeader(ctx, { title, description: t('error.status', { status }) })}
+    heading: title,
+    body: html`${pageIntro(ctx, { description: t('error.status', { status }) })}
     <div class="ol-stack">
       ${alert(ctx, tone, message)}
       <div>${linkButton(ctx, { href: '/admin/', label: t('nav.backToOverview'), icon: 'layout-dashboard' })}</div>

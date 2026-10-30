@@ -17,7 +17,9 @@ A [personal hub](./hub.md) can serve a web interface for you, its owner. From a 
 - **Forgotten**: every forget and restore, with its time, where it was made, who made it, its reason, and what it covers. A forget's own page shows you what it hides, the entries' text and the session events, which appear nowhere else; **Restore** there brings it back, after saying what will come back and asking for a reason.
 - The **audit log**, and your open **sign-ins**.
 
-The admin UI is available in English and Simplified Chinese, following your browser's language, and follows your system's light or dark mode. Both can be switched at the foot of the sidebar, or below the form on the sign-in page.
+The admin UI is available in English and Simplified Chinese, following your browser's language, and follows your system's light or dark mode. Both can be switched in the **Preferences** menu at the foot of the sidebar, which also signs you out, or below the form on the sign-in page.
+
+It adapts to the width of the window rather than squeezing a page. On a narrower window, between 860 and 1200 pixels, the sidebar becomes a column of icons, each named on hover, and the search field becomes a button. On a phone or a window narrower than that, the sidebar opens from the menu button at the top left. Where a page has no room beside its content, a list's filters open from a **Filters** button, with the filters that are on shown above the list as tags that remove them; a session's turns open from the button that says which turn is shown; and the details of a recall or an entry follow its content. Wide tables become rows that name each value, so nothing scrolls sideways and no column is left out.
 
 ## On your own machine
 

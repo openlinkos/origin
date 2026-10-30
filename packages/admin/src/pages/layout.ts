@@ -124,10 +124,18 @@ export interface Crumb {
 }
 
 export interface PageOptions {
-  /** The document title and the last breadcrumb. */
+  /** The document title, and the page's heading unless `heading` says otherwise. */
   title: string;
+  /** The page's heading (its h1, in the top bar), when it is more than its title. */
+  heading?: HtmlValue;
+  /** A count after the heading, such as how many rows a list has. */
+  count?: number;
+  /** Badges after the heading, such as a kind or a status. */
+  badges?: HtmlValue;
+  /** The page's actions, at the end of the top bar; at most one of them primary. */
+  actions?: HtmlValue;
   nav?: NavKey;
-  /** Breadcrumbs between the hub and this page. */
+  /** The pages above this one, after its group in the sidebar. */
   crumbs?: Crumb[];
   body: HtmlValue;
   /** Sign-in and re-authentication: the form beside the brand panel, without navigation. */
@@ -135,16 +143,19 @@ export interface PageOptions {
 }
 
 /**
- * The page's place: its group in the sidebar, the pages above it, then the page; the host is left to
- * the address bar.
+ * The pages above this one: its group in the sidebar, then the pages it belongs to; the host is
+ * left to the address bar. The page itself is the heading after it.
  */
-function breadcrumb(ctx: Ctx, o: PageOptions): SafeHtml {
+function breadcrumb(ctx: Ctx, o: PageOptions): HtmlValue {
   const group = NAV.find((g) => g.items.some((i) => i.key === o.nav))?.label;
-  return html`<nav aria-label="${ctx.t('nav.breadcrumb')}"><ol class="admin-crumbs">
-      ${group ? html`<li>${ctx.t(group)}</li>` : ''}
-      ${(o.crumbs ?? []).map((c) => html`<li>${c.href ? html`<a href="${c.href}">${c.label}</a>` : c.label}</li>`)}
-      <li><span aria-current="page">${o.title}</span></li>
-    </ol></nav>`;
+  const items = [
+    ...(group ? [html`<li>${ctx.t(group)}</li>`] : []),
+    ...(o.crumbs ?? []).map(
+      (c) => html`<li>${c.href ? html`<a href="${c.href}">${c.label}</a>` : c.label}</li>`,
+    ),
+  ];
+  if (items.length === 0) return '';
+  return html`<nav aria-label="${ctx.t('nav.breadcrumb')}"><ol class="ol-breadcrumb">${items}</ol></nav>`;
 }
 
 /** How long ago, in words: just now, minutes, hours, or days. */
@@ -157,80 +168,129 @@ export function ago(ctx: Ctx, ts: number): string {
   return ctx.t('ago.days', { n: Math.floor(hours / 24) });
 }
 
-/** The sidebar's foot: on a device, its hub; on a hub, its devices. */
+/** How the store stands, at the foot of the sidebar: on a device, its hub; on a hub, its devices. */
 function storeStatus(ctx: Ctx): SafeHtml {
   const t = ctx.t;
+  const status = (tone: 'success' | 'warning' | 'off', text: string, link?: string) => {
+    const inner = html`<span class="ol-dot"></span><span>${text}</span>`;
+    const cls = `ol-sidebar-status${tone === 'off' ? '' : ` ol-status-${tone}`}`;
+    return link
+      ? html`<a class="${cls}" href="${link}" title="${text}">${inner}</a>`
+      : html`<div class="${cls}" title="${text}">${inner}</div>`;
+  };
   if (ctx.mode === 'hub') {
     const devices = ctx.service.devices(ctx.now);
     const stale = devices.some((d) => d.stale);
-    return html`<a class="admin-side-row" href="/admin/devices"><span class="admin-dot${stale ? ' admin-dot-warn' : ''}"></span>${t('side.devices', { n: devices.length })}</a>`;
+    return status(
+      stale ? 'warning' : 'success',
+      t('side.devices', { n: devices.length }),
+      '/admin/devices',
+    );
   }
   const hub = ctx.service.hub();
-  if (!hub)
-    return html`<div class="admin-side-row"><span class="admin-dot admin-dot-off"></span>${t('side.noHub')}</div>`;
-  if (hub.syncing)
-    return html`<div class="admin-side-row"><span class="admin-dot"></span>${t('side.syncing')}</div>`;
-  if (hub.lastError) {
-    return html`<div class="admin-side-row" title="${hub.lastError}"><span class="admin-dot admin-dot-warn"></span>${t('side.syncFailed')}</div>`;
-  }
-  return html`<div class="admin-side-row"><span class="admin-dot"></span>${
+  if (!hub) return status('off', t('side.noHub'));
+  if (hub.syncing) return status('success', t('side.syncing'));
+  if (hub.lastError) return status('warning', `${t('side.syncFailed')}: ${hub.lastError}`);
+  return status(
+    'success',
     hub.lastSyncAt === null
       ? t('side.notSynced')
-      : t('side.synced', { ago: ago(ctx, hub.lastSyncAt) })
-  }</div>`;
+      : t('side.synced', { ago: ago(ctx, hub.lastSyncAt) }),
+  );
 }
 
-/** Where this store is: this device, with a way to its hub, or the hub. */
-function storeSwitch(ctx: Ctx): HtmlValue {
-  if (ctx.mode === 'hub') return '';
+/** The admin UI of this device's hub, when it has one. */
+function hubUrl(ctx: Ctx): string | null {
+  if (ctx.mode === 'hub') return null;
   const hub = ctx.service.hub();
-  if (!hub) return '';
-  return html`<div class="admin-seg"><span aria-current="true">${icon(ctx, 'laptop')}${ctx.t('top.local')}</span><a href="${`${hub.url.replace(/\/+$/, '')}/admin/`}" rel="noreferrer" target="_blank">${icon(ctx, 'server')}${ctx.t('top.hub')}</a></div>`;
+  return hub ? `${hub.url.replace(/\/+$/, '')}/admin/` : null;
 }
 
+/** Where this store is: this device, with a way to its hub. */
+function storeSwitch(ctx: Ctx): HtmlValue {
+  const url = hubUrl(ctx);
+  if (!url) return '';
+  return html`<div class="admin-seg"><span aria-current="true">${icon(ctx, 'laptop')}${ctx.t('top.local')}</span><a href="${url}" rel="noreferrer" target="_blank">${icon(ctx, 'server')}${ctx.t('top.hub')}</a></div>`;
+}
+
+/**
+ * The menu at the foot of the sidebar: the colour theme, the language, the hub, the documentation,
+ * and signing out. Each choice is a small POST form, so it works without a script.
+ */
+function prefsMenu(ctx: Ctx): SafeHtml {
+  const t = ctx.t;
+  const url = hubUrl(ctx);
+  return html`<button class="ol-sidebar-account" type="button" popovertarget="prefs" title="${t('prefs.label')}">
+      ${icon(ctx, 'settings')}
+      <span class="ol-sidebar-account-text"><span class="ol-sidebar-account-name">${t('prefs.label')}</span><span class="ol-sidebar-account-meta">Origin ${ctx.version}</span></span>
+      ${icon(ctx, 'chevrons-up-down', 'sm')}
+    </button>
+    <div class="ol-menu ol-menu-above" id="prefs" popover>
+      <div class="ol-menu-label">${t('prefs.theme')}</div>
+      <form method="post" action="/admin/prefs"><input type="hidden" name="next" value="${here(ctx)}">${THEMES.map(
+        (th) =>
+          html`<button type="submit" class="ol-menu-item" name="theme" value="${th.value}"${ctx.theme === th.value ? html` aria-current="true"` : ''}>${icon(ctx, th.icon, 'sm')}${t(th.label)}</button>`,
+      )}</form>
+      <hr class="ol-menu-separator">
+      <div class="ol-menu-label">${t('prefs.language')}</div>
+      <form method="post" action="/admin/prefs"><input type="hidden" name="next" value="${here(ctx)}">${(
+        ['en', 'zh'] as const
+      ).map(
+        (l) =>
+          html`<button type="submit" class="ol-menu-item" name="lang" value="${l}" lang="${HTML_LANG[l]}"${ctx.lang === l ? html` aria-current="true"` : ''}>${l === 'en' ? 'English' : '简体中文'}</button>`,
+      )}</form>
+      <hr class="ol-menu-separator">
+      ${url ? html`<a class="ol-menu-item" href="${url}" rel="noreferrer" target="_blank">${icon(ctx, 'server', 'sm')}${t('top.openHub')}</a>` : ''}
+      <a class="ol-menu-item" href="${docsUrl(ctx)}" rel="noreferrer">${icon(ctx, 'book-open', 'sm')}${t('app.docs')}</a>
+      <hr class="ol-menu-separator">
+      <form method="post" action="/admin/logout">${csrfField(ctx)}<button type="submit" class="ol-menu-item">${icon(ctx, 'log-out', 'sm')}${t('auth.signOut')}</button></form>
+    </div>`;
+}
+
+/**
+ * The app: the design system's workbench. The sidebar (the sections, how the store stands, and the
+ * preferences) is a rail of icons on medium screens and a sheet on narrow ones; the top bar heads
+ * the page with its breadcrumb, its heading, and its actions, then search and the store.
+ */
 function appShell(ctx: Ctx, o: PageOptions): SafeHtml {
   const t = ctx.t;
   const counts = ctx.service.navCounts();
   const count = (key: NavKey) =>
     key === 'sessions' || key === 'recalls' || key === 'entries' ? counts[key] : null;
   return html`<a class="ol-skip-link" href="#main">${t('nav.skip')}</a>
-<div class="admin-app">
-  <aside class="admin-side">
-    <a class="admin-brand" href="/admin/">${logo(ctx, 20)}<span>Origin</span><span class="admin-brand-tag">${ctx.mode === 'local' ? t('app.local') : t('app.hub')}</span></a>
-    <nav class="admin-nav" aria-label="${t('nav.label')}">
+<div class="ol-app ol-app-workbench">
+  <aside class="ol-sidebar" id="nav" popover aria-label="${t('nav.label')}">
+    <div class="ol-sidebar-head"><a class="ol-brand" href="/admin/" aria-label="Origin">${logo(ctx, 20)}<span>Origin</span></a><span class="ol-brand-tag">${ctx.mode === 'local' ? t('app.local') : t('app.hub')}</span></div>
+    <nav class="ol-nav" aria-label="${t('nav.label')}">
       ${navFor(ctx).map(
-        (
-          group,
-        ) => html`${group.label ? html`<div class="admin-nav-label">${t(group.label)}</div>` : ''}
-        ${group.items.map((n) => {
-          const c = count(n.key);
-          return html`<a href="${href(n.path)}"${n.key === o.nav ? html` aria-current="page"` : ''}>${icon(ctx, n.icon)}${t(n.label)}${c === null ? '' : html`<span class="admin-nav-count">${fmtNumber(c, ctx.lang)}</span>`}</a>`;
-        })}`,
+        (group) =>
+          html`<div class="ol-nav-group">${group.label ? html`<div class="ol-nav-label">${t(group.label)}</div>` : ''}${group.items.map(
+            (n) => {
+              const c = count(n.key);
+              return html`<a class="ol-nav-item" href="${href(n.path)}" title="${t(n.label)}"${n.key === o.nav ? html` aria-current="page"` : ''}>${icon(ctx, n.icon)}<span class="ol-nav-text">${t(n.label)}</span>${c === null ? '' : html`<span class="ol-nav-count">${fmtNumber(c, ctx.lang)}</span>`}</a>`;
+            },
+          )}</div>`,
       )}
     </nav>
-    <div class="admin-side-foot">
-      ${storeStatus(ctx)}
-      <div class="admin-side-row">${themeForm(ctx, true)}${languageForm(ctx, 'ol-btn ol-btn-ghost ol-btn-sm')}</div>
-      <div class="admin-side-row"><form method="post" action="/admin/logout">${csrfField(ctx)}<button type="submit" class="ol-btn ol-btn-ghost ol-btn-sm">${icon(ctx, 'log-out', 'sm')}${t('auth.signOut')}</button></form><a class="admin-faint" href="${docsUrl(ctx)}" rel="noreferrer">Origin ${ctx.version}</a></div>
-    </div>
+    <div class="ol-sidebar-foot">${storeStatus(ctx)}${prefsMenu(ctx)}</div>
   </aside>
-  <div class="admin-main">
-    <header class="admin-top">
+  <div class="ol-main">
+    <header class="ol-topbar">
+      <button class="ol-btn ol-btn-ghost ol-btn-icon ol-btn-sm ol-nav-open" type="button" popovertarget="nav" aria-label="${t('nav.menu')}">${icon(ctx, 'menu')}</button>
       ${breadcrumb(ctx, o)}
-      <div class="admin-top-tools">
+      <h1 class="ol-topbar-title"><span class="ol-topbar-title-text">${o.heading ?? o.title}</span>${o.count === undefined ? '' : html`<span class="ol-topbar-count">${fmtNumber(o.count, ctx.lang)}</span>`}${o.badges ?? ''}</h1>
+      <div class="ol-topbar-actions">
+        ${o.actions ?? ''}
         ${
           o.nav === 'search'
             ? ''
-            : html`<form class="admin-search" method="get" action="/admin/search" role="search">
-          ${icon(ctx, 'search', 'sm')}
-          <input type="search" name="q" placeholder="${t('search.quick')}" aria-label="${t('nav.search')}">
-          <kbd class="admin-kbd">/</kbd>
-        </form>`
+            : html`<form class="ol-search" method="get" action="/admin/search" role="search">${icon(ctx, 'search', 'sm')}<input class="ol-input ol-input-sm" type="search" name="q" placeholder="${t('search.quick')}" aria-label="${t('nav.search')}"></form>
+        <a class="ol-btn ol-btn-ghost ol-btn-icon ol-btn-sm ol-topbar-search-link" href="/admin/search">${icon(ctx, 'search')}<span class="ol-sr-only">${t('nav.search')}</span></a>`
         }
         ${storeSwitch(ctx)}
       </div>
     </header>
-    <main class="admin-page" id="main" tabindex="-1">
+    <main class="ol-content" id="main" tabindex="-1">
 ${o.body}
     </main>
   </div>

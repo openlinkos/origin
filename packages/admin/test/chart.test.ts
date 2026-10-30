@@ -24,8 +24,12 @@ function chart(columns: Array<Record<string, number>>) {
 describe('the stacked column chart', () => {
   it('is an accessible SVG, coloured by class, with every number in a table', () => {
     const out = chart([{ 'claude-code': 4, codex: 2 }, {}, { codex: 6 }]);
+    // A fluid chart: the plot stretches to its column; its text is HTML beside it, at one size.
     expect(out).toContain(
-      '<svg class="ol-chart-svg" viewBox="0 0 720 200" role="img" aria-labelledby="activity-title activity-desc" focusable="false">',
+      '<svg class="ol-chart-svg ol-chart-fluid" viewBox="0 0 72 100" preserveAspectRatio="none" role="img" aria-labelledby="activity-title activity-desc" focusable="false">',
+    );
+    expect(out).toContain(
+      '<div class="ol-chart-y" aria-hidden="true"><span>6</span><span>3</span><span>0</span></div>',
     );
     expect(out).toContain('<title id="activity-title">Activity &lt;last 30 days&gt;</title>');
     expect(out).toContain('<desc id="activity-desc">12 events</desc>');
@@ -37,9 +41,11 @@ describe('the stacked column chart', () => {
     // Each column tells its numbers on hover; empty columns have none to tell.
     expect(out).toContain('<title>Day 0: 6\nclaude-code 4\ncodex 2</title>');
     expect(out).toContain('<title>Day 1: 0</title>');
-    // Labels under every second column, counted from the last.
-    expect(out.match(/class="ol-chart-label"/g)).toHaveLength(2);
-    expect(out).toContain('text-anchor="end">D2</text>');
+    // Labels under every second column, counted from the last: one cell per column.
+    expect(out).toContain(
+      '<div class="ol-chart-x" aria-hidden="true"><span>D0</span><span></span><span>D2</span></div>',
+    );
+    expect(out).not.toContain('<text');
     // The legend and the table.
     expect(out).toContain('<figure class="ol-chart">');
     expect(out).toContain('<g class="ol-chart-col"><title>');
@@ -60,6 +66,6 @@ describe('the stacked column chart', () => {
     expect([0, 1, 7, 10, 11, 21, 6474, 8001, 45_000].map(niceCeil)).toEqual([
       1, 1, 8, 10, 20, 30, 8000, 10_000, 50_000,
     ]);
-    expect(chart([{ codex: 6474 }])).toContain('>8K</text>');
+    expect(chart([{ codex: 6474 }])).toContain('<span>8K</span>');
   });
 });

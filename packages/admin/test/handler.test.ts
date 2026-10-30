@@ -407,12 +407,19 @@ describe('pages', () => {
     expect(overview).toMatch(/<symbol id="i-layout-dashboard" viewBox="0 0 24 24"><rect /);
     // Signed in: the app shell with its navigation, error pages included; signed out (and on
     // unknown paths, where the session is not read), the sign-in card and never the shell.
-    expect(overview).toContain('<a href="/admin/" aria-current="page">');
+    expect(overview).toContain(
+      '<a class="ol-nav-item" href="/admin/" title="Overview" aria-current="page">',
+    );
+    // The sidebar opens as a sheet on narrow screens: a popover, with the button that opens it.
+    expect(overview).toContain('<aside class="ol-sidebar" id="nav" popover aria-label="Sections">');
+    expect(overview).toMatch(/<button class="[^"]*ol-nav-open" type="button" popovertarget="nav"/);
+    // The page is headed once, in the top bar.
+    expect(overview.match(/<h1[ >]/g)).toHaveLength(1);
     expect(signedIn[4]?.status).toBe(404);
-    expect(signedIn[4]?.text).toContain('class="admin-app"');
+    expect(signedIn[4]?.text).toContain('class="ol-app ol-app-workbench"');
     for (const page of anonymous) {
       expect(page.text).toContain('class="ol-auth-card"');
-      expect(page.text).not.toContain('class="admin-app"');
+      expect(page.text).not.toContain('class="ol-app ol-app-workbench"');
     }
     expect(signedIn[5]?.text).toContain('class="ol-auth-card"');
   });
@@ -483,10 +490,12 @@ describe('breadcrumb', () => {
     const base = await serve();
     const b = new Browser(base);
     await b.login(PASSWORD);
+    // The pages above, then the page's heading, as the top bar reads.
     const crumbs = (text: string) =>
-      /<ol class="admin-crumbs">([\s\S]*?)<\/ol>/
+      /<header class="ol-topbar">([\s\S]*?)<div class="ol-topbar-actions">/
         .exec(text)?.[1]
-        ?.replace(/<[^>]+>/g, ' ')
+        ?.replace(/<button[\s\S]*?<\/button>/, '')
+        .replace(/<[^>]+>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
     expect(crumbs((await b.get('/admin/audit')).text)).toBe('Settings Audit log');

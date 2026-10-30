@@ -85,20 +85,33 @@ function rawLines(): void {
 }
 
 /**
- * Scroll a session's outline to the turn shown, which may be far down a long session. Only the
+ * Scroll a session's outline to the turn shown, which may be far down a long session: the outline
+ * itself beside the turn, or the sheet it opens in on a narrow screen, when it opens. Only the
  * outline scrolls; the page stays where it is.
  */
 function outlineToCurrent(): void {
   for (const list of document.querySelectorAll<HTMLElement>('.admin-outline')) {
     const current = list.querySelector<HTMLElement>(':scope > [aria-current="true"]');
     if (!current) continue;
-    const above = current.offsetTop - list.offsetTop;
-    if (
-      above < list.scrollTop ||
-      above + current.offsetHeight > list.scrollTop + list.clientHeight
-    ) {
-      list.scrollTop = Math.max(0, above - list.clientHeight / 3);
-    }
+    const reveal = () => {
+      const scroller =
+        list.scrollHeight > list.clientHeight ? list : list.closest<HTMLElement>('.ol-sheet');
+      if (!scroller) return;
+      const top =
+        current.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top +
+        scroller.scrollTop;
+      if (
+        top < scroller.scrollTop ||
+        top + current.offsetHeight > scroller.scrollTop + scroller.clientHeight
+      ) {
+        scroller.scrollTop = Math.max(0, top - scroller.clientHeight / 3);
+      }
+    };
+    reveal();
+    list.closest('[popover]')?.addEventListener('toggle', (event) => {
+      if ((event as ToggleEvent).newState === 'open') reveal();
+    });
   }
 }
 

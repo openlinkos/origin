@@ -1,6 +1,7 @@
 import {
   ENTRY_KINDS,
   type Entry,
+  type EntryKind,
   type EventRow,
   entrySummary,
   type ForgetResult,
@@ -9,7 +10,6 @@ import {
 import type { Ctx } from '../context.js';
 import { clip, fmtNumber, time } from '../context.js';
 import { href, html, type SafeHtml } from '../html.js';
-import { icon } from '../icons.js';
 import {
   type EntryBoard,
   type EntryBoardFilter,
@@ -22,13 +22,14 @@ import { eventCard } from './browse.js';
 import {
   alert,
   badge,
+  empty,
   entryFlags,
   entryTable,
   eventTag,
   hasEnded,
   kindBadge,
   linkButton,
-  pageHeader,
+  pageIntro,
   panel,
   sessionHref,
   statusBadge,
@@ -40,10 +41,11 @@ import {
   box,
   facetGroup,
   facts,
+  filterLayout,
   kindTag,
   linkChips,
   listPager,
-  pageBar,
+  searchField,
   toggled,
   whenShort,
   withParams,
@@ -82,17 +84,16 @@ export function entriesPage(ctx: Ctx, b: EntryBoard & { filter: EntryBoardFilter
     ...b.facets.projects.slice(0, RAIL_PROJECTS),
     ...b.facets.projects.slice(RAIL_PROJECTS).filter((p) => f.projects.includes(p.value)),
   ];
-  const rail = html`<aside class="admin-facets" aria-label="${t('facet.label')}">
-    ${facetGroup(ctx, {
-      title: t('entries.kind'),
-      clear: f.kinds.length > 0 ? link({ kind: null }) : null,
-      items: ENTRY_KINDS.map((k) => ({
-        label: kindTag(ctx, k),
-        count: b.facets.kinds.find((v) => v.value === k)?.count ?? 0,
-        checked: f.kinds.includes(k),
-        href: link({ kind: toggled(f.kinds, k) }),
-      })),
-    })}
+  const facetGroups = html`${facetGroup(ctx, {
+    title: t('entries.kind'),
+    clear: f.kinds.length > 0 ? link({ kind: null }) : null,
+    items: ENTRY_KINDS.map((k) => ({
+      label: kindTag(ctx, k),
+      count: b.facets.kinds.find((v) => v.value === k)?.count ?? 0,
+      checked: f.kinds.includes(k),
+      href: link({ kind: toggled(f.kinds, k) }),
+    })),
+  })}
     ${facetGroup(ctx, {
       title: t('filter.project'),
       clear: f.projects.length > 0 ? link({ project: null }) : null,
@@ -133,58 +134,69 @@ export function entriesPage(ctx: Ctx, b: EntryBoard & { filter: EntryBoardFilter
           href: link({ recalled: f.recalled ? null : '1' }),
         },
       ],
-    })}
-  </aside>`;
-  const kept = [...ctx.url.searchParams].filter(([k]) => k !== 'q' && k !== 'page');
-  const toolbar = html`<div class="admin-toolbar">
-    <form class="admin-search" method="get" action="/admin/entries" role="search">
-      ${kept.map(([k, v]) => html`<input type="hidden" name="${k}" value="${v}">`)}
-      ${icon(ctx, 'search', 'sm')}
-      <input type="search" name="q" value="${f.q}" placeholder="${t('entries.filterPlaceholder')}" maxlength="200" aria-label="${t('entries.text')}">
-    </form>
-    ${linkChips(
-      ctx,
-      SESSION_RANGES.map((r) => ({
-        label: t(`range.${r}`),
-        href: link({ range: r === 'all' ? null : r }),
-        current: f.range === r,
-        count: b.ranges[r],
-      })),
-    )}
-    <div class="admin-toolbar-end">${linkChips(ctx, [
-      {
-        label: t('entries.history'),
-        href: link({ history: f.history ? null : '1' }),
-        current: f.history,
-      },
-    ])}</div>
-  </div>`;
-  const filtered =
-    f.kinds.length + f.projects.length + f.authors.length > 0 ||
-    f.origin !== 'any' ||
-    f.recalled ||
-    f.q !== '' ||
-    f.range !== 'all';
+    })}`;
+  const tags = [
+    ...f.kinds.map((k) => ({
+      label: t(`kind.${k as EntryKind}`),
+      href: link({ kind: toggled(f.kinds, k) }),
+    })),
+    ...f.projects.map((p) => ({ label: p, href: link({ project: toggled(f.projects, p) }) })),
+    ...f.authors.map((a) => ({ label: a, href: link({ author: toggled(f.authors, a) }) })),
+    ...(f.origin === 'any'
+      ? []
+      : [{ label: t(`entries.origin.${f.origin}`), href: link({ origin: null }) }]),
+    ...(f.recalled ? [{ label: t('entries.recalled'), href: link({ recalled: null }) }] : []),
+  ];
   const rows =
     b.rows.length === 0
-      ? html`<div class="admin-table-empty">${
-          filtered
-            ? html`<p>${t('entries.none')}</p>${linkButton(ctx, { href: '/admin/entries', label: t('filter.clear'), size: 'sm' })}`
-            : html`<p>${t('entries.noneYet')}</p><p class="admin-note">${t('entries.noneHelp')}</p>`
-        }</div>`
+      ? tags.length > 0 || f.q !== '' || f.range !== 'all'
+        ? empty(ctx, {
+            icon: 'book-marked',
+            title: t('entries.none'),
+            action: linkButton(ctx, {
+              href: '/admin/entries',
+              label: t('filter.clear'),
+              size: 'sm',
+            }),
+          })
+        : empty(ctx, {
+            icon: 'book-marked',
+            title: t('entries.noneYet'),
+            text: t('entries.noneHelp'),
+          })
       : entryTable(ctx, b.rows);
   renderPage(ctx, 200, {
     title: t('nav.entries'),
     nav: 'entries',
-    body: html`${pageBar(ctx, { title: t('nav.entries'), count: b.total })}
-    <div class="admin-board">
-      ${rail}
-      <section class="admin-board-main">
-        ${toolbar}
-        ${rows}
-        ${listPager(ctx, { page: b.page, size: PAGE_SIZE, shown: b.rows.length, total: b.total, more: b.more })}
-      </section>
-    </div>`,
+    count: b.total,
+    body: filterLayout(ctx, {
+      facets: facetGroups,
+      search: searchField(ctx, {
+        action: '/admin/entries',
+        value: f.q,
+        placeholder: t('entries.filterPlaceholder'),
+        label: t('entries.text'),
+      }),
+      ranges: linkChips(
+        ctx,
+        SESSION_RANGES.map((r) => ({
+          label: t(`range.${r}`),
+          href: link({ range: r === 'all' ? null : r }),
+          current: f.range === r,
+          count: b.ranges[r],
+        })),
+      ),
+      tags,
+      end: linkChips(ctx, [
+        {
+          label: t('entries.history'),
+          href: link({ history: f.history ? null : '1' }),
+          current: f.history,
+        },
+      ]),
+      body: html`${rows}
+      ${listPager(ctx, { page: b.page, size: PAGE_SIZE, shown: b.rows.length, total: b.total, more: b.more })}`,
+    }),
   });
 }
 
@@ -197,7 +209,7 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
   const e = d.entry;
   const n = (v: number) => fmtNumber(v, ctx.lang);
   const sources = box({
-    title: html`${t('entry.sourcesTitle')}<span class="admin-bar-count">${n(d.sources.length)}</span>`,
+    title: html`${t('entry.sourcesTitle')}<span class="ol-count">${n(d.sources.length)}</span>`,
     aside: t('entry.sourcesHelp'),
     flush: true,
     body: html`<ol class="admin-sources">${d.sources.map((s) => {
@@ -217,27 +229,27 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
   const versions =
     d.history.length > 1
       ? box({
-          title: html`${t('entry.historyTitle')}<span class="admin-bar-count">${n(d.history.length)}</span>`,
+          title: html`${t('entry.historyTitle')}<span class="ol-count">${n(d.history.length)}</span>`,
           flush: true,
-          body: html`<table class="admin-table">
-      <thead><tr><th>${t('entries.text')}</th><th>${t('entries.author')}</th><th>${t('entry.status')}</th><th class="admin-r">${t('tokens.created')}</th></tr></thead>
+          body: html`<div class="ol-table-wrap"><table class="ol-table ol-table-compact ol-table-stack">
+      <thead><tr><th>${t('entries.text')}</th><th>${t('entries.author')}</th><th>${t('entry.status')}</th><th class="ol-num">${t('tokens.created')}</th></tr></thead>
       <tbody>${d.history.map(
         (v) => html`<tr${v.id === e.id ? html` aria-selected="true"` : ''}>
         <td class="admin-wide">${v.id === e.id ? html`<span class="admin-cell-title">${clip(v.text, 300)}</span>` : html`<a class="admin-cell-title" href="${href('entry', { id: v.id })}">${clip(v.text, 300)}</a>`}<span class="admin-cell-sub ol-mono">${v.id}</span></td>
         <td>${v.author}</td>
         <td>${v.status === 'active' ? html`<span class="admin-good">${t('status.active')}</span>` : v.concurrent ? badge(t('status.concurrent'), 'neutral') : statusBadge(ctx, v.status)}</td>
-        <td class="admin-r">${whenShort(ctx, v.createdAt)}</td>
+        <td class="ol-num">${whenShort(ctx, v.createdAt)}</td>
       </tr>`,
-      )}</tbody></table>`,
+      )}</tbody></table></div>`,
         })
       : '';
   const recalls = box({
-    title: html`${t('nav.recalls')}<span class="admin-bar-count">${n(d.recalls.total)}</span>`,
+    title: html`${t('nav.recalls')}<span class="ol-count">${n(d.recalls.total)}</span>`,
     aside: t('entry.recallsHelp'),
     flush: true,
     body:
       d.recalls.total === 0
-        ? html`<div class="admin-panel-body"><p class="admin-muted">${t('entry.recallsNone')}</p></div>`
+        ? html`<div class="ol-panel-body"><p class="admin-muted">${t('entry.recallsNone')}</p></div>`
         : html`${recallTable(ctx, d.recalls.latest)}${
             d.recalls.total > d.recalls.latest.length
               ? html`<p class="admin-handed-note">${t('entry.recallsMore', { n: n(d.recalls.total - d.recalls.latest.length) })}</p>`
@@ -246,7 +258,7 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
   });
   const details = box({
     title: t('entry.details'),
-    body: html`<dl class="admin-kv">
+    body: html`<dl class="ol-dl">
       <dt>${t('entries.kind')}</dt><dd>${kindTag(ctx, e.kind)}</dd>
       <dt>${t('entry.status')}</dt><dd>${t(`status.${e.status}`)}</dd>
       <dt>${t('entries.confidence')}</dt><dd>${e.confidence}</dd>
@@ -262,26 +274,24 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
     title: e.id,
     nav: 'entries',
     crumbs: [{ label: t('nav.entries'), href: '/admin/entries' }],
-    body: html`${pageBar(ctx, {
-      title: clip(entrySummary(e.text), 120),
-      badges: html`${kindTag(ctx, e.kind)}${statusBadge(ctx, e.status)}${entryFlags(ctx, e)}`,
-      actions: html`${e.status === 'active' ? linkButton(ctx, { href: href('correct', { id: e.id }), label: t('entry.correct'), icon: 'pencil', size: 'sm' }) : ''}${linkButton(ctx, { href: href('forget', { id: e.id }), label: t('entry.forget'), icon: 'eraser', variant: 'danger-soft', size: 'sm' })}`,
-    })}
-    ${facts(ctx, [
+    heading: clip(entrySummary(e.text), 120),
+    badges: html`${kindTag(ctx, e.kind)}${statusBadge(ctx, e.status)}${entryFlags(ctx, e)}`,
+    actions: html`${e.status === 'active' ? linkButton(ctx, { href: href('correct', { id: e.id }), label: t('entry.correct'), icon: 'pencil', size: 'sm' }) : ''}${linkButton(ctx, { href: href('forget', { id: e.id }), label: t('entry.forget'), icon: 'eraser', variant: 'danger-soft', size: 'sm' })}`,
+    body: html`${facts(ctx, [
       e.project ? { icon: 'folder', value: e.project } : null,
       { icon: 'user', value: e.author },
       { icon: 'clock', value: time(e.createdAt) },
       { label: t('entries.confidence'), value: String(e.confidence) },
       d.recalls.total > 0 ? { label: t('nav.recalls'), value: n(d.recalls.total) } : null,
     ])}
-    ${e.imported ? html`<div class="admin-notices">${alert(ctx, 'info', t('entry.imported', { agent: e.author.replace(/@.*$/, '') }))}</div>` : ''}
-    ${e.status === 'superseded' && e.supersededBy ? html`<div class="admin-notices">${alert(ctx, 'info', html`${t(e.concurrent ? 'entry.concurrent' : 'entry.supersededBy')} <a class="ol-mono" href="${href('entry', { id: e.supersededBy })}">${e.supersededBy}</a>`)}</div>` : ''}
-    <div class="admin-detail-grid">
-      <div class="admin-dash-stack">
+    ${e.imported ? html`<div class="ol-notices">${alert(ctx, 'info', t('entry.imported', { agent: e.author.replace(/@.*$/, '') }))}</div>` : ''}
+    ${e.status === 'superseded' && e.supersededBy ? html`<div class="ol-notices">${alert(ctx, 'info', html`${t(e.concurrent ? 'entry.concurrent' : 'entry.supersededBy')} <a class="ol-mono" href="${href('entry', { id: e.supersededBy })}">${e.supersededBy}</a>`)}</div>` : ''}
+    <div class="ol-layout-supporting">
+      <div class="ol-stack">
         ${box({ title: t('entries.text'), body: html`<div class="admin-entry-text">${e.text}</div>` })}
         ${sources}${versions}${recalls}
       </div>
-      <div class="admin-dash-stack">${details}</div>
+      <div class="ol-stack">${details}</div>
     </div>`,
   });
 }
@@ -305,7 +315,8 @@ export function correctPage(
       { label: t('nav.entries'), href: '/admin/entries' },
       { label: e.id, href: href('entry', { id: e.id }) },
     ],
-    body: html`${pageHeader(ctx, { title: t('correct.title'), description: t('correct.help') })}
+    heading: t('correct.title'),
+    body: html`${pageIntro(ctx, { description: t('correct.help') })}
     <div class="ol-grid ol-grid-2">
       <form method="post" action="/admin/correct" class="ol-form">
         ${formError(ctx, o.error)}
@@ -362,7 +373,8 @@ export function rememberPage(
       { label: t('nav.sessions'), href: '/admin/sessions' },
       { label: e.id, href: href('event', { id: e.id }) },
     ],
-    body: html`${pageHeader(ctx, { title: t('remember.title'), description: t('remember.help') })}
+    heading: t('remember.title'),
+    body: html`${pageIntro(ctx, { description: t('remember.help') })}
     <div class="ol-grid ol-grid-2">
       <form method="post" action="/admin/remember" class="ol-form">
         ${formError(ctx, o.error)}
@@ -412,10 +424,8 @@ export function forgetPage(
   renderPage(ctx, status, {
     title: t('forget.title'),
     nav: 'tombstones',
-    body: html`${pageHeader(ctx, {
-      title: html`${t('forget.title')} <span class="ol-mono">${o.id}</span>`,
-      description: t('forget.rules'),
-    })}
+    heading: html`${t('forget.title')} <span class="ol-mono">${o.id}</span>`,
+    body: html`${pageIntro(ctx, { description: t('forget.rules') })}
     ${o.error ? html`<div class="ol-notices">${alert(ctx, 'danger', o.error)}</div>` : ''}
     ${
       !plan
@@ -464,7 +474,8 @@ export function forgottenPage(ctx: Ctx, r: ForgetResult): void {
   renderPage(ctx, 200, {
     title: t('forget.doneTitle'),
     nav: 'tombstones',
-    body: html`${pageHeader(ctx, { title: t('forget.doneTitle'), description: propagation(ctx) })}
+    heading: t('forget.doneTitle'),
+    body: html`${pageIntro(ctx, { description: propagation(ctx) })}
     <div class="ol-stack">
       ${alert(ctx, 'success', t('forget.done', { entries: fmtNumber(r.entries.length, ctx.lang), events: fmtNumber(r.events.length, ctx.lang), tombstone: r.tombstoneId ?? '—' }))}
       <p>${t('forget.restoreHint')}</p>
@@ -484,7 +495,8 @@ export function restoredPage(ctx: Ctx, r: RestoreResult): void {
   renderPage(ctx, 200, {
     title: t('restore.doneTitle'),
     nav: 'tombstones',
-    body: html`${pageHeader(ctx, { title: t('restore.doneTitle'), description: propagation(ctx) })}
+    heading: t('restore.doneTitle'),
+    body: html`${pageIntro(ctx, { description: propagation(ctx) })}
     <div class="ol-stack">
       ${alert(ctx, 'success', t('restore.done', { entries: fmtNumber(r.entries.length, ctx.lang), events: fmtNumber(r.events.length, ctx.lang), tombstone: r.tombstoneId }))}
       ${r.entries.length > 0 ? html`<div><h3 class="ol-heading-sm">${t('forget.entries')}</h3>${ids(r.entries, 'entry')}</div>` : ''}

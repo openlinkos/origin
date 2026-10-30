@@ -12,7 +12,7 @@ import {
   kindBadge,
   linkButton,
   olderLink,
-  pageHeader,
+  pageIntro,
   panel,
   section,
   submitButton,
@@ -61,7 +61,8 @@ export function tombstonesPage(
   renderPage(ctx, 200, {
     title: t('nav.tombstones'),
     nav: 'tombstones',
-    body: html`${pageHeader(ctx, { title: t('tombstones.title'), description: t('tombstones.help') })}
+    heading: t('tombstones.title'),
+    body: html`${pageIntro(ctx, { description: t('tombstones.help') })}
     ${
       o.tombstones.length === 0
         ? empty(ctx, {
@@ -183,11 +184,9 @@ export function tombstonePage(
     title: r.id,
     nav: 'tombstones',
     crumbs: [{ label: t('nav.tombstones'), href: '/admin/tombstones' }],
-    body: html`${pageHeader(ctx, {
-      title: html`${isForget ? t('tombstone.forgetTitle') : t('tombstone.restoreTitle')} <span class="ol-mono">${r.id}</span>`,
-      badges: html`${kindTag(ctx, r)}${isForget ? statusTag(ctx, { ...r, restoredBy: [] }) : ''}`,
-      description: isForget ? t('tombstone.forgetHelp') : t('tombstone.restoreHelp'),
-    })}
+    heading: html`${isForget ? t('tombstone.forgetTitle') : t('tombstone.restoreTitle')} <span class="ol-mono">${r.id}</span>`,
+    badges: html`${kindTag(ctx, r)}${isForget ? statusTag(ctx, { ...r, restoredBy: [] }) : ''}`,
+    body: html`${pageIntro(ctx, { description: isForget ? t('tombstone.forgetHelp') : t('tombstone.restoreHelp') })}
     ${o.error ? html`<div class="ol-notices">${alert(ctx, 'danger', o.error)}</div>` : ''}
     ${notice ? html`<div class="ol-notices">${notice}</div>` : ''}
     <div class="ol-grid ol-grid-sidebar ol-section">
@@ -229,7 +228,8 @@ export function auditPage(ctx: Ctx, o: { records: AuditRecord[]; more: boolean }
   renderPage(ctx, 200, {
     title: t('nav.audit'),
     nav: 'audit',
-    body: html`${pageHeader(ctx, { title: t('audit.title'), description: t('audit.help') })}
+    heading: t('audit.title'),
+    body: html`${pageIntro(ctx, { description: t('audit.help') })}
     ${
       o.records.length === 0
         ? empty(ctx, { icon: 'scroll-text', title: t('audit.none'), text: t('audit.noneHelp') })
@@ -259,14 +259,12 @@ export function signinsPage(ctx: Ctx, sessions: AdminSessionInfo[], notice?: str
   renderPage(ctx, 200, {
     title: t('nav.signins'),
     nav: 'signins',
-    body: html`${pageHeader(ctx, {
-      title: t('signins.title'),
-      description: t('signins.help'),
-      actions:
-        others > 0
-          ? html`<form method="post" action="/admin/signins/revoke">${csrfField(ctx)}<button type="submit" class="ol-btn ol-btn-danger-soft">${icon(ctx, 'log-out')}${t('signins.revokeOthers', { n: others })}</button></form>`
-          : '',
-    })}
+    heading: t('signins.title'),
+    actions:
+      others > 0
+        ? html`<form method="post" action="/admin/signins/revoke">${csrfField(ctx)}<button type="submit" class="ol-btn ol-btn-danger-soft">${icon(ctx, 'log-out')}${t('signins.revokeOthers', { n: others })}</button></form>`
+        : '',
+    body: html`${pageIntro(ctx, { description: t('signins.help') })}
     ${notice ? html`<div class="ol-notices">${alert(ctx, 'success', notice)}</div>` : ''}
     ${tableWrap(
       html`<th>${t('signins.started')}</th><th>${t('signins.lastSeen')}</th><th>${t('audit.client')}</th><th class="ol-actions"><span class="ol-sr-only">${t('tokens.actions')}</span></th>`,

@@ -17,7 +17,7 @@ import {
   badge,
   empty,
   linkButton,
-  pageHeader,
+  pageIntro,
   panel,
   section,
   sessionHref,
@@ -32,7 +32,6 @@ import {
   box,
   KIND_SLOTS,
   kindTag,
-  pageBar,
   ratioBar,
   sparkline,
   splitBar,
@@ -60,17 +59,17 @@ function devicesTable(ctx: Ctx, devices: DeviceSummary[]): SafeHtml {
       }),
     });
   }
-  return html`<table class="admin-table">
-    <thead><tr><th>${t('devices.name')}</th><th>${t('devices.lastPush')}</th><th class="admin-r">${t('devices.files')}</th><th class="admin-r">${t('devices.bytes')}</th><th>${t('devices.status')}</th></tr></thead>
+  return html`<div class="ol-table-wrap"><table class="ol-table ol-table-compact ol-table-stack">
+    <thead><tr><th>${t('devices.name')}</th><th>${t('devices.lastPush')}</th><th class="ol-num">${t('devices.files')}</th><th class="ol-num">${t('devices.bytes')}</th><th>${t('devices.status')}</th></tr></thead>
     <tbody>${devices.map(
       (d) => html`<tr>
       <td class="admin-wide"><a class="admin-cell-title" href="${href('device', { name: d.device })}">${d.device}</a></td>
-      <td>${time(d.lastUpdateAt)}</td>
-      <td class="admin-r">${fmtNumber(d.files, ctx.lang)}</td>
-      <td class="admin-r">${fmtBytes(d.bytes)}</td>
+      <td data-label="${t('devices.lastPush')}">${time(d.lastUpdateAt)}</td>
+      <td class="ol-num" data-label="${t('devices.files')}">${fmtNumber(d.files, ctx.lang)}</td>
+      <td class="ol-num" data-label="${t('devices.bytes')}">${fmtBytes(d.bytes)}</td>
       <td>${deviceStatus(ctx, d)}</td>
     </tr>`,
-    )}</tbody></table>`;
+    )}</tbody></table></div>`;
 }
 
 /**
@@ -95,7 +94,7 @@ function hubBox(ctx: Ctx, hub: HubLink | null): SafeHtml {
         ? badge(t('hub.notSynced'), 'warning', { dot: true })
         : badge(t('hub.connected'), 'success', { dot: true }),
     body: html`${hub.lastError ? alert(ctx, 'warning', t('hub.syncFailed', { error: hub.lastError })) : ''}
-      <dl class="admin-kv">
+      <dl class="ol-dl">
         <dt>${t('hub.url')}</dt><dd class="ol-mono ol-break">${hub.url}</dd>
         <dt>${t('hub.device')}</dt><dd>${hub.device}</dd>
         <dt>${t('hub.lastSync')}</dt><dd>${hub.lastSyncAt === null ? t('hub.never') : time(hub.lastSyncAt)}</dd>
@@ -119,11 +118,11 @@ function kpi(
     tone?: 'warning';
   },
 ): SafeHtml {
-  return html`<a class="admin-kpi${o.wide ? ' admin-kpi-wide' : ''}" href="${o.href}">
-    <span class="admin-kpi-label${o.tone ? ' ol-tone-warning' : ''}">${icon(ctx, o.icon, 'sm')}${o.label}</span>
-    <span class="admin-kpi-value">${o.value}</span>
-    ${o.figure ? html`<span class="admin-kpi-figure">${o.figure}</span>` : ''}
-    <span class="admin-kpi-meta">${o.meta}</span>
+  const value = html`<span class="ol-stat-value">${o.value}</span>`;
+  return html`<a class="ol-stat" href="${o.href}">
+    <span class="ol-stat-label"><span class="ol-stat-icon${o.tone ? ` ol-tone-${o.tone}` : ''}">${icon(ctx, o.icon, 'sm')}</span>${o.label}</span>
+    ${o.figure && !o.wide ? html`<span class="ol-stat-row">${value}${o.figure}</span>` : html`${value}${o.figure ?? ''}`}
+    <span class="ol-stat-meta">${o.meta}</span>
   </a>`;
 }
 
@@ -158,7 +157,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
   });
   const kinds = ['memory', 'knowledge', 'cognition'] as const;
 
-  const kpis = html`<section class="admin-kpis" aria-label="${t('overview.countsTitle')}">
+  const kpis = html`<section class="ol-stats" aria-label="${t('overview.countsTitle')}">
     ${kpi(ctx, {
       href: '/admin/sessions',
       icon: 'message-square',
@@ -192,7 +191,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
           cognition: n(o.entries.cognition),
         }),
       ),
-      meta: html`${kinds.map((k) => html`<span>${kindTag(ctx, k)} <b>${n(o.entries[k])}</b></span>`)}`,
+      meta: html`<span class="ol-legend">${kinds.map((k) => html`<span class="ol-legend-item">${kindTag(ctx, k)}<span class="ol-legend-value">${n(o.entries[k])}</span></span>`)}</span>`,
     })}
     ${kpi(ctx, {
       href: '/admin/recalls',
@@ -263,7 +262,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
     flush: true,
     body:
       r.recalls === 0
-        ? html`<div class="admin-panel-body"><p class="admin-muted">${t('overview.recallsNone')}</p>
+        ? html`<div class="ol-panel-body"><p class="admin-muted">${t('overview.recallsNone')}</p>
           <p class="admin-note"><a href="${docsUrl(ctx, 'guide/recall')}" rel="noreferrer">${t('recalls.howItWorks')}</a></p></div>`
         : html`<ul class="admin-meters">${r.byOccasion.map(
             (x) => html`<li>
@@ -285,18 +284,18 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
     flush: true,
     body:
       o.recent.length === 0
-        ? html`<div class="admin-panel-body"><p class="admin-muted">${t('overview.noSessions')}</p></div>`
-        : html`<table class="admin-table">
-      <thead><tr><th>${t('sessions.titleColumn')}</th><th>${t('facet.agent')}</th><th>${t('filter.project')}</th><th class="admin-r">${t('overview.events')}</th><th class="admin-r">${t('sessions.lastActive')}</th></tr></thead>
+        ? html`<div class="ol-panel-body"><p class="admin-muted">${t('overview.noSessions')}</p></div>`
+        : html`<div class="ol-table-wrap"><table class="ol-table ol-table-compact ol-table-stack">
+      <thead><tr><th>${t('sessions.titleColumn')}</th><th>${t('facet.agent')}</th><th>${t('filter.project')}</th><th class="ol-num">${t('overview.events')}</th><th class="ol-num">${t('sessions.lastActive')}</th></tr></thead>
       <tbody>${o.recent.map(
         (s) => html`<tr>
         <td class="admin-wide"><a class="admin-cell-title" href="${sessionHref(s)}">${sessionName(ctx, s, 90)}</a></td>
         <td>${agentTag(s.source)}</td>
-        <td>${s.project ?? html`<span class="admin-faint">—</span>`}</td>
-        <td class="admin-r">${n(s.eventCount)}</td>
-        <td class="admin-r">${whenShort(ctx, s.endedAt)}</td>
+        <td data-label="${t('filter.project')}">${s.project ?? html`<span class="admin-faint">—</span>`}</td>
+        <td class="ol-num" data-label="${t('overview.events')}">${n(s.eventCount)}</td>
+        <td class="ol-num">${whenShort(ctx, s.endedAt)}</td>
       </tr>`,
-      )}</tbody></table>`,
+      )}</tbody></table></div>`,
   });
 
   const top = o.projects[0]?.events ?? 0;
@@ -306,7 +305,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
     flush: true,
     body:
       o.projects.length === 0
-        ? html`<div class="admin-panel-body"><p class="admin-muted">${t('overview.projectsNone', { days: ACTIVITY_DAYS })}</p></div>`
+        ? html`<div class="ol-panel-body"><p class="admin-muted">${t('overview.projectsNone', { days: ACTIVITY_DAYS })}</p></div>`
         : html`<ul class="admin-meters">${o.projects.map(
             (p) => html`<li>
               <a href="${href('sessions', { project: p.project })}" title="${t('overview.projectSessions', { n: n(p.sessions) })}">${p.project}</a>
@@ -321,7 +320,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
     flush: true,
     body:
       o.sources.length === 0
-        ? html`<div class="admin-panel-body">${empty(ctx, {
+        ? html`<div class="ol-panel-body">${empty(ctx, {
             icon: 'history',
             title: t('overview.noSessions'),
             text: local ? t('overview.noDataLocal') : t('overview.noData'),
@@ -334,19 +333,19 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
                   size: 'sm',
                 }),
           })}</div>`
-        : html`<table class="admin-table">
-      <thead><tr><th>${t('overview.source')}</th><th>${t('overview.agentVersion')}</th><th class="admin-r">${t('overview.latest')}</th><th class="admin-r">${t('overview.lastIngest')}</th><th class="admin-r">${t('overview.sessions')}</th><th class="admin-r">${t('overview.events')}</th><th class="admin-r">${t('overview.parseErrors7d')}</th></tr></thead>
+        : html`<div class="ol-table-wrap"><table class="ol-table ol-table-compact ol-table-stack">
+      <thead><tr><th>${t('overview.source')}</th><th>${t('overview.agentVersion')}</th><th class="ol-num">${t('overview.latest')}</th><th class="ol-num">${t('overview.lastIngest')}</th><th class="ol-num">${t('overview.sessions')}</th><th class="ol-num">${t('overview.events')}</th><th class="ol-num">${t('overview.parseErrors7d')}</th></tr></thead>
       <tbody>${o.sources.map(
         (s) => html`<tr>
         <td class="admin-wide"><a class="admin-cell-title" href="${href('sessions', { agent: s.source })}">${agentTag(s.source)}</a></td>
-        <td>${s.agentVersion ? html`<span class="ol-mono">${s.agentVersion}</span>` : html`<span class="admin-faint">—</span>`}</td>
-        <td class="admin-r">${whenShort(ctx, s.lastTs)}</td>
-        <td class="admin-r">${whenShort(ctx, s.lastSyncAt)}</td>
-        <td class="admin-r">${n(s.sessions)}</td>
-        <td class="admin-r">${n(s.events)}</td>
-        <td class="admin-r">${s.parseErrors7d > 0 ? html`<span class="admin-bad">${n(s.parseErrors7d)}</span>` : html`<span class="admin-faint">0</span>`}</td>
+        <td data-label="${t('overview.agentVersion')}">${s.agentVersion ? html`<span class="ol-mono">${s.agentVersion}</span>` : html`<span class="admin-faint">—</span>`}</td>
+        <td class="ol-num" data-label="${t('overview.latest')}">${whenShort(ctx, s.lastTs)}</td>
+        <td class="ol-num" data-label="${t('overview.lastIngest')}">${whenShort(ctx, s.lastSyncAt)}</td>
+        <td class="ol-num" data-label="${t('overview.sessions')}">${n(s.sessions)}</td>
+        <td class="ol-num" data-label="${t('overview.events')}">${n(s.events)}</td>
+        <td class="ol-num" data-label="${t('overview.parseErrors7d')}">${s.parseErrors7d > 0 ? html`<span class="admin-bad">${n(s.parseErrors7d)}</span>` : html`<span class="admin-faint">0</span>`}</td>
       </tr>`,
-      )}</tbody></table>`,
+      )}</tbody></table></div>`,
   });
 
   const status = box({
@@ -354,12 +353,12 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
     aside: healthy
       ? badge(t('overview.healthOk'), 'success', { dot: true })
       : badge(t('overview.healthCheck'), 'warning', { dot: true }),
-    body: html`<dl class="admin-kv">
+    body: html`<dl class="ol-dl">
       <dt>${t('overview.parseErrors')}</dt>
       <dd>${t('overview.parseErrorsValue', { day: n(o.parseErrors.last24h), week: n(o.parseErrors.last7d) })}</dd>
       ${o.parseErrors.bySource7d.map(
         (e) =>
-          html`<dt class="admin-kv-sub">${e.source} ${e.device ? deviceName(e.device) : html`<span class="admin-faint">${t('overview.local')}</span>`}</dt><dd>${n(e.parseErrors)}</dd>`,
+          html`<dt class="ol-dl-sub">${e.source} ${e.device ? deviceName(e.device) : html`<span class="admin-faint">${t('overview.local')}</span>`}</dt><dd>${n(e.parseErrors)}</dd>`,
       )}
       <dt>${t('overview.version')}</dt><dd>${o.version}</dd>
       <dt>${t('overview.uptime')}</dt><dd>${fmtDuration(o.uptimeMs, t)}</dd>
@@ -368,9 +367,9 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
 
   const storage = box({
     title: t('overview.storageTitle'),
-    body: html`<dl class="admin-kv">
+    body: html`<dl class="ol-dl">
       <dt>${t('overview.database')}</dt><dd>${fmtBytes(o.usage.databaseBytes)}</dd>
-      <dt class="admin-kv-sub">${t('overview.wal')}</dt><dd>${fmtBytes(o.usage.walBytes)}</dd>
+      <dt class="ol-dl-sub">${t('overview.wal')}</dt><dd>${fmtBytes(o.usage.walBytes)}</dd>
       <dt>${t('overview.mirrorsDisk')}</dt><dd>${fmtBytes(o.usage.mirrorDiskBytes)}</dd>
       ${
         o.usage.bucket
@@ -393,7 +392,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
     flush: true,
     body:
       o.latestEntries.length === 0
-        ? html`<div class="admin-panel-body"><p class="admin-muted">${t('entries.noneYet')}</p></div>`
+        ? html`<div class="ol-panel-body"><p class="admin-muted">${t('entries.noneYet')}</p></div>`
         : html`<ul class="admin-rows">${o.latestEntries.map(
             (e) => html`<li>
               ${kindTag(ctx, e.kind)}
@@ -409,7 +408,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
     flush: true,
     body:
       o.latestTombstones.length === 0
-        ? html`<div class="admin-panel-body"><p class="admin-muted">${t('tombstones.none')}</p></div>`
+        ? html`<div class="ol-panel-body"><p class="admin-muted">${t('tombstones.none')}</p></div>`
         : html`<ul class="admin-rows">${o.latestTombstones.map(
             (x) => html`<li>
               ${
@@ -431,25 +430,21 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
   renderPage(ctx, 200, {
     title: t('nav.overview'),
     nav: 'overview',
-    body: html`${pageBar(ctx, {
-      title: t('overview.title'),
-      actions: local
-        ? ''
-        : html`${linkButton(ctx, { href: '/admin/connect', label: t('nav.connect'), icon: 'plug', size: 'sm' })}${linkButton(ctx, { href: '/admin/tokens/new', label: t('tokens.create'), icon: 'plus', variant: 'primary', size: 'sm' })}`,
-    })}
-    ${
+    heading: t('overview.title'),
+    actions: local
+      ? ''
+      : html`${linkButton(ctx, { href: '/admin/connect', label: t('nav.connect'), icon: 'plug', size: 'sm' })}${linkButton(ctx, { href: '/admin/tokens/new', label: t('tokens.create'), icon: 'plus', variant: 'primary', size: 'sm' })}`,
+    body: html`${
       stale.length > 0 || o.parseErrors.last24h > 0
-        ? html`<div class="admin-notices">
+        ? html`<div class="ol-notices">
       ${stale.length > 0 ? alert(ctx, 'warning', t('overview.staleDevices', { n: stale.length })) : ''}
       ${o.parseErrors.last24h > 0 ? alert(ctx, 'warning', t('overview.parseErrors24h', { n: o.parseErrors.last24h })) : ''}
     </div>`
         : ''
     }
     ${kpis}
-    <div class="admin-dash">
-      <div class="admin-dash-stack">${activity}${recent}${sources}</div>
-      <div class="admin-dash-stack">${recalls}${projects}${local ? hubBox(ctx, o.hub) : ''}${status}${storage}</div>
-      ${
+    <div class="ol-layout-dashboard">
+      <div class="ol-stack">${activity}${recent}${sources}${
         local
           ? ''
           : box({
@@ -459,11 +454,10 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
                   ? html`<a href="/admin/devices">${t('overview.allDevices')}</a>`
                   : '',
               flush: true,
-              cls: 'admin-dash-full',
               body: devicesTable(ctx, o.devices),
             })
-      }
-      <div class="admin-dash-half">${entries}${forgets}</div>
+      }${entries}</div>
+      <div class="ol-stack">${recalls}${projects}${local ? hubBox(ctx, o.hub) : ''}${status}${storage}${forgets}</div>
     </div>`,
   });
 }
@@ -473,16 +467,14 @@ export function devicesPage(ctx: Ctx, devices: DeviceSummary[]): void {
   renderPage(ctx, 200, {
     title: t('nav.devices'),
     nav: 'devices',
-    body: html`${pageHeader(ctx, {
-      title: t('nav.devices'),
-      description: t('devices.help'),
-      actions: linkButton(ctx, {
-        href: '/admin/connect',
-        label: t('devices.howToConnect'),
-        icon: 'plug',
-        variant: 'primary',
-      }),
-    })}
+    heading: t('nav.devices'),
+    actions: linkButton(ctx, {
+      href: '/admin/connect',
+      label: t('devices.howToConnect'),
+      icon: 'plug',
+      variant: 'primary',
+    }),
+    body: html`${pageIntro(ctx, { description: t('devices.help') })}
     ${devicesTable(ctx, devices)}`,
   });
 }
@@ -494,11 +486,9 @@ export function devicePage(ctx: Ctx, d: DeviceDetail): void {
     title: d.device.device,
     nav: 'devices',
     crumbs: [{ label: t('nav.devices'), href: '/admin/devices' }],
-    body: html`${pageHeader(ctx, {
-      title: d.device.device,
-      badges: deviceStatus(ctx, d.device),
-      description: t('devices.help'),
-    })}
+    heading: d.device.device,
+    badges: deviceStatus(ctx, d.device),
+    body: html`${pageIntro(ctx, { description: t('devices.help') })}
     <div class="ol-grid ol-grid-sidebar ol-section">
       ${section({
         title: t('devices.health7d'),
@@ -547,16 +537,14 @@ export function connectPage(ctx: Ctx, s: Snippets): void {
   renderPage(ctx, 200, {
     title: t('nav.connect'),
     nav: 'connect',
-    body: html`${pageHeader(ctx, {
-      title: t('connect.title'),
-      description: t('connect.intro'),
-      actions: linkButton(ctx, {
-        href: '/admin/tokens/new',
-        label: t('connect.createToken'),
-        icon: 'plus',
-        variant: 'primary',
-      }),
-    })}
+    heading: t('connect.title'),
+    actions: linkButton(ctx, {
+      href: '/admin/tokens/new',
+      label: t('connect.createToken'),
+      icon: 'plus',
+      variant: 'primary',
+    }),
+    body: html`${pageIntro(ctx, { description: t('connect.intro') })}
     ${s.known ? '' : alert(ctx, 'info', t('connect.noPublicUrl'))}
     ${connectSnippetsBlock(ctx, s)}`,
   });

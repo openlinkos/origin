@@ -234,7 +234,7 @@ describe('origin ui: the sign-in link', () => {
     );
     const page = await b.get('/admin/');
     expect(page.status).toBe(200);
-    expect(page.text).toContain('class="admin-app"');
+    expect(page.text).toContain('class="ol-app ol-app-workbench"');
 
     // Used up: another browser gets nothing; the signed-in one is just sent on.
     const other = new Browser(base);
@@ -481,7 +481,7 @@ describe('origin ui: pages', () => {
 
     const page = await b.get(`/admin/entry?id=${entry.id}`);
     expect(pageProblems(page.text)).toEqual([]);
-    expect(page.text).toContain('Recalls<span class="admin-bar-count">1</span>');
+    expect(page.text).toContain('Recalls<span class="ol-count">1</span>');
     expect(page.text).toContain(`/admin/recall?id=${id}`);
 
     const session = await b.get(`/admin/session?source=fake&id=${SESSION}`);
@@ -524,7 +524,7 @@ describe('origin ui: pages', () => {
       const res = await b.get(p);
       expect(res.status, p).toBe(200);
       expect(pageProblems(res.text), p).toEqual([]);
-      expect(res.text, p).toContain('<span class="admin-brand-tag">Local</span>');
+      expect(res.text, p).toContain('<span class="ol-brand-tag">Local</span>');
       expect(res.text, p).not.toMatch(/href="\/admin\/(tokens|devices?|connect|signins|reauth)\b/);
       expect(res.text, p).not.toContain('<img src=x');
     }
@@ -563,7 +563,16 @@ describe('origin ui: pages', () => {
     expect(overview).toContain('Latest forgets and restores');
     // The timeline by day, filtered by name.
     const timeline = (await b.get('/admin/sessions?q=SCHEMA')).text;
-    expect(timeline).toContain('<table class="admin-table">');
+    // Restacked into rows below 40rem: every cell after the first names its column.
+    expect(timeline).toContain('<table class="ol-table ol-table-compact ol-table-stack">');
+    expect(timeline).toContain('<td class="ol-num" data-label="Turns">1</td>');
+    // The filters are on the page and in the sheet the filter bar opens on narrow screens.
+    expect(timeline).toContain('<aside class="ol-sheet ol-facets" id="filters" popover');
+    expect(timeline).toMatch(/<button[^>]*ol-sheet-open" popovertarget="filters">/);
+    // A filter that is on shows as a tag that removes it, at every width.
+    expect((await b.get('/admin/sessions?agent=fake')).text).toContain(
+      '<a class="ol-filter-tag" href="/admin/sessions" title="Remove this filter"><span>fake</span>',
+    );
     expect(timeline).toContain(`href="/admin/session?source=fake&amp;id=${SESSION}"`);
     expect(timeline).toContain('Keep the schema simple.');
     expect((await b.get('/admin/sessions?q=nothing-like-it')).text).toContain('No sessions match');
@@ -571,7 +580,7 @@ describe('origin ui: pages', () => {
       { sessionId: SESSION, prompt: 'Keep the schema simple.', turns: 1 },
     ]);
     const zh = await b.get('/admin/', { 'Accept-Language': 'zh-CN' });
-    expect(zh.text).toContain('<span class="admin-brand-tag">本机</span>');
+    expect(zh.text).toContain('<span class="ol-brand-tag">本机</span>');
   });
 
   it('show a command the agent acted on as the prompt of its own turn', async () => {

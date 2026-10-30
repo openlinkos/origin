@@ -14,7 +14,7 @@ import type { SessionTrace, TraceStep, TraceTurn } from '../service.js';
 import type { Note, ToolRun, ToolSummary, Turn, TurnItem } from '../turns.js';
 import { badge, chip, eventLink, linkButton, sessionHref, sessionName } from './components.js';
 import { renderPage } from './layout.js';
-import { agentTag, facts, linkChips, pageBar } from './workbench.js';
+import { agentTag, facts, linkChips } from './workbench.js';
 
 /** A prompt longer than this shows its start, and the rest on request. */
 const PROMPT_SHOWN = 1200;
@@ -307,7 +307,7 @@ function turnDetail(ctx: Ctx, o: SessionTrace, open: boolean): SafeHtml {
       <span class="admin-fact">${icon(ctx, 'clock', 'sm')}${time(turn.startedAt)}</span>
       <span class="admin-fact">${icon(ctx, 'timer', 'sm')}${fmtSpan(turn.endedAt - turn.startedAt, t)}</span>
       ${turn.tools.calls > 0 ? html`<span class="admin-fact">${t('trace.calls', { n: n(turn.tools.calls) })}</span>` : ''}
-      <span class="admin-detail-nav">${step(o.previous, t('trace.previous'), 'chevron-left')}${step(o.next, t('trace.next'), 'chevron-right')}</span>
+      <span class="admin-detail-nav"><button type="button" class="ol-btn ol-btn-secondary ol-btn-sm ol-sheet-open" popovertarget="turns">${icon(ctx, 'list', 'sm')}${t('trace.turnOf', { n: n(o.number), total: n(o.total) })}</button>${step(o.previous, t('trace.previous'), 'chevron-left')}${step(o.next, t('trace.next'), 'chevron-right')}</span>
     </div>
     ${notes(ctx, turn.lead)}
     ${turn.prompt ? (turn.command !== null ? commandBlock(ctx, turn.prompt, turn.command) : promptBlock(ctx, turn.prompt)) : ''}
@@ -343,8 +343,8 @@ export function sessionPage(ctx: Ctx, o: SessionTrace & { open: boolean }): void
     title: name,
     nav: 'sessions',
     crumbs: [{ label: t('nav.sessions'), href: '/admin/sessions' }],
-    body: html`${pageBar(ctx, { title: s.title ? s.title : sessionName(ctx, s, 160) })}
-    ${facts(ctx, [
+    heading: s.title ? s.title : sessionName(ctx, s, 160),
+    body: html`${facts(ctx, [
       { value: agentTag(s.source) },
       s.project ? { icon: 'folder', value: s.project } : null,
       { icon: 'clock', value: html`${time(s.startedAt)} – ${time(s.endedAt)}` },
@@ -358,8 +358,9 @@ export function sessionPage(ctx: Ctx, o: SessionTrace & { open: boolean }): void
           }
         : null,
     ])}
-    <div class="admin-trace">
-      <nav class="admin-trace-outline" aria-label="${t('trace.outline')}">
+    <div class="ol-layout-list-detail admin-trace">
+      <nav class="ol-sheet admin-trace-outline" id="turns" popover aria-label="${t('trace.outline')}">
+        <div class="ol-sheet-head"><h2 class="ol-sheet-title">${t('trace.outline')}</h2><button type="button" class="ol-btn ol-btn-ghost ol-btn-icon ol-btn-sm" popovertarget="turns" popovertargetaction="hide" aria-label="${t('action.close')}">${icon(ctx, 'x', 'sm')}</button></div>
         <div class="admin-trace-tabs">${linkChips(ctx, [
           show('all', t('trace.all')),
           show('recalled', t('trace.withRecalls'), o.totals.withRecalls),
