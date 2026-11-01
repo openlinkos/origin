@@ -6,7 +6,7 @@ origin status                                          Per-source counts, entrie
 origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
 origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
 origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
-origin show      <id>                                  Show an entry, an event (with its original source), or a recall
+origin show      <id> [--source <id>]                  Show an entry, an event (with its original source), a session, or a recall
 origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
 origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
 origin forget    <id> --reason <text> [--yes]          Hide an entry or event on every store, as a record (needs --yes)
@@ -35,7 +35,7 @@ origin push                                            Same as origin sync (kept
 - **Source ids** are `claude-code`, `codex`, `cursor`, `grok`, and `zcode`.
 - **Entry kinds** are `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries).
 - **Entries** listed and found are the current ones. Superseded versions, and entries whose validity has ended (such as an imported memory whose file was deleted), appear with `origin entries --history` and in `origin show`. Entries imported from the memory files agents keep for themselves are marked as imported.
-- **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting and restoring leave, and `rcl_7d2e9a0b1c3f` for recalls.
+- **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting and restoring leave, and `rcl_7d2e9a0b1c3f` for recalls. Sessions go by the id their agent gives them, such as a UUID.
 
 ## Searching
 
@@ -71,6 +71,36 @@ Sources:
   [2026-10-20 10:01] claude-code origin user/message
       “not add migrations yet”
       ↳ claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
+```
+
+For a session id, `show` prints the session as a card, the one the MCP tool `get` hands agents: its name and time, the prompts that start its first 20 turns, the entries written from it, the recalls it was handed, and the sessions just before and after it in its project, with the id of each, to `show` next. When sessions of two agents have the same id, `--source` picks one.
+
+```console
+$ origin show 9d3b6f20-5a1e-4c7d-8b2f-6e0a4c9d1b3f
+Session     9d3b6f20-5a1e-4c7d-8b2f-6e0a4c9d1b3f  claude-code, project origin
+Name        Store format
+Directory   /home/dana/code/origin
+Time        2026-10-20 09:58 – 11:20
+Events      186 events, 2 turns
+
+Turns:
+    1. [2026-10-20 09:58] How should we version the store format?
+       ↳ claude-code:2b7e4d1a-9c3f-4a5b-8e6d-1f0a3b4c5d6e
+    2. [2026-10-20 10:01] Let's not add migrations yet — we're early. Just test in a fresh temp folder.
+       ↳ claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
+
+Entries written from it:
+  [2026-10-20 10:42] memory  No schema versioning or migrations before the first release; test against a fresh ORIGIN_HOME.
+      ↳ ent_5f0c2a9e41b7
+
+Recalls it was handed:
+  [2026-10-20 09:58] at the start of a session, 3 items  ↳ rcl_3f9a0c1d2e4b
+
+Before      codex 2026-10-19 17:30  “Sketch the store layout”
+            ↳ 0199a1b2-7c3d-4e5f-8a6b-9c0d1e2f3a4b
+After       —
+
+Its events: origin timeline --session 9d3b6f20-5a1e-4c7d-8b2f-6e0a4c9d1b3f
 ```
 
 ## Recall

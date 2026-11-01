@@ -56,6 +56,7 @@ import {
   recallSession,
   recordAudit,
   relayPending,
+  resolveId,
   revokeToken,
   type SessionRow,
   type SourceAdapter,
@@ -76,12 +77,17 @@ import {
   type EventResult,
   type EventView,
   type GetResult,
+  isRecallResult,
+  isSessionResult,
+  type RecallResult,
   type SearchResult,
+  type SessionResult,
   type SessionView,
   type SourceView,
   serveRelay,
   serveReplica,
   serveStdio,
+  sessionResult,
   type TimelineResult,
   WATCH_INTERVAL_MS,
 } from '@openlinkos/origin-mcp';
@@ -116,7 +122,7 @@ Usage:
   origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
   origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
   origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
-  origin show      <id>                                  Show an entry, an event (with its original source), or a recall
+  origin show      <id> [--source <id>]                  Show an entry, an event (with its original source), a session, or a recall
   origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
   origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
   origin forget    <id> --reason <text> [--yes]          Hide an entry or event on every store, as a record (needs --yes)
@@ -868,14 +874,25 @@ function printEntry(e: ShownEntryDetail, history: string[], sources: ShownSource
 }
 
 async function cmdShow(ctx: Ctx, args: string[]): Promise<number> {
-  const id = args[0];
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { source: { type: 'string' } },
+  });
+  const id = positionals[0];
   if (!id) {
-    console.error('Usage: origin show <id>');
+    console.error('Usage: origin show <id> [--source <id>]');
     return 2;
   }
+  if (isRelay(ctx.db)) return showFromHub(relayHub(ctx), id, values.source);
   if (isRecallId(id)) return showRecall(ctx, id);
-  if (isRelay(ctx.db)) return showFromHub(relayHub(ctx), id);
   if (isEntryId(id)) return showEntry(ctx, id);
+  // An event, or a session: by its id, or as `<source>:<session id>`.
+  const opened = resolveId(ctx.db, id, values.source);
+  if (opened?.kind === 'session') {
+    printSession(sessionResult(ctx.db, opened.session));
+    return 0;
+  }
   const e = getEvent(ctx.db, id);
   if (!e) return notFound(ctx, id);
   const loc = rawLocator(ctx.db, ctx.home, e);
@@ -902,9 +919,101 @@ function showEntry(ctx: Ctx, id: string): number {
   return 0;
 }
 
-/** `origin show` on a relay: the entry or event as the hub has it, with its line on the hub. */
-async function showFromHub(hub: HubConfig, id: string): Promise<number> {
-  const r = (await askHub(hub, 'get', { id })) as GetResult;
+/**
+ * A session as `origin show` prints it: its card (see sessionResult in the MCP package), the same
+ * on a device and, from its hub, on a relay.
+ */
+function printSession(s: SessionResult): void {
+  const started = parseIso(s.started);
+  const ended = parseIso(s.ended);
+  const until = fmtDate(started) === fmtDate(ended) ? fmtTime(ended) : fmtDateTime(ended);
+  // A session without a title is named by its first prompt, in quotes: the user's words.
+  const name = s.title ?? (s.prompt ? `“${s.prompt}”` : '—');
+  console.log(`Session     ${s.session}  ${s.source}, project ${s.project ?? '—'}`);
+  console.log(`Name        ${oneLine(name, 100)}`);
+  if (s.cwd) console.log(`Directory   ${s.cwd}`);
+  console.log(`Time        ${fmtDateTime(started)} – ${until}`);
+  console.log(`Events      ${count(s.events, 'event')}, ${count(s.turns, 'turn')}`);
+  if (s.prompts.length > 0) {
+    console.log('\nTurns:');
+    for (const p of s.prompts) {
+      console.log(
+        `  ${String(p.turn).padStart(3)}. [${fmtDateTime(Date.parse(p.time))}] ${oneLine(p.text, 120)}`,
+      );
+      console.log(`       ↳ ${p.id}`);
+    }
+    if (s.more_prompts > 0) console.log(`  … and ${count(s.more_prompts, 'more turn')}`);
+  }
+  if (s.entries.length > 0) {
+    console.log('\nEntries written from it:');
+    for (const e of s.entries) {
+      console.log(`  [${fmtDateTime(Date.parse(e.created))}] ${e.kind}  ${oneLine(e.text, 120)}`);
+      console.log(`      ↳ ${e.id}`);
+    }
+  }
+  if (s.recalls.length > 0) {
+    console.log('\nRecalls it was handed:');
+    for (const r of s.recalls) {
+      const at = OCCASIONS[r.occasion as RecallRecord['occasion']] ?? r.occasion;
+      console.log(
+        `  [${fmtDateTime(Date.parse(r.time))}] at ${at}, ${count(r.items, 'item')}  ↳ ${r.id}`,
+      );
+    }
+  }
+  console.log('');
+  for (const [label, n] of [
+    ['Before', s.before],
+    ['After', s.after],
+  ] as const) {
+    if (!n) {
+      console.log(`${label.padEnd(12)}—`);
+      continue;
+    }
+    const other = n.title ?? (n.prompt ? `“${n.prompt}”` : '');
+    console.log(
+      `${label.padEnd(12)}${n.source} ${fmtDateTime(parseIso(n.started))}  ${oneLine(other, 80)}`,
+    );
+    console.log(`            ↳ ${n.session}`);
+  }
+  console.log(`\nIts events: origin timeline --session ${s.session}`);
+}
+
+/** A recall as the hub has it, for `origin show` on a relay. */
+function printRecall(r: RecallResult): void {
+  const at = OCCASIONS[r.occasion as RecallRecord['occasion']] ?? r.occasion;
+  console.log(`Recall      ${r.id}`);
+  console.log(`Time        ${fmtDateTime(Date.parse(r.time))}, at ${at}`);
+  console.log(`Agent       ${r.agent ?? '—'}${r.session ? `, session ${r.session}` : ''}`);
+  console.log(`Project     ${r.project ?? '—'}${r.directory ? ` (${r.directory})` : ''}`);
+  console.log(`Device      ${r.device}`);
+  console.log(`Tokens      about ${r.tokens} of ${r.budget}`);
+  if (r.items.length === 0) {
+    console.log('\nNothing it handed over is still visible.');
+    return;
+  }
+  const used = r.items.filter((i) => i.used).length;
+  console.log(`\nHanded over, ${count(used, 'item')} used since:`);
+  const lines = r.text.split('\n').filter((l) => l.startsWith('- '));
+  for (const item of r.items) {
+    const score = item.score === null ? '' : `, score ${item.score.toFixed(2)}`;
+    const ref = item.source ? `${item.source}:${item.id}` : item.id;
+    console.log(`  ${item.rank}. ${item.layer}${score}${item.used ? ', used' : ''}  ${ref}`);
+    const line = lines.find((l) => l.includes(item.id));
+    if (line) console.log(`     ${oneLine(line.slice(2), 100)}`);
+  }
+}
+
+/** `origin show` on a relay: the id as the hub has it; an event with its line on the hub. */
+async function showFromHub(hub: HubConfig, id: string, source?: string): Promise<number> {
+  const r = (await askHub(hub, 'get', source ? { id, source } : { id })) as GetResult;
+  if (isSessionResult(r)) {
+    printSession(r);
+    return 0;
+  }
+  if (isRecallResult(r)) {
+    printRecall(r);
+    return 0;
+  }
   if ('entry' in r) {
     const { entry: v, history, sources } = r as EntryResult;
     printEntry(
