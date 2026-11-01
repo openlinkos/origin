@@ -181,9 +181,9 @@ const PROMPT_HEAD = 1000;
  * and `<local-command-caveat>`, or Codex's `<environment_context>`: the elements a message starts
  * with are skipped, and what follows them is the prompt. Nothing left, or only a bracketed notice
  * such as `[Request interrupted by user]`, is no prompt. Whitespace is collapsed, and the prompt cut
- * to PROMPT_TITLE_MAX characters.
+ * to `max` characters, PROMPT_TITLE_MAX by default.
  */
-export function promptTitle(text: string): string | null {
+export function promptTitle(text: string, max = PROMPT_TITLE_MAX): string | null {
   let rest = text;
   for (;;) {
     rest = rest.trimStart();
@@ -202,9 +202,9 @@ export function promptTitle(text: string): string | null {
   const prompt = (long ? rest.slice(0, PROMPT_HEAD) : rest).replace(/\s+/g, ' ').trim();
   if (prompt.length === 0 || (!long && /^\[[^\]]*\]$/.test(prompt))) return null;
   const chars = [...prompt];
-  if (chars.length <= PROMPT_TITLE_MAX) return prompt;
+  if (chars.length <= max) return prompt;
   return `${chars
-    .slice(0, PROMPT_TITLE_MAX - 1)
+    .slice(0, max - 1)
     .join('')
     .trimEnd()}…`;
 }
@@ -310,12 +310,17 @@ export interface TurnStart extends SessionPrompt {
  * its own (not a sub-agent's), before the next prompt or command. A command the agent did not act
  * on, such as `/clear` or `/model`, starts no turn. Prompts come from the index of user messages;
  * each command costs one look into the `(source, session_id, ts)` index, up to the agent's first
- * event after it.
+ * event after it. A prompt is cut to `chars` characters (PROMPT_TITLE_MAX by default).
  */
-export function sessionTurnStarts(db: Database, source: string, sessionId: string): TurnStart[] {
+export function sessionTurnStarts(
+  db: Database,
+  source: string,
+  sessionId: string,
+  opts: { chars?: number } = {},
+): TurnStart[] {
   const candidates: TurnStart[] = [];
   for (const r of userMessages(db, source, sessionId)) {
-    const prompt = promptTitle(r.text);
+    const prompt = promptTitle(r.text, opts.chars);
     if (prompt !== null) {
       candidates.push({ id: r.id, seq: r.seq, ts: r.ts, prompt, command: false });
       continue;
@@ -448,6 +453,50 @@ export function getSession(db: Database, source: string, sessionId: string): Ses
     )
     .get(source, sessionId) as SessionRecord | undefined;
   return row ? toSessionRow(row, promptFinder(db)) : null;
+}
+
+/** The sources that have a session with this id and visible events in it, by name. */
+export function sessionSources(db: Database, sessionId: string): string[] {
+  return (
+    db
+      .prepare(
+        'SELECT source FROM session WHERE session_id = ? AND event_count > 0 ORDER BY source',
+      )
+      .all(sessionId) as unknown as Array<{ source: string }>
+  ).map((r) => r.source);
+}
+
+/** The key of a session in sessionNames: its source and id. */
+export const sessionKey = (source: string, sessionId: string) => `${source}\n${sessionId}`;
+
+/**
+ * The names of several sessions (see sessionKey), as one session's title or, without one, its
+ * provisional name (see promptTitle); null for a session with neither, or with no visible events.
+ * The titles come from one query; the prompts of those without a title, one look per session.
+ */
+export function sessionNames(
+  db: Database,
+  sessions: Array<{ source: string; sessionId: string }>,
+): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  const keys = [...new Map(sessions.map((s) => [sessionKey(s.source, s.sessionId), s])).values()];
+  if (keys.length === 0) return out;
+  const rows = db
+    .prepare(
+      `SELECT source, session_id, title FROM session
+        WHERE event_count > 0 AND (source, session_id) IN
+          (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?))`,
+    )
+    .all(JSON.stringify(keys.map((k) => [k.source, k.sessionId]))) as unknown as Array<{
+    source: string;
+    session_id: string;
+    title: string | null;
+  }>;
+  const prompt = promptFinder(db);
+  for (const r of rows) {
+    out.set(sessionKey(r.source, r.session_id), r.title ?? prompt(r.source, r.session_id));
+  }
+  return out;
 }
 
 /** List events in chronological order. */

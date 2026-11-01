@@ -24,6 +24,8 @@ export function fakeAdapter(root: string): SourceAdapter {
         kind?: EventKind;
         title?: string;
         project?: string;
+        /** The id of the event it follows, as Claude Code's `parentUuid`. */
+        parent?: string;
       };
       if (o.title) return { events: [], sessionTitle: o.title, sessionId: o.session };
       return {
@@ -36,6 +38,7 @@ export function fakeAdapter(root: string): SourceAdapter {
             kind: o.kind ?? 'message',
             text: o.text,
             project: o.project ?? 'demo',
+            parentId: o.parent ?? null,
           },
         ],
       };

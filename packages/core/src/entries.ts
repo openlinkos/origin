@@ -237,6 +237,76 @@ export function entriesCiting(db: Database, eventId: string): Entry[] {
 }
 
 /**
+ * Current entries, as listings show them (not superseded, forgotten, or ended), that cite a visible
+ * event matching `events`, a condition on the event `e`; newest first, at most `limit`, leaving out
+ * the versions of the entry with root `except`. A hidden source never counts (invariant 2), so an
+ * entry is not listed for what it cites through one.
+ */
+function currentCiting(
+  db: Database,
+  events: string,
+  params: unknown[],
+  limit: number,
+  except?: string,
+): Entry[] {
+  const where = [
+    'fe.entry_id IS NULL',
+    CURRENT_VERSION,
+    '(en.valid_to IS NULL OR en.valid_to > ?)',
+  ];
+  const values: unknown[] = [Date.now()];
+  if (except) {
+    where.push('en.root <> ?');
+    values.push(except);
+  }
+  where.push(`en.id IN (SELECT s.entry_id FROM entry_source s JOIN event e ON e.id = s.event_id
+    WHERE ${events} AND ${VISIBLE_EVENT})`);
+  values.push(...params, limit);
+  return (
+    db
+      .prepare(
+        `${ENTRY_SELECT} WHERE ${where.join(' AND ')}
+         ORDER BY en.created_at DESC, en.id DESC LIMIT ?`,
+      )
+      .all(...(values as never[])) as unknown as EntryRecord[]
+  ).map(toEntry);
+}
+
+/** The current entries that cite an event, newest first (see currentCiting). */
+export function currentEntriesCiting(db: Database, eventId: string, limit = 10): Entry[] {
+  return currentCiting(db, 'e.id = ?', [eventId], limit);
+}
+
+/** The current entries written from a session: those that cite its events, newest first. */
+export function entriesOfSession(
+  db: Database,
+  source: string,
+  sessionId: string,
+  limit = 10,
+): Entry[] {
+  return currentCiting(db, 'e.source = ? AND e.session_id = ?', [source, sessionId], limit);
+}
+
+/**
+ * The current entries related to an entry: other entries that cite an event of a session this
+ * version cites, its very events included; newest first. Versions of the entry itself are left out.
+ */
+export function relatedEntries(db: Database, id: string, limit = 10): Entry[] {
+  const entry = getEntry(db, id);
+  if (!entry) return [];
+  return currentCiting(
+    db,
+    `(e.source, e.session_id) IN (SELECT c.source, c.session_id FROM entry_source cs
+       JOIN event c ON c.id = cs.event_id
+       WHERE cs.entry_id = ?
+         AND NOT EXISTS (SELECT 1 FROM excluded_event cx WHERE cx.event_id = c.id))`,
+    [entry.id],
+    limit,
+    entry.root,
+  );
+}
+
+/**
  * Full-text search over active entries. Every term must occur in the text, ignoring case: terms of
  * three or more characters through the trigram index (ranked by BM25, best first), shorter ones by
  * checking the text. Without a term of three or more characters, newest first.
