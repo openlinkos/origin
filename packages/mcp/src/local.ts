@@ -192,8 +192,8 @@ export interface EntryResult {
   /** Every version of the entry, oldest first, forks included. */
   history: VersionView[];
   /**
-   * Other current entries that cite an event of a session this one cites, newest first (absent
-   * from older hubs).
+   * Other current entries that cite an event this one cites, or another event of a session it
+   * cites (a memory file's version is no session), newest first (absent from older hubs).
    */
   related?: EntryStub[];
   origin?: Found;

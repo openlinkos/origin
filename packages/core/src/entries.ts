@@ -288,19 +288,22 @@ export function entriesOfSession(
 }
 
 /**
- * The current entries related to an entry: other entries that cite an event of a session this
- * version cites, its very events included; newest first. Versions of the entry itself are left out.
+ * The current entries related to an entry: other entries that cite an event this version cites,
+ * or another event of a session it cites; newest first. Versions of the entry itself are left out.
+ * A version of a memory file (a `memory` event) is no part of a session: its stream holds every
+ * memory of a directory, so it relates only the entries that cite that very version.
  */
 export function relatedEntries(db: Database, id: string, limit = 10): Entry[] {
   const entry = getEntry(db, id);
   if (!entry) return [];
   return currentCiting(
     db,
-    `(e.source, e.session_id) IN (SELECT c.source, c.session_id FROM entry_source cs
-       JOIN event c ON c.id = cs.event_id
-       WHERE cs.entry_id = ?
-         AND NOT EXISTS (SELECT 1 FROM excluded_event cx WHERE cx.event_id = c.id))`,
-    [entry.id],
+    `(e.id IN (SELECT cs.event_id FROM entry_source cs WHERE cs.entry_id = ?)
+      OR (e.kind <> 'memory' AND (e.source, e.session_id) IN (
+        SELECT c.source, c.session_id FROM entry_source cs JOIN event c ON c.id = cs.event_id
+         WHERE cs.entry_id = ? AND c.kind <> 'memory'
+           AND NOT EXISTS (SELECT 1 FROM excluded_event cx WHERE cx.event_id = c.id))))`,
+    [entry.id, entry.id],
     limit,
     entry.root,
   );

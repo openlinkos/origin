@@ -330,6 +330,40 @@ describe('forgetting and the neighbours of what remains', () => {
   });
 });
 
+describe('imported memories', () => {
+  it('relate only through the very version they cite, and are no session', async () => {
+    // A memory stream holds every memory file of a directory, under one session id.
+    fs.writeFileSync(
+      path.join(src, 'memory.jsonl'),
+      line('m1', 'memory/demo', 1500, 'user', '# Cache\nUse an LRU.', 'memory') +
+        line('m2', 'memory/demo', 1501, 'user', '# Deploy\nShip on Fridays.', 'memory') +
+        line('m3', 'memory/demo', 1502, 'user', '# Style\nKeep commits short.', 'memory'),
+    );
+    await syncSource({ db, home }, fakeAdapter(src));
+    const cache = note('Use an LRU for the cache.', 'fake:m1');
+    note('Ship on Fridays.', 'fake:m2');
+    note('Keep commits short.', 'fake:m3');
+    expect(ids(relatedEntries(db, cache.id))).toEqual([]);
+    const same = note('The cache is an LRU, as its memory file says.', 'fake:m1');
+    expect(ids(relatedEntries(db, cache.id))).toEqual([same.id]);
+
+    // Entries written from a session are unaffected.
+    const first = note('Cache the API client with an LRU.', 'fake:b1');
+    const done = note('The cache wraps fetch.', 'fake:b5');
+    expect(ids(relatedEntries(db, first.id))).toEqual([done.id]);
+
+    // A memory stream is no session: it is not opened, named, or listed next to one.
+    expect(getSession(db, 'fake', 'memory/demo')).toBeNull();
+    expect(resolveId(db, 'memory/demo')).toBeNull();
+    expect(resolveId(db, 'fake:memory/demo')).toBeNull();
+    expect(sessionNames(db, [{ source: 'fake', sessionId: 'memory/demo' }]).size).toBe(0);
+    const card = describeSession(db, getSession(db, 'fake', 's1')!);
+    expect(card.before?.sessionId).toBe('s0');
+    expect(ids(card.entries)).toEqual([done.id, first.id]);
+    expect(describeSession(db, getSession(db, 'fake', 's0')!).after?.sessionId).toBe('s1');
+  });
+});
+
 describe('stubs and names', () => {
   it('cut text to one short line', () => {
     expect(stubText('  two\n\nlines  ')).toBe('two lines');
