@@ -109,7 +109,7 @@ function localHandlers(
         await refresh();
         return toolResult(timelineOf(db, args));
       }),
-    get: (args) => run(() => toolResult(getById(db, args.id))),
+    get: (args) => run(() => toolResult(getById(db, args))),
     sources: (args) => run(() => toolResult(sourcesOf(db, home, args.id))),
     remember: (args) =>
       run(async () => {

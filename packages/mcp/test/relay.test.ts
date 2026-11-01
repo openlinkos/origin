@@ -135,6 +135,22 @@ describe('origin mcp on a relay', () => {
     });
   });
 
+  it('hands the hub every input of a read as it is: ids of any kind, pages, and turns', async () => {
+    await connect();
+    const card = await call('get', { id: 's1', source: 'fake' });
+    expect(card.json).toMatchObject({ session: 's1', turns: 1, prompts: [{ id: 'fake:e1' }] });
+    expect(card.json.origin).toBeUndefined();
+    const page = await call('get', { id: 'fake:e1', offset: 5 });
+    expect(page.json).toMatchObject({
+      offset: 5,
+      text: 'the hub behind TLS and give every device its own token.',
+    });
+    const turn = await call('timeline', { session: 's1', turn: 1, limit: 1 });
+    expect(turn.json).toMatchObject({ more: 1, events: [{ id: 'fake:e1' }] });
+    const after = await call('timeline', { session: 's1', after: 'fake:e1' });
+    expect(after.json).toMatchObject({ more: 0, events: [{ id: 'fake:e2' }] });
+  });
+
   it('says that a relay cannot answer or write while its hub is unreachable', async () => {
     await connect({ answerTimeoutMs: 3000 });
     await hub.stop();

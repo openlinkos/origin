@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-51677628
+sourceHash: sha256-4e536dab
 ---
 
 # MCP 工具
@@ -22,15 +22,15 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
   --header "Authorization: Bearer ogn_…" --header "X-Origin-Client: claude-code"
 ```
 
-服务器在 MCP 的 `instructions` 里告诉 Agent 怎样使用这些工具：开始任务时，如果召回还没有给过简报，就调用 `brief`；回答关于过去工作的问题前先检索和阅读，并引用条目和事件的 id；记下决定及其理由、稳定的事实和用户的偏好，并引用它们出自的事件；把标为 `imported` 的条目看作某个 Agent 自己记忆文件的镜像；纠正有误的条目；只在用户要求时遗忘，并带上用户给的原因。
+服务器在 MCP 的 `instructions` 里告诉 Agent 怎样使用这些工具：开始任务时，如果召回还没有给过简报，就调用 `brief`；回答关于过去工作的问题前先检索和阅读（顺着 `get` 在它打开的内容旁列出的 id 读下去，长会话一次读一轮），并引用条目和事件的 id；记下决定及其理由、稳定的事实和用户的偏好，并引用它们出自的事件；把标为 `imported` 的条目看作某个 Agent 自己记忆文件的镜像；纠正有误的条目；只在用户要求时遗忘，并带上用户给的原因。
 
 ## 约定 {#conventions}
 
 - **结果**是一个 JSON 文本项。结果中的时间是 ISO 8601 格式，用服务器所在时区的本地时间，带毫秒和时区偏移，例如 `2026-10-20T09:12:30.000+08:00`。
 - **时间参数**（`since`、`until`、`valid_from`、`valid_to`）接受相对值 `30m`、`24h`、`7d`、`2w`（从现在往前算），或绝对的日期、时间：`2026-10-20` 或 ISO 8601。
-- **id。** 条目 id 是 `ent_` 加 12 到 32 个十六进制字符。事件 id 是 `<来源>:<来源中的 id>`，例如 `claude-code:7d0c4a1e-…`；来源是 `claude-code`、`codex`、`cursor`、`zcode` 或 `grok` 之一。
+- **id。** 条目 id 是 `ent_` 加 12 到 32 个十六进制字符。事件 id 是 `<来源>:<来源中的 id>`，例如 `claude-code:7d0c4a1e-…`；来源是 `claude-code`、`codex`、`cursor`、`zcode` 或 `grok` 之一。会话用它的 Agent 自己给的 id（例如一个 UUID），也可以像召回记录它那样写成 `<来源>:<会话 id>`。召回 id 是 `rcl_` 加 12 个十六进制字符。[`get`](#get) 可以打开其中任意一种。
 - **错误**以工具错误（`isError`）返回，附可读的说明，从不作为协议错误返回：无效的输入、未知的 id（`Unknown entry or event <id>.`）和已遗忘的 id（`<id> has been forgotten.`）。
-- **在连接了中枢的设备上**，结果中的每个条目、事件、会话和来源都带有 `origin`：本设备有的为 `local`，只有中枢有的为 `hub`。同一条目的多个版本只列出当前版本。如果中枢在 2 秒内（`ORIGIN_HUB_TIMEOUT_MS`）没有回答，结果只包含本设备的答案，后面再跟一个文本项：`Note: the Origin hub was not consulted (<reason>); these results come from this device only.`
+- **在连接了中枢的设备上**，结果中的每个条目、事件、会话和来源都带有 `origin`：本设备有的为 `local`，只有中枢有的为 `hub`；结果中列出的存根（见下文）不带，因为它们来自给出回答的那个库。同一条目的多个版本只列出当前版本。如果中枢在 2 秒内（`ORIGIN_HUB_TIMEOUT_MS`）没有回答，结果只包含本设备的答案，后面再跟一个文本项：`Note: the Origin hub was not consulted (<reason>); these results come from this device only.`
 - **在中继上**，每个结果都是中枢返回的原样，不带 `origin` 标注。连不上中枢时，每个工具都会失败，并说明中继只能通过它的中枢作答。
 
 ## 条目、事件和会话 {#entries-events-and-sessions}
@@ -53,6 +53,8 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 
 **会话**有 `session`、`source`、`project`、`title`（Agent 给它起的标题，没有则为 null）、`prompt`（没有标题的会话的第一条提示，截到 80 个字符）、`started`、`ended` 和 `events`（可见事件的数量）。
 
+**存根**是结果对它近旁内容的展示：一行，带一个 id，供 `get` 打开。条目的存根是 `{ id, kind, text, created }`，`text` 取它的第一行；事件的存根是 `{ id, time, role, kind, text }`，`text` 是合并成一行的正文；两者都截到约 120 个字符。会话的存根就是上面这样的会话。
+
 ## brief {#brief}
 
 用户的记忆中与 Agent 工作之处有关的内容，每项一行：一份简报，包括用户的偏好与边界、项目最新的决定和事实、这个项目最近与任意 Agent 的会话；加上 `about` 时，还有与它匹配的条目。它就是 Agent 的 hook 会拿到的内容（见[召回](./recall.md)），供 hook 无法交出内容的 Agent 使用，也以同样的方式记录为一次召回。
@@ -71,7 +73,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 ```json
 {
   "recall": "rcl_8b2f4e1a9c0d",
-  "text": "Origin recall rcl_8b2f4e1a9c0d: a brief from the user's cross-agent memory (project demo-app), one line each. Call Origin's `get` with an entry id for its full text and sources, or `timeline` with a session id to read that session. Entries can be outdated; the user's words in this session come first.\n\nThe user's preferences and boundaries:\n- ent_5f0c2a9e41b7 Run the full test suite before pushing\n\nProject demo-app:\n- ent_3f9a1c2b7d4e (2026-10-20) Releases are tagged from master once CI passes on Ubuntu and Windows."
+  "text": "Origin recall rcl_8b2f4e1a9c0d: a brief from the user's cross-agent memory (project demo-app), one line each. Origin's `get` opens any id here: an entry for its text and sources, a session for its turns and what was written from it. Entries can be outdated; the user's words in this session come first.\n\nThe user's preferences and boundaries:\n- ent_5f0c2a9e41b7 Run the full test suite before pushing\n\nProject demo-app:\n- ent_3f9a1c2b7d4e (2026-10-20) Releases are tagged from master once CI passes on Ubuntu and Windows."
 }
 ```
 
@@ -90,7 +92,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 | `include_tools` | 布尔值 | `false` | 除了消息，也检索工具调用和工具结果 |
 | `limit` | 整数，1 到 100 | 20 | 条目和事件各自最多返回这么多 |
 
-返回 `{ entries, events }`：当前的条目（不含有效期已结束的），以及事件；每个事件的文本截到 400 个字符，并带有一个 `snippet`，即第一处匹配附近最多 200 个字符，每处匹配都用方括号标出。
+返回 `{ entries, events }`：当前的条目（不含有效期已结束的），以及事件；每个事件的文本截到 400 个字符，并带有一个 `snippet`，即第一处匹配附近最多 200 个字符，每处匹配都用方括号标出，还带有 `session_title`，即事件所在会话的标题，没有标题时为它的第一条提示。
 
 ```json
 { "query": "release workflow", "limit": 5 }
@@ -127,7 +129,8 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
       "role": "user",
       "kind": "message",
       "text": "Set up the release workflow: tag from master, publish with provenance.",
-      "snippet": "Set up the [release] [workflow]: tag from master, publish with provenance."
+      "snippet": "Set up the [release] [workflow]: tag from master, publish with provenance.",
+      "session_title": "Release workflow"
     }
   ]
 }
@@ -135,7 +138,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 
 ## timeline {#timeline}
 
-某个时间范围内的会话，最新的在前；给了 `session` 时，按顺序列出一个会话的事件。
+某个时间范围内的会话，最新的在前；给了 `session` 时，按顺序一页一页地列出一个会话的事件。
 
 | 参数 | 类型 | 默认 | 含义 |
 |---|---|---|---|
@@ -144,10 +147,12 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 | `source` | 来源 id | 任意 | 只要这个来源的会话；与 `session` 一起使用时，指那个会话的来源 |
 | `project` | 字符串 | 任意 | 只要这个项目的会话 |
 | `session` | 字符串 | 无 | 会话 id：改为列出它的事件 |
+| `turn` | 整数，0 或更大 | 无 | 与 `session` 一起使用时：只列出这一轮的事件。一轮从一条提示开始，第一条为 1；0 是第一条提示之前的内容 |
+| `after` | 事件 id | 无 | 与 `session` 一起使用时：只列出这个事件之后的事件，即上一页的最后一个之后 |
 | `include_tools` | 布尔值 | `false` | 与 `session` 一起使用时：除了消息，也列出工具调用和结果、注入的上下文和系统事件 |
 | `limit` | 整数，1 到 500 | 50 | 最多返回这么多会话或事件 |
 
-返回 `{ sessions }`，按最后活动时间排序；或者 `{ session, events }`，即该会话最早的若干事件，从早到晚，每个事件的文本截到 1,000 个字符。一个会话内不能分页：更长的会话要加大 `limit`，或者用 `search` 加上 `project` 和时间范围。
+返回 `{ sessions }`，按最后活动时间排序；或者在给了 `session` 时返回 `{ session, title, prompt, events, more }`：会话的名称，所请求范围内最早的若干事件，从早到晚，每个事件的文本截到 1,000 个字符，以及 `more`，即这个范围内最后一个事件之后还有多少可见的事件。要继续读，把最后一个事件的 id 作为 `after` 传入；要读某一轮，把它的序号作为 `turn` 传入（[`get`](#get) 给出的会话卡片列出了它的各轮）。两个来源的会话共用同一个会话 id 时，需要给出 `source`。
 
 ```json
 { "since": "2d", "project": "demo-app", "limit": 2 }
@@ -180,15 +185,61 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 }
 ```
 
+一个会话的一轮，每次两个事件：
+
+```json
+{ "session": "2f1e8c47-0000-4000-8000-000000000001", "turn": 2, "limit": 2 }
+```
+
+```json
+{
+  "session": "2f1e8c47-0000-4000-8000-000000000001",
+  "title": "Release workflow",
+  "prompt": null,
+  "events": [
+    {
+      "id": "claude-code:7d0c4a1e-0000-4000-8000-000000000005",
+      "time": "2026-10-20T09:20:41.300+08:00",
+      "source": "claude-code",
+      "project": "demo-app",
+      "session": "2f1e8c47-0000-4000-8000-000000000001",
+      "role": "user",
+      "kind": "message",
+      "text": "Now publish with provenance from the release job."
+    },
+    {
+      "id": "claude-code:7d0c4a1e-0000-4000-8000-000000000006",
+      "time": "2026-10-20T09:20:52.004+08:00",
+      "source": "claude-code",
+      "project": "demo-app",
+      "session": "2f1e8c47-0000-4000-8000-000000000001",
+      "role": "assistant",
+      "kind": "message",
+      "text": "The release job now publishes with --provenance; it needs id-token: write."
+    }
+  ],
+  "more": 3
+}
+```
+
+下一页用同样的 `turn`，并传入 `"after": "claude-code:7d0c4a1e-0000-4000-8000-000000000006"`。
+
 ## get {#get}
 
-取一个条目及其来源和版本，或一个事件的全文。
+Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话或召回（见[沿引用阅读](../architecture.md#reading-along-references)）。近旁的一切都以存根给出，一行，带着 id，这样 Agent 就能一跳一跳地打开接下来要紧的内容，而不必读完整个会话。
 
 | 参数 | 类型 | 含义 |
 |---|---|---|
-| `id` | 字符串 | 条目 id（`ent_…`）或事件 id（`<来源>:…`） |
+| `id` | 字符串 | 条目 id（`ent_…`）、事件 id（`<来源>:…`）、会话 id（单独的 id，或 `<来源>:<会话 id>`）或召回 id（`rcl_…`） |
+| `source` | 来源 id | 两个来源的会话共用同一个会话 id 时：指明是哪一个。不给时，这样的 id 会报错，并列出这些来源 |
+| `offset` | 整数，0 或更大 | 对事件：正文从哪里开始，以 UTF-16 码元计（默认 0），用来分页读取很长的正文 |
 
-对条目，返回 `{ entry, sources, history }`：`sources` 是它引用的事件，每个带有它从中引用的 `quote`（没有则为 null），文本截到 500 个字符；`history` 列出条目的每个版本，从早到晚，包括分叉，每个版本有 `id`、`supersedes`、`author`、`created` 和 `status`。已被取代或有效期已结束的条目，按 id 仍然可以取到。对事件，返回事件本身，文本截到 20,000 个字符，并带有它的 `cwd`、`git_branch` 和 `agent_version`。
+- **条目**：`{ entry, sources, history, related }`。`sources` 是它引用的事件，每个带有它从中引用的 `quote`（没有则为 null）、截到 500 个字符的文本，以及 `session_title`；`history` 列出条目的每个版本，从早到晚，包括分叉，每个版本有 `id`、`supersedes`、`author`、`created` 和 `status`；`related` 以存根列出最多 10 个其他的当前条目，它们引用了这个条目所引用会话中的某个事件，从新到旧。已被取代或有效期已结束的条目，按 id 仍然可以取到。
+- **事件**：事件本身，带有它的 `cwd`、`git_branch`、`agent_version` 和 `session_title`，以及从 `offset` 开始、最多 20,000 个字符的正文，并给出 `total_chars`（正文全长）和 `next_offset`（下一页的起点，读到末尾时为 null）。它的第一页（`offset` 为 0）还带有它近旁的内容：`turn`，即 `{ number, prompt }`，它所在的轮次和开启这一轮的提示的存根，在第一条提示之前则为 null；`replies_to`，它的 Agent 记录的、它所接续的事件的存根（Claude Code 的 `parentUuid`），没有则为 null；`around`，即 `{ before, after }`，同一会话中它前后各两个可见事件的存根，除非它本身是工具调用或工具结果，否则只取消息；以及 `cited_by`，以存根列出最多 10 个引用它的当前条目。
+- **会话**：一张卡片，带有会话的各字段、它的 `cwd`，以及 `turns`（轮数）；`prompts`，它前 20 轮的起点，每个为 `{ turn, id, time, text }`，以及 `more_prompts`，即这些之后还有多少轮；`entries`，以存根列出最多 10 个从中写下的当前条目（引用了它的事件的条目），从新到旧；`recalls`，最多 10 次它拿到的召回，从新到旧，每次为 `{ id, occasion, time, items }`，`items` 是它交出的内容中仍然可见的数量；以及 `before` 和 `after`，同一项目中按开始时间紧挨在它前后的会话，不限 Agent，没有则为 null。要读某一轮，用 [`timeline`](#timeline)。
+- **召回**：`{ id, time, occasion, agent, session, device, project, directory, budget, tokens, items, text }`：它在何时、为哪个 Agent、哪个会话和哪台设备、在哪里而做，它的预算和用掉的 token，它的各项，每项为 `{ rank, layer, kind, id, score, used }`（会话还有 `source`；`used` 表示会话后来是否用到了这一项，会话还不知道时为 null），以及 `text`，即 Agent 拿到的内容，按库现在的样子重建。此后被遗忘的内容在两者中都会略去。
+
+当前条目就是列表中会显示的条目：没有被取代、没有被遗忘、也没有到期。被遗忘的内容从不出现在存根中，也不被计数。在连接了中枢的设备上，事件、会话或召回来自其中一个库，带的是那个库的存根：设备有这个 id 时用设备的，否则用中枢的，并去掉设备已遗忘的内容。
 
 ```json
 { "id": "ent_3f9a1c2b7d4e" }
@@ -214,7 +265,8 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
       "session": "2f1e8c47-0000-4000-8000-000000000001",
       "role": "user",
       "kind": "message",
-      "text": "Set up the release workflow: tag from master, publish with provenance."
+      "text": "Set up the release workflow: tag from master, publish with provenance.",
+      "session_title": "Release workflow"
     }
   ],
   "history": [
@@ -225,11 +277,75 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
       "created": "2026-10-20T09:12:30.000+08:00",
       "status": "active"
     }
+  ],
+  "related": [
+    {
+      "id": "ent_9c4d2e7f1a6b",
+      "kind": "knowledge",
+      "text": "The npm token is gone: packages publish through trusted publishing.",
+      "created": "2026-10-20T10:31:02.517+08:00"
+    }
   ]
 }
 ```
 
-上面的条目做了删节；实际结果包含它的全部字段。
+上面的条目做了删节；实际结果包含它的全部字段。按 id 打开一个会话：
+
+```json
+{ "id": "2f1e8c47-0000-4000-8000-000000000001" }
+```
+
+```json
+{
+  "session": "2f1e8c47-0000-4000-8000-000000000001",
+  "source": "claude-code",
+  "project": "demo-app",
+  "cwd": "/home/dana/code/demo-app",
+  "title": "Release workflow",
+  "prompt": null,
+  "started": "2026-10-20T09:01:05.120+08:00",
+  "ended": "2026-10-20T10:44:51.007+08:00",
+  "events": 212,
+  "turns": 2,
+  "prompts": [
+    {
+      "turn": 1,
+      "id": "claude-code:7d0c4a1e-0000-4000-8000-000000000001",
+      "time": "2026-10-20T09:01:05.120+08:00",
+      "text": "Set up the release workflow: tag from master, publish with provenance."
+    },
+    {
+      "turn": 2,
+      "id": "claude-code:7d0c4a1e-0000-4000-8000-000000000005",
+      "time": "2026-10-20T09:20:41.300+08:00",
+      "text": "Now publish with provenance from the release job."
+    }
+  ],
+  "more_prompts": 0,
+  "entries": [
+    {
+      "id": "ent_3f9a1c2b7d4e",
+      "kind": "memory",
+      "text": "Releases are tagged from master once CI passes on Ubuntu and Windows.",
+      "created": "2026-10-20T09:12:30.000+08:00"
+    }
+  ],
+  "recalls": [
+    { "id": "rcl_8b2f4e1a9c0d", "occasion": "start", "time": "2026-10-20T09:01:04.870+08:00", "items": 2 }
+  ],
+  "before": {
+    "session": "ses_0199f0a1-7c2e-7d3a-9b4c-5e6f7a8b9c0d",
+    "source": "zcode",
+    "project": "demo-app",
+    "title": null,
+    "prompt": "Why does the upload retry twice on a 503?",
+    "started": "2026-10-19T16:20:00.000+08:00",
+    "ended": "2026-10-19T16:52:13.480+08:00",
+    "events": 48
+  },
+  "after": null
+}
+```
 
 ## sources {#sources}
 

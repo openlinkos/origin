@@ -1,14 +1,23 @@
-import type {
-  EntryResult,
-  EntryView,
-  Found,
-  GetResult,
-  SearchResult,
-  SessionView,
-  SourceOfEntry,
-  SourceView,
-  TimelineResult,
-  VersionView,
+import {
+  type EntryResult,
+  type EntryStub,
+  type EntryView,
+  type EventResult,
+  type EventStub,
+  type Found,
+  type GetResult,
+  isEntryResult,
+  isRecallResult,
+  isSessionResult,
+  type RecallResult,
+  type SearchResult,
+  type SessionEvents,
+  type SessionResult,
+  type SessionView,
+  type SourceOfEntry,
+  type SourceView,
+  type TimelineResult,
+  type VersionView,
 } from './local.js';
 
 /**
@@ -134,12 +143,24 @@ export function mergeTimeline(
       .sort((a, b) => endedAt(b) - endedAt(a));
     return { sessions: sessions.slice(0, limit) };
   }
-  const theirs = hub && 'events' in hub ? hub.events : [];
-  const events = union(local.events, theirs, (e) => e.id)
+  const mine: SessionEvents = local;
+  const theirs = hub && 'events' in hub ? hub : null;
+  const events = union(mine.events, theirs?.events ?? [], (e) => e.id)
     .filter((e) => !facts.forgotten(e.id))
     .map((e) => labelled(e, facts, e.id))
     .sort((a, b) => Date.parse(a.time) - Date.parse(b.time) || (a.id < b.id ? -1 : 1));
-  return { session: local.session, events: events.slice(0, limit) };
+  const shown = events.slice(0, limit);
+  // What follows is counted by the side that had the events, this device when it had any, plus
+  // what the limit left out of the merged page.
+  const counted = mine.events.length > 0 || !theirs ? mine : theirs;
+  const named = mine.title != null || mine.prompt != null || !theirs ? mine : theirs;
+  return {
+    session: mine.session,
+    title: named.title ?? null,
+    prompt: named.prompt ?? null,
+    events: shown,
+    more: (counted.more ?? 0) + (events.length - shown.length),
+  };
 }
 
 /**
@@ -164,14 +185,70 @@ function resolveVersions(entry: EntryView, history: VersionView[]): Omit<EntryRe
   };
 }
 
-function isEntryResult(r: GetResult): r is EntryResult {
-  return 'entry' in r;
+/**
+ * Whether an entry the hub names may be shown here: the device has not forgotten it, nor holds a
+ * newer version of it.
+ */
+function shownHere(id: string, facts: LocalFacts): boolean {
+  if (facts.forgotten(id)) return false;
+  const status = facts.entryStatus(id);
+  return status === null || status === 'active';
+}
+
+const visibleStub = (s: EventStub | null, facts: LocalFacts) =>
+  s && !facts.forgotten(s.id) ? s : null;
+
+/** The hub's event, without the neighbours this device has forgotten. */
+function hubEvent(r: EventResult, facts: LocalFacts): EventResult {
+  const out = { ...r };
+  if (r.turn) out.turn = facts.forgotten(r.turn.prompt.id) ? null : r.turn;
+  if (r.replies_to !== undefined) out.replies_to = visibleStub(r.replies_to, facts);
+  if (r.around) {
+    const visible = (s: EventStub) => !facts.forgotten(s.id);
+    out.around = { before: r.around.before.filter(visible), after: r.around.after.filter(visible) };
+  }
+  if (r.cited_by) out.cited_by = r.cited_by.filter((e: EntryStub) => shownHere(e.id, facts));
+  return out;
+}
+
+/** The hub's session card, without the prompts and entries this device has forgotten. */
+function hubSession(r: SessionResult, facts: LocalFacts): SessionResult {
+  const prompts = r.prompts.filter((p) => !facts.forgotten(p.id));
+  return {
+    ...r,
+    turns: r.turns - (r.prompts.length - prompts.length),
+    prompts,
+    entries: r.entries.filter((e) => shownHere(e.id, facts)),
+  };
+}
+
+/** The hub's recall, without the items this device has forgotten, in its items and its text. */
+function hubRecall(r: RecallResult, facts: LocalFacts): RecallResult {
+  const hidden = r.items
+    .filter((i) => i.kind === 'entry' && facts.forgotten(i.id))
+    .map((i) => i.id);
+  if (hidden.length === 0) return r;
+  const lines = r.text.split('\n').filter((l) => !hidden.some((id) => l.startsWith(`- ${id}`)));
+  // A heading left with no items under it goes too, with the blank line before it.
+  const kept: string[] = [];
+  lines.forEach((l, i) => {
+    const heading = i > 0 && lines[i - 1] === '' && l !== '' && !l.startsWith('- ');
+    if (heading && !(lines[i + 1] ?? '').startsWith('- ')) kept.pop();
+    else kept.push(l);
+  });
+  return {
+    ...r,
+    items: r.items.filter((i) => !hidden.includes(i.id)),
+    text: kept.some((l) => l.startsWith('- ')) ? kept.join('\n') : '',
+  };
 }
 
 /**
- * `get` on a device: its own answer when it has the id, completed by the hub's (other versions of
- * the entry, written on the hub or on other devices); the hub's answer otherwise. Null when
- * neither has it.
+ * `get` on a device. An event, a session, or a recall is one store's answer, with that store's
+ * neighbours, never a mix of both: the device's own when it has the id, the hub's otherwise, less
+ * what the device has forgotten. An entry is the device's answer completed by the hub's (other
+ * versions of the entry, written on the hub or on other devices, and their sources); its related
+ * entries come from the store whose answer it is. Null when neither has it.
  */
 export function mergeGet(
   local: GetResult | null,
@@ -180,7 +257,9 @@ export function mergeGet(
 ): GetResult | null {
   if (local && !isEntryResult(local)) return { ...local, origin: 'local' };
   if (!local && hub && !isEntryResult(hub)) {
-    return facts.forgotten(hub.id) ? null : { ...hub, origin: 'hub' };
+    if (isSessionResult(hub)) return { ...hubSession(hub, facts), origin: 'hub' };
+    if (isRecallResult(hub)) return { ...hubRecall(hub, facts), origin: 'hub' };
+    return facts.forgotten(hub.id) ? null : { ...hubEvent(hub, facts), origin: 'hub' };
   }
   const mine = local && isEntryResult(local) ? local : null;
   const theirs = hub && isEntryResult(hub) ? hub : null;
@@ -194,9 +273,11 @@ export function mergeGet(
   const sources = union<SourceOfEntry>(mine?.sources ?? [], theirs?.sources ?? [], (s) => s.id)
     .filter((s) => !facts.forgotten(s.id))
     .map((s) => labelled(s, facts, s.id));
+  const related = mine ? mine.related : theirs?.related?.filter((e) => shownHere(e.id, facts));
   return {
     ...resolveVersions(base.entry, history),
     sources,
+    ...(related === undefined ? {} : { related }),
     origin: mine ? 'local' : 'hub',
   };
 }

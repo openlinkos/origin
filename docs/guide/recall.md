@@ -9,10 +9,10 @@ Claude Code and Codex get recall through their hooks. Other agents ask for it th
 - **When a session starts**, a brief: your preferences and boundaries for this project and those that hold everywhere, this project's latest decisions and facts, and its latest sessions with any agent in the last 30 days.
 - **With each prompt**, the entries whose first line shares rare enough words with it, at most five, leaving out what the session was already handed.
 
-Each item is one line, an id and the start of the entry, so a brief stays under about 800 tokens and a prompt's matches under 400. The agent asks Origin's `get` for the rest. For example, at the start of a session:
+Each item is one line, an id and the start of the entry, so a brief stays under about 800 tokens and a prompt's matches under 400. The agent asks Origin's `get` for the rest: an entry's text and sources, or a session's turns and the entries written from it, each with the ids of what is next to it (see [MCP tools](./mcp.md#get)). For example, at the start of a session:
 
 ```text
-Origin recall rcl_3f9a0c1d2e4b: a brief from the user's cross-agent memory (project acme), one line each. Call Origin's `get` with an entry id for its full text and sources, or `timeline` with a session id to read that session. Entries can be outdated; the user's words in this session come first.
+Origin recall rcl_3f9a0c1d2e4b: a brief from the user's cross-agent memory (project acme), one line each. Origin's `get` opens any id here: an entry for its text and sources, a session for its turns and what was written from it. Entries can be outdated; the user's words in this session come first.
 
 The user's preferences and boundaries:
 - ent_5f0c2a9e41b7 Run the full test suite before pushing; never skip CI on both platforms

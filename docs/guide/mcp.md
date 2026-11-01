@@ -18,15 +18,15 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
   --header "Authorization: Bearer ogn_…" --header "X-Origin-Client: claude-code"
 ```
 
-The server's MCP `instructions` tell agents how to use the tools: call `brief` when they start a task, unless a recall already gave them one; search and read before answering questions about past work and cite entry and event ids; remember decisions with their reasons, stable facts, and preferences of the user, citing the events they come from; treat entries marked `imported` as mirrors of an agent's own memory files; correct entries that are wrong; and forget only when the user asks, with their reason.
+The server's MCP `instructions` tell agents how to use the tools: call `brief` when they start a task, unless a recall already gave them one; search and read before answering questions about past work, following the ids that `get` lists next to what it opens and reading a long session a turn at a time, and cite entry and event ids; remember decisions with their reasons, stable facts, and preferences of the user, citing the events they come from; treat entries marked `imported` as mirrors of an agent's own memory files; correct entries that are wrong; and forget only when the user asks, with their reason.
 
 ## Conventions {#conventions}
 
 - **Results** are one JSON text item. Times in results are ISO 8601 in the server's local time zone, with milliseconds and offset, such as `2026-10-20T09:12:30.000+08:00`.
 - **Time arguments** (`since`, `until`, `valid_from`, `valid_to`) take a relative value, `30m`, `24h`, `7d`, or `2w`, counted back from now, or an absolute date or time, `2026-10-20` or ISO 8601.
-- **Ids.** Entries are `ent_` and 12 to 32 hex characters. Events are `<source>:<id in the source>`, such as `claude-code:7d0c4a1e-…`; a source is `claude-code`, `codex`, `cursor`, `zcode`, or `grok`.
+- **Ids.** Entries are `ent_` and 12 to 32 hex characters. Events are `<source>:<id in the source>`, such as `claude-code:7d0c4a1e-…`; a source is `claude-code`, `codex`, `cursor`, `zcode`, or `grok`. Sessions go by their agent's own id, such as a UUID, or by `<source>:<session id>`, as recalls record them. Recalls are `rcl_` and 12 hex characters. [`get`](#get) opens any of them.
 - **Errors** come back as tool errors (`isError`) with a readable message, never as protocol errors: invalid input, unknown ids (`Unknown entry or event <id>.`), and forgotten ids (`<id> has been forgotten.`).
-- **On a device connected to a hub**, every entry, event, session, and source in a result carries `origin`: `local` if this device has it, `hub` if only the hub does. Of the versions of one entry, only the current one is listed. If the hub does not answer within 2 seconds (`ORIGIN_HUB_TIMEOUT_MS`), the result holds this device's answer alone, followed by a second text item: `Note: the Origin hub was not consulted (<reason>); these results come from this device only.`
+- **On a device connected to a hub**, every entry, event, session, and source in a result carries `origin`: `local` if this device has it, `hub` if only the hub does; the stubs a result lists (see below) do not, as they come from the store that answered. Of the versions of one entry, only the current one is listed. If the hub does not answer within 2 seconds (`ORIGIN_HUB_TIMEOUT_MS`), the result holds this device's answer alone, followed by a second text item: `Note: the Origin hub was not consulted (<reason>); these results come from this device only.`
 - **On a relay**, every result is the hub's, as the hub returns it, without `origin` labels. When the hub cannot be reached, every tool fails with a message saying that the relay answers only through its hub.
 
 ## Entries, events, and sessions {#entries-events-and-sessions}
@@ -49,6 +49,8 @@ An **event** has `id`, `time`, `source`, `project`, `session` (the session id), 
 
 A **session** has `session`, `source`, `project`, `title` (the title its agent gave it, or null), `prompt` (for a session without a title, its first prompt, cut to 80 characters), `started`, `ended`, and `events` (the number of its visible events).
 
+A **stub** is what a result shows of what is next to it: one line with an id, for `get` to open. An entry's stub is `{ id, kind, text, created }`, with its first line as `text`; an event's is `{ id, time, role, kind, text }`, with its text on one line; both are cut to about 120 characters. A session's stub is the session as above.
+
 ## brief {#brief}
 
 What the user's memory holds for where the agent works, one line per item: a brief of the user's preferences and boundaries, the project's latest decisions and facts, and its latest sessions with any agent, and with `about`, the entries that match it. It is what an agent's hooks are handed (see [Recall](./recall.md)), for agents whose hooks cannot hand anything over, and it is recorded the same way, as a recall.
@@ -67,7 +69,7 @@ It returns `{ recall, text }`: the recall's id, and the items under a header tha
 ```json
 {
   "recall": "rcl_8b2f4e1a9c0d",
-  "text": "Origin recall rcl_8b2f4e1a9c0d: a brief from the user's cross-agent memory (project demo-app), one line each. Call Origin's `get` with an entry id for its full text and sources, or `timeline` with a session id to read that session. Entries can be outdated; the user's words in this session come first.\n\nThe user's preferences and boundaries:\n- ent_5f0c2a9e41b7 Run the full test suite before pushing\n\nProject demo-app:\n- ent_3f9a1c2b7d4e (2026-10-20) Releases are tagged from master once CI passes on Ubuntu and Windows."
+  "text": "Origin recall rcl_8b2f4e1a9c0d: a brief from the user's cross-agent memory (project demo-app), one line each. Origin's `get` opens any id here: an entry for its text and sources, a session for its turns and what was written from it. Entries can be outdated; the user's words in this session come first.\n\nThe user's preferences and boundaries:\n- ent_5f0c2a9e41b7 Run the full test suite before pushing\n\nProject demo-app:\n- ent_3f9a1c2b7d4e (2026-10-20) Releases are tagged from master once CI passes on Ubuntu and Windows."
 }
 ```
 
@@ -86,7 +88,7 @@ Full-text search over entries and session events, best match first. Without a qu
 | `include_tools` | boolean | `false` | Also search tool calls and tool results, not only messages |
 | `limit` | integer, 1 to 100 | 20 | At most this many entries, and this many events |
 
-It returns `{ entries, events }`: current entries, without those whose validity has ended, and events, each with its text cut to 400 characters and a `snippet` of up to 200 characters around the first match, with every match in brackets.
+It returns `{ entries, events }`: current entries, without those whose validity has ended, and events, each with its text cut to 400 characters, a `snippet` of up to 200 characters around the first match, with every match in brackets, and `session_title`, the title of the event's session or, without one, its first prompt.
 
 ```json
 { "query": "release workflow", "limit": 5 }
@@ -123,7 +125,8 @@ It returns `{ entries, events }`: current entries, without those whose validity 
       "role": "user",
       "kind": "message",
       "text": "Set up the release workflow: tag from master, publish with provenance.",
-      "snippet": "Set up the [release] [workflow]: tag from master, publish with provenance."
+      "snippet": "Set up the [release] [workflow]: tag from master, publish with provenance.",
+      "session_title": "Release workflow"
     }
   ]
 }
@@ -131,7 +134,7 @@ It returns `{ entries, events }`: current entries, without those whose validity 
 
 ## timeline {#timeline}
 
-Sessions in a time range, newest first; or, with `session`, the events of one session in order.
+Sessions in a time range, newest first; or, with `session`, the events of one session in order, a page at a time.
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
@@ -140,10 +143,12 @@ Sessions in a time range, newest first; or, with `session`, the events of one se
 | `source` | source id | any | Sessions of this source only; with `session`, the source of that session |
 | `project` | string | any | Sessions of this project only |
 | `session` | string | none | A session id: list its events instead |
+| `turn` | integer, 0 or more | none | With `session`: only the events of this turn. A turn starts at a prompt, 1 at the first; 0 is what came before the first prompt |
+| `after` | event id | none | With `session`: only the events after this one, the last of the page before |
 | `include_tools` | boolean | `false` | With `session`: also list tool calls and results, injected context, and system events, not only messages |
 | `limit` | integer, 1 to 500 | 50 | At most this many sessions, or events |
 
-It returns `{ sessions }`, sessions ordered by their last activity, or `{ session, events }`, the session's first events oldest first, each with its text cut to 1,000 characters. There is no paging within a session: a longer session needs a larger `limit`, or `search` with `project` and a time range.
+It returns `{ sessions }`, sessions ordered by their last activity, or, with `session`, `{ session, title, prompt, events, more }`: the session's name, its first events in the range asked for, oldest first, each with its text cut to 1,000 characters, and `more`, how many visible events of that range follow the last one. To read on, pass the last event's id as `after`; to read one turn, pass its number as `turn` (a session's card from [`get`](#get) lists its turns). A session id that sessions of two sources share needs `source`.
 
 ```json
 { "since": "2d", "project": "demo-app", "limit": 2 }
@@ -176,15 +181,61 @@ It returns `{ sessions }`, sessions ordered by their last activity, or `{ sessio
 }
 ```
 
+One turn of a session, two events at a time:
+
+```json
+{ "session": "2f1e8c47-0000-4000-8000-000000000001", "turn": 2, "limit": 2 }
+```
+
+```json
+{
+  "session": "2f1e8c47-0000-4000-8000-000000000001",
+  "title": "Release workflow",
+  "prompt": null,
+  "events": [
+    {
+      "id": "claude-code:7d0c4a1e-0000-4000-8000-000000000005",
+      "time": "2026-10-20T09:20:41.300+08:00",
+      "source": "claude-code",
+      "project": "demo-app",
+      "session": "2f1e8c47-0000-4000-8000-000000000001",
+      "role": "user",
+      "kind": "message",
+      "text": "Now publish with provenance from the release job."
+    },
+    {
+      "id": "claude-code:7d0c4a1e-0000-4000-8000-000000000006",
+      "time": "2026-10-20T09:20:52.004+08:00",
+      "source": "claude-code",
+      "project": "demo-app",
+      "session": "2f1e8c47-0000-4000-8000-000000000001",
+      "role": "assistant",
+      "kind": "message",
+      "text": "The release job now publishes with --provenance; it needs id-token: write."
+    }
+  ],
+  "more": 3
+}
+```
+
+The next page passes `"after": "claude-code:7d0c4a1e-0000-4000-8000-000000000006"` with the same `turn`.
+
 ## get {#get}
 
-An entry with its sources and versions, or an event with its full text.
+Any id Origin hands over, with what is next to it: an entry, an event, a session, or a recall (see [Reading along references](../architecture.md#reading-along-references)). Everything next to it comes as a stub, one line with its id, so that an agent opens what matters next, one hop at a time, rather than reading whole sessions.
 
 | Parameter | Type | Meaning |
 |---|---|---|
-| `id` | string | An entry id (`ent_…`) or an event id (`<source>:…`) |
+| `id` | string | An entry id (`ent_…`), an event id (`<source>:…`), a session id (alone, or as `<source>:<session id>`), or a recall id (`rcl_…`) |
+| `source` | source id | For a session id that sessions of two sources share: which one. Without it, such an id is an error that names the sources |
+| `offset` | integer, 0 or more | For an event: where its text starts, in UTF-16 code units (0 by default), to read a long one in pages |
 
-For an entry, it returns `{ entry, sources, history }`: `sources` are the events it cites, each with the `quote` it cites from it, or null, and its text cut to 500 characters; `history` lists every version of the entry, oldest first, forks included, each with `id`, `supersedes`, `author`, `created`, and `status`. An entry that is superseded or whose validity has ended is still returned by id. For an event, it returns the event with its text cut to 20,000 characters, and its `cwd`, `git_branch`, and `agent_version`.
+- **An entry**: `{ entry, sources, history, related }`. `sources` are the events it cites, each with the `quote` it cites from it, or null, its text cut to 500 characters, and its `session_title`; `history` lists every version of the entry, oldest first, forks included, each with `id`, `supersedes`, `author`, `created`, and `status`; `related` lists up to 10 other current entries that cite an event of a session this one cites, newest first, as stubs. An entry that is superseded or whose validity has ended is still returned by id.
+- **An event**: the event with its `cwd`, `git_branch`, `agent_version`, and `session_title`, and its text from `offset` on, at most 20,000 characters, with `total_chars`, the length of all of it, and `next_offset`, where the next page starts, or null at the end. Its first page (`offset` 0) also has what is next to it: `turn`, `{ number, prompt }`, the turn it falls in and the stub of the prompt that started that turn, or null before the first prompt; `replies_to`, the stub of the event its agent recorded it as following (Claude Code's `parentUuid`), or null; `around`, `{ before, after }`, the stubs of the two visible events on each side in its session, messages only unless the event is a tool call or result; and `cited_by`, up to 10 current entries that cite it, as stubs.
+- **A session**: a card with the fields of a session, its `cwd`, and `turns`, its number of turns; `prompts`, where its first 20 turns start, each `{ turn, id, time, text }`, and `more_prompts`, how many turns follow those; `entries`, up to 10 current entries written from it (that cite its events), newest first, as stubs; `recalls`, up to 10 recalls it was handed, newest first, each `{ id, occasion, time, items }`, where `items` counts what it handed over that is still visible; and `before` and `after`, the sessions just before and after it in its project, of any agent, by when they started, or null. Read a turn with [`timeline`](#timeline).
+- **A recall**: `{ id, time, occasion, agent, session, device, project, directory, budget, tokens, items, text }`: when, for which agent, session, and device, and where it was made, its budget and the tokens it used, its items, each `{ rank, layer, kind, id, score, used }` (and `source` for a session; `used` says whether the session went on to use the item, and is null while the session is not known), and `text`, what the agent was handed, rebuilt from the store as it is now. What was forgotten since is left out of both.
+
+Current entries are those that listings show: not superseded, forgotten, or ended. What was forgotten is never among the stubs, nor counted. On a device connected to a hub, an event, a session, or a recall comes from one store, with that store's stubs: the device's when it has the id, otherwise the hub's, without what the device has forgotten.
 
 ```json
 { "id": "ent_3f9a1c2b7d4e" }
@@ -210,7 +261,8 @@ For an entry, it returns `{ entry, sources, history }`: `sources` are the events
       "session": "2f1e8c47-0000-4000-8000-000000000001",
       "role": "user",
       "kind": "message",
-      "text": "Set up the release workflow: tag from master, publish with provenance."
+      "text": "Set up the release workflow: tag from master, publish with provenance.",
+      "session_title": "Release workflow"
     }
   ],
   "history": [
@@ -221,11 +273,75 @@ For an entry, it returns `{ entry, sources, history }`: `sources` are the events
       "created": "2026-10-20T09:12:30.000+08:00",
       "status": "active"
     }
+  ],
+  "related": [
+    {
+      "id": "ent_9c4d2e7f1a6b",
+      "kind": "knowledge",
+      "text": "The npm token is gone: packages publish through trusted publishing.",
+      "created": "2026-10-20T10:31:02.517+08:00"
+    }
   ]
 }
 ```
 
-The entry above is shortened; a result holds all its fields.
+The entry above is shortened; a result holds all its fields. A session, by its id:
+
+```json
+{ "id": "2f1e8c47-0000-4000-8000-000000000001" }
+```
+
+```json
+{
+  "session": "2f1e8c47-0000-4000-8000-000000000001",
+  "source": "claude-code",
+  "project": "demo-app",
+  "cwd": "/home/dana/code/demo-app",
+  "title": "Release workflow",
+  "prompt": null,
+  "started": "2026-10-20T09:01:05.120+08:00",
+  "ended": "2026-10-20T10:44:51.007+08:00",
+  "events": 212,
+  "turns": 2,
+  "prompts": [
+    {
+      "turn": 1,
+      "id": "claude-code:7d0c4a1e-0000-4000-8000-000000000001",
+      "time": "2026-10-20T09:01:05.120+08:00",
+      "text": "Set up the release workflow: tag from master, publish with provenance."
+    },
+    {
+      "turn": 2,
+      "id": "claude-code:7d0c4a1e-0000-4000-8000-000000000005",
+      "time": "2026-10-20T09:20:41.300+08:00",
+      "text": "Now publish with provenance from the release job."
+    }
+  ],
+  "more_prompts": 0,
+  "entries": [
+    {
+      "id": "ent_3f9a1c2b7d4e",
+      "kind": "memory",
+      "text": "Releases are tagged from master once CI passes on Ubuntu and Windows.",
+      "created": "2026-10-20T09:12:30.000+08:00"
+    }
+  ],
+  "recalls": [
+    { "id": "rcl_8b2f4e1a9c0d", "occasion": "start", "time": "2026-10-20T09:01:04.870+08:00", "items": 2 }
+  ],
+  "before": {
+    "session": "ses_0199f0a1-7c2e-7d3a-9b4c-5e6f7a8b9c0d",
+    "source": "zcode",
+    "project": "demo-app",
+    "title": null,
+    "prompt": "Why does the upload retry twice on a 503?",
+    "started": "2026-10-19T16:20:00.000+08:00",
+    "ended": "2026-10-19T16:52:13.480+08:00",
+    "events": 48
+  },
+  "after": null
+}
+```
 
 ## sources {#sources}
 

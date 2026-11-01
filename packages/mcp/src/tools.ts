@@ -7,7 +7,7 @@ import { z } from 'zod';
 export const INSTRUCTIONS = `Origin is the user's local, cross-agent memory: an append-only archive of their sessions with AI coding agents, plus durable entries — memory (what happened), knowledge (stable facts), and cognition (the user's preferences, methods, goals, and boundaries).
 
 - When you start a task, call \`brief\` with your working directory, unless a note headed \`Origin recall\` already gave you one: it lists the user's preferences, the project's latest decisions and facts, and its latest sessions, one line each. Use \`get\` on the ids that matter.
-- To answer questions about past work, decisions, or reasons, use \`search\` and \`timeline\`, then \`get\` or \`sources\` to read the original text. Cite entry and event ids.
+- To answer questions about past work, decisions, or reasons, use \`search\` and \`timeline\`, then \`get\` or \`sources\` to read the original text. \`get\` opens any id Origin gives you (an entry, an event, a session, or a recall) and lists what is next to it, one line each with its id: follow the ids that matter rather than reading everything. Read a long session a turn at a time with \`timeline\` (\`session\`, \`turn\`, \`after\`). Cite entry and event ids.
 - When you learn something that will matter in future sessions — a decision and its reason, a stable fact, a preference of the user — save it with \`remember\`, citing the events it comes from: event ids from search/timeline, or an exact quote from this conversation.
 - Entries marked \`imported\` mirror an agent's own memory files (such as Claude Code's memory directory); a later version of the file supersedes a correction made here. Entries whose validity has ended are left out of search unless you ask for one by id.
 - If an entry is wrong or outdated, use \`correct\`. Use \`forget\` only when the user explicitly asks, and pass their reason: it hides the entry or event from every query on every store and is kept as a record; only the user can restore it, from the Origin CLI or admin UI.
@@ -72,23 +72,47 @@ export const TOOL_SPECS = {
   timeline: {
     title: 'Timeline',
     description:
-      'Sessions in a time range (newest first), each with its title or, when it has none, its first prompt; or the events of one session in order when `session` is given.',
+      'Sessions in a time range (newest first), each with its title or, when it has none, its first prompt; or, with `session`, the events of one session in order, a page at a time: `turn` reads one turn, `after` goes on after the last event of a page, and `more` says how many follow.',
     inputSchema: {
       since: time.describe('Start of the range (default 7d)'),
       until: time,
       source: z.string().optional(),
       project: z.string().optional(),
       session: z.string().optional().describe('Session id: list its events instead'),
+      turn: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          'With session: only this turn (1 for the first prompt; 0 for what came before it)',
+        ),
+      after: z
+        .string()
+        .optional()
+        .describe('With session: continue after this event id, the last of the previous page'),
       include_tools: z.boolean().default(false),
       limit: z.number().int().min(1).max(500).default(50),
     },
     annotations: readOnly,
   },
   get: {
-    title: 'Get entry or event',
+    title: 'Get by id',
     description:
-      'Fetch an entry (with its sources and version history) or an event (full text) by id.',
-    inputSchema: { id: z.string().describe('Entry id (ent_…) or event id (source:…)') },
+      'Open any id Origin hands you, with what is next to it, one line each by id: an entry (sources, version history, related entries), an event (its text, session, turn, the events around it, and the entries citing it), a session (its turns, the entries written from it, its recalls, and the sessions before and after it), or a recall (what it handed over).',
+    inputSchema: {
+      id: z.string().describe('Entry (ent_…), event (source:…), session, or recall (rcl_…) id'),
+      source: z
+        .string()
+        .optional()
+        .describe('For a session id: its source, when sessions of two sources have that id'),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe("For an event: where to start reading its text (a page's next_offset)"),
+    },
     annotations: readOnly,
   },
   sources: {

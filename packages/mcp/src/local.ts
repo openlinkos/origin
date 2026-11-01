@@ -1,31 +1,48 @@
 import {
   correct,
   type Database,
+  describeSession,
   type Entry,
   type EventRow,
   entryHistory,
   entrySources,
+  eventContext,
+  findSession,
+  firstLine,
   forget,
   getEntry,
   getEvent,
+  getRecall,
+  getSession,
   isEntryForgotten,
   isEntryId,
   isEventForgotten,
   isoLocal,
   listEntries,
-  listEvents,
   listSessions,
+  NEIGHBOUR_MAX,
   OriginError,
   parseTime,
   planRecall,
+  type RecallItemRecord,
   rawLocator,
   readRawLine,
+  readSession,
+  rebuildRecall,
   recallScope,
+  recallSession,
   recallText,
   recordRecall,
+  relatedEntries,
   remember,
+  resolveId,
+  type SessionRow,
   searchEntries,
   searchEvents,
+  sessionKey,
+  sessionNames,
+  stubText,
+  usedRefs,
 } from '@openlinkos/origin-core';
 import type { ToolArgs } from './tools.js';
 
@@ -77,6 +94,8 @@ export interface EventView {
 
 export interface SearchHitView extends EventView {
   snippet: string;
+  /** The title of the event's session, or its first prompt (absent from older hubs). */
+  session_title?: string | null;
 }
 
 export interface SearchResult {
@@ -100,7 +119,57 @@ export interface SessionView {
   origin?: Found;
 }
 
-export type TimelineResult = { sessions: SessionView[] } | { session: string; events: EventView[] };
+/** The events of one session, a page at a time (see timelineOf). */
+export interface SessionEvents {
+  session: string;
+  /** The session's title and first prompt, as in SessionView (absent from older hubs). */
+  title?: string | null;
+  prompt?: string | null;
+  events: EventView[];
+  /** How many visible events of the range asked for follow the last one (absent from older hubs). */
+  more?: number;
+}
+
+export type TimelineResult = { sessions: SessionView[] } | SessionEvents;
+
+/**
+ * Stubs: what a card shows of its neighbours, one line each, by id (see
+ * docs/architecture.md#reading-along-references). `get` opens any of them.
+ */
+
+/** An entry in one line: its first line, cut short. */
+export interface EntryStub {
+  id: string;
+  kind: string;
+  text: string;
+  created: string;
+}
+
+/** An event in one line: its text on one line, cut short. */
+export interface EventStub {
+  id: string;
+  time: string;
+  role: string;
+  kind: string;
+  text: string;
+}
+
+/** Where a turn of a session starts: its prompt, or the command the agent acted on. */
+export interface PromptStub {
+  turn: number;
+  id: string;
+  time: string;
+  text: string;
+}
+
+/** A recall a session was handed, in one line: `get` opens it. */
+export interface RecallStub {
+  id: string;
+  occasion: string;
+  time: string;
+  /** How many of its items are still visible. */
+  items: number;
+}
 
 /** One version in an entry's history: enough to tell the chain's shape and its current version. */
 export interface VersionView {
@@ -113,6 +182,8 @@ export interface VersionView {
 
 export interface SourceOfEntry extends EventView {
   quote: string | null;
+  /** The title of the event's session, or its first prompt (absent from older hubs). */
+  session_title?: string | null;
 }
 
 export interface EntryResult {
@@ -120,6 +191,11 @@ export interface EntryResult {
   sources: SourceOfEntry[];
   /** Every version of the entry, oldest first, forks included. */
   history: VersionView[];
+  /**
+   * Other current entries that cite an event of a session this one cites, newest first (absent
+   * from older hubs).
+   */
+  related?: EntryStub[];
   origin?: Found;
 }
 
@@ -127,9 +203,83 @@ export interface EventResult extends EventView {
   cwd: string | null;
   git_branch: string | null;
   agent_version: string | null;
+  /** The fields below are absent from older hubs. */
+  session_title?: string | null;
+  /** Where `text` starts in the event's text, in UTF-16 code units, and the length of all of it. */
+  offset?: number;
+  total_chars?: number;
+  /** The offset of the next page of the text, or null when this page reaches its end. */
+  next_offset?: number | null;
+  /**
+   * What is next to the event, on its first page only (offset 0): its turn and that turn's
+   * prompt, the event it follows, the events around it, and the current entries that cite it.
+   */
+  turn?: { number: number; prompt: EventStub } | null;
+  replies_to?: EventStub | null;
+  around?: { before: EventStub[]; after: EventStub[] };
+  cited_by?: EntryStub[];
 }
 
-export type GetResult = EntryResult | EventResult;
+/** A session as a card: what it is, and what is next to it (see sessionResult). */
+export interface SessionResult extends SessionView {
+  cwd: string | null;
+  turns: number;
+  prompts: PromptStub[];
+  /** How many turns follow those in `prompts`. */
+  more_prompts: number;
+  entries: EntryStub[];
+  recalls: RecallStub[];
+  before: SessionView | null;
+  after: SessionView | null;
+}
+
+/** One item a recall handed over. */
+export interface RecallItemView {
+  rank: number;
+  layer: string;
+  kind: 'entry' | 'session';
+  /** An entry id, or a session id, with the session's `source`. */
+  id: string;
+  source?: string;
+  score: number | null;
+  /** Whether the session went on to use it; null while the recall's session is not known. */
+  used: boolean | null;
+}
+
+/** A recall, and the text it handed over as the store rebuilds it now (see recallResult). */
+export interface RecallResult {
+  id: string;
+  time: string;
+  occasion: string;
+  agent: string | null;
+  session: string | null;
+  device: string;
+  project: string | null;
+  directory: string | null;
+  budget: number;
+  tokens: number;
+  items: RecallItemView[];
+  text: string;
+  origin?: Found;
+}
+
+export type GetResult = EntryResult | EventResult | SessionResult | RecallResult;
+
+export function isEntryResult(r: GetResult): r is EntryResult {
+  return 'entry' in r;
+}
+
+export function isSessionResult(r: GetResult): r is SessionResult {
+  return 'turns' in r;
+}
+
+export function isRecallResult(r: GetResult): r is RecallResult {
+  return 'occasion' in r && 'items' in r;
+}
+
+export function isEventResult(r: GetResult): r is EventResult {
+  return !isEntryResult(r) && !isSessionResult(r) && !isRecallResult(r);
+}
 
 export interface SourceView {
   event_id: string;
@@ -158,6 +308,35 @@ export function eventView(e: EventRow, maxText: number): EventView {
     text: clip(e.text, maxText),
   };
 }
+
+export function entryStub(e: Entry): EntryStub {
+  return {
+    id: e.id,
+    kind: e.kind,
+    text: stubText(firstLine(e.text)),
+    created: isoLocal(e.createdAt),
+  };
+}
+
+export function eventStub(e: Pick<EventRow, 'id' | 'ts' | 'role' | 'kind' | 'text'>): EventStub {
+  return { id: e.id, time: isoLocal(e.ts), role: e.role, kind: e.kind, text: stubText(e.text) };
+}
+
+export function sessionView(s: SessionRow): SessionView {
+  return {
+    session: s.sessionId,
+    source: s.source,
+    project: s.project,
+    title: s.title,
+    prompt: s.prompt,
+    started: s.startedAt === null ? null : isoLocal(s.startedAt),
+    ended: s.endedAt === null ? null : isoLocal(s.endedAt),
+    events: s.eventCount,
+  };
+}
+
+/** A session's name: its title, or its first prompt. */
+const nameOf = (s: SessionRow | null): string | null => (s ? (s.title ?? s.prompt) : null);
 
 export function entryView(e: Entry): EntryView {
   return {
@@ -223,21 +402,37 @@ export function searchStore(db: Database, args: ToolArgs<'search'>): SearchResul
           kinds: args.include_tools ? undefined : ['message'],
           limit: args.limit,
         });
+  // Each hit names its session; the names of the page's sessions are looked up together.
+  const names = sessionNames(db, events);
   return {
     entries: entries.map(entryView),
-    events: events.map((h) => ({ ...eventView(h, 400), snippet: h.snippet })),
+    events: events.map((h) => ({
+      ...eventView(h, 400),
+      snippet: h.snippet,
+      session_title: names.get(sessionKey(h.source, h.sessionId)) ?? null,
+    })),
   };
 }
 
 export function timelineOf(db: Database, args: ToolArgs<'timeline'>): TimelineResult {
   if (args.session) {
-    const events = listEvents(db, {
-      sessionId: args.session,
-      source: args.source,
+    const session = findSession(db, args.session, args.source);
+    if (!session) return { session: args.session, title: null, prompt: null, events: [], more: 0 };
+    const page = readSession(db, {
+      source: session.source,
+      sessionId: session.sessionId,
       kinds: args.include_tools ? undefined : ['message'],
+      turn: args.turn,
+      after: args.after,
       limit: args.limit,
     });
-    return { session: args.session, events: events.map((e) => eventView(e, 1000)) };
+    return {
+      session: args.session,
+      title: session.title,
+      prompt: session.prompt,
+      events: page.events.map((e) => eventView(e, 1000)),
+      more: page.more,
+    };
   }
   const sessions = listSessions(db, {
     since: parseTime(args.since ?? '7d'),
@@ -246,46 +441,171 @@ export function timelineOf(db: Database, args: ToolArgs<'timeline'>): TimelineRe
     project: args.project,
     limit: args.limit,
   });
+  return { sessions: sessions.map(sessionView) };
+}
+
+/** An event's text is read in pages of this many UTF-16 code units. */
+export const EVENT_PAGE = 20_000;
+
+/**
+ * Open any id (see docs/architecture.md, "Reading along references"): an entry, a recall, an
+ * event, or a session, each with what is next to it. `source` picks the session when two sources
+ * have one of that id; `offset` is where an event's text starts, to read a long one in pages.
+ */
+export function getById(
+  db: Database,
+  args: { id: string; source?: string; offset?: number },
+): GetResult {
+  const opened = resolveId(db, args.id, args.source);
+  if (!opened) missing(db, args.id);
+  switch (opened.kind) {
+    case 'entry':
+      return entryResult(db, opened.id);
+    case 'recall':
+      return recallResult(db, opened.id);
+    case 'event':
+      return eventResult(db, opened.id, args.offset ?? 0);
+    case 'session':
+      return sessionResult(db, opened.session);
+  }
+}
+
+function entryResult(db: Database, id: string): EntryResult {
+  const entry = getEntry(db, id);
+  if (!entry) missing(db, id);
+  const sources = entrySources(db, entry.id);
+  const names = sessionNames(
+    db,
+    sources.map((s) => s.event),
+  );
   return {
-    sessions: sessions.map((s) => ({
-      session: s.sessionId,
-      source: s.source,
-      project: s.project,
-      title: s.title,
-      prompt: s.prompt,
-      started: s.startedAt === null ? null : isoLocal(s.startedAt),
-      ended: s.endedAt === null ? null : isoLocal(s.endedAt),
-      events: s.eventCount,
+    entry: entryView(entry),
+    sources: sources.map((s) => ({
+      quote: s.quote,
+      ...eventView(s.event, 500),
+      session_title: names.get(sessionKey(s.event.source, s.event.sessionId)) ?? null,
     })),
+    history: entryHistory(db, entry.id).map((v) => ({
+      id: v.id,
+      supersedes: v.supersedes,
+      author: v.author,
+      created: isoLocal(v.createdAt),
+      status: v.status,
+    })),
+    related: relatedEntries(db, entry.id, NEIGHBOUR_MAX).map(entryStub),
   };
 }
 
-export function getById(db: Database, id: string): GetResult {
-  if (isEntryId(id)) {
-    const entry = getEntry(db, id);
-    if (!entry) missing(db, id);
-    return {
-      entry: entryView(entry),
-      sources: entrySources(db, entry.id).map((s) => ({
-        quote: s.quote,
-        ...eventView(s.event, 500),
-      })),
-      history: entryHistory(db, entry.id).map((v) => ({
-        id: v.id,
-        supersedes: v.supersedes,
-        author: v.author,
-        created: isoLocal(v.createdAt),
-        status: v.status,
-      })),
-    };
-  }
+function eventResult(db: Database, id: string, offset: number): EventResult {
   const event = getEvent(db, id);
   if (!event) missing(db, id);
-  return {
-    ...eventView(event, 20_000),
+  const total = event.text.length;
+  const start = Math.min(Math.max(0, offset), total);
+  const end = Math.min(start + EVENT_PAGE, total);
+  const result: EventResult = {
+    ...eventView(event, EVENT_PAGE),
+    text: clip(event.text.slice(start), EVENT_PAGE),
     cwd: event.cwd,
     git_branch: event.gitBranch,
     agent_version: event.agentVersion,
+    session_title: null,
+    offset: start,
+    total_chars: total,
+    next_offset: end < total ? end : null,
+  };
+  // Later pages of a long text carry only the text: its neighbours came with the first.
+  if (start > 0) {
+    result.session_title = nameOf(getSession(db, event.source, event.sessionId));
+    return result;
+  }
+  const ctx = eventContext(db, event);
+  result.session_title = nameOf(ctx.session);
+  result.turn = ctx.turn && {
+    number: ctx.turn.number,
+    prompt: eventStub({
+      id: ctx.turn.start.id,
+      ts: ctx.turn.start.ts,
+      role: 'user',
+      kind: 'message',
+      text: ctx.turn.start.prompt,
+    }),
+  };
+  result.replies_to = ctx.repliesTo && eventStub(ctx.repliesTo);
+  result.around = { before: ctx.before.map(eventStub), after: ctx.after.map(eventStub) };
+  result.cited_by = ctx.citedBy.map(entryStub);
+  return result;
+}
+
+/** A session's card: what it is, its turns, the entries written from it, its recalls, its neighbours. */
+export function sessionResult(db: Database, session: SessionRow): SessionResult {
+  const card = describeSession(db, session);
+  const view = sessionView(session);
+  return {
+    session: view.session,
+    source: view.source,
+    project: view.project,
+    cwd: session.cwd,
+    title: view.title,
+    prompt: view.prompt,
+    started: view.started,
+    ended: view.ended,
+    events: view.events,
+    turns: card.turns,
+    prompts: card.prompts.map((p) => ({
+      turn: p.turn,
+      id: p.id,
+      time: isoLocal(p.ts),
+      text: p.prompt,
+    })),
+    more_prompts: card.morePrompts,
+    entries: card.entries.map(entryStub),
+    recalls: card.recalls.map(({ recall, items }) => ({
+      id: recall.id,
+      occasion: recall.occasion,
+      time: isoLocal(recall.at),
+      items,
+    })),
+    before: card.before && sessionView(card.before),
+    after: card.after && sessionView(card.after),
+  };
+}
+
+/**
+ * A recall: what it was made for, its items, whether its session went on to use each, and the text
+ * it handed over, rebuilt from the store as it is now. What was forgotten since is left out of both
+ * (invariant 2), so a rank may be missing from the items.
+ */
+function recallResult(db: Database, id: string): RecallResult {
+  const recall = getRecall(db, id);
+  if (!recall) missing(db, id);
+  const rebuilt = rebuildRecall(db, recall);
+  const session = recallSession(db, recall);
+  const used = session ? usedRefs(db, recall) : null;
+  const item = (i: RecallItemRecord): RecallItemView => {
+    const at = i.kind === 'session' ? i.ref.indexOf(':') : -1;
+    return {
+      rank: i.rank,
+      layer: i.layer,
+      kind: i.kind,
+      id: at < 0 ? i.ref : i.ref.slice(at + 1),
+      ...(at < 0 ? {} : { source: i.ref.slice(0, at) }),
+      score: i.score,
+      used: used ? used.has(i.ref) : null,
+    };
+  };
+  return {
+    id: recall.id,
+    time: isoLocal(recall.at),
+    occasion: recall.occasion,
+    agent: recall.source,
+    session: session?.sessionId ?? null,
+    device: recall.origin,
+    project: recall.project,
+    directory: recall.cwd,
+    budget: recall.budget,
+    tokens: recall.tokens,
+    items: recall.items.filter((i) => rebuilt.lines.has(i.ref)).map(item),
+    text: rebuilt.text,
   };
 }
 

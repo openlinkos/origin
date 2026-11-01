@@ -266,7 +266,10 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
           (mine, theirs, hub) =>
             answer(
               mergeTimeline(
-                mine ?? (args.session ? { session: args.session, events: [] } : { sessions: [] }),
+                mine ??
+                  (args.session
+                    ? { session: args.session, title: null, prompt: null, events: [], more: 0 }
+                    : { sessions: [] }),
                 theirs as TimelineResult | null,
                 facts,
                 args.limit,
@@ -281,7 +284,7 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
         return read<GetResult>(
           'get',
           args,
-          () => getById(db, args.id),
+          () => getById(db, args),
           (mine, theirs, hub) => {
             const merged = mergeGet(mine, theirs as GetResult | null, facts);
             return merged ? answer(merged, hub) : toolError(`${args.id} has been forgotten.`);

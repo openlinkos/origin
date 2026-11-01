@@ -543,7 +543,7 @@ function header(plan: Pick<RecallPlan, 'occasion' | 'project'>, id: string): str
     plan.occasion === 'prompt'
       ? 'entries from the user’s cross-agent memory that match this prompt'
       : `a brief from the user’s cross-agent memory${scope}`;
-  return `Origin recall ${id}: ${what}, one line each. Call Origin's \`get\` with an entry id for its full text and sources, or \`timeline\` with a session id to read that session. Entries can be outdated; the user's words in this session come first.`;
+  return `Origin recall ${id}: ${what}, one line each. Origin's \`get\` opens any id here: an entry for its text and sources, a session for its turns and what was written from it. Entries can be outdated; the user's words in this session come first.`;
 }
 
 /**

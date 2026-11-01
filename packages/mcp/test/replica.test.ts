@@ -12,13 +12,23 @@ import {
   getRecall,
   initStoreName,
   openDatabase,
+  planRecall,
   receiveEntry,
+  recordRecall,
   remember,
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fakeAdapter, line } from '../../core/test/helpers.js';
-import { createOriginServer, createReplicaServer, type ReplicaOptions } from '../src/index.js';
+import {
+  createOriginServer,
+  createReplicaServer,
+  type EventResult,
+  type RecallResult,
+  type ReplicaOptions,
+  type SessionResult,
+} from '../src/index.js';
+import { type LocalFacts, mergeGet, mergeTimeline } from '../src/merge.js';
 import { refreshGate } from '../src/tools.js';
 import { parse, startTestHub, type TestHub, TOKEN, type ToolCallResult } from './hub-fixture.js';
 
@@ -339,6 +349,234 @@ describe('origin mcp on a connected device', () => {
     const offline = await call('correct', { id: corrected.json.entry.id, text: 'again' });
     expect(offline.isError).toBe(true);
     expect(offline.text).toMatch(/is not in this device's store, and the hub at .* is unreachable/);
+  });
+});
+
+describe('reading along references on a connected device', () => {
+  it("opens a session, an event, or a recall from one store, the device's when it has it", async () => {
+    // An entry on the hub that cites the shared session: the device's card does not take it in.
+    remember(hub.db, {
+      kind: 'memory',
+      text: 'Tokens are per device.',
+      confidence: 0.9,
+      author: 'cloud@ci',
+      sources: [{ eventId: 'fake:e1' }],
+    });
+    const own = remember(db, {
+      kind: 'memory',
+      text: 'Tokens can be revoked.',
+      confidence: 0.9,
+      author: 'test',
+      sources: [{ eventId: 'fake:e2' }],
+    });
+    const brief = remember(hub.db, {
+      kind: 'memory',
+      text: 'Commit messages are short.',
+      confidence: 0.9,
+      author: 'cloud@ci',
+      project: 'demo',
+      sources: [{ eventId: 'fake:h1' }],
+    });
+    const recall = recordRecall(
+      hub.db,
+      planRecall(hub.db, { occasion: 'request', source: 'cloud', cwd: '/w/demo', project: 'demo' }),
+    );
+    await connect();
+
+    const mine = await call('get', { id: 's1' });
+    expect(mine.json).toMatchObject({ session: 's1', origin: 'local', turns: 1 });
+    expect(ids(mine.json.entries)).toEqual([own.id]);
+    const theirs = await call('get', { id: 'sh' });
+    expect(theirs.json).toMatchObject({
+      session: 'sh',
+      origin: 'hub',
+      prompt: 'Keep commit messages short, says the other device.',
+      turns: 1,
+    });
+    expect(ids(theirs.json.entries)).toEqual([brief.id]);
+
+    const event = await call('get', { id: 'fake:h1' });
+    expect(event.json).toMatchObject({
+      origin: 'hub',
+      session_title: 'Keep commit messages short, says the other device.',
+      turn: { number: 1 },
+      cited_by: [{ id: brief.id }],
+    });
+    const local = await call('get', { id: 'fake:e2' });
+    expect(local.json).toMatchObject({ origin: 'local', cited_by: [{ id: own.id }] });
+
+    const opened = await call('get', { id: recall });
+    expect(opened.json).toMatchObject({ id: recall, origin: 'hub', items: [{ id: brief.id }] });
+    expect(opened.json.text).toContain(brief.id);
+
+    // A session's page: merged by id, with the count of what follows from the side that had it.
+    const page = await call('timeline', { session: 's1', limit: 1 });
+    expect(page.json).toMatchObject({
+      session: 's1',
+      prompt: 'Keep the hub behind TLS and give every device its own token.',
+      more: 1,
+    });
+    expect(ids(page.json.events)).toEqual(['fake:e1']);
+    const rest = await call('timeline', { session: 's1', after: 'fake:e1' });
+    expect(rest.json).toMatchObject({ more: 0 });
+    expect(ids(rest.json.events)).toEqual(['fake:e2']);
+    const hubOnly = await call('timeline', { session: 'sh', turn: 1 });
+    expect(hubOnly.json).toMatchObject({ more: 0, prompt: theirs.json.prompt });
+    expect(ids(hubOnly.json.events)).toEqual(['fake:h1']);
+
+    const found = await call('search', { query: 'Keep' });
+    expect(
+      found.json.events.map((e: { id: string; session_title: string }) => [e.id, e.session_title]),
+    ).toEqual(
+      expect.arrayContaining([
+        ['fake:h1', theirs.json.prompt],
+        ['fake:d1', 'Keep the device store local and fast.'],
+      ]),
+    );
+  });
+
+  /** What a device knows, for merging: it has `known`, and has forgotten `forgotten`. */
+  const factsOf = (known: string[], forgotten: string[] = []): LocalFacts => ({
+    known: (id) => known.includes(id) || forgotten.includes(id),
+    forgotten: (id) => forgotten.includes(id),
+    entryStatus: (id) =>
+      forgotten.includes(id) ? 'forgotten' : known.includes(id) ? 'active' : null,
+    versions: () => [],
+  });
+  const stub = (id: string) => ({ id, time: '', role: 'user', kind: 'message', text: id });
+  const entry = (id: string) => ({ id, kind: 'memory', text: id, created: '' });
+
+  it("leaves out of the hub's cards what the device has forgotten (invariant 2)", () => {
+    const facts = factsOf([], ['fake:x1', 'ent_00000000000a', 'fake:p2']);
+    const event = mergeGet(
+      null,
+      {
+        id: 'fake:x2',
+        time: '',
+        source: 'fake',
+        project: null,
+        session: 's',
+        role: 'assistant',
+        kind: 'message',
+        text: '',
+        cwd: null,
+        git_branch: null,
+        agent_version: null,
+        turn: { number: 1, prompt: stub('fake:x1') },
+        replies_to: stub('fake:x1'),
+        around: { before: [stub('fake:x1'), stub('fake:x0')], after: [stub('fake:x3')] },
+        cited_by: [entry('ent_00000000000a'), entry('ent_00000000000b')],
+      } satisfies EventResult,
+      facts,
+    ) as EventResult;
+    expect(event).toMatchObject({ origin: 'hub', turn: null, replies_to: null });
+    expect(ids(event.around?.before ?? [])).toEqual(['fake:x0']);
+    expect(ids(event.cited_by ?? [])).toEqual(['ent_00000000000b']);
+
+    const session = mergeGet(
+      null,
+      {
+        session: 's',
+        source: 'fake',
+        project: null,
+        cwd: null,
+        title: null,
+        prompt: 'p1',
+        started: null,
+        ended: null,
+        events: 4,
+        turns: 2,
+        prompts: [
+          { turn: 1, id: 'fake:p1', time: '', text: 'p1' },
+          { turn: 2, id: 'fake:p2', time: '', text: 'p2' },
+        ],
+        more_prompts: 0,
+        entries: [entry('ent_00000000000a'), entry('ent_00000000000b')],
+        recalls: [],
+        before: null,
+        after: null,
+      } satisfies SessionResult,
+      facts,
+    ) as SessionResult;
+    expect(session).toMatchObject({ origin: 'hub', turns: 1 });
+    expect(ids(session.prompts)).toEqual(['fake:p1']);
+    expect(ids(session.entries)).toEqual(['ent_00000000000b']);
+
+    const item = (rank: number, id: string) => ({
+      rank,
+      layer: 'project',
+      kind: 'entry' as const,
+      id,
+      score: null,
+      used: null,
+    });
+    const recall = (items: string[], text: string): RecallResult => ({
+      id: 'rcl_000000000001',
+      time: '',
+      occasion: 'start',
+      agent: 'codex',
+      session: null,
+      device: 'desktop',
+      project: 'demo',
+      directory: null,
+      budget: 800,
+      tokens: 40,
+      items: items.map((id, i) => item(i + 1, id)),
+      text,
+    });
+    const header = 'Origin recall rcl_000000000001: a brief.';
+    const both = mergeGet(
+      null,
+      recall(
+        ['ent_00000000000b', 'ent_00000000000a'],
+        `${header}\n\nThe user’s preferences and boundaries:\n- ent_00000000000b B\n\nProject demo:\n- ent_00000000000a (2026-10-20) A`,
+      ),
+      facts,
+    ) as RecallResult;
+    expect(ids(both.items)).toEqual(['ent_00000000000b']);
+    expect(both.text).toBe(
+      `${header}\n\nThe user’s preferences and boundaries:\n- ent_00000000000b B`,
+    );
+    const none = mergeGet(
+      null,
+      recall(['ent_00000000000a'], `${header}\n\nProject demo:\n- ent_00000000000a A`),
+      facts,
+    ) as RecallResult;
+    expect(none).toMatchObject({ items: [], text: '' });
+  });
+
+  it("pages a session with the device's count of what follows, or the hub's", () => {
+    const ev = (id: string, time: string) => ({
+      id,
+      time,
+      source: 'fake',
+      project: null,
+      session: 's',
+      role: 'user',
+      kind: 'message',
+      text: id,
+    });
+    const facts = factsOf(['fake:a', 'fake:b']);
+    const local = {
+      session: 's',
+      title: null,
+      prompt: 'mine',
+      events: [ev('fake:a', '2026-10-20T10:00:00.000Z'), ev('fake:b', '2026-10-20T10:01:00.000Z')],
+      more: 1,
+    };
+    const hub = {
+      session: 's',
+      title: null,
+      prompt: 'theirs',
+      events: [ev('fake:a', '2026-10-20T10:00:00.000Z'), ev('fake:c', '2026-10-20T10:02:00.000Z')],
+      more: 7,
+    };
+    expect(mergeTimeline(local, hub, facts, 2)).toMatchObject({
+      prompt: 'mine',
+      more: 2, // the device's 1, and fake:c, left out by the limit
+    });
+    const empty = { session: 's', title: null, prompt: null, events: [], more: 0 };
+    expect(mergeTimeline(empty, hub, facts, 5)).toMatchObject({ prompt: 'theirs', more: 7 });
   });
 });
 

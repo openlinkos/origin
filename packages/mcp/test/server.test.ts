@@ -192,3 +192,203 @@ describe('origin MCP server', () => {
     expect(r).toMatchObject({ isError: true, text: 'Unknown event fake:missing.' });
   });
 });
+
+describe('reading along references', () => {
+  const s1 = () => path.join(src, 's1.jsonl');
+  beforeEach(() => {
+    fs.appendFileSync(
+      s1(),
+      line('e3', 's1', 3000, 'user', 'Now add a watcher for new log lines.') +
+        line('e4', 's1', 3010, 'assistant', 'Read src/watch.ts', 'tool_use') +
+        line('e5', 's1', 3020, 'user', 'x'.repeat(25_000), 'tool_result') +
+        `${JSON.stringify({ id: 'e6', session: 's1', ts: 3030, role: 'assistant', text: 'The watcher looks every minute.', parent: 'e3' })}\n`,
+    );
+    fs.writeFileSync(
+      path.join(src, 's2.jsonl'),
+      line('f1', 's2', 5000, 'user', 'Document the watcher.'),
+    );
+  });
+
+  /** Write an entry citing a quote, in project demo. */
+  const note = async (text: string, quote: string) =>
+    (
+      await call('remember', {
+        kind: 'memory',
+        text,
+        confidence: 0.9,
+        project: 'demo',
+        sources: [{ quote }],
+      })
+    ).json.entry.id as string;
+
+  it('opens a session as a card, and a recall with what it handed over', async () => {
+    const stored = await note('Everything is stored in SQLite.', 'so it stays local');
+    const brief = await call('brief', { cwd: '/home/dana/code/demo' });
+    const recall = brief.json.recall as string;
+    // The agent's log holds the brief it was handed, then a reply that uses what was in it.
+    const now = Date.now() + 1000;
+    fs.appendFileSync(
+      s1(),
+      line('g1', 's1', now, 'user', JSON.stringify(brief.json), 'tool_result') +
+        line('g2', 's1', now + 1, 'assistant', `As ${stored} says, SQLite it is.`),
+    );
+    await call('search', {}); // ingest
+
+    const card = (await call('get', { id: 's1' })).json;
+    expect(card).toMatchObject({
+      session: 's1',
+      source: 'fake',
+      project: 'demo',
+      title: null,
+      prompt: 'Store everything in SQLite so it stays local.',
+      events: 8,
+      turns: 2,
+      more_prompts: 0,
+      before: null,
+      after: { session: 's2', prompt: 'Document the watcher.' },
+    });
+    expect(card.prompts).toEqual([
+      { turn: 1, id: 'fake:e1', time: expect.any(String), text: card.prompt },
+      {
+        turn: 2,
+        id: 'fake:e3',
+        time: expect.any(String),
+        text: 'Now add a watcher for new log lines.',
+      },
+    ]);
+    expect(card.entries).toEqual([
+      {
+        id: stored,
+        kind: 'memory',
+        text: 'Everything is stored in SQLite.',
+        created: expect.any(String),
+      },
+    ]);
+    expect(card.recalls).toEqual([
+      { id: recall, occasion: 'request', time: expect.any(String), items: 1 },
+    ]);
+    // `<source>:<session id>`, as recalls record sessions, opens it too.
+    expect((await call('get', { id: 'fake:s1' })).json.turns).toBe(2);
+
+    const opened = (await call('get', { id: recall })).json;
+    expect(opened).toMatchObject({
+      id: recall,
+      occasion: 'request',
+      agent: 'test-agent',
+      session: 's1',
+      device: 'laptop',
+      project: 'demo',
+      directory: '/home/dana/code/demo',
+      items: [{ rank: 1, layer: 'project', kind: 'entry', id: stored, score: null, used: true }],
+    });
+    expect(opened.text).toBe(brief.json.text);
+
+    // Forgotten, the entry (and the event it cites) leaves the card, the recall, and the counts
+    // (invariant 2).
+    await call('forget', { id: stored, reason: 'test' });
+    const after = (await call('get', { id: 's1' })).json;
+    expect(after).toMatchObject({ events: 7, turns: 1, entries: [], recalls: [] });
+    expect(after.prompts.map((p: { id: string }) => p.id)).toEqual(['fake:e3']);
+    expect((await call('get', { id: recall })).json).toMatchObject({ items: [], text: '' });
+  });
+
+  it('opens an event with its session, turn, neighbours, and citations, and pages its text', async () => {
+    const cited = await note('The watcher looks for new lines every minute.', 'every minute');
+    const answer = (await call('get', { id: 'fake:e6' })).json;
+    expect(answer).toMatchObject({
+      id: 'fake:e6',
+      session_title: 'Store everything in SQLite so it stays local.',
+      offset: 0,
+      total_chars: 31,
+      next_offset: null,
+      turn: { number: 2, prompt: { id: 'fake:e3', role: 'user', kind: 'message' } },
+      replies_to: { id: 'fake:e3', text: 'Now add a watcher for new log lines.' },
+      cited_by: [{ id: cited, kind: 'memory' }],
+    });
+    // A message's neighbours are messages; a tool event's, any kind.
+    const near = (r: {
+      around: { before: Array<{ id: string }>; after: Array<{ id: string }> };
+    }) => [r.around.before.map((e) => e.id), r.around.after.map((e) => e.id)];
+    expect(near(answer)).toEqual([['fake:e2', 'fake:e3'], []]);
+
+    const long = (await call('get', { id: 'fake:e5' })).json;
+    expect(near(long)).toEqual([['fake:e3', 'fake:e4'], ['fake:e6']]);
+    expect(long).toMatchObject({ offset: 0, total_chars: 25_000, next_offset: 20_000 });
+    expect(long.text).toBe(`${'x'.repeat(20_000)}…[+5000 chars]`);
+    expect(long.around.before[1].text).toBe('Read src/watch.ts');
+    const rest = (await call('get', { id: 'fake:e5', offset: 20_000 })).json;
+    expect(rest).toMatchObject({ offset: 20_000, total_chars: 25_000, next_offset: null });
+    expect(rest.text).toBe('x'.repeat(5000));
+    // Later pages carry the text alone.
+    expect(rest.around).toBeUndefined();
+    expect(rest.turn).toBeUndefined();
+  });
+
+  it('pages a session by turns and after an event, saying how many follow', async () => {
+    await call('search', {}); // ingest
+    const page = async (args: Record<string, unknown>) => {
+      const r = await call('timeline', { session: 's1', ...args });
+      if (r.isError) return r.text;
+      return [r.json.events.map((e: { id: string }) => e.id), r.json.more];
+    };
+    const first = (await call('timeline', { session: 's1', limit: 1 })).json;
+    expect(first).toMatchObject({
+      session: 's1',
+      title: null,
+      prompt: 'Store everything in SQLite so it stays local.',
+      more: 3,
+    });
+    expect(await page({ after: 'fake:e1', limit: 2 })).toEqual([['fake:e2', 'fake:e3'], 1]);
+    expect(await page({ turn: 2, include_tools: true })).toEqual([
+      ['fake:e3', 'fake:e4', 'fake:e5', 'fake:e6'],
+      0,
+    ]);
+    expect(await page({ turn: 1 })).toEqual([['fake:e1', 'fake:e2'], 0]);
+    expect(await page({ turn: 3 })).toMatch(/^Session s1 has 2 turns/);
+    expect(await page({ after: 'fake:f1' })).toBe('Event fake:f1 is not in session s1.');
+    expect((await call('timeline', { session: 'nope' })).json).toEqual({
+      session: 'nope',
+      title: null,
+      prompt: null,
+      events: [],
+      more: 0,
+    });
+  });
+
+  it('names the session of every search hit, and of every source of an entry', async () => {
+    const r = await call('search', { query: 'watcher' });
+    expect(
+      r.json.events.map((e: { id: string; session_title: string }) => [e.id, e.session_title]),
+    ).toEqual(
+      expect.arrayContaining([
+        ['fake:e3', 'Store everything in SQLite so it stays local.'],
+        ['fake:f1', 'Document the watcher.'],
+      ]),
+    );
+    const documented = await note('Document the watcher.', 'Document the watcher');
+    const watcher = await note('A watcher looks for new lines.', 'add a watcher');
+    const got = (await call('get', { id: watcher })).json;
+    expect(got.sources[0]).toMatchObject({
+      id: 'fake:e3',
+      session_title: 'Store everything in SQLite so it stays local.',
+    });
+    // Related: other current entries from the same sessions; s2's entry is not.
+    expect(got.related).toEqual([]);
+    expect((await call('get', { id: documented })).json.related).toEqual([]);
+    const minute = await note('The watcher runs every minute.', 'every minute');
+    const now = (await call('get', { id: watcher })).json;
+    expect(now.related.map((e: { id: string }) => e.id)).toEqual([minute]);
+  });
+
+  it('keeps the errors for ids it does not know', async () => {
+    await call('search', {});
+    expect(await call('get', { id: 'nope' })).toMatchObject({
+      isError: true,
+      text: 'Unknown entry or event nope.',
+    });
+    expect(await call('get', { id: 'rcl_000000000000' })).toMatchObject({
+      isError: true,
+      text: 'Unknown entry or event rcl_000000000000.',
+    });
+  });
+});

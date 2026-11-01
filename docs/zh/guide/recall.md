@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-bb569174
+sourceHash: sha256-cec0b2a9
 ---
 
 # 召回
@@ -13,10 +13,10 @@ Claude Code 和 Codex 通过它们的 hook 获得召回。其他 Agent 通过 Or
 - **会话开始时**，一份简报：你在这个项目中的偏好与边界和在哪里都成立的偏好与边界，这个项目最新的决定和事实，以及这个项目最近 30 天内与任意 Agent 的最近几个会话。
 - **每个提示**，第一行与提示有足够罕见的共同词的条目，最多五条，本会话已经拿到的不再给。
 
-每一项一行，是 id 和条目的开头，所以一份简报不超过约 800 个 token，一个提示的匹配不超过 400 个。Agent 用 Origin 的 `get` 获取其余内容。例如，会话开始时：
+每一项一行，是 id 和条目的开头，所以一份简报不超过约 800 个 token，一个提示的匹配不超过 400 个。Agent 用 Origin 的 `get` 获取其余内容：条目的正文和来源，或会话的各轮和从中写下的条目，每样都带着它近旁内容的 id（见 [MCP 工具](./mcp.md#get)）。例如，会话开始时：
 
 ```text
-Origin recall rcl_3f9a0c1d2e4b: a brief from the user's cross-agent memory (project acme), one line each. Call Origin's `get` with an entry id for its full text and sources, or `timeline` with a session id to read that session. Entries can be outdated; the user's words in this session come first.
+Origin recall rcl_3f9a0c1d2e4b: a brief from the user's cross-agent memory (project acme), one line each. Origin's `get` opens any id here: an entry for its text and sources, a session for its turns and what was written from it. Entries can be outdated; the user's words in this session come first.
 
 The user's preferences and boundaries:
 - ent_5f0c2a9e41b7 Run the full test suite before pushing; never skip CI on both platforms
