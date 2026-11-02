@@ -87,9 +87,9 @@ jobs:
           echo "$HEADERS" | grep -qi '^cache-control: no-store, private'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:7077/admin/api/overview)" = 401
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" http://localhost:7077/admin/api/overview)" = 401
-          login() { # <port> <password> <cookie jar>
+          login() { # <port> <password> <cookie jar>, as the owner ci (the first sign-in names the owner)
             curl -s -o /dev/null -w '%{http_code}' -c "$3" -H "Origin: http://localhost:$1" \
-              -H 'Content-Type: application/json' -d "{\"password\":\"$2\"}" \
+              -H 'Content-Type: application/json' -d "{\"username\":\"ci\",\"password\":\"$2\"}" \
               "http://localhost:$1/admin/api/login"
           }
           test "$(login 7077 "$TOKEN" none.jar)" = 401
