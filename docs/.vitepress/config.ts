@@ -18,9 +18,7 @@ export default defineOpenLinkOSConfig({
   themeConfig: {
     socialLinks: [{ icon: 'github', link: repo }],
   },
-  legal: [
-    { text: { en: 'MIT License', zh: 'MIT 许可证' }, link: `${repo}/blob/master/LICENSE` },
-  ],
+  legal: [{ text: { en: 'MIT License', zh: 'MIT 许可证' }, link: `${repo}/blob/master/LICENSE` }],
   locales: {
     root: {
       description: 'Local-first, cross-agent personal memory for AI coding agents.',
