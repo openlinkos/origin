@@ -8,7 +8,7 @@ Origin 所有值得注意的改动都列在这里。版本号遵循[语义化版
 
 ## [Unreleased] {#unreleased}
 
-- 在浏览器中打开中枢的地址，会看到一个公开首页，而不再是一个光秃秃的 JSON 错误：Origin 的标志和名称，一句说明这个中枢是什么的话（中文或英文），管理界面在 `/admin` 下提供时有一个**登录**按钮，以及「由开源的 Origin 驱动」和指向网站与源代码的链接。页面不显示库里的任何内容。请求 JSON 的客户端会收到 `{"service":"origin","docs":"https://origin.openlinkos.com/"}`，`/robots.txt` 只允许搜索引擎读取这个页面；以自己的名义展示中枢时，设置 `ORIGIN_POWERED_BY=off` 可以去掉署名。中枢前面的代理还需要转发 `/`、`/robots.txt` 和 `/assets/*`。
+- 在浏览器中打开中枢的地址，会看到一个公开首页，而不再是一个光秃秃的 JSON 错误：Origin 的标志和名称，一句说明这个中枢是什么的话（中文或英文），管理界面在 `/admin` 下提供时有一个**登录**按钮，以及「由开源的 Origin 驱动」和指向网站与源代码的链接。页面不显示库里的任何内容。请求 JSON 的客户端会收到 `{"service":"origin","docs":"https://origin.openlinkos.com/"}`，`/robots.txt` 让搜索引擎不收录整个中枢（个人中枢不进搜索结果）；以自己的名义展示中枢时，设置 `ORIGIN_POWERED_BY=off` 可以去掉署名。中枢前面的代理还需要转发 `/`、`/robots.txt` 和 `/assets/*`。
 - 没有有效令牌的请求仍然被拒绝并返回 `401`；JSON 响应体现在还有 `docs`，即中枢指南的地址。
 - 管理界面的每个页面底部显示 Origin 的版本，以及指向文档、GitHub 上的源代码和反馈问题表单的链接；中枢和 `origin ui` 的登录页在表单下方说明 Origin 是开源软件。
 

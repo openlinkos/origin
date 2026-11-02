@@ -56,7 +56,7 @@ describe('the landing page', () => {
     expect(res.text).toContain(
       '<a href="https://origin.openlinkos.com/" rel="noreferrer">Documentation</a><a href="https://github.com/openlinkos/origin" rel="noreferrer">GitHub</a>',
     );
-    // Indexable, unlike the admin UI, and within the admin UI's rules for markup.
+    // Within the admin UI's rules for markup; robots.txt keeps crawlers away from the whole hub.
     expect(res.text).not.toContain('noindex');
     expect(res.headers['x-robots-tag']).toBeUndefined();
     expect(pageProblems(res.text)).toEqual([]);
@@ -182,12 +182,12 @@ describe('the landing page', () => {
     expect(page.text).not.toContain('admin.');
   });
 
-  it('lets crawlers read the page and nothing else', async () => {
+  it('asks crawlers to stay away: a personal hub is not for search results', async () => {
     const base = await serve();
     const res = await request(`${base}/robots.txt`);
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toBe('text/plain; charset=utf-8');
-    expect(res.text).toBe('User-agent: *\nAllow: /$\nAllow: /assets/\nDisallow: /\n');
+    expect(res.text).toBe('User-agent: *\nDisallow: /\n');
   });
 
   it('leaves every other path alone', async () => {

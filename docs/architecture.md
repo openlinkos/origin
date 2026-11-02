@@ -548,7 +548,7 @@ A device sends its hub what it has written itself; the hub sends devices only wh
 |---|---|
 | `GET /healthz` | `{ "ok": true, "version": … }`, no auth |
 | `GET /` | The landing page, no auth: Origin's mark and name, one sentence on what the hub is (in the language of `Accept-Language`), a link to `/admin/` when the admin UI is mounted there, and "Powered by Origin, open source" with links to the project's site and source unless `ORIGIN_POWERED_BY` is off. A request that accepts `application/json` and not `text/html` gets `{ "service": "origin", "docs": … }`. The admin UI's Content-Security-Policy and guard headers, `Cache-Control: no-store` |
-| `GET /robots.txt` | Allows `/` and `/assets/`, disallows everything else; no auth |
+| `GET /robots.txt` | Disallows everything: a personal hub is not for search results; no auth |
 | `GET /assets/…` | The landing page's files: the design system's stylesheet with its fonts, and the marks, under content-hashed names, cached as immutable; no auth |
 | `POST /mcp` | MCP Streamable HTTP, stateless, JSON responses; the same eleven tools as the stdio server |
 | `GET /v1/device` | `{ device, hub }`: the device the token belongs to (its name), and the hub's name |

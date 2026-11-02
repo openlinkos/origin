@@ -32,7 +32,7 @@ export const LANDING_JSON = { service: 'origin', docs: SITE_URL } as const;
  * Crawlers may read the landing page and the files it needs to render, and nothing else: every
  * other path is an API behind a token, or the admin UI.
  */
-export const ROBOTS_TXT = 'User-agent: *\nAllow: /$\nAllow: /assets/\nDisallow: /\n';
+export const ROBOTS_TXT = 'User-agent: *\nDisallow: /\n';
 
 /** The files of the landing page: the design system's stylesheet (with its fonts) and the marks. */
 const FILES = ['ui.css', 'favicon.svg', 'logo.svg', 'logo-dark.svg'];

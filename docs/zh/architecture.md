@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-41bcb797
+sourceHash: sha256-39848359
 ---
 
 # 架构
@@ -552,7 +552,7 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 |---|---|
 | `GET /healthz` | `{ "ok": true, "version": … }`，无需鉴权 |
 | `GET /` | 公开首页，无需鉴权：Origin 的标志和名称，一句说明这个中枢是什么的话（语言取自 `Accept-Language`），管理界面挂在 `/admin/` 时有指向它的链接，以及「由开源的 Origin 驱动」和指向项目网站与源代码的链接（`ORIGIN_POWERED_BY` 为 off 时不显示）。接受 `application/json` 而不接受 `text/html` 的请求会收到 `{ "service": "origin", "docs": … }`。带有管理界面的 Content-Security-Policy 和防护响应头，`Cache-Control: no-store` |
-| `GET /robots.txt` | 允许 `/` 和 `/assets/`，禁止其他一切；无需鉴权 |
+| `GET /robots.txt` | 禁止一切：个人中枢不进搜索结果；无需鉴权 |
 | `GET /assets/…` | 公开首页用到的文件：设计系统的样式表及其字体，以及标志，使用带内容哈希的文件名，按不可变内容缓存；无需鉴权 |
 | `POST /mcp` | MCP Streamable HTTP，无状态，JSON 响应；与 stdio server 相同的十一个工具 |
 | `GET /v1/device` | `{ device, hub }`：令牌所属的设备（即令牌名）和中枢的名称 |

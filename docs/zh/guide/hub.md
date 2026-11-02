@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-c24d1ee5
+sourceHash: sha256-cfefe472
 ---
 
 # 个人中枢
@@ -45,6 +45,8 @@ origin serve --host 127.0.0.1 --port 7077
 ## 公开首页 {#the-landing-page}
 
 在浏览器中打开中枢的地址，比如 `http://localhost:7077/`，会看到一个不需要令牌的公开页面：Origin 的标志和名称，一句说明这个中枢是什么的话（按浏览器的偏好显示中文或英文）；如果[管理界面](./admin.md)在同一端口的 `/admin` 下提供，还有一个**登录**按钮；页脚是「由开源的 Origin 驱动」，以及指向本站和源代码的链接。页面不显示库里的任何内容。请求 JSON 的客户端（`Accept: application/json`）会收到 `{"service":"origin","docs":"https://origin.openlinkos.com/"}`。`/robots.txt` 只允许搜索引擎读取这个页面，页面用到的样式表、字体和标志由中枢自己在 `/assets/` 下提供。
+
+中枢让搜索引擎不收录整个站点（`/robots.txt` 禁止一切）：这个页面是给打开地址的人看的，不是给搜索结果的。
 
 如果你以自己的名义展示这个中枢，设置 `ORIGIN_POWERED_BY=off` 可以去掉页面上对 Origin 的署名；管理界面中指向项目的链接仍然保留。
 

@@ -343,7 +343,7 @@ describe('the hub in a browser', () => {
     expect((await fetch(`${hub.url}/`, { method: 'HEAD' })).status).toBe(200);
 
     const robots = await fetch(`${hub.url}/robots.txt`);
-    expect(await robots.text()).toBe('User-agent: *\nAllow: /$\nAllow: /assets/\nDisallow: /\n');
+    expect(await robots.text()).toBe('User-agent: *\nDisallow: /\n');
   });
 
   it('refuses every other path without a token, pointing at the hub guide', async () => {

@@ -42,6 +42,8 @@ origin serve --host 127.0.0.1 --port 7077
 
 Open the hub's address in a browser, such as `http://localhost:7077/`, and it shows a public page that needs no token: Origin's mark and name, one sentence on what the hub is, in English or Chinese as your browser prefers, a **Sign in** button when the [admin UI](./admin.md) is served at `/admin` on the same port, and at its foot "Powered by Origin, open source", with links to this site and to the source code. The page shows nothing from your store. A client that asks for JSON (`Accept: application/json`) gets `{"service":"origin","docs":"https://origin.openlinkos.com/"}` instead. `/robots.txt` lets search engines read that page and nothing else, and the hub serves the page's stylesheet, fonts, and marks itself, under `/assets/`.
 
+Search engines are asked to stay away from the whole hub (`/robots.txt` disallows everything): the page is there for people who open the address, not for search results.
+
 If you present the hub under your own name, set `ORIGIN_POWERED_BY=off` to leave the credit to Origin off the page; the admin UI keeps its links to the project.
 
 Every other path, except `/healthz` and the admin UI with its own sign-in, needs a token (see [Create tokens](#create-tokens)). A request without one gets `401` with `{"error":"Missing or invalid token.","docs":"https://origin.openlinkos.com/guide/hub"}`, whose `docs` is this guide.
