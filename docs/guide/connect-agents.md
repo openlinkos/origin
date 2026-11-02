@@ -10,7 +10,7 @@ Every agent launches the same stdio server, `origin mcp`, which `npm install -g 
 | ZCode | ✅ | ✅ | Per ZCode's docs |
 | Grok Build | ✅ | ✅ | Registration |
 
-Other programs, such as another agent runtime, a chat bot, or a notes pipeline, can bring their sessions too, by writing event lines; see [Bring your own source](./sources.md).
+Other programs, such as another agent runtime, a chat bot, or a notes pipeline, can bring their sessions too, by writing event lines; see [Bring your own source](./sources.md). OpenClaw has a plugin that writes them for it: see [Connect OpenClaw](./openclaw.md).
 
 ## Connect them all at once
 

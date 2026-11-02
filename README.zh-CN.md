@@ -49,7 +49,7 @@ Origin 以**人**而不是工具为中心：
 | ZCode | ✅ | ✅ |
 | Grok Build | ✅ | ✅ |
 
-任何支持 MCP 的 Agent 现在都能查询归档和条目；归档某个 Agent 自己的会话则需要它的适配器，或者一个把会话写成事件行的脚本：其他 Agent 运行时、聊天工作区、通知流和笔记流水线都可以这样把会话写进 `~/.origin/sources/` 下的目录，或者直接发给你的中枢（见[接入你自己的来源](https://origin.openlinkos.com/zh/guide/sources)）。如何为各 Agent 注册 Origin，见[接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)；各 Agent 把会话存放在哪里，见[会话来源](https://origin.openlinkos.com/zh/sources)。
+任何支持 MCP 的 Agent 现在都能查询归档和条目；归档某个 Agent 自己的会话则需要它的适配器，或者一个把会话写成事件行的脚本：其他 Agent 运行时、聊天工作区、通知流和笔记流水线都可以这样把会话写进 `~/.origin/sources/` 下的目录，或者直接发给你的中枢（见[接入你自己的来源](https://origin.openlinkos.com/zh/guide/sources)）。OpenClaw 的 Agent 则通过 Origin 的 OpenClaw 插件接入（见[接入 OpenClaw](https://origin.openlinkos.com/zh/guide/openclaw)）。如何为各 Agent 注册 Origin，见[接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)；各 Agent 把会话存放在哪里，见[会话来源](https://origin.openlinkos.com/zh/sources)。
 
 ## 快速开始
 
@@ -87,6 +87,7 @@ Codex、Cursor、ZCode、Grok Build 的接入方式见[接入 Agent](https://ori
 - [核心概念](https://origin.openlinkos.com/zh/guide/concepts)：会话、线索、条目、版本、有效期、导入的记忆与遗忘
 - [接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)：Claude Code、Codex、Cursor、ZCode、Grok Build，以及它们可用的 MCP 工具
 - [接入你自己的来源](https://origin.openlinkos.com/zh/guide/sources)：以事件行带来其他任何程序的会话
+- [接入 OpenClaw](https://origin.openlinkos.com/zh/guide/openclaw)：把 OpenClaw 上各个 Agent 的会话写进 Origin 的插件
 - [个人中枢](https://origin.openlinkos.com/zh/guide/hub)：自托管，让你所有的机器和云端 Agent 共享一份记忆
 - [管理界面](https://origin.openlinkos.com/zh/guide/admin)：在浏览器中管理中枢：启用、登录、放在 TLS 之后，或保持私有访问
 - [隐私与数据](https://origin.openlinkos.com/zh/guide/privacy)：Origin 保存了什么、遗忘如何生效、如何清除全部数据
@@ -144,7 +145,8 @@ packages/
 ├── adapters/   @openlinkos/origin-adapters  各 Agent 的会话解析器
 ├── mcp/        @openlinkos/origin-mcp       MCP 工具、stdio 与 HTTP server、已接入设备上的合并读取
 ├── admin/      @openlinkos/origin-admin     中枢的管理界面：服务器端渲染的页面与 JSON API
-└── cli/        @openlinkos/origin           origin 命令与中枢（`origin serve`）
+├── cli/        @openlinkos/origin           origin 命令与中枢（`origin serve`）
+└── openclaw/   @openlinkos/origin-openclaw  OpenClaw 插件：把它上面各个 Agent 的会话写成事件行
 docs/                                        文档站点（VitePress）
 ├── guide/                                   使用指南（英文；中文版在 docs/zh/ 下）
 ├── architecture.md                          设计、数据模型、不变量

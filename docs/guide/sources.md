@@ -1,6 +1,6 @@
 # Bring your own source
 
-Origin reads the logs of five coding agents, each with an adapter of its own. Much of your work happens elsewhere: in another agent runtime, a chat workspace, a notification stream, a notes pipeline. You can bring any of these to Origin without changing its code. Have a script write their events as **event lines**, a JSONL format of Origin's own, into a directory Origin reads, and they become sessions like any agent's: in the timeline, in search, in the briefs agents are handed, in threads and the change feed, and in the admin UI.
+Origin reads the logs of five coding agents, each with an adapter of its own. Much of your work happens elsewhere: in another agent runtime, a chat workspace, a notification stream, a notes pipeline. You can bring any of these to Origin without changing its code. Have a script write their events as **event lines**, a JSONL format of Origin's own, into a directory Origin reads, and they become sessions like any agent's: in the timeline, in search, in the briefs agents are handed, in threads and the change feed, and in the admin UI. For OpenClaw, Origin has a writer of its own, a plugin: see [Connect OpenClaw](./openclaw.md).
 
 ## The format
 

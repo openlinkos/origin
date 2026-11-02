@@ -1,10 +1,10 @@
 ---
-sourceHash: sha256-e25fb01d
+sourceHash: sha256-92a6c3c2
 ---
 
 # 升级
 
-Origin 的五个 npm 包和中枢的容器镜像使用同一个版本号一起发布。本页说明版本号意味着什么、如何升级设备和中枢，以及升级时你的库会发生什么。每个版本具体改了什么，见[更新日志](../changelog.md)。
+Origin 的六个 npm 包和中枢的容器镜像使用同一个版本号一起发布。本页说明版本号意味着什么、如何升级设备和中枢，以及升级时你的库会发生什么。每个版本具体改了什么，见[更新日志](../changelog.md)。
 
 ## 版本 {#versions}
 
@@ -13,6 +13,7 @@ Origin 遵循[语义化版本](https://semver.org/lang/zh-CN/)。在 1.0 之前�
 - **次版本**（0.2、0.3……）可能改变存储格式、CLI、MCP 工具或中枢的 API。它在更新日志中的那一节以一段**升级**说明开头，写明需要做什么（如果需要的话）。
 - **修订版本**（0.3.1……）只修复问题，从不改变存储格式。
 - 要安装的包是 `@openlinkos/origin`，它会带上同一版本的另外四个包（`-core`、`-adapters`、`-mcp`、`-admin`）。在 1.0 之前，这四个包的 API 属于内部接口，任何版本都可能改变。
+- 第六个包 `@openlinkos/origin-openclaw` 是安装进 OpenClaw 的插件（[接入 OpenClaw](./openclaw.md)）。升级 Origin 时，在 OpenClaw 中用同一条命令加上新版本号升级它。
 
 每个版本都由 GitHub Actions 从标签构建并发布，从不在个人电脑上发布；npm 包带有来源证明（provenance），镜像带有来源证明和 SBOM 证明（见[验证发布](#verify-a-release)）。
 

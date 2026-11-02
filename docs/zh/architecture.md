@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-d9e81c31
+sourceHash: sha256-8a416edf
 ---
 
 # 架构
@@ -292,7 +292,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 
 ### 你自己的来源 {#your-own-sources}
 
-人的工作也发生在 Origin 的适配器看不到的地方：其他 Agent 运行时、聊天工作区、通知流、笔记流水线。Origin 没有为每一种都写一个适配器，而是读取它自己的一种格式，**事件行**：UTF-8 的 JSONL，每行一个事件，由写入它的东西不断追加（字段与规则见 [sources.md](sources.md#your-own-sources-event-lines)）。写入者在 Origin 之外：一个轮询或订阅某个服务的脚本追加行，而 Origin 自己不发起任何网络调用（不变量 4），像读取 Agent 的记录一样读取它们。随 Origin 一起发布的唯一一个写入者，即它的 OpenClaw 插件（`packages/openclaw`），也不例外：它运行在 OpenClaw 的 Gateway 中，Origin 只通过它写出的行认识它。
+人的工作也发生在 Origin 的适配器看不到的地方：其他 Agent 运行时、聊天工作区、通知流、笔记流水线。Origin 没有为每一种都写一个适配器，而是读取它自己的一种格式，**事件行**：UTF-8 的 JSONL，每行一个事件，由写入它的东西不断追加（字段与规则见 [sources.md](sources.md#your-own-sources-event-lines)）。写入者在 Origin 之外：一个轮询或订阅某个服务的脚本追加行，而 Origin 自己不发起任何网络调用（不变量 4），像读取 Agent 的记录一样读取它们。随 Origin 一起发布的唯一一个写入者，即它的 OpenClaw 插件（`packages/openclaw`，见[接入 OpenClaw](guide/openclaw.md)），也不例外：它运行在 OpenClaw 的 Gateway 中，Origin 只通过它写出的行认识它。
 
 - **目录就是注册。** 库的主目录下 `sources/` 中的每个目录（`~/.origin/sources/<name>/`），或者指向某个目录的链接，都是一个来源，其 id 就是目录名，前提是这个名称由 2 到 32 个小写字母、数字和连字符组成、以字母开头，既不是内置来源的 id，也不是 `origin`、`hub`、`local`、`all` 和 `devices` 之一（`devices` 用于中枢存放其设备文件的镜像，即 `raw/devices/…`）。其他名称的目录会被忽略，每次同步在标准错误上给出一条警告（`origin mcp` 只警告一次）。没有来源表：CLI 每次列出它的适配器时都会列出这些目录，所以新目录会在下一次同步时被读取；删除的目录不再被读取，而已归档的内容保留。
 - **同一个适配器。** 每个这样的来源都由事件行适配器（`adapters` 中的 `createLinesAdapter`）读取，它的文件是目录下任意深度的 `.jsonl` 文件，隐藏文件除外，最旧的在前；它的 `locate` 指向同样的文件，所以单个文件也可以单独采集（`syncFile`）。目录中的 `VERSION` 文件给出写入这个来源的程序的版本，它的事件把这个版本记录为 Agent 版本。此后的采集与上文相同：游标、重写检测、`raw/<name>/` 下的镜像、封存、标题、会话汇总、按 `branch`（规则 R2）和跟随链接形成的线索、提议，以及变更流；召回能看到它的项目中任何来源的会话，依据 `cwd` 或 `project`。

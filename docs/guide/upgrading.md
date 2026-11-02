@@ -1,6 +1,6 @@
 # Upgrading
 
-Origin is released as one version across its five npm packages and the hub's container image. This page explains what a version promises, how to upgrade a device and a hub, and what happens to your store when you do. What changed in each release is in the [changelog](../changelog.md).
+Origin is released as one version across its six npm packages and the hub's container image. This page explains what a version promises, how to upgrade a device and a hub, and what happens to your store when you do. What changed in each release is in the [changelog](../changelog.md).
 
 ## Versions
 
@@ -8,7 +8,8 @@ Origin follows [Semantic Versioning](https://semver.org). Before 1.0:
 
 - A **minor** version (0.2, 0.3, …) may change the store format, the CLI, the MCP tools, or the hub's API. Its changelog section starts with an **Upgrading** note that says what to do, if anything.
 - A **patch** version (0.3.1, …) only fixes bugs, and never changes the store format.
-- `@openlinkos/origin` is the package to install; it brings the other four (`-core`, `-adapters`, `-mcp`, `-admin`) at the same version. Their APIs are internal until 1.0 and may change in any release.
+- `@openlinkos/origin` is the package to install; it brings four others (`-core`, `-adapters`, `-mcp`, `-admin`) at the same version. Their APIs are internal until 1.0 and may change in any release.
+- `@openlinkos/origin-openclaw`, the sixth, is a plugin you install into OpenClaw ([Connect OpenClaw](./openclaw.md)). Upgrade it there, with the same command and the new version, when you upgrade Origin.
 
 Every release is built and published by GitHub Actions from a tag, never from a workstation, with npm provenance, and with provenance and SBOM attestations on the images (see [Verify a release](#verify-a-release)).
 

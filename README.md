@@ -49,7 +49,7 @@ Origin puts **you** at the center instead of the tool:
 | ZCode | ✅ | ✅ |
 | Grok Build | ✅ | ✅ |
 
-Any MCP-capable agent can already query the archive and entries. Archiving an agent's own sessions needs its adapter, or a script that writes them as event lines: other agent runtimes, chat workspaces, notification streams, and notes pipelines can all bring their sessions this way, into a directory under `~/.origin/sources/` or straight to your hub (see [Bring your own source](docs/guide/sources.md)). To register Origin with each agent, see [Connect your agents](docs/guide/connect-agents.md). Where each agent stores its sessions is documented in [docs/sources.md](docs/sources.md).
+Any MCP-capable agent can already query the archive and entries. Archiving an agent's own sessions needs its adapter, or a script that writes them as event lines: other agent runtimes, chat workspaces, notification streams, and notes pipelines can all bring their sessions this way, into a directory under `~/.origin/sources/` or straight to your hub (see [Bring your own source](docs/guide/sources.md)). OpenClaw's agents get there through Origin's plugin for OpenClaw (see [Connect OpenClaw](docs/guide/openclaw.md)). To register Origin with each agent, see [Connect your agents](docs/guide/connect-agents.md). Where each agent stores its sessions is documented in [docs/sources.md](docs/sources.md).
 
 ## Getting started
 
@@ -87,6 +87,7 @@ The full documentation lives in [`docs/`](docs/) and is published at [origin.ope
 - [Concepts](docs/guide/concepts.md): sessions, threads, entries, versions, validity, imported memories, and forgetting
 - [Connect your agents](docs/guide/connect-agents.md): Claude Code, Codex, Cursor, ZCode, Grok Build, and the MCP tools they get
 - [Bring your own source](docs/guide/sources.md): bring the sessions of any other program, as event lines
+- [Connect OpenClaw](docs/guide/openclaw.md): the plugin that writes your OpenClaw agents' sessions to Origin
 - [Personal hub](docs/guide/hub.md): one memory across your machines and cloud agents, self-hosted
 - [Admin UI](docs/guide/admin.md): manage your hub in a browser: enable it, sign in, put it behind TLS, or keep it private
 - [Privacy and your data](docs/guide/privacy.md): what Origin stores, how forgetting works, how to remove everything
@@ -144,7 +145,8 @@ packages/
 ├── adapters/   @openlinkos/origin-adapters  per-agent session parsers
 ├── mcp/        @openlinkos/origin-mcp       MCP tools, stdio and HTTP servers, merged reads on a connected device
 ├── admin/      @openlinkos/origin-admin     the hub's admin UI: server-rendered pages and a JSON API
-└── cli/        @openlinkos/origin           the `origin` command and the hub (`origin serve`)
+├── cli/        @openlinkos/origin           the `origin` command and the hub (`origin serve`)
+└── openclaw/   @openlinkos/origin-openclaw  the plugin for OpenClaw, which writes its agents' sessions as event lines
 docs/                                        documentation site (VitePress)
 ├── guide/                                   user guides (English; Chinese under docs/zh/)
 ├── architecture.md                          design, data model, invariants
