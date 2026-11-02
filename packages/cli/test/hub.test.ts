@@ -216,7 +216,10 @@ describe('personal hub', () => {
     expect((await ingest({ relPath: '../../../etc/passwd' })).status).toBe(400);
     expect((await ingest({ relPath: 'C:/Windows/x.jsonl' })).status).toBe(400);
     expect((await ingest({ device: '../evil' })).status).toBe(400);
-    expect((await ingest({ source: 'nope' })).status).toBe(400);
+    // A source is built in, or a name of one's own (parsed as event lines); nothing else.
+    for (const source of ['No_pe', 'devices', 'x', 7]) {
+      expect((await ingest({ source })).status, String(source)).toBe(400);
+    }
     // The token of laptop acts only for laptop, never as another device or as the hub itself.
     expect((await ingest({ device: 'hub' })).status).toBe(403);
     const asHub = await fetch(`${hub.url}/v1/tombstones?after=0&device=hub`, {

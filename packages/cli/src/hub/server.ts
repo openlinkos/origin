@@ -22,6 +22,7 @@ import {
   verifyToken,
 } from '@openlinkos/origin-core';
 import { handleMcpHttp } from '@openlinkos/origin-mcp';
+import { hubAdapters } from '../sources.js';
 
 /** Decompressed request bodies larger than this are rejected. */
 const MAX_BODY = 64 * 1024 * 1024;
@@ -31,7 +32,10 @@ const MAX_RECORDS = 1000;
 export interface HubOptions {
   db: Database;
   home: string;
-  /** Adapters used to parse pushed raw mirrors, by source id. */
+  /**
+   * Adapters used to parse pushed raw mirrors, by source id. A source that is not among them, and
+   * whose name can name a source of one's own, is parsed as event lines (see sources.ts).
+   */
   adapters: SourceAdapter[];
   version: string;
   log?: (message: string) => void;
@@ -60,8 +64,9 @@ class HttpError extends Error {
 export function createHubServer(opts: HubOptions): http.Server {
   // A store that starts serving without a name becomes `hub` (see docs/architecture.md#storage).
   initStoreName(opts.db, HUB_STORE_NAME);
+  const adapterFor = hubAdapters(opts.adapters, opts.home);
   return http.createServer((req, res) => {
-    handle(opts, req, res).catch((err: unknown) => {
+    handle(opts, adapterFor, req, res).catch((err: unknown) => {
       const status =
         err instanceof HttpError
           ? err.status
@@ -85,6 +90,7 @@ export function createHubServer(opts: HubOptions): http.Server {
 
 async function handle(
   opts: HubOptions,
+  adapterFor: (source: string) => SourceAdapter | null,
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): Promise<void> {
@@ -146,7 +152,7 @@ async function handle(
       requireMethod(req, 'POST');
       const body = (await readJson(req)) as Record<string, unknown>;
       const device = deviceOf(opts, caller.name, body.device);
-      const adapter = opts.adapters.find((a) => a.id === body.source);
+      const adapter = typeof body.source === 'string' ? adapterFor(body.source) : null;
       if (!adapter) throw new HttpError(400, `Unknown source: ${String(body.source)}`);
       if (typeof body.data !== 'string') throw new HttpError(400, 'Missing data.');
       const result = appendRemote({ db: opts.db, home: opts.home, log: opts.log }, adapter, {

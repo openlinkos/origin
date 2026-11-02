@@ -9,7 +9,7 @@ Origin is not at 1.0 yet. Until then, a new minor version may change the store f
 ## Requirements
 
 - Node.js 22.16 or later (24 LTS recommended)
-- At least one supported agent: Claude Code, Codex CLI, Cursor, Grok Build, or ZCode.
+- At least one supported agent: Claude Code, Codex CLI, Cursor, Grok Build, or ZCode; or a program of your own that writes event lines (see [Bring your own source](./sources.md)).
 
 ## Install
 

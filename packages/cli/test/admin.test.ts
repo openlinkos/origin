@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { createClaudeCodeAdapter } from '@openlinkos/origin-adapters';
+import { createClaudeCodeAdapter, createLinesAdapter } from '@openlinkos/origin-adapters';
 import {
   correct,
   createToken,
@@ -170,6 +170,65 @@ describe('admin UI on the hub', () => {
     const raw = (await b.api('GET', `event-raw?id=${encodeURIComponent(USER_EVENT)}`)).json();
     expect(raw).toMatchObject({ id: USER_EVENT, truncated: false });
     expect(JSON.parse(raw.line).uuid).toBe('22222222-2222-4222-8222-222222222222');
+  });
+
+  it('shows the sessions of a source of your own under its name, in the neutral colour', async () => {
+    const dir = path.join(deviceHome, 'sources', 'chat-ops');
+    fs.mkdirSync(dir, { recursive: true });
+    const at = Date.now() - 3_600_000;
+    const lines = [
+      {
+        id: 'm1',
+        session: 'incident-7',
+        time: at,
+        role: 'user',
+        kind: 'message',
+        text: 'Is the deploy stuck?',
+        title: 'Deploy incident',
+      },
+      {
+        id: 'm2',
+        session: 'incident-7',
+        time: at + 1000,
+        role: 'assistant',
+        kind: 'message',
+        text: 'It waits on a migration lock.',
+      },
+    ];
+    fs.writeFileSync(
+      path.join(dir, 'a.jsonl'),
+      lines
+        .map(
+          (l) => `${JSON.stringify(l)}
+`,
+        )
+        .join(''),
+    );
+    await syncSource(
+      { db: deviceDb, home: deviceHome },
+      createLinesAdapter({ id: 'chat-ops', dir }),
+    );
+    await push();
+    const b = await signedIn();
+    const tag =
+      '<span class="ol-legend-item admin-neutral"><span class="ol-swatch" aria-hidden="true"></span>chat-ops</span>';
+    for (const p of [
+      '/admin/session?source=chat-ops&id=incident-7',
+      '/admin/sessions?agent=chat-ops',
+      `/admin/event?id=${encodeURIComponent('chat-ops:m2')}`,
+    ]) {
+      const res = await b.get(p);
+      expect(res.status, p).toBe(200);
+      expect(res.text, p).toContain(tag);
+      expect(pageProblems(res.text), p).toEqual([]);
+    }
+    const session = await b.get('/admin/session?source=chat-ops&id=incident-7');
+    expect(session.text).toContain('Deploy incident');
+    expect(session.text).toContain('It waits on a migration lock.');
+    // In the overview's chart, its bars and swatch are neutral too.
+    const overview = await b.get('/admin/');
+    expect(overview.text).toMatch(/class="ol-chart-bar admin-neutral"/);
+    expect(overview.text).toContain('class="ol-swatch admin-neutral"');
   });
 
   it('keeps admin sessions and hub tokens apart', async () => {

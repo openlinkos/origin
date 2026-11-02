@@ -9,6 +9,7 @@ Where each target agent stores its sessions on disk and what an adapter needs to
 | `cursor` | [Cursor](https://cursor.com) | **Supported** | CLI: `~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`; IDE: `state.vscdb` | JSONL message blocks; SQLite key-value |
 | `zcode` | [ZCode](https://github.com/zai-org/ZCode) | **Supported** | `~/.zcode/cli/db/db.sqlite` | SQLite (relational) |
 | `grok` | [Grok Build](https://github.com/xai-org/grok-build) | **Supported** | `~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl` | JSONL ACP session-update stream |
+| `<name>` | Your own: any program that writes event lines | **Supported** | `~/.origin/sources/<name>/**/*.jsonl` | Event lines, see [Your own sources](#your-own-sources-event-lines) |
 
 All five agents also keep their own memory, scoped per repository, project, or machine. Origin imports the memory files of Claude Code, ZCode, and Grok Build as entries (see [Native memories](#native-memories)); since those files cite no sources, an imported entry cites the version of the file it comes from.
 
@@ -169,3 +170,22 @@ A file of event lines is UTF-8 JSONL: one JSON object per line, one event each, 
 - **Validation.** A line that is not a JSON object, lacks a required field, or has a field of the wrong type is a parse error, as is a `time` without an offset, a `kind` of `memory`, and a `title_by` other than `user` or `agent`: it is counted and yields nothing, it stays in the raw mirror, and the lines around it are read as usual. An optional field that is `null` or an empty string counts as absent. Fields Origin does not know are left in the raw mirror.
 - **Ids.** A line whose event id the store already has adds nothing, so a line sent twice is ingested once. Give every event of a source its own `id`, whichever session it belongs to.
 - **Sessions and titles.** A session's events are those with its `session`, from any file of the source. Its title is that of its latest line with a `title`, except that a title not given by the person never replaces one that was, as for Claude Code.
+
+### On a device
+
+Each directory under `~/.origin/sources/` (or `$ORIGIN_HOME/sources/`) is a source, named after the directory:
+
+```
+~/.origin/sources/
+├── chat-ops/                 # the source chat-ops
+│   ├── VERSION               # optional: the version of what writes it, on its first line
+│   └── 2026/11/02.jsonl      # every .jsonl file below the directory, at any depth
+└── notes/
+    └── inbox.jsonl
+```
+
+- **Names.** 2 to 32 lowercase letters, digits, and hyphens, starting with a letter, other than the ids of the built-in sources above and `origin`, `hub`, `local`, `all`, and `devices`. A directory with another name is ignored, with a warning when Origin syncs. The directory may be a link to one elsewhere.
+- **Files.** Every `.jsonl` file below the directory, at any depth, oldest first; hidden files and directories (`.name`) are left out. Only complete lines are read, so a writer appends a whole line, ending with a line break, at a time. A file rewritten rather than appended to is mirrored again from its start as a new generation, as an agent's log would be, and its lines whose ids the source already has add nothing.
+- **Version.** The first line of a `VERSION` file in the directory, if there is one, is recorded as the agent version of the events read after it.
+- **Mirrors.** As for agents, under `raw/<name>/` with the files' paths in the directory. A device connected to a hub pushes them, and the hub keeps them as `raw/devices/<device>/<name>/…`; a relay sends the files' lines to the hub instead.
+- **Reading.** `origin sync` reads every source, `origin sync --source <name>` one of them, and `origin mcp` looks for new lines every minute while an agent runs. There are no hooks.

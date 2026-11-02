@@ -11,6 +11,7 @@ import { en } from '../src/i18n/en.js';
 import { negotiateLang, translator } from '../src/i18n/index.js';
 import { zh } from '../src/i18n/zh.js';
 import { ICON_NAMES } from '../src/icons.js';
+import { agentSlot, agentTag, bySlot } from '../src/pages/workbench.js';
 import { LoginLimiter } from '../src/ratelimit.js';
 
 describe('html', () => {
@@ -130,6 +131,25 @@ describe('brand', () => {
     // No custom properties of its own: colours, sizes, and the chart palette are the kit's tokens.
     expect(rules).not.toMatch(/(?:^|[;{\s])--[\w-]+\s*:/);
     expect(rules).toContain('var(--ol-');
+  });
+});
+
+describe('sources', () => {
+  it('gives the agents Origin reads their colours, and sources of your own the neutral one', () => {
+    expect(agentTag('claude-code').value).toBe(
+      '<span class="ol-legend-item ol-series-1"><span class="ol-swatch" aria-hidden="true"></span>claude-code</span>',
+    );
+    expect(agentTag('chat-ops').value).toBe(
+      '<span class="ol-legend-item admin-neutral"><span class="ol-swatch" aria-hidden="true"></span>chat-ops</span>',
+    );
+    expect(agentSlot('notes')).toBe('neutral');
+    // The agents in their order, then your own, by name.
+    expect(['notes', 'codex', 'chat-ops', 'claude-code'].sort(bySlot)).toEqual([
+      'claude-code',
+      'codex',
+      'chat-ops',
+      'notes',
+    ]);
   });
 });
 

@@ -29,6 +29,7 @@ import {
   agentSlot,
   agentTag,
   box,
+  bySlot,
   KIND_SLOTS,
   kindTag,
   listPager,
@@ -226,7 +227,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
 
   const agents = o.sources
     .filter((s) => o.activity.some((d) => (d.bySource[s.source] ?? 0) > 0))
-    .sort((a, b) => agentSlot(a.source) - agentSlot(b.source));
+    .sort((a, b) => bySlot(a.source, b.source));
   const activity = box({
     title: t('overview.activity'),
     aside: t('overview.activityAside'),

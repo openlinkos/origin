@@ -10,6 +10,8 @@ Every agent launches the same stdio server, `origin mcp`, which `npm install -g 
 | ZCode | ✅ | ✅ | Per ZCode's docs |
 | Grok Build | ✅ | ✅ | Registration |
 
+Other programs, such as another agent runtime, a chat bot, or a notes pipeline, can bring their sessions too, by writing event lines; see [Bring your own source](./sources.md).
+
 ## Connect them all at once
 
 `origin agents` shows the agents installed on this machine and how each is connected. `origin agents connect` registers Origin's MCP server with each of them, and adds two kinds of hooks to Claude Code and Codex: the [recall](./recall.md) hooks, which hand the agent what matters when a session starts and with each prompt, and the ingest hooks, which hand Origin a session's new lines as each turn ends, in the background, so that other sessions, and your hub, see them right away. It shows what it would change, and changes it only with `--yes`, backing up each file next to it first; it adds and removes only Origin's own entries, and `origin agents disconnect` removes them again. Name agents to connect only those, such as `origin agents connect codex`. On a machine you connected with an earlier version, run it again to add the hooks it lacks.

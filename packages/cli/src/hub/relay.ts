@@ -133,6 +133,8 @@ async function relay(opts: RelaySyncOptions): Promise<RelaySyncResult> {
     files: 0,
     bytes: 0,
     eventsAdded: 0,
+    // What the hub refuses of a relay's files is in `failed`, with what could not be read.
+    refused: [],
     entriesPushed: 0,
     tombstonesPushed: 0,
     waiting: null,

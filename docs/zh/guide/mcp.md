@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-e0193343
+sourceHash: sha256-017baf0c
 ---
 
 # MCP 工具
@@ -28,7 +28,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 
 - **结果**是一个 JSON 文本项。结果中的时间是 ISO 8601 格式，用服务器所在时区的本地时间，带毫秒和时区偏移，例如 `2026-10-20T09:12:30.000+08:00`。
 - **时间参数**（`since`、`until`、`valid_from`、`valid_to`）接受相对值 `30m`、`24h`、`7d`、`2w`（从现在往前算），或绝对的日期、时间：`2026-10-20` 或 ISO 8601。
-- **id。** 条目 id 是 `ent_` 加 12 到 32 个十六进制字符。事件 id 是 `<来源>:<来源中的 id>`，例如 `claude-code:7d0c4a1e-…`；来源是 `claude-code`、`codex`、`cursor`、`zcode` 或 `grok` 之一。会话用它的 Agent 自己给的 id（例如一个 UUID），也可以像召回记录它那样写成 `<来源>:<会话 id>`。线索 id 是 `thr_` 加 12 个十六进制字符，召回 id 和提议 id 也一样，前缀分别为 `rcl_` 和 `prp_`。[`get`](#get) 可以打开其中任意一种。
+- **id。** 条目 id 是 `ent_` 加 12 到 32 个十六进制字符。事件 id 是 `<来源>:<来源中的 id>`，例如 `claude-code:7d0c4a1e-…`；来源是 `claude-code`、`codex`、`cursor`、`zcode` 或 `grok` 之一，或者是用户自己的某个来源的名称（见[接入你自己的来源](./sources.md)）。会话用它的 Agent 自己给的 id（例如一个 UUID），也可以像召回记录它那样写成 `<来源>:<会话 id>`。线索 id 是 `thr_` 加 12 个十六进制字符，召回 id 和提议 id 也一样，前缀分别为 `rcl_` 和 `prp_`。[`get`](#get) 可以打开其中任意一种。
 - **错误**以工具错误（`isError`）返回，附可读的说明，从不作为协议错误返回：无效的输入、未知的 id（`Unknown entry or event <id>.`）和已遗忘的 id（`<id> has been forgotten.`）。
 - **在连接了中枢的设备上**，结果中的每个条目、事件、会话和来源都带有 `origin`：本设备有的为 `local`，只有中枢有的为 `hub`；结果中列出的存根（见下文）不带，因为它们来自给出回答的那个库。同一条目的多个版本只列出当前版本。如果中枢在 2 秒内（`ORIGIN_HUB_TIMEOUT_MS`）没有回答，结果只包含本设备的答案，后面再跟一个文本项：`Note: the Origin hub was not consulted (<reason>); these results come from this device only.`
 - **在中继上**，每个结果都是中枢返回的原样，不带 `origin` 标注。连不上中枢时，每个工具都会失败，并说明中继只能通过它的中枢作答。

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-64d1cb59
+sourceHash: sha256-c52c5302
 ---
 
 # 快速开始
@@ -13,7 +13,7 @@ Origin 还没有到 1.0。在此之前，新的次版本可能改变存储格式
 ## 环境要求 {#requirements}
 
 - Node.js 22.16 或更高（推荐 24 LTS）
-- 至少一个已支持的 Agent：Claude Code、Codex CLI、Cursor、Grok Build 或 ZCode。
+- 至少一个已支持的 Agent：Claude Code、Codex CLI、Cursor、Grok Build 或 ZCode；或者一个你自己的、会写事件行的程序（见[接入你自己的来源](./sources.md)）。
 
 ## 安装 {#install}
 

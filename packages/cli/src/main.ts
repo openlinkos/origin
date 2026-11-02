@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
-import { adapterById, allAdapters, KNOWN_SOURCE_IDS } from '@openlinkos/origin-adapters';
+import { KNOWN_SOURCE_IDS } from '@openlinkos/origin-adapters';
 import { parseListen, parsePublicUrl, SIGN_IN_LINK_MS } from '@openlinkos/origin-admin';
 import {
   assertComplete,
@@ -68,6 +68,7 @@ import {
   searchEvents,
   setAdminPassword,
   setStoreName,
+  sourcesDir,
   stats,
   storeName,
   syncSource,
@@ -126,6 +127,7 @@ import {
   printProposal,
   showProposal,
 } from './proposals.js';
+import { sourceAdapters } from './sources.js';
 import { isHookCall, main as syncHook } from './sync-hook.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
 import { onEnter, openInBrowser, startLocalUi, UI_PORT, writeSignInFile } from './ui.js';
@@ -173,9 +175,7 @@ Personal hub:
 
 Entry kinds: ${ENTRY_KINDS.join(' · ')}. Time values: 7d / 24h / 30m / 2w or YYYY-MM-DD.
 Data directory: $ORIGIN_HOME or ~/.origin
-Source ids: ${KNOWN_SOURCE_IDS.join(' · ')} (implemented: ${allAdapters()
-  .map((a) => a.id)
-  .join(', ')})`;
+Source ids: ${KNOWN_SOURCE_IDS.join(' · ')}, and your own: one per directory $ORIGIN_HOME/sources/<name>/ of event lines`;
 
 interface Ctx {
   db: Database;
@@ -233,7 +233,7 @@ export async function main(argv: string[]): Promise<number> {
   // Opening the store upgrades an older one. A migration may parse mirrored lines again, with the
   // adapters, and read their sealed frames, which a hub may keep in a bucket.
   const db = openDatabase(dbPath(home), {
-    adapters: allAdapters(),
+    adapters: sourceAdapters(home),
     beforeMigrate: (db) =>
       void setUpFrames(db, home, {
         command: 'other',
@@ -319,8 +319,13 @@ export async function main(argv: string[]): Promise<number> {
   }
 }
 
+/** Warn on standard error, as the CLI does of a directory under sources/ that names no source. */
+const warn = (message: string) => console.error(message);
+
 async function syncAll(ctx: Ctx): Promise<void> {
-  for (const adapter of allAdapters()) await syncSource({ db: ctx.db, home: ctx.home }, adapter);
+  for (const adapter of sourceAdapters(ctx.home, warn)) {
+    await syncSource({ db: ctx.db, home: ctx.home }, adapter);
+  }
 }
 
 /** One line about a sync with the hub. */
@@ -337,6 +342,9 @@ function describeHubSync(hub: HubConfig, r: HubSyncResult): string {
     lines.push(
       'The hub does not keep recalls yet; they wait here, and are sent once it runs this version of Origin.',
     );
+  }
+  for (const f of r.refused) {
+    lines.push(`Not sent: ${f.path} (${f.source}): the hub refused it: ${f.reason}`);
   }
   return lines.join('\n');
 }
@@ -364,18 +372,17 @@ async function cmdSync(ctx: Ctx, args: string[]): Promise<number> {
       local: { type: 'boolean', default: false },
     },
   });
-  const adapters = values.source ? [adapterById(values.source)] : allAdapters();
-  if (adapters.some((a) => a === null)) {
+  const all = sourceAdapters(ctx.home, warn);
+  const adapters = values.source ? all.filter((a) => a.id === values.source) : all;
+  if (adapters.length === 0) {
     console.error(
-      `Source not implemented: ${values.source} (implemented: ${allAdapters()
-        .map((a) => a.id)
-        .join(', ')})`,
+      `No source ${values.source} (sources: ${all.map((a) => a.id).join(', ')}). Your own sources are the directories of ${sourcesDir(ctx.home)}.`,
     );
     return 2;
   }
-  if (isRelay(ctx.db)) return relaySync(ctx, adapters as SourceAdapter[], values);
+  if (isRelay(ctx.db)) return relaySync(ctx, adapters, values);
   const rows: string[][] = [];
-  for (const adapter of adapters as NonNullable<(typeof adapters)[number]>[]) {
+  for (const adapter of adapters) {
     const r = await syncSource(
       {
         db: ctx.db,
@@ -417,7 +424,7 @@ async function cmdSync(ctx: Ctx, args: string[]): Promise<number> {
       log: values.verbose ? (m) => console.error(`  ${m}`) : undefined,
     });
     console.log(`\n${describeHubSync(hub, r)}`);
-    return 0;
+    return r.refused.length > 0 ? 1 : 0;
   } catch (err) {
     console.error(`\nNot synced with the hub: ${(err as Error).message}`);
     return 1;
@@ -564,7 +571,7 @@ async function relayStatus(ctx: Ctx): Promise<number> {
   );
   const rows: string[][] = [];
   const warnings: string[] = [];
-  for (const adapter of allAdapters()) {
+  for (const adapter of sourceAdapters(ctx.home, warn)) {
     const p = await relayPending(ctx.db, adapter);
     if (p.files === 0) continue;
     const last = lastRelayed(ctx.db, adapter.id);
@@ -1398,10 +1405,11 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
   const device = storeName(ctx.db);
   const watchIntervalMs = watchInterval();
   // What the log files looked like when they were last ingested: the background checks compare it
-  // with what they look like now, without reading them (see fingerprintSources).
-  const adapters = allAdapters();
+  // with what they look like now, without reading them (see fingerprintSources). The sources are
+  // listed again each time, so that a directory added under sources/ meanwhile is read too.
+  const adapters = () => sourceAdapters(ctx.home, log);
   let ingested: string | null = null;
-  const fingerprint = () => fingerprintSources(adapters).catch(() => null);
+  const fingerprint = () => fingerprintSources(adapters()).catch(() => null);
   const ingest = async () => {
     const before = await fingerprint();
     await syncAll(ctx);
@@ -1415,7 +1423,7 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
     // Every tool is the hub's; the agents' new log lines go to the hub first (see relay.ts).
     if (!hub) throw new OriginError(RELAY_UNCONNECTED);
     // While the hub cannot be reached, warn of unsent logs that their agents may soon delete.
-    const cleanup = new RetentionWatch(() => retentionWarnings(ctx.db, adapters), log);
+    const cleanup = new RetentionWatch(() => retentionWarnings(ctx.db, adapters()), log);
     await serveRelay({
       device,
       hub: { url: hub.url, token: hub.token },
@@ -1424,7 +1432,7 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
       sync: async () => {
         const before = await fingerprint();
         try {
-          await relayWithHub({ db: ctx.db, home: ctx.home, hub, adapters, log });
+          await relayWithHub({ db: ctx.db, home: ctx.home, hub, adapters: adapters(), log });
         } catch (err) {
           void cleanup.check();
           throw err;
@@ -1500,7 +1508,7 @@ async function cmdUi(ctx: Ctx, args: string[]): Promise<number> {
     version: VERSION,
     port,
     hub: () => hubOf(ctx),
-    ingest: allAdapters(),
+    ingest: sourceAdapters(ctx.home, log),
     log,
   });
   const minutes = SIGN_IN_LINK_MS / 60_000;
@@ -1642,7 +1650,7 @@ async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
     home: ctx.home,
     host: values.host,
     port,
-    adapters: allAdapters(),
+    adapters: sourceAdapters(ctx.home, (m) => console.error(m)),
     version: VERSION,
     log: (m) => console.error(m),
     admin,

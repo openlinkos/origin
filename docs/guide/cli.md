@@ -38,7 +38,7 @@ origin push                                            Same as origin sync (kept
 ```
 
 - **Time values** are relative durations (`30m`, `24h`, `7d`, `2w`) or dates (`YYYY-MM-DD`, ISO 8601).
-- **Source ids** are `claude-code`, `codex`, `cursor`, `grok`, and `zcode`.
+- **Source ids** are `claude-code`, `codex`, `cursor`, `grok`, and `zcode`, and the name of each of your own sources, a directory under `~/.origin/sources/` (see [Bring your own source](./sources.md)). `origin sync` warns of a directory there whose name names no source, and leaves it alone.
 - **Entry kinds** are `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries).
 - **Entries** listed and found are the current ones. Superseded versions, and entries whose validity has ended (such as an imported memory whose file was deleted), appear with `origin entries --history` and in `origin show`. Entries imported from the memory files agents keep for themselves are marked as imported.
 - **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting and restoring leave, `rcl_7d2e9a0b1c3f` for recalls, `prp_1b7e4c0a9d23` for proposals, entries agents proposed for you to review, and `thr_4c1e9a7b2d30` for threads, the sessions of one piece of work (see [Threads](./concepts.md#threads)). Sessions go by the id their agent gives them, such as a UUID; `origin timeline` shows a session's thread next to its id.

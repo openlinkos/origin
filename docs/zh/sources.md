@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-ed02e29d
+sourceHash: sha256-bf8c9def
 ---
 
 # 会话来源
@@ -13,6 +13,7 @@ sourceHash: sha256-ed02e29d
 | `cursor` | [Cursor](https://cursor.com) | **已支持** | CLI：`~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl`；IDE：`state.vscdb` | JSONL 消息块；SQLite 键值存储 |
 | `zcode` | [ZCode](https://github.com/zai-org/ZCode) | **已支持** | `~/.zcode/cli/db/db.sqlite` | SQLite（关系型） |
 | `grok` | [Grok Build](https://github.com/xai-org/grok-build) | **已支持** | `~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl` | JSONL 格式的 ACP session-update 流 |
+| `<name>` | 你自己的：任何写事件行的程序 | **已支持** | `~/.origin/sources/<name>/**/*.jsonl` | 事件行，见[你自己的来源](#your-own-sources-event-lines) |
 
 这五个 Agent 也都维护各自的记忆，范围限定在单个仓库、项目或机器。Origin 把 Claude Code、ZCode 和 Grok Build 的记忆文件导入为条目（见[原生记忆](#native-memories)）；这些文件不引用任何来源，所以导入的条目引用的是它所来自的那个文件版本。
 
@@ -173,3 +174,22 @@ Split unrelated changes into separate commits.
 - **校验。** 不是 JSON 对象、缺少必需字段，或某个字段类型不对的行，都是解析错误；没有时区偏移的 `time`、`memory` 类的 `kind`、取值不是 `user` 或 `agent` 的 `title_by` 也是：这一行会被计数，不产生任何内容，仍然留在原始镜像中，它前后的行照常读取。取值为 `null` 或空字符串的可选字段视同没有。Origin 不认识的字段留在原始镜像中。
 - **Id。** 事件 id 已在存储中的行不会新增任何内容，所以同一行发送两次只会采集一次。请让一个来源的每个事件都有自己的 `id`，无论它属于哪个会话。
 - **会话与标题。** 一个会话的事件是该来源任意文件中带有这个 `session` 的事件。它的标题取自带 `title` 的最新一行，但不是由本人给出的标题永远不会替换本人给出的标题，这与 Claude Code 相同。
+
+### 在设备上 {#on-a-device}
+
+`~/.origin/sources/`（或 `$ORIGIN_HOME/sources/`）下的每个目录都是一个来源，以目录名命名：
+
+```
+~/.origin/sources/
+├── chat-ops/                 # the source chat-ops
+│   ├── VERSION               # optional: the version of what writes it, on its first line
+│   └── 2026/11/02.jsonl      # every .jsonl file below the directory, at any depth
+└── notes/
+    └── inbox.jsonl
+```
+
+- **名称。** 由 2 到 32 个小写字母、数字和连字符组成，以字母开头，并且不是上面内置来源的 id，也不是 `origin`、`hub`、`local`、`all` 和 `devices`。其他名称的目录会被忽略，Origin 同步时会给出警告。目录可以是指向别处某个目录的链接。
+- **文件。** 目录下任意深度的每个 `.jsonl` 文件，最旧的在前；隐藏的文件和目录（`.name`）不读取。只读取完整的行，所以写入者每次追加一整行，以换行符结尾。被重写而不是被追加的文件，会像 Agent 的记录一样，作为新的一代从头重新镜像，其中 id 已在该来源中的行不会新增任何内容。
+- **版本。** 如果目录中有 `VERSION` 文件，它的第一行会被记录为此后读取的事件的 Agent 版本。
+- **镜像。** 与 Agent 相同，位于 `raw/<name>/` 下，路径与文件在目录中的路径相同。接入中枢的设备会推送它们，中枢把它们保存为 `raw/devices/<device>/<name>/…`；中继则把这些文件的行直接发送给中枢。
+- **读取。** `origin sync` 读取所有来源，`origin sync --source <name>` 只读其中一个，Agent 运行期间 `origin mcp` 每分钟查看一次新增的行。没有 hook。

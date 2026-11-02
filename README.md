@@ -9,7 +9,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Origin archives the sessions your AI agents already write to disk into a single local store. Claude Code, Codex, Cursor, Grok Build, and ZCode are supported. Through one [MCP](https://modelcontextprotocol.io) server, it gives every agent the same memory. Whichever tool you open can look up what you decided last week and why, trace it to the exact original line, and save what it learns for next time. If you work on several machines or with cloud agents, a self-hosted **personal hub** brings them all into the same memory.
+Origin archives the sessions your AI agents already write to disk into a single local store. Claude Code, Codex, Cursor, Grok Build, and ZCode are supported, and anything else can bring its sessions as event lines, a format any script can write. Through one [MCP](https://modelcontextprotocol.io) server, it gives every agent the same memory. Whichever tool you open can look up what you decided last week and why, trace it to the exact original line, and save what it learns for next time. If you work on several machines or with cloud agents, a self-hosted **personal hub** brings them all into the same memory.
 
 > **Status: early (0.4).** Ingestion of Claude Code, Codex, Cursor, Grok Build, and ZCode sessions, the import of the memories Claude Code, ZCode, and Grok Build keep, recall when a session starts and with each prompt, the MCP server, the CLI, `origin ui`, and the personal hub with its admin UI, relays, and bucket storage work end to end. Before 1.0, a minor version may change the store format; stores are upgraded in place, and [Upgrading](https://origin.openlinkos.com/guide/upgrading) and the [changelog](CHANGELOG.md) say what to do.
 
@@ -49,7 +49,7 @@ Origin puts **you** at the center instead of the tool:
 | ZCode | ✅ | ✅ |
 | Grok Build | ✅ | ✅ |
 
-Any MCP-capable agent can already query the archive and entries. Archiving an agent's own sessions needs its adapter. To register Origin with each agent, see [Connect your agents](docs/guide/connect-agents.md). Where each agent stores its sessions is documented in [docs/sources.md](docs/sources.md).
+Any MCP-capable agent can already query the archive and entries. Archiving an agent's own sessions needs its adapter, or a script that writes them as event lines: other agent runtimes, chat workspaces, notification streams, and notes pipelines can all bring their sessions this way, into a directory under `~/.origin/sources/` (see [Bring your own source](docs/guide/sources.md)). To register Origin with each agent, see [Connect your agents](docs/guide/connect-agents.md). Where each agent stores its sessions is documented in [docs/sources.md](docs/sources.md).
 
 ## Getting started
 
@@ -86,6 +86,7 @@ The full documentation lives in [`docs/`](docs/) and is published at [origin.ope
 - [Getting started](docs/guide/getting-started.md): install, archive your sessions, ask your first question
 - [Concepts](docs/guide/concepts.md): sessions, threads, entries, versions, validity, imported memories, and forgetting
 - [Connect your agents](docs/guide/connect-agents.md): Claude Code, Codex, Cursor, ZCode, Grok Build, and the MCP tools they get
+- [Bring your own source](docs/guide/sources.md): bring the sessions of any other program, as event lines
 - [Personal hub](docs/guide/hub.md): one memory across your machines and cloud agents, self-hosted
 - [Admin UI](docs/guide/admin.md): manage your hub in a browser: enable it, sign in, put it behind TLS, or keep it private
 - [Privacy and your data](docs/guide/privacy.md): what Origin stores, how forgetting works, how to remove everything

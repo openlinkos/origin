@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-fc24913b
+sourceHash: sha256-df460acf
 ---
 
 # 命令参考
@@ -42,7 +42,7 @@ origin push                                            与 origin sync 相同（
 ```
 
 - **时间参数**：相对时长（`30m`、`24h`、`7d`、`2w`）或日期（`YYYY-MM-DD`、ISO 8601）。
-- **来源 id**：`claude-code`、`codex`、`cursor`、`grok` 与 `zcode`。
+- **来源 id**：`claude-code`、`codex`、`cursor`、`grok` 与 `zcode`，以及你自己每个来源的名称，即 `~/.origin/sources/` 下的一个目录（见[接入你自己的来源](./sources.md)）。那里名称不能作为来源名称的目录，`origin sync` 会给出警告，并且不去动它。
 - **条目类型**：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。
 - **条目**：列出和检索到的都是当前的条目。已被取代的版本，以及有效期已经结束的条目（例如文件已被删除的导入记忆），用 `origin entries --history` 或 `origin show` 才能看到。从 Agent 为自己保存的记忆文件导入的条目会标记为导入的。
 - **id 形式**：条目如 `ent_5f0c2a9e41b7`；事件如 `claude-code:<uuid>` 或 `codex:<session>:o12`；遗忘记录（遗忘与恢复留下的记录）如 `tmb_3a9d70c1e2f4`；召回如 `rcl_7d2e9a0b1c3f`；提议，即 Agent 提出、等你审阅的条目，如 `prp_1b7e4c0a9d23`；线索，即属于同一件工作的那些会话（见[线索](./concepts.md#threads)），如 `thr_4c1e9a7b2d30`。会话用它的 Agent 给的 id，例如一个 UUID；`origin timeline` 会在会话 id 旁显示它的线索。

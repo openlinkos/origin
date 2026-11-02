@@ -9,7 +9,7 @@
 
 [English](README.md) | 简体中文
 
-各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：已支持 Claude Code、Codex、Cursor、Grok Build 与 ZCode。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。如果你在多台机器上工作，或者使用云端 Agent，可以用自托管的**个人中枢**把它们接入同一份记忆。
+各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：已支持 Claude Code、Codex、Cursor、Grok Build 与 ZCode，其他任何东西也可以把会话写成事件行（一种任何脚本都能写的格式）带进来。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。如果你在多台机器上工作，或者使用云端 Agent，可以用自托管的**个人中枢**把它们接入同一份记忆。
 
 > **状态：早期版本（0.4）。** Claude Code、Codex、Cursor、Grok Build 与 ZCode 会话的采集，Claude Code、ZCode 与 Grok Build 自身记忆的导入，会话开始时和每个提示的召回，MCP server、CLI、`origin ui`，以及个人中枢（含管理界面、中继和存储桶）已经端到端可用。1.0 之前，次版本可能改变存储格式；库会就地升级，[升级](https://origin.openlinkos.com/zh/guide/upgrading)和[更新日志](https://origin.openlinkos.com/zh/changelog)会说明需要怎么做。
 
@@ -49,7 +49,7 @@ Origin 以**人**而不是工具为中心：
 | ZCode | ✅ | ✅ |
 | Grok Build | ✅ | ✅ |
 
-任何支持 MCP 的 Agent 现在都能查询归档和条目；归档某个 Agent 自己的会话则需要它的适配器。如何为各 Agent 注册 Origin，见[接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)；各 Agent 把会话存放在哪里，见[会话来源](https://origin.openlinkos.com/zh/sources)。
+任何支持 MCP 的 Agent 现在都能查询归档和条目；归档某个 Agent 自己的会话则需要它的适配器，或者一个把会话写成事件行的脚本：其他 Agent 运行时、聊天工作区、通知流和笔记流水线都可以这样把会话写进 `~/.origin/sources/` 下的目录（见[接入你自己的来源](https://origin.openlinkos.com/zh/guide/sources)）。如何为各 Agent 注册 Origin，见[接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)；各 Agent 把会话存放在哪里，见[会话来源](https://origin.openlinkos.com/zh/sources)。
 
 ## 快速开始
 
@@ -86,6 +86,7 @@ Codex、Cursor、ZCode、Grok Build 的接入方式见[接入 Agent](https://ori
 - [快速开始](https://origin.openlinkos.com/zh/guide/getting-started)：安装、归档会话、提出第一个问题
 - [核心概念](https://origin.openlinkos.com/zh/guide/concepts)：会话、线索、条目、版本、有效期、导入的记忆与遗忘
 - [接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)：Claude Code、Codex、Cursor、ZCode、Grok Build，以及它们可用的 MCP 工具
+- [接入你自己的来源](https://origin.openlinkos.com/zh/guide/sources)：以事件行带来其他任何程序的会话
 - [个人中枢](https://origin.openlinkos.com/zh/guide/hub)：自托管，让你所有的机器和云端 Agent 共享一份记忆
 - [管理界面](https://origin.openlinkos.com/zh/guide/admin)：在浏览器中管理中枢：启用、登录、放在 TLS 之后，或保持私有访问
 - [隐私与数据](https://origin.openlinkos.com/zh/guide/privacy)：Origin 保存了什么、遗忘如何生效、如何清除全部数据

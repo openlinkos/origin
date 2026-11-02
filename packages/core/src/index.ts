@@ -196,7 +196,7 @@ export {
   verifyAdminPassword,
   verifyAdminPasswordHash,
 } from './password.js';
-export { dbPath, originHome, parseRawPath, rawDir, remotePath } from './paths.js';
+export { dbPath, originHome, parseRawPath, rawDir, remotePath, sourcesDir } from './paths.js';
 export {
   acceptProposal,
   countProposals,

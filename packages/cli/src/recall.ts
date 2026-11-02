@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { parseArgs } from 'node:util';
-import { allAdapters, KNOWN_SOURCE_IDS } from '@openlinkos/origin-adapters';
+import { isLinesSourceId, KNOWN_SOURCE_IDS } from '@openlinkos/origin-adapters';
 import {
   type Database,
   dbPath,
@@ -20,6 +20,7 @@ import {
   recordRecall,
 } from '@openlinkos/origin-core';
 import { setUpFrames } from './hub/bucket.js';
+import { sourceAdapters } from './sources.js';
 
 /**
  * `origin recall`: what Origin hands an agent unasked (see docs/architecture.md#recall). An agent's
@@ -81,7 +82,10 @@ export function hookOutput(eventName: string, text: string): string {
 }
 
 function openStore(home: string): Database {
-  const db = openDatabase(dbPath(home), { adapters: allAdapters(), log: (m) => console.error(m) });
+  const db = openDatabase(dbPath(home), {
+    adapters: sourceAdapters(home),
+    log: (m) => console.error(m),
+  });
   setUpFrames(db, home, { command: 'other', env: process.env });
   return db;
 }
@@ -156,8 +160,14 @@ export async function main(argv: string[]): Promise<number> {
     }
     return runHook(values.hook as HookAgent);
   }
-  if (values.agent && !(KNOWN_SOURCE_IDS as readonly string[]).includes(values.agent)) {
-    console.error(`Unknown agent "${values.agent}" (agents: ${KNOWN_SOURCE_IDS.join(', ')}).`);
+  if (
+    values.agent &&
+    !(KNOWN_SOURCE_IDS as readonly string[]).includes(values.agent) &&
+    !isLinesSourceId(values.agent)
+  ) {
+    console.error(
+      `Unknown agent "${values.agent}" (agents: ${KNOWN_SOURCE_IDS.join(', ')}, or a source of your own).`,
+    );
     return 2;
   }
   const db = openStore(originHome());

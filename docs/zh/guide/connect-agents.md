@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-68ce84d3
+sourceHash: sha256-88b567db
 ---
 
 # 接入 Agent
@@ -13,6 +13,8 @@ sourceHash: sha256-68ce84d3
 | Cursor | ✅ | ✅ | 依据 Cursor 文档 |
 | ZCode | ✅ | ✅ | 依据 ZCode 文档 |
 | Grok Build | ✅ | ✅ | 已注册 |
+
+其他程序，例如另一个 Agent 运行时、聊天机器人或笔记流水线，也可以通过写事件行带来它们的会话；见[接入你自己的来源](./sources.md)。
 
 ## 一次接好所有 Agent {#connect-them-all-at-once}
 

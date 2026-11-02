@@ -9,6 +9,7 @@
 import type { Ctx } from '../context.js';
 import { fmtCompact, fmtNumber } from '../context.js';
 import { type HtmlValue, html, type SafeHtml } from '../html.js';
+import { type Slot, slotClass } from './workbench.js';
 
 /** The chart palette has this many slots; more series than that share the last one. */
 export const SERIES_SLOTS = 8;
@@ -16,8 +17,11 @@ export const SERIES_SLOTS = 8;
 export interface ChartSeries {
   key: string;
   label: string;
-  /** Its colour, 1 to SERIES_SLOTS: fixed for the thing it stands for, whatever else is shown. */
-  slot: number;
+  /**
+   * Its colour, 1 to SERIES_SLOTS, fixed for the thing it stands for, whatever else is shown; or
+   * neutral, for what has no colour of its own.
+   */
+  slot: Slot;
 }
 
 export interface ChartColumn {
@@ -68,7 +72,10 @@ export function stackedColumns(
   },
 ): SafeHtml {
   const n = (v: number) => fmtNumber(v, ctx.lang);
-  const slot = (k: number) => Math.min(Math.max(1, o.series[k]?.slot ?? k + 1), SERIES_SLOTS);
+  const slot = (k: number): string => {
+    const s = o.series[k]?.slot ?? k + 1;
+    return slotClass(s === 'neutral' ? s : Math.min(Math.max(1, s), SERIES_SLOTS));
+  };
   const totals = o.columns.map((c) => o.series.reduce((sum, s) => sum + (c.values[s.key] ?? 0), 0));
   const max = niceCeil(Math.max(0, ...totals));
   const W = Math.max(1, o.columns.length) * STEP;
@@ -93,7 +100,7 @@ export function stackedColumns(
       const last = j === parts.length - 1;
       // A gap the colour of the surface parts each segment from the one above it.
       const h = Math.max(0.5, bottom - top - (last ? 0 : GAP));
-      const cls = `ol-chart-bar ol-series-${slot(p.k)}`;
+      const cls = `ol-chart-bar ${slot(p.k)}`;
       return last
         ? html`<path class="${cls}" d="${topRounded(x, bottom - h, barW, h)}"/>`
         : html`<rect class="${cls}" x="${r1(x)}" y="${r1(bottom - h)}" width="${r1(barW)}" height="${r1(h)}"/>`;
@@ -113,7 +120,7 @@ export function stackedColumns(
 
   const legend = o.series.map((s, k) => {
     const total = o.columns.reduce((sum, c) => sum + (c.values[s.key] ?? 0), 0);
-    return html`<li><span class="ol-swatch ol-series-${slot(k)}" aria-hidden="true"></span><span>${s.label}</span><span class="ol-legend-value">${n(total)}</span></li>`;
+    return html`<li><span class="ol-swatch ${slot(k)}" aria-hidden="true"></span><span>${s.label}</span><span class="ol-legend-value">${n(total)}</span></li>`;
   });
 
   return html`<figure class="ol-chart">

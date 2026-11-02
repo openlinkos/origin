@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { adapterById, allAdapters } from '@openlinkos/origin-adapters';
+import { adapterById } from '@openlinkos/origin-adapters';
 import {
   type Database,
   dbPath,
@@ -20,6 +20,7 @@ import { setUpFrames } from './hub/bucket.js';
 import { type HubConfig, readHubConfig } from './hub/config.js';
 import { relayFileWithHub } from './hub/relay.js';
 import { pushFile } from './hub/sync.js';
+import { sourceAdapters } from './sources.js';
 
 /**
  * `origin sync --hook <agent>`: live ingestion (see docs/architecture.md#live-ingestion). An
@@ -86,7 +87,10 @@ function locatedFiles(adapter: SourceAdapter, paths: string[]): SourceFile[] {
 }
 
 function openStore(home: string): Database {
-  const db = openDatabase(dbPath(home), { adapters: allAdapters(), log: (m) => console.error(m) });
+  const db = openDatabase(dbPath(home), {
+    adapters: sourceAdapters(home),
+    log: (m) => console.error(m),
+  });
   setUpFrames(db, home, { command: 'other', env: process.env });
   return db;
 }

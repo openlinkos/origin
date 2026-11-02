@@ -8,6 +8,7 @@ Everything lives in one directory, `~/.origin` (or `ORIGIN_HOME`):
 
 - `origin.db`: a SQLite database with the normalized events, their search index, your entries, and the record of everything you forgot and restored.
 - `raw/`: append-only copies of the original session log files, and of every version of the memory files agents keep for themselves, compressed with zstd: each is a `.zst` file of compressed frames and a `.tail` file with its newest lines. A hub can keep the compressed frames in a bucket instead (see [Keep raw mirrors in a bucket](./hub.md#keep-raw-mirrors-in-a-bucket)).
+- `sources/`: the files of your own sources, if you have any: event lines that programs you run write there (see [Bring your own source](./sources.md)). Origin reads them and never changes them; what it read of them is in `raw/` like an agent's logs, so deleting a file there does not remove it from the archive.
 
 Your data lives only on machines you control: your devices and, if you run one, your own hub, with the bucket you give it, if any. Origin never calls a third-party service or an LLM API. Without a hub it makes no network connections at all; with a hub, the only traffic is between your devices and your hub, and between the hub and its bucket. The directory is not encrypted, so protect it the way you would protect the original logs.
 

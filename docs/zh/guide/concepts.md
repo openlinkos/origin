@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-393f8a1c
+sourceHash: sha256-9e6b073c
 ---
 
 # 核心概念
@@ -8,7 +8,7 @@ sourceHash: sha256-393f8a1c
 
 ## 会话与事件 {#sessions-and-events}
 
-每个支持的 Agent（Claude Code、Codex、Cursor、Grok Build、ZCode）本来就会把对话写到磁盘上。Origin 读取这些记录，保存两样东西：
+每个支持的 Agent（Claude Code、Codex、Cursor、Grok Build、ZCode）本来就会把对话写到磁盘上，其他任何东西也可以把自己的对话写成事件行（见[接入你自己的来源](./sources.md)）。Origin 读取这些记录，保存两样东西：
 
 - **原始镜像**：原始记录的只追加副本，压缩后保存在 `~/.origin/raw/` 下。它们比 Agent 自己的清理活得更久，而且从不改写。
 - **事件**：每条消息、每次工具调用和工具结果，在各 Agent 之间统一格式，按**会话**归组，并建立检索索引。每个事件都指向它所来自的镜像中的那一行。
@@ -20,7 +20,7 @@ sourceHash: sha256-393f8a1c
 一件工作常常要用好几个会话：你第二天接着做，Agent 压缩上下文之后接着做，或者换一个 Agent 接着做。Origin 不调用模型，按两条规则把这样的会话归入一条**线索**：
 
 - **跟随链接。** 你接着做某个早先会话里的工作时，Agent 用那个会话的 id 调用 `follow`，Origin 在每台归档这份记录的机器上，从 Agent 自己的记录中读出这条链接（见 [MCP 工具](./mcp.md#follow)）。
-- **分支。** 同一项目中位于同一个 git 分支（`main`、`master` 这样的默认分支除外）上、彼此相隔不超过 30 天的会话。在 Origin 读取的 Agent 中，Claude Code 会记录分支。
+- **分支。** 同一项目中位于同一个 git 分支（`main`、`master` 这样的默认分支除外）上、彼此相隔不超过 30 天的会话。在 Origin 读取的 Agent 中，Claude Code 会记录分支，你自己的来源也可以给出分支。
 
 线索有一个 id（`thr_…`），以及它第一个会话的名称和项目。Agent 在简报中看到线索，几个会话组成的线索只占一行；在 `timeline` 中也能看到；用 `get` 打开时，会列出线索的会话、Agent、分支，以及从中写下的条目；你可以用 `origin timeline` 和 `origin show thr_…` 查看它们。线索的任何部分都不是手写的：遗忘一条链接的事件，或一个会话的全部事件，这个会话就会离开它的线索。确切的规则见架构中的[线索](../architecture.md#threads)。
 

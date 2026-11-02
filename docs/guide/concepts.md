@@ -4,7 +4,7 @@ This page explains how Origin remembers: what it keeps, how what agents learn be
 
 ## Sessions and events
 
-Every supported agent (Claude Code, Codex, Cursor, Grok Build, ZCode) already writes its conversations to disk. Origin reads them and keeps two things:
+Every supported agent (Claude Code, Codex, Cursor, Grok Build, ZCode) already writes its conversations to disk, and anything else can write its own as event lines (see [Bring your own source](./sources.md)). Origin reads them and keeps two things:
 
 - **Raw mirrors**: append-only copies of the original logs, stored compressed under `~/.origin/raw/`. They outlive the agent's own cleanup, and they are never rewritten.
 - **Events**: each message, tool call, and tool result, normalized across agents, grouped into **sessions**, and indexed for search. Every event points to the line of the mirror it came from.
@@ -16,7 +16,7 @@ That pointer is **provenance**: any answer Origin gives can be expanded down to 
 One piece of work often takes several sessions: you go on the next day, after the agent compacted its context, or with another agent. Origin groups such sessions into a **thread**, without a model, by two rules:
 
 - **Follow links.** When you take up work from an earlier session, the agent calls `follow` with that session's id, and Origin reads the link from the agent's own log, on every machine that archives it (see [MCP tools](./mcp.md#follow)).
-- **Branches.** Sessions of a project on the same git branch, other than a default branch such as `main` or `master`, within 30 days of each other. Of the agents Origin reads, Claude Code records the branch.
+- **Branches.** Sessions of a project on the same git branch, other than a default branch such as `main` or `master`, within 30 days of each other. Of the agents Origin reads, Claude Code records the branch, and your own sources can give one.
 
 A thread has an id (`thr_…`), and the name and project of its first session. Agents see threads in the brief, where a thread of several sessions takes one line, in `timeline`, and with `get`, which lists a thread's sessions, agents, branches, and the entries written from it; you see them with `origin timeline` and `origin show thr_…`. Nothing about a thread is written by hand: forgetting the event of a link, or every event of a session, takes the session out of its thread. See [Threads](../architecture.md#threads) in the architecture for the exact rules.
 

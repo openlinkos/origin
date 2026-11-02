@@ -16,6 +16,14 @@ export function rawDir(home: string = originHome()): string {
 }
 
 /**
+ * Where a person's own sources are, one directory each, named after the source: `<home>/sources`
+ * (see docs/sources.md#your-own-sources-event-lines).
+ */
+export function sourcesDir(home: string = originHome()): string {
+  return path.join(home, 'sources');
+}
+
+/**
  * raw_file path of a file replicated from a device to a hub: `@<device>:<original path>`. Local
  * paths never start with `@`, and device names cannot contain `:`.
  */

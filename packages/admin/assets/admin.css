@@ -390,12 +390,14 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* A neutral part of a bar or legend, such as a recall's header. */
-rect.admin-neutral {
+/* The neutral colour, of a series that has none of its own: a recall's header in its bar and
+   legend, a source of one's own in charts and tags. */
+:is(rect, path).admin-neutral {
   fill: var(--ol-color-fg-subtle);
 }
 
-.admin-neutral > .ol-swatch {
+.admin-neutral > .ol-swatch,
+.ol-swatch.admin-neutral {
   background: var(--ol-color-fg-subtle);
 }
 

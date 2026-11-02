@@ -40,6 +40,11 @@ export interface HubSyncResult {
   files: number;
   bytes: number;
   eventsAdded: number;
+  /**
+   * Files the hub refused (400 or 413), such as those of a source of one's own that a hub of an
+   * earlier version does not know: they are sent again by the next sync, and the others still go.
+   */
+  refused: Array<{ source: string; path: string; reason: string }>;
   /** Entries and tombstones of this device the hub received (again, after an interruption). */
   entriesPushed: number;
   tombstonesPushed: number;
@@ -132,6 +137,7 @@ export async function syncWithHub(opts: HubSyncOptions): Promise<HubSyncResult> 
       files: 0,
       bytes: 0,
       eventsAdded: 0,
+      refused: [],
       entriesPushed: 0,
       tombstonesPushed: 0,
       waiting: null,
@@ -173,8 +179,11 @@ export async function hubCursors(
   return file ? cursors.filter((c) => c.source === file.source && c.path === file.path) : cursors;
 }
 
-/** What pushing mirrors sent: files with new bytes, the bytes, and the events the hub parsed. */
-type PushCounts = Pick<HubSyncResult, 'files' | 'bytes' | 'eventsAdded'>;
+/**
+ * What pushing mirrors sent: files with new bytes, the bytes, and the events the hub parsed; and
+ * the files it refused.
+ */
+type PushCounts = Pick<HubSyncResult, 'files' | 'bytes' | 'eventsAdded' | 'refused'>;
 
 async function pushMirrors(opts: HubSyncOptions, call: Call, result: HubSyncResult) {
   const cursors = await hubCursors(call, opts.hub.device);
@@ -196,7 +205,7 @@ export async function pushFile(
   file: { source: string; path: string },
 ): Promise<PushCounts> {
   const call = hubClient(opts);
-  const result: PushCounts = { files: 0, bytes: 0, eventsAdded: 0 };
+  const result: PushCounts = { files: 0, bytes: 0, eventsAdded: 0, refused: [] };
   const cursors = await hubCursors(call, opts.hub.device, file);
   const remote = new Map(cursors.map((c) => [c.generation, c.bytes]));
   for (const raw of localRawFiles(opts.db, file)) {
@@ -205,7 +214,11 @@ export async function pushFile(
   return result;
 }
 
-/** Push one mirror from `offset`, the hub's cursor, to its end, resuming where the hub stands. */
+/**
+ * Push one mirror from `offset`, the hub's cursor, to its end, resuming where the hub stands. A file
+ * the hub refuses outright (400, 413) is noted in `result.refused` and left for the next sync, as a
+ * relay does, so that the other files, and then the entries and tombstones, still go.
+ */
 async function pushRawFile(
   opts: HubSyncOptions,
   call: Call,
@@ -233,10 +246,17 @@ async function pushRawFile(
       agentVersion,
       data: data.toString('base64'),
     };
-    const reply = (await call('POST', '/v1/ingest', body, [409])) as {
+    const reply = (await call('POST', '/v1/ingest', body, [400, 409, 413])) as {
       bytes: number;
       eventsAdded?: number;
+      error?: unknown;
     };
+    if (typeof reply.error === 'string') {
+      result.refused.push({ source: file.source, path: file.path, reason: reply.error });
+      opts.log?.(`the hub refused ${file.path} (${file.source}): ${reply.error}`);
+      if (offset === from) result.files--; // nothing of it was sent
+      return;
+    }
     if (reply.eventsAdded === undefined) {
       // Offset mismatch: continue from the hub's cursor. Another process pushing the same file
       // moves it on; only a hub that answers without moving on, again and again, is an error.

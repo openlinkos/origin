@@ -1,0 +1,94 @@
+# Bring your own source
+
+Origin reads the logs of five coding agents, each with an adapter of its own. Much of your work happens elsewhere: in another agent runtime, a chat workspace, a notification stream, a notes pipeline. You can bring any of these to Origin without changing its code. Have a script write their events as **event lines**, a JSONL format of Origin's own, into a directory Origin reads, and they become sessions like any agent's: in the timeline, in search, in the briefs agents are handed, in threads and the change feed, and in the admin UI.
+
+## The format
+
+A file of event lines holds one JSON object per line, one event each, and is only ever appended to. Every line has six fields: an `id`, the `session` it belongs to, its `time`, a `role`, a `kind`, and its `text`. For example (synthetic):
+
+```json
+{"id":"msg-1001","session":"incident-42","time":"2026-11-02T09:30:00Z","role":"user","kind":"message","text":"Is the deploy stuck?","project":"demo-app","title":"Deploy incident"}
+```
+
+- `time` is ISO 8601 with an offset, such as `2026-11-02T09:30:00Z` or `2026-11-02T17:30:00+08:00`, or epoch milliseconds as a number.
+- `role` is `user`, `assistant`, or `system`.
+- `kind` is `message` for what was said, `tool_use` and `tool_result` for a call and what it returned, `meta` for context that was not said, such as an injected notice, and `system` for events of the system.
+- Optional fields give a session its `title`, its `project` and working directory (`cwd`), its git `branch`, the line an event follows (`parent`), and anything else you want to keep (`meta`).
+
+A line that is not valid, for example one without a `time`, is counted as a parse error and skipped; the others are read as usual. Every field and rule is in [Session sources](../sources.md#your-own-sources-event-lines).
+
+## Write lines on a device
+
+Each directory under `~/.origin/sources/` (or `$ORIGIN_HOME/sources/`) is a source, named after the directory, such as `chat-ops`. A name has 2 to 32 lowercase letters, digits, and hyphens, starts with a letter, and is not one of the built-in sources (`claude-code`, `codex`, `cursor`, `grok`, `zcode`) or `origin`, `hub`, `local`, `all`, and `devices`; Origin ignores a directory with any other name and says so when it syncs. Every `.jsonl` file below the directory is read, at any depth, so a writer can keep a file per day, per channel, or per run. There is nothing else to set up.
+
+From a shell:
+
+```bash
+mkdir -p ~/.origin/sources/chat-ops
+echo '{"id":"msg-1002","session":"incident-42","time":"2026-11-02T09:31:00Z","role":"assistant","kind":"message","text":"It waits on a migration lock.","parent":"msg-1001"}' \
+  >> ~/.origin/sources/chat-ops/incidents.jsonl
+origin sync --source chat-ops
+```
+
+From Node:
+
+```js
+// append-event.mjs: append one event line to the source chat-ops.
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+const home = process.env.ORIGIN_HOME || join(homedir(), '.origin');
+const file = join(home, 'sources', 'chat-ops', 'incidents.jsonl');
+mkdirSync(dirname(file), { recursive: true });
+const event = {
+  id: 'msg-1003',
+  session: 'incident-42',
+  time: new Date().toISOString(),
+  role: 'user',
+  kind: 'message',
+  text: 'Release the lock, then retry the deploy.',
+  project: 'demo-app',
+};
+appendFileSync(file, `${JSON.stringify(event)}\n`);
+```
+
+- **Whole lines.** Origin reads only complete lines, so append each line at once, ending with a line break; a line still being written is read once it ends.
+- **When it is read.** `origin sync` reads every source, and `origin sync --source chat-ops` this one; while an agent runs, `origin mcp` looks for new lines every minute; `origin ui` reads them when it starts. `origin status` lists the source with its sessions and events.
+- **Its version.** A `VERSION` file in the directory, with a version on its first line, such as `chat-bridge 1.4.2`, is recorded with the events as their agent's version.
+- **To your hub.** On a device connected to a [personal hub](./hub.md), `origin sync` sends the source's archived lines to the hub as it sends every agent's, and a relay sends the files' new lines straight to it.
+
+## Choose ids and sessions
+
+- **An id names one event, for good.** Give every event of a source its own `id`, and the same one each time you write it: the writer's own id, such as a chat message's, serves best. A line whose `id` the source already has adds nothing, so writing a line again, when you are not sure it was written, is safe.
+- **Lines are never changed.** Like Origin's whole archive, a source is append-only: an event, once read, keeps its text. To say something else, write a new event with a new id.
+- **A session is one conversation.** A chat thread, an incident, a run of a job, a day of notes: whatever you would want to open as a whole. Its events are shown in time order, whichever file holds them.
+- **Ids Origin gives its own objects** start with `ent_`, `thr_`, `rcl_`, or `prp_`; do not start a session id with them, since `get` would read it as one of those.
+
+## Titles, projects, and threads
+
+- **Titles.** A line with a `title` names its session, and the latest wins. Add `"title_by": "user"` to a title the person gave: a later title without it does not replace it, as a session you renamed in Claude Code keeps its name. Without a title, a session is named by its first user message, as for any agent.
+- **Projects.** `project` names the project, as Origin names projects elsewhere: the last segment of a working directory, such as `demo-app`. With `cwd`, the working directory itself, briefs tell two checkouts with the same name apart. An agent that starts in a project is handed the project's latest sessions of any source, yours included.
+- **Threads.** Sessions of a project on the same `branch`, other than a default branch such as `main`, within 30 days of each other, form a [thread](./concepts.md#threads) with each other and with the agents' sessions on that branch. An agent can also join its session to one of yours with `follow`.
+
+## What you see
+
+Once synced, a source's sessions are in every view of Origin, the same as an agent's:
+
+```bash
+origin timeline --source chat-ops      # its sessions, with their threads
+origin show incident-42                # one session, with its turns
+origin search "migration lock"         # its messages, among everything else
+origin recall --cwd ~/code/demo-app    # what an agent there is handed
+```
+
+- In the [admin UI](./admin.md), it is listed under its name, in a neutral colour.
+- Through MCP, `timeline`, `search`, `get`, and `brief` show its sessions and events, and `changes` lists its new events as they arrive, so that an agent that looks every few minutes sees them.
+- Agents can cite its events in entries, and you can forget them, as any events.
+
+## Limits
+
+- **Origin calls no network for you.** It reads files. A writer that takes events from a chat workspace or a notification service runs on its own, polling the service or subscribing to it, and appends lines; Origin never reaches the service, and needs no credentials for it.
+- **It looks; nothing tells it.** Your sources have no hooks: their lines arrive with the next `origin sync`, or within a minute while an agent runs `origin mcp`.
+- **Not for memories.** The `memory` kind is refused: imported memories come only from the memory files agents keep for themselves. To record a decision or a fact, save an entry, citing the event.
+- **Not a place to edit.** A file rewritten rather than appended to is read again from its start, as a new generation, and its events that Origin has already read stay as they were.

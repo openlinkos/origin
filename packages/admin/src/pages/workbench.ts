@@ -20,17 +20,37 @@ const AGENT_SLOTS: Record<string, number> = {
   cursor: 6,
 };
 
-/** An agent's slot in the chart palette: its own for the agents Origin reads, a shared one otherwise. */
-export function agentSlot(source: string): number {
-  return AGENT_SLOTS[source] ?? 7;
+/** A slot in the chart palette, or the neutral colour of what has none of its own. */
+export type Slot = number | 'neutral';
+
+/**
+ * A source's colour: its own slot for the agents Origin reads, and the neutral one for a person's
+ * own sources (see docs/sources.md#your-own-sources-event-lines), which their names tell apart.
+ */
+export function agentSlot(source: string): Slot {
+  return AGENT_SLOTS[source] ?? 'neutral';
+}
+
+/** Sources in the order of their slots, the neutral ones last, by name. */
+export function bySlot(a: string, b: string): number {
+  const rank = (s: string) => {
+    const slot = agentSlot(s);
+    return slot === 'neutral' ? Number.POSITIVE_INFINITY : slot;
+  };
+  return rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0);
+}
+
+/** The class that gives a mark, a swatch, or a group of them a slot's colour. */
+export function slotClass(slot: Slot): string {
+  return slot === 'neutral' ? 'admin-neutral' : `ol-series-${slot}`;
 }
 
 /** A name with a swatch in its series' colour. */
-function swatched(slot: number, text: HtmlValue): SafeHtml {
-  return html`<span class="ol-legend-item ol-series-${slot}"><span class="ol-swatch" aria-hidden="true"></span>${text}</span>`;
+function swatched(slot: Slot, text: HtmlValue): SafeHtml {
+  return html`<span class="ol-legend-item ${slotClass(slot)}"><span class="ol-swatch" aria-hidden="true"></span>${text}</span>`;
 }
 
-/** An agent: a square in its colour, and its name in plain text. */
+/** An agent, or a source of one's own: a square in its colour, and its name in plain text. */
 export function agentTag(source: string): SafeHtml {
   return swatched(agentSlot(source), source);
 }
@@ -226,13 +246,13 @@ export function histogram(
   const n = (v: number) => fmtNumber(v, ctx.lang);
   const labelled = new Set([0, Math.floor(o.days.length / 2), o.days.length - 1]);
   const columns = o.days.map((d, i) => {
-    const sources = Object.entries(d.bySource).sort(([a], [b]) => agentSlot(a) - agentSlot(b));
+    const sources = Object.entries(d.bySource).sort(([a], [b]) => bySlot(a, b));
     const sum = sources.reduce((a, [, v]) => a + v, 0);
     let top = H;
     const segments = sources.map(([source, v]) => {
       const h = (v / max) * (H - 1);
       top -= h;
-      return html`<rect class="ol-chart-bar ol-series-${agentSlot(source)}" x="${i * STEP + 1.5}" y="${r1(top)}" width="${STEP - 3}" height="${r1(Math.max(h, 0))}"/>`;
+      return html`<rect class="ol-chart-bar ${slotClass(agentSlot(source))}" x="${i * STEP + 1.5}" y="${r1(top)}" width="${STEP - 3}" height="${r1(Math.max(h, 0))}"/>`;
     });
     const title = `${d.day}: ${o.unit ? o.unit(sum) : ctx.t('hist.sessions', { n: n(sum) })}${sources.map(([s, v]) => `, ${s} ${n(v)}`).join('')}`;
     const out = o.since !== null && d.start < o.since;
@@ -282,7 +302,7 @@ export function sparkline(values: number[], label: string): SafeHtml {
  * their sum, or of `whole` when given, which leaves the rest of the bar empty.
  */
 export function splitBar(
-  parts: Array<{ value: number; slot: number | 'neutral' }>,
+  parts: Array<{ value: number; slot: Slot }>,
   label: string,
   whole?: number,
 ): SafeHtml {
@@ -292,7 +312,7 @@ export function splitBar(
     .filter((p) => p.value > 0)
     .map((p) => {
       const w = (p.value / Math.max(1, total)) * 100;
-      const cls = p.slot === 'neutral' ? 'admin-neutral' : `ol-series-${p.slot}`;
+      const cls = slotClass(p.slot);
       const rect = html`<rect class="${cls}" x="${Math.round(x * 10) / 10}" width="${Math.max(0.5, Math.round(w * 10) / 10 - 0.6)}" height="6"/>`;
       x += w;
       return rect;

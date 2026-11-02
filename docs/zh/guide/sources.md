@@ -1,0 +1,98 @@
+---
+sourceHash: sha256-dca6c2dc
+---
+
+# 接入你自己的来源
+
+Origin 读取五个编码 Agent 的记录，每个 Agent 有自己的适配器。而你的很多工作发生在别处：另一个 Agent 运行时、一个聊天工作区、一条通知流、一条笔记流水线。这些都可以带进 Origin，不必改动它的代码：让一个脚本把它们的事件写成**事件行**（Origin 自己的一种 JSONL 格式），放进 Origin 读取的目录，它们就成为和任何 Agent 的会话一样的会话：出现在时间线、搜索、交给 Agent 的简报、线索和变更流中，也出现在管理界面里。
+
+## 格式 {#the-format}
+
+一个事件行文件每行一个 JSON 对象，每个对象一个事件，只追加、不改写。每一行都有六个字段：`id`、所属的 `session`、`time`、`role`、`kind` 和 `text`。例如（合成数据）：
+
+```json
+{"id":"msg-1001","session":"incident-42","time":"2026-11-02T09:30:00Z","role":"user","kind":"message","text":"Is the deploy stuck?","project":"demo-app","title":"Deploy incident"}
+```
+
+- `time` 是带时区偏移的 ISO 8601，例如 `2026-11-02T09:30:00Z` 或 `2026-11-02T17:30:00+08:00`，或者以数字表示的 epoch 毫秒。
+- `role` 是 `user`、`assistant` 或 `system`。
+- `kind` 是 `message`（说出的话）、`tool_use` 和 `tool_result`（一次调用和它返回的结果）、`meta`（并非说出的上下文，例如注入的通知），或者 `system`（系统的事件）。
+- 可选字段给出会话的标题（`title`）、项目和工作目录（`project`、`cwd`）、git 分支（`branch`）、一个事件所接续的那一行（`parent`），以及你想保留的其他任何内容（`meta`）。
+
+无效的行，例如没有 `time` 的行，会被计为解析错误并跳过，其他行照常读取。全部字段和规则见[会话来源](../sources.md#your-own-sources-event-lines)。
+
+## 在设备上写入 {#write-lines-on-a-device}
+
+`~/.origin/sources/`（或 `$ORIGIN_HOME/sources/`）下的每个目录都是一个来源，以目录名命名，例如 `chat-ops`。名称由 2 到 32 个小写字母、数字和连字符组成，以字母开头，并且不是内置来源之一（`claude-code`、`codex`、`cursor`、`grok`、`zcode`），也不是 `origin`、`hub`、`local`、`all` 和 `devices`；其他名称的目录会被 Origin 忽略，同步时它会说明这一点。目录下任意深度的每个 `.jsonl` 文件都会被读取，所以写入者可以每天、每个频道或每次运行用一个文件。不需要别的设置。
+
+在 shell 中：
+
+```bash
+mkdir -p ~/.origin/sources/chat-ops
+echo '{"id":"msg-1002","session":"incident-42","time":"2026-11-02T09:31:00Z","role":"assistant","kind":"message","text":"It waits on a migration lock.","parent":"msg-1001"}' \
+  >> ~/.origin/sources/chat-ops/incidents.jsonl
+origin sync --source chat-ops
+```
+
+在 Node 中：
+
+```js
+// append-event.mjs: append one event line to the source chat-ops.
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+const home = process.env.ORIGIN_HOME || join(homedir(), '.origin');
+const file = join(home, 'sources', 'chat-ops', 'incidents.jsonl');
+mkdirSync(dirname(file), { recursive: true });
+const event = {
+  id: 'msg-1003',
+  session: 'incident-42',
+  time: new Date().toISOString(),
+  role: 'user',
+  kind: 'message',
+  text: 'Release the lock, then retry the deploy.',
+  project: 'demo-app',
+};
+appendFileSync(file, `${JSON.stringify(event)}\n`);
+```
+
+- **整行写入。** Origin 只读取完整的行，所以每一行要一次写完，以换行符结尾；还在写的行会在写完之后被读取。
+- **何时读取。** `origin sync` 读取所有来源，`origin sync --source chat-ops` 只读这一个；Agent 运行期间，`origin mcp` 每分钟查看一次新增的行；`origin ui` 启动时会读取它们。`origin status` 会列出这个来源及其会话数和事件数。
+- **它的版本。** 目录中的 `VERSION` 文件，第一行写一个版本号，例如 `chat-bridge 1.4.2`，会作为事件的 Agent 版本记录下来。
+- **送往中枢。** 在接入了[个人中枢](./hub.md)的设备上，`origin sync` 会像发送每个 Agent 的记录一样，把这个来源已归档的行发送给中枢；中继则直接把这些文件新增的行发送给中枢。
+
+## 选择 id 与会话 {#choose-ids-and-sessions}
+
+- **一个 id 永远指同一个事件。** 让一个来源的每个事件都有自己的 `id`，并且每次写它时都用同一个：写入者自己的 id（例如聊天消息的 id）最合适。`id` 已在该来源中的行不会新增任何内容，所以在不确定某一行是否写成功时，再写一次是安全的。
+- **行永远不会被修改。** 与 Origin 的整个归档一样，来源是只追加的：一个事件一旦读入，文本就不再改变。要表达别的内容，就用新的 id 写一个新事件。
+- **一个会话是一段对话。** 一个聊天线程、一次事故、一次任务运行、一天的笔记：任何你想作为整体打开的东西。它的事件按时间顺序显示，无论它们在哪个文件里。
+- **Origin 给自己的对象用的 id** 以 `ent_`、`thr_`、`rcl_` 或 `prp_` 开头；会话 id 不要以它们开头，否则 `get` 会把它当成这些对象之一。
+
+## 标题、项目与线索 {#titles-projects-and-threads}
+
+- **标题。** 带 `title` 的行为它的会话命名，以最新的为准。本人给出的标题请加上 `"title_by": "user"`：之后不带它的标题不会替换它，就像你在 Claude Code 中重命名过的会话会保留它的名称一样。没有标题的会话以它的第一条用户消息命名，与任何 Agent 相同。
+- **项目。** `project` 是项目名，与 Origin 在别处命名项目的方式一致：工作目录的最后一段，例如 `demo-app`。如果给出 `cwd`，即工作目录本身，简报就能区分两个同名的检出。一个在某项目中启动的 Agent，会收到这个项目最近的会话，来源不限，你自己的来源也在其中。
+- **线索。** 同一项目中位于同一个 `branch`（`main` 这样的默认分支除外）上、彼此相隔不超过 30 天的会话，会彼此组成一条[线索](./concepts.md#threads)，也会与 Agent 在这个分支上的会话组成线索。Agent 也可以用 `follow` 把自己的会话接到你的某个会话上。
+
+## 你会看到什么 {#what-you-see}
+
+同步之后，来源的会话出现在 Origin 的每个视图中，与 Agent 的会话一样：
+
+```bash
+origin timeline --source chat-ops      # its sessions, with their threads
+origin show incident-42                # one session, with its turns
+origin search "migration lock"         # its messages, among everything else
+origin recall --cwd ~/code/demo-app    # what an agent there is handed
+```
+
+- 在[管理界面](./admin.md)中，它以自己的名称列出，使用中性的颜色。
+- 通过 MCP，`timeline`、`search`、`get` 和 `brief` 会显示它的会话和事件，`changes` 会在新事件到达时列出它们，所以每隔几分钟查看一次的 Agent 也能看到。
+- Agent 可以在条目中引用它的事件，你也可以遗忘这些事件，与任何事件相同。
+
+## 限制 {#limits}
+
+- **Origin 不替你访问网络。** 它只读取文件。从聊天工作区或通知服务获取事件的写入者自己运行，轮询或订阅这个服务，然后追加行；Origin 从不访问这个服务，也不需要它的凭据。
+- **它靠查看，没有人通知它。** 你自己的来源没有 hook：它们的行随下一次 `origin sync` 到达，或者在 Agent 运行 `origin mcp` 期间一分钟之内到达。
+- **不用于记忆。** `memory` 类会被拒绝：导入的记忆只来自 Agent 为自己保存的记忆文件。要记下一个决定或一条事实，请保存一个条目，并引用相应的事件。
+- **不是编辑的地方。** 被重写而不是被追加的文件，会作为新的一代从头再读一遍，Origin 已经读入的事件保持原样。
