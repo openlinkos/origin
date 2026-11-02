@@ -1,6 +1,6 @@
 name: Release
 
-# Publishes the five packages to npm when a v* tag is pushed, then creates the GitHub release. They
+# Publishes the six packages to npm when a v* tag is pushed, then creates the GitHub release. They
 # share one version; a package whose version is already on npm is skipped. `pnpm pack` replaces the
 # workspace references with that version, and npm publishes the tarballs with trusted publishing
 # (OIDC), so no token is stored and provenance is attached automatically. The `npm` environment
@@ -48,22 +48,23 @@ jobs:
 
       - name: The tag matches every package version
         run: |
-          for pkg in core adapters mcp admin cli; do
+          for pkg in core adapters mcp admin cli openclaw; do
             test "${GITHUB_REF_NAME}" = "v$(node -p "require('./packages/${pkg}/package.json').version")"
           done
 
       - name: Pack
         run: |
           mkdir -p "$RUNNER_TEMP/pack"
-          for pkg in core adapters mcp admin cli; do
+          for pkg in core adapters mcp admin cli openclaw; do
             (cd "packages/${pkg}" && pnpm pack --pack-destination "$RUNNER_TEMP/pack")
           done
           ls -l "$RUNNER_TEMP/pack"
 
-      # Dependencies first, so that each package's dependencies are on npm when it appears.
+      # Dependencies first, so that each package's dependencies are on npm when it appears. The
+      # OpenClaw plugin depends on none of them and nothing depends on it: it goes last.
       - name: Publish
         run: |
-          for pkg in core adapters mcp admin cli; do
+          for pkg in core adapters mcp admin cli openclaw; do
             name="$(node -p "require('./packages/${pkg}/package.json').name")"
             version="$(node -p "require('./packages/${pkg}/package.json').version")"
             if npm view "${name}@${version}" version >/dev/null 2>&1; then

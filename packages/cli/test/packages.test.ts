@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-// The release workflow publishes these five together; it only finds out on npm what is wrong with a
+// The release workflow publishes these six together; it only finds out on npm what is wrong with a
 // manifest, so check here what npm would refuse or publish wrongly.
-const DIRS = ['core', 'adapters', 'mcp', 'admin', 'cli'];
+const DIRS = ['core', 'adapters', 'mcp', 'admin', 'openclaw', 'cli'];
 
 const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8');
 const manifests = DIRS.map((dir) => ({ dir, pkg: JSON.parse(read(`../../${dir}/package.json`)) }));
