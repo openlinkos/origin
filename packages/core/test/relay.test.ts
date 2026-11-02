@@ -15,6 +15,7 @@ import {
   type RelayChunk,
   type RelayHub,
   relayCursor,
+  relayFile,
   relayPending,
   relaySource,
   remoteCursors,
@@ -121,6 +122,49 @@ describe('relay mode', () => {
     fs.appendFileSync(file, 'ion":"s1","ts":3000,"role":"user","text":"third"}\n');
     expect(await relay(adapter, hub)).toMatchObject({ eventsAdded: 1, filesChanged: 1 });
     expect(mirrorText(hubDb, hubHome, 1)).toBe(fs.readFileSync(file, 'utf8'));
+  });
+
+  it('relays one file on its own, as relaySource relays it', async () => {
+    const a = path.join(src, 'a.jsonl');
+    const b = path.join(src, 'b.jsonl');
+    fs.writeFileSync(a, line('a1', 'sa', 1000, 'user', 'first of a'));
+    fs.writeFileSync(b, line('b1', 'sb', 1500, 'user', 'first of b'));
+    const adapter = fakeAdapter(src);
+    const { hub } = testHub(adapter);
+    makeRelay(db);
+    const logged = () => count(db, 'sync_log');
+
+    expect(await relayFile({ db }, adapter, hub, a)).toMatchObject({
+      filesSeen: 1,
+      filesChanged: 1,
+      eventsAdded: 1,
+      bytes: fs.statSync(a).size,
+      failed: [],
+    });
+    expect(hubTexts()).toEqual(['first of a']);
+    expect(relayCursor(db, 'fake', b)).toBeNull();
+    expect(logged()).toBe(1);
+    // The hub's cursors of that one file, as /v1/cursors gives them for one file.
+    expect(remoteCursors(hubDb, 'laptop', { source: 'fake', path: a })).toEqual([
+      { source: 'fake', path: a, generation: 1, bytes: fs.statSync(a).size },
+    ]);
+    expect(remoteCursors(hubDb, 'laptop', { source: 'fake', path: b })).toEqual([]);
+
+    // Nothing new: nothing sent, nothing logged. Then appended lines go from the cursor.
+    expect(await relayFile({ db }, adapter, hub, a)).toMatchObject({ filesChanged: 0, bytes: 0 });
+    expect(logged()).toBe(1);
+    fs.appendFileSync(a, line('a2', 'sa', 2000, 'user', 'second of a'));
+    expect(await relayFile({ db }, adapter, hub, a)).toMatchObject({ eventsAdded: 1 });
+    expect(mirrorText(hubDb, hubHome, 1)).toBe(fs.readFileSync(a, 'utf8'));
+
+    // A path the adapter does not locate, or a missing file, sends nothing.
+    for (const p of [path.join(tmp, 'a.jsonl'), path.join(src, 'gone.jsonl')]) {
+      expect(await relayFile({ db }, adapter, hub, p)).toMatchObject({ filesSeen: 0, bytes: 0 });
+    }
+
+    // The full relay then sends the other file only, and the hub holds what it would have.
+    expect(await relay(adapter, hub)).toMatchObject({ filesChanged: 1, eventsAdded: 1 });
+    expect(hubTexts().sort()).toEqual(['first of a', 'first of b', 'second of a']);
   });
 
   it('moves no cursor while the hub cannot be reached or refuses a file', async () => {

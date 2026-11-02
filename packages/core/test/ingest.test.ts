@@ -18,6 +18,7 @@ import {
   searchEvents,
   stats,
   storeUsage,
+  syncFile,
   syncSource,
 } from '../src/index.js';
 import { TRANSACTION_BYTES } from '../src/ingest.js';
@@ -182,6 +183,147 @@ describe('syncSource', () => {
       }),
     ]);
     expect(scan).toEqual([{ source: 'fake', sessions: 1, events: 2, first: 1000, last: 5000 }]);
+  });
+});
+
+describe('syncFile', () => {
+  const count = (d: Database, table: string) =>
+    (d.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+  const syncLogRows = (d: Database) =>
+    (d.prepare('SELECT COUNT(*) AS n FROM sync_log').get() as { n: number }).n;
+  /** A raw file as stored, with its mirror's content, for comparing two stores. */
+  const rawFiles = (d: Database, h: string) =>
+    (
+      d
+        .prepare(
+          `SELECT id, source, path, generation, mirror, bytes_ingested, lines_ingested, tail_hash
+           FROM raw_file ORDER BY path, generation`,
+        )
+        .all() as Array<{ id: number }>
+    ).map(({ id, ...row }) => ({ ...row, content: mirrorText(d, h, id) }));
+  const events = (d: Database) =>
+    d
+      .prepare(
+        `SELECT e.id, e.source, e.session_id, e.ts, e.role, e.kind, e.text, e.raw_line, r.path
+         FROM event e JOIN raw_file r ON r.id = e.raw_file_id ORDER BY e.id`,
+      )
+      .all();
+
+  it('ingests one file only, as syncSource ingests it: the same mirror, events, and cursor', async () => {
+    const a = path.join(src, 'a.jsonl');
+    const b = path.join(src, 'b.jsonl');
+    fs.writeFileSync(
+      a,
+      line('a1', 'sa', 1000, 'user', 'Plan the importer') +
+        line('a2', 'sa', 2000, 'assistant', 'Reading the format first'),
+    );
+    fs.writeFileSync(b, line('b1', 'sb', 1500, 'user', 'Another session'));
+    const adapter = fakeAdapter(src);
+
+    const r = await syncFile({ db, home }, adapter, a);
+    expect(r).toMatchObject({ filesSeen: 1, filesChanged: 1, linesRead: 2, eventsAdded: 2 });
+    expect(listEvents(db, {}).map((e) => e.id)).toEqual(['fake:a1', 'fake:a2']);
+    expect(listSessions(db).map((s) => [s.sessionId, s.eventCount])).toEqual([['sa', 2]]);
+    expect(syncLogRows(db)).toBe(1);
+
+    // Another store that ingests the whole source holds the same of that file.
+    const otherHome = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-home-'));
+    const other = openDatabase(path.join(otherHome, 'origin.db'));
+    try {
+      await syncSource({ db: other, home: otherHome }, adapter);
+      const ofA = (rows: Array<{ path: string }>) => rows.filter((row) => row.path === a);
+      expect(rawFiles(db, home)).toEqual(ofA(rawFiles(other, otherHome)));
+      expect(events(db)).toEqual(ofA(events(other) as Array<{ path: string }>));
+
+      // Appended lines are read from the cursor; a partial line waits, as for syncSource.
+      const more = line('a3', 'sa', 3000, 'user', 'Now the tests');
+      fs.appendFileSync(a, `${more}{"id":"a4"`);
+      const again = await syncFile({ db, home }, adapter, a);
+      expect(again).toMatchObject({ filesChanged: 1, linesRead: 1, eventsAdded: 1 });
+      await syncSource({ db: other, home: otherHome }, adapter);
+      expect(rawFiles(db, home)).toEqual(ofA(rawFiles(other, otherHome)));
+      expect(events(db)).toEqual(ofA(events(other) as Array<{ path: string }>));
+    } finally {
+      other.close();
+      fs.rmSync(otherHome, { recursive: true, force: true });
+    }
+
+    // Nothing new: nothing read, and no run in the sync log.
+    const rows = syncLogRows(db);
+    expect(await syncFile({ db, home }, adapter, a)).toMatchObject({
+      filesSeen: 1,
+      filesChanged: 0,
+      linesRead: 0,
+      eventsAdded: 0,
+    });
+    expect(syncLogRows(db)).toBe(rows);
+
+    // A later syncSource of the whole source finds that file done and ingests the other.
+    const all = await syncSource({ db, home }, adapter);
+    expect(all).toMatchObject({ filesChanged: 1, eventsAdded: 1 });
+  });
+
+  it('opens a new generation for a rewritten file, keeping the old mirror', async () => {
+    const file = path.join(src, 'c.jsonl');
+    fs.writeFileSync(file, line('1', 's3', 1000, 'user', 'original content here'));
+    const adapter = fakeAdapter(src);
+    await syncFile({ db, home }, adapter, file);
+    fs.writeFileSync(file, line('9', 's3', 5000, 'user', 'rewritten from scratch!!'));
+    const r = await syncFile({ db, home }, adapter, file);
+    expect(r).toMatchObject({ newGenerations: 1, eventsAdded: 1 });
+    expect(rawLocator(db, home, getEvent(db, 'fake:1')!)?.generation).toBe(1);
+    expect(rawLocator(db, home, getEvent(db, 'fake:9')!)?.generation).toBe(2);
+  });
+
+  it('ingests nothing for a path its adapter does not locate, or that is not a file', async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-elsewhere-'));
+    try {
+      const stray = path.join(outside, 'a.jsonl');
+      fs.writeFileSync(stray, line('x', 'sx', 1000, 'user', 'not ours'));
+      fs.writeFileSync(path.join(src, 'notes.txt'), 'not a session\n');
+      fs.mkdirSync(path.join(src, 'dir.jsonl'));
+      const adapter = fakeAdapter(src);
+      const { locate: _, ...blind } = adapter;
+      for (const [a, p] of [
+        [adapter, stray],
+        [adapter, path.join(src, 'notes.txt')],
+        [adapter, path.join(src, 'missing.jsonl')],
+        [adapter, path.join(src, 'dir.jsonl')],
+        [blind, path.join(src, 'notes.txt')],
+      ] as const) {
+        expect(await syncFile({ db, home }, a, p)).toMatchObject({
+          filesSeen: 0,
+          filesChanged: 0,
+          linesRead: 0,
+        });
+      }
+      expect(count(db, 'raw_file')).toBe(0);
+      expect(syncLogRows(db)).toBe(0);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('serializes concurrent calls on one file, ingesting each line once', async () => {
+    const file = path.join(src, 'p.jsonl');
+    let text = '';
+    for (let i = 0; i < 200; i++) text += line(`p${i}`, 'sp', 1000 + i, 'user', `line ${i}`);
+    fs.writeFileSync(file, text);
+    const adapter = fakeAdapter(src);
+    const second = openDatabase(path.join(home, 'origin.db'));
+    try {
+      const results = await Promise.all([
+        syncFile({ db, home }, adapter, file),
+        syncFile({ db: second, home }, adapter, file),
+        syncFile({ db, home }, adapter, file),
+      ]);
+      expect(results.reduce((n, r) => n + r.eventsAdded, 0)).toBe(200);
+      expect(results.reduce((n, r) => n + r.linesRead, 0)).toBe(200);
+    } finally {
+      second.close();
+    }
+    expect(count(db, 'event')).toBe(200);
+    expect(mirrorText(db, home, getEvent(db, 'fake:p0')!.rawFileId)).toBe(text);
   });
 });
 

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-10726840
+sourceHash: sha256-42ef5994
 ---
 
 # 架构
@@ -144,12 +144,16 @@ interface SourceAdapter {
   displayName: string;
   version(): string | null; // agent version, if known
   discover(): Promise<SourceFile[]>; // { absPath, relPath, compression?: 'zstd', generated? }
+  locate?(absPath: string): SourceFile | null; // the file discover() would list at absPath, or null
   parseLine(line: string, ctx: ParseContext): ParsedLine | null; // deterministic; throws on malformed input
 }
 // ctx: { absPath, relPath, lineNo, fileMtimeMs, readLine(n) }; readLine returns an earlier line of
 // the same file as ingested, for an adapter that needs, say, a file's first line on a hub.
 // generated: { token, mtimeMs, next(last, maxBytes) } for a source that is not a log file, such as
 // a database: the adapter writes the lines (see Generated sources).
+// locate: pure, so the file need not exist; for one file named from outside, such as the transcript
+// an agent's hook names, with the relPath discover() gives, so that a file has one mirror however
+// it is found.
 ```
 
 ## 存储 {#storage}

@@ -6,6 +6,8 @@ import { readRange } from './frames.js';
 import {
   type Content,
   completeLines,
+  emptySyncResult,
+  isFile,
   logSync,
   oldestFirst,
   TRANSACTION_BYTES,
@@ -360,26 +362,10 @@ export async function relaySource(
 ): Promise<RelayResult> {
   assertRelay(ctx.db);
   const startedAt = Date.now();
-  const result: RelayResult = {
-    source: adapter.id,
-    filesSeen: 0,
-    filesChanged: 0,
-    linesRead: 0,
-    eventsAdded: 0,
-    parseErrors: 0,
-    newGenerations: 0,
-    durationMs: 0,
-    bytes: 0,
-    failed: [],
-  };
+  const result: RelayResult = { ...emptySyncResult(adapter.id), bytes: 0, failed: [] };
   const files = oldestFirst(await adapter.discover());
   result.filesSeen = files.length;
   const agentVersion = adapter.version();
-  const chunkBytes = ctx.chunkBytes ?? TRANSACTION_BYTES;
-  const fail = (file: SourceFile, reason: string) => {
-    result.failed.push({ path: file.absPath, reason });
-    ctx.log?.(`not relayed: ${file.relPath}: ${reason}`);
-  };
 
   // Most files have not changed; between them, let an MCP server answer tool calls now and then.
   let ranSince = Date.now();
@@ -388,86 +374,43 @@ export async function relaySource(
       await new Promise((resolve) => setImmediate(resolve));
       ranSince = Date.now();
     }
-    const stored = relayCursor(ctx.db, adapter.id, file.absPath);
-    let rf: RelayFile | null;
-    try {
-      rf = openRelayFile(file, stored, hub.holds(adapter.id, file.absPath), ctx.log);
-    } catch (err) {
-      fail(file, (err as Error).message);
-      continue;
-    }
-    if (!rf) continue;
-    const relPath = file.relPath.replace(/\\/g, '/').replace(/^\/+/, '');
-    let sent = false;
-    let conflicts = 0;
-    let complete = true;
-    for (;;) {
-      let piece: ReturnType<RelayFile['next']>;
-      try {
-        piece = rf.next(chunkBytes);
-      } catch (err) {
-        fail(file, (err as Error).message);
-        complete = false;
-        break;
-      }
-      if (!piece) break;
-      const { generation, bytes: offset } = rf.cursor;
-      const answer = await hub.send({
-        source: adapter.id,
-        path: file.absPath,
-        relPath,
-        generation,
-        offset,
-        data: piece.data,
-        mtimeMs: rf.mtimeMs,
-        agentVersion,
-      });
-      if (answer.status === 'refused') {
-        fail(file, answer.reason);
-        complete = false;
-        break;
-      }
-      if (answer.status === 'conflict') {
-        // Another process sent these lines first, or the hub holds more or less of the file than
-        // this relay knew: go on from where the hub stands.
-        let aligned = false;
-        try {
-          // Another process sending the same file moves the hub on; only answers that do not
-          // move it on count against the limit.
-          aligned = (answer.bytes > offset || ++conflicts <= 3) && rf.align(answer.bytes);
-        } catch {
-          aligned = false;
-        }
-        if (!aligned) {
-          fail(
-            file,
-            `the hub holds ${answer.bytes} bytes of generation ${generation}, and this file cannot go on from there`,
-          );
-          complete = false;
-          break;
-        }
-        saveRelayCursor(ctx.db, adapter.id, file.absPath, rf.cursor);
-        continue;
-      }
-      if (stored && generation > stored.generation && !sent) result.newGenerations++;
-      rf.cursor = piece.cursor;
-      saveRelayCursor(ctx.db, adapter.id, file.absPath, rf.cursor);
-      sent = true;
-      result.bytes += piece.data.length;
-      result.linesRead += answer.linesRead;
-      result.eventsAdded += answer.eventsAdded;
-      result.parseErrors += answer.parseErrors;
-    }
-    if (complete) {
-      const settled = rf.settled();
-      if (!sameCursor(settled, stored)) saveRelayCursor(ctx.db, adapter.id, file.absPath, settled);
-    }
-    if (sent) result.filesChanged++;
+    await relayOne(ctx, adapter, hub, file, agentVersion, result);
   }
 
   result.durationMs = Date.now() - startedAt;
+  logRelay(ctx, startedAt, result);
+  return result;
+}
+
+/**
+ * Relay one file of a source, as relaySource relays each file it discovers: the file the adapter
+ * locates at `absPath` (see SourceAdapter.locate), its complete lines after the relay's cursor sent
+ * to the hub. An agent's hook calls it with the transcript it names (see
+ * docs/architecture.md#live-ingestion). A path the adapter does not locate, or that is not a file
+ * now, sends nothing (`filesSeen` 0); the sync log records a run only when the hub received lines.
+ */
+export async function relayFile(
+  ctx: RelayContext,
+  adapter: SourceAdapter,
+  hub: RelayHub,
+  absPath: string,
+): Promise<RelayResult> {
+  assertRelay(ctx.db);
+  const startedAt = Date.now();
+  const result: RelayResult = { ...emptySyncResult(adapter.id), bytes: 0, failed: [] };
+  const file = adapter.locate?.(absPath) ?? null;
+  if (file && !file.generated && isFile(file.absPath)) {
+    result.filesSeen = 1;
+    await relayOne(ctx, adapter, hub, file, adapter.version(), result);
+  }
+  result.durationMs = Date.now() - startedAt;
+  if (result.filesChanged > 0) logRelay(ctx, startedAt, result);
+  return result;
+}
+
+function logRelay(ctx: RelayContext, startedAt: number, result: RelayResult): void {
   logSync(ctx.db, {
-    source: adapter.id,
+    source: result.source,
     startedAt,
     filesSeen: result.filesSeen,
     filesChanged: result.filesChanged,
@@ -480,7 +423,100 @@ export async function relaySource(
       .filter(Boolean)
       .join('; '),
   });
-  return result;
+}
+
+/**
+ * Send the hub the complete lines of one file after the relay's cursor, chunk by chunk, saving the
+ * cursor as soon as the hub acknowledges each; adds its counts to `result`, and a file it could
+ * not send to `result.failed`.
+ */
+async function relayOne(
+  ctx: RelayContext,
+  adapter: SourceAdapter,
+  hub: RelayHub,
+  file: SourceFile,
+  agentVersion: string | null,
+  result: RelayResult,
+): Promise<void> {
+  const chunkBytes = ctx.chunkBytes ?? TRANSACTION_BYTES;
+  const fail = (reason: string) => {
+    result.failed.push({ path: file.absPath, reason });
+    ctx.log?.(`not relayed: ${file.relPath}: ${reason}`);
+  };
+  const stored = relayCursor(ctx.db, adapter.id, file.absPath);
+  let rf: RelayFile | null;
+  try {
+    rf = openRelayFile(file, stored, hub.holds(adapter.id, file.absPath), ctx.log);
+  } catch (err) {
+    fail((err as Error).message);
+    return;
+  }
+  if (!rf) return;
+  const relPath = file.relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  let sent = false;
+  let conflicts = 0;
+  let complete = true;
+  for (;;) {
+    let piece: ReturnType<RelayFile['next']>;
+    try {
+      piece = rf.next(chunkBytes);
+    } catch (err) {
+      fail((err as Error).message);
+      complete = false;
+      break;
+    }
+    if (!piece) break;
+    const { generation, bytes: offset } = rf.cursor;
+    const answer = await hub.send({
+      source: adapter.id,
+      path: file.absPath,
+      relPath,
+      generation,
+      offset,
+      data: piece.data,
+      mtimeMs: rf.mtimeMs,
+      agentVersion,
+    });
+    if (answer.status === 'refused') {
+      fail(answer.reason);
+      complete = false;
+      break;
+    }
+    if (answer.status === 'conflict') {
+      // Another process sent these lines first, or the hub holds more or less of the file than
+      // this relay knew: go on from where the hub stands.
+      let aligned = false;
+      try {
+        // Another process sending the same file moves the hub on; only answers that do not
+        // move it on count against the limit.
+        aligned = (answer.bytes > offset || ++conflicts <= 3) && rf.align(answer.bytes);
+      } catch {
+        aligned = false;
+      }
+      if (!aligned) {
+        fail(
+          `the hub holds ${answer.bytes} bytes of generation ${generation}, and this file cannot go on from there`,
+        );
+        complete = false;
+        break;
+      }
+      saveRelayCursor(ctx.db, adapter.id, file.absPath, rf.cursor);
+      continue;
+    }
+    if (stored && generation > stored.generation && !sent) result.newGenerations++;
+    rf.cursor = piece.cursor;
+    saveRelayCursor(ctx.db, adapter.id, file.absPath, rf.cursor);
+    sent = true;
+    result.bytes += piece.data.length;
+    result.linesRead += answer.linesRead;
+    result.eventsAdded += answer.eventsAdded;
+    result.parseErrors += answer.parseErrors;
+  }
+  if (complete) {
+    const settled = rf.settled();
+    if (!sameCursor(settled, stored)) saveRelayCursor(ctx.db, adapter.id, file.absPath, settled);
+  }
+  if (sent) result.filesChanged++;
 }
 
 /** What a relay has not sent of one source yet, as far as its cursors tell, without the hub. */

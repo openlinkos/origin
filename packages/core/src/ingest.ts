@@ -78,47 +78,17 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
   // A relay sends its agents' logs to its hub instead (see relay.ts); it mirrors nothing itself.
   assertComplete(ctx.db, "ingest its agents' logs");
   const startedAt = Date.now();
-  const result: SyncResult = {
-    source: adapter.id,
-    filesSeen: 0,
-    filesChanged: 0,
-    linesRead: 0,
-    eventsAdded: 0,
-    parseErrors: 0,
-    newGenerations: 0,
-    durationMs: 0,
-  };
+  const result = emptySyncResult(adapter.id);
   const files = oldestFirst(await adapter.discover());
   result.filesSeen = files.length;
   const agentVersion = adapter.version();
-  // Between write transactions, let the process do other work now and then: an MCP server keeps
-  // answering tool calls while it ingests in the background.
-  let ranSince = Date.now();
-  const breathe = async () => {
-    if (Date.now() - ranSince < YIELD_EVERY_MS) return;
-    await new Promise((resolve) => setImmediate(resolve));
-    ranSince = Date.now();
-  };
+  const breathe = breather();
 
   for (const file of files) {
     await breathe();
-    // Most files have not changed since the last sync; that needs no write lock.
-    if (isUnchanged(ctx, adapter.id, file)) continue;
-    // New lines go in write transactions of at most TRANSACTION_BYTES each, so that other processes
-    // (the CLI, one MCP server per agent session) never wait long for the lock, even during a large
-    // import. The cursor is re-read under the lock, so concurrent syncs never ingest the same bytes
-    // twice.
-    let changed = false;
-    for (;;) {
-      await breathe();
-      const step = transaction(ctx.db, () => ingestFile(ctx, adapter, file, agentVersion, result), {
-        immediate: true,
-      });
-      if (step.sealed !== null) settleMirror(ctx.db, ctx.home, step.sealed);
-      if (step.status !== 'none') changed = true;
-      if (step.status !== 'more') break;
+    if (await ingestSourceFile(ctx, adapter, file, agentVersion, result, breathe)) {
+      result.filesChanged++;
     }
-    if (changed) result.filesChanged++;
   }
   // Files that stopped growing an hour ago are likely finished: store their last lines compressed.
   sealIdleMirrors(ctx.db, ctx.home, {
@@ -140,8 +110,114 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
   return result;
 }
 
+/**
+ * Ingest one file of a source, as syncSource ingests each file it discovers: the file the adapter
+ * locates at `absPath` (see SourceAdapter.locate), read from its cursor, its new complete lines
+ * mirrored and parsed, with rewrite detection, sealing, titles, native memories, threads, and
+ * session aggregates, in the same bounded write transactions. An agent's hook calls it with the
+ * transcript it names, so that a session's new lines arrive without a scan of every source (see
+ * docs/architecture.md#live-ingestion). A path the adapter does not locate, or that is not a file
+ * now, is ingested as nothing (`filesSeen` 0). Sealing the tails of idle mirrors is left to
+ * syncSource, and a sync_log row is recorded only when lines were read.
+ */
+export async function syncFile(
+  ctx: IngestContext,
+  adapter: SourceAdapter,
+  absPath: string,
+): Promise<SyncResult> {
+  assertComplete(ctx.db, "ingest its agents' logs");
+  const startedAt = Date.now();
+  const result = emptySyncResult(adapter.id);
+  const file = adapter.locate?.(absPath) ?? null;
+  if (file && !file.generated && isFile(file.absPath)) {
+    result.filesSeen = 1;
+    const agentVersion = adapter.version();
+    if (await ingestSourceFile(ctx, adapter, file, agentVersion, result, breather())) {
+      result.filesChanged = 1;
+    }
+  }
+  result.durationMs = Date.now() - startedAt;
+  if (result.linesRead > 0) {
+    logSync(ctx.db, {
+      source: adapter.id,
+      startedAt,
+      filesSeen: result.filesSeen,
+      filesChanged: result.filesChanged,
+      stats: result,
+      note: result.newGenerations > 0 ? `new generations: ${result.newGenerations}` : null,
+    });
+  }
+  return result;
+}
+
+export function emptySyncResult(source: string): SyncResult {
+  return {
+    source,
+    filesSeen: 0,
+    filesChanged: 0,
+    linesRead: 0,
+    eventsAdded: 0,
+    parseErrors: 0,
+    newGenerations: 0,
+    durationMs: 0,
+  };
+}
+
+/** Whether a path is a regular file now (following links), as discover() lists them. */
+export function isFile(absPath: string): boolean {
+  try {
+    return fs.statSync(absPath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ingest the new complete lines of one file, if it changed since its last ingestion; returns
+ * whether anything was ingested (or a new generation opened). Adds its counts to `result`.
+ */
+async function ingestSourceFile(
+  ctx: IngestContext,
+  adapter: SourceAdapter,
+  file: SourceFile,
+  agentVersion: string | null,
+  result: SyncResult,
+  breathe: () => Promise<void>,
+): Promise<boolean> {
+  // Most files have not changed since the last sync; that needs no write lock.
+  if (isUnchanged(ctx, adapter.id, file)) return false;
+  // New lines go in write transactions of at most TRANSACTION_BYTES each, so that other processes
+  // (the CLI, one MCP server per agent session, agents' hooks) never wait long for the lock, even
+  // during a large import. The cursor is re-read under the lock, so concurrent syncs never ingest
+  // the same bytes twice.
+  let changed = false;
+  for (;;) {
+    await breathe();
+    const step = transaction(ctx.db, () => ingestFile(ctx, adapter, file, agentVersion, result), {
+      immediate: true,
+    });
+    if (step.sealed !== null) settleMirror(ctx.db, ctx.home, step.sealed);
+    if (step.status !== 'none') changed = true;
+    if (step.status !== 'more') break;
+  }
+  return changed;
+}
+
 /** A sync lets other work run at least this often (see syncSource). */
 const YIELD_EVERY_MS = 20;
+
+/**
+ * Between write transactions, let the process do other work now and then: an MCP server keeps
+ * answering tool calls while it ingests in the background.
+ */
+function breather(): () => Promise<void> {
+  let ranSince = Date.now();
+  return async () => {
+    if (Date.now() - ranSince < YIELD_EVERY_MS) return;
+    await new Promise((resolve) => setImmediate(resolve));
+    ranSince = Date.now();
+  };
+}
 
 /**
  * What the adapters' files look like now, as one digest of each file's path, size, and
@@ -605,18 +681,23 @@ function validateChunk(adapter: SourceAdapter, chunk: RemoteChunk): string {
   return relPath;
 }
 
-/** The hub's byte cursor for every file replicated from `device`. */
+/**
+ * The hub's byte cursor for every file replicated from `device`, or with `file`, for each
+ * generation of that one file (its source, and its original path on the device).
+ */
 export function remoteCursors(
   db: Database,
   device: string,
+  file?: { source: string; path: string },
 ): Array<{ source: string; path: string; generation: number; bytes: number }> {
   const prefix = remotePath(device, '');
-  const rows = db
-    .prepare(
-      `SELECT source, path, generation, bytes_ingested FROM raw_file
-       WHERE substr(path, 1, ?) = ? ORDER BY source, path, generation`,
-    )
-    .all(prefix.length, prefix) as unknown as Array<{
+  const sql = file
+    ? `SELECT source, path, generation, bytes_ingested FROM raw_file
+       WHERE source = ? AND path = ? ORDER BY generation`
+    : `SELECT source, path, generation, bytes_ingested FROM raw_file
+       WHERE substr(path, 1, ?) = ? ORDER BY source, path, generation`;
+  const params = file ? [file.source, remotePath(device, file.path)] : [prefix.length, prefix];
+  const rows = db.prepare(sql).all(...params) as unknown as Array<{
     source: string;
     path: string;
     generation: number;
@@ -632,10 +713,14 @@ export function remoteCursors(
 
 /**
  * This store's own (not replicated) raw files, as a device pushes them to its hub: least recently
- * updated first, so that the hub receives a device's history roughly in the order it happened.
+ * updated first, so that the hub receives a device's history roughly in the order it happened; or
+ * with `file`, the generations of that one file (its source and original path), oldest first.
  * Their content is read with readMirror (see mirror.ts).
  */
-export function localRawFiles(db: Database): Array<{
+export function localRawFiles(
+  db: Database,
+  file?: { source: string; path: string },
+): Array<{
   id: number;
   source: string;
   path: string;
@@ -644,12 +729,13 @@ export function localRawFiles(db: Database): Array<{
   bytes: number;
   updatedAt: number;
 }> {
-  const rows = db
-    .prepare(
-      `SELECT ${RAW_COLUMNS} FROM raw_file WHERE substr(path, 1, 1) <> '@'
-       ORDER BY updated_at, source, path, generation`,
-    )
-    .all() as unknown as RawFileRow[];
+  const sql = file
+    ? `SELECT ${RAW_COLUMNS} FROM raw_file
+       WHERE source = ? AND path = ? AND substr(path, 1, 1) <> '@' ORDER BY generation`
+    : `SELECT ${RAW_COLUMNS} FROM raw_file WHERE substr(path, 1, 1) <> '@'
+       ORDER BY updated_at, source, path, generation`;
+  const params = file ? [file.source, file.path] : [];
+  const rows = db.prepare(sql).all(...params) as unknown as RawFileRow[];
   return rows.map((r) => ({
     id: r.id,
     source: r.source,

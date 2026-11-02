@@ -126,6 +126,7 @@ export {
   type RemoteChunk,
   refreshSession,
   remoteCursors,
+  syncFile,
   syncSource,
 } from './ingest.js';
 export {
@@ -271,6 +272,7 @@ export {
   type RelayPending,
   type RelayResult,
   relayCursor,
+  relayFile,
   relayPending,
   relaySource,
   saveRelayCursor,

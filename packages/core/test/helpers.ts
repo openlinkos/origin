@@ -5,7 +5,7 @@ import { type Database, type EventKind, readMirror, type SourceAdapter } from '.
 /**
  * Minimal fake source: one {"id","session","ts","role","text"} object per line, with optional
  * `kind`, `title`, `project`, `cwd`, `branch` (its git branch), and `parent`. Another `id` makes it
- * a second agent.
+ * a second agent. Its files are the `.jsonl` files directly in `root`, which `locate` finds too.
  */
 export function fakeAdapter(root: string, id = 'fake'): SourceAdapter {
   return {
@@ -17,6 +17,11 @@ export function fakeAdapter(root: string, id = 'fake'): SourceAdapter {
         .readdirSync(root)
         .filter((f) => f.endsWith('.jsonl'))
         .map((f) => ({ absPath: path.join(root, f), relPath: f }));
+    },
+    locate(absPath) {
+      const rel = path.relative(root, absPath);
+      if (rel.includes(path.sep) || rel.startsWith('..') || !rel.endsWith('.jsonl')) return null;
+      return { absPath: path.join(root, rel), relPath: rel };
     },
     parseLine(line) {
       const o = JSON.parse(line) as {

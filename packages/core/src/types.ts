@@ -147,6 +147,14 @@ export interface SourceAdapter {
   version(): string | null;
   /** List the files to ingest now. */
   discover(): Promise<SourceFile[]>;
+  /**
+   * The file at `absPath` as discover() would list it, with the same absPath, relPath, and
+   * compression, so that it gets the same mirror; null when the path is not one of this adapter's
+   * files (outside its root, or one discover() skips). Pure: it reads nothing, so the file need not
+   * exist. Implemented by adapters whose agents name a session's file in their hooks, so that one
+   * file can be ingested on its own (see syncFile in ingest.ts).
+   */
+  locate?(absPath: string): SourceFile | null;
   /** Parse one line; null means the line yields nothing (still counted). Thrown errors are caught and counted by the ingester. */
   parseLine(line: string, ctx: ParseContext): ParsedLine | null;
 }
