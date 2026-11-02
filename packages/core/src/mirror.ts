@@ -473,9 +473,12 @@ export function sealIdleMirrors(
   home: string,
   opts: { before: number; remote: boolean; source?: string; frameBytes?: number },
 ): number {
+  // A mirror two raw files share, as an earlier version let two files with one name do, is left
+  // as it is: sealing one's tail would cut the other's lines (see newMirror in ingest.ts).
   const idle = `r.updated_at < ? AND (substr(r.path, 1, 1) = '@') = ?
     AND r.bytes_ingested > COALESCE((SELECT byte_offset + byte_length FROM raw_chunk
-                                     WHERE raw_file_id = r.id ORDER BY first_line DESC LIMIT 1), 0)`;
+                                     WHERE raw_file_id = r.id ORDER BY first_line DESC LIMIT 1), 0)
+    AND NOT EXISTS (SELECT 1 FROM raw_file o WHERE lower(o.mirror) = lower(r.mirror) AND o.id <> r.id)`;
   const params: Array<number | string> = [opts.before, opts.remote ? 1 : 0];
   const bySource = opts.source === undefined ? '' : ' AND r.source = ?';
   if (opts.source !== undefined) params.push(opts.source);

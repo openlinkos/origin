@@ -430,13 +430,26 @@ describe('your own sources on a hub', () => {
         getSession(deviceDb, 'notes', 'retry-1')?.thread,
       );
 
-      // Lines sent with the laptop's token under the same path would share that mirror: refused.
-      const clash = await post('notes', '?path=2026/11/02.jsonl', lines(1), {
+      // Lines sent with the laptop's token under the same path go to a file, and a mirror, of
+      // their own, beside the device's.
+      const beside = await post('notes', '?path=2026/11/02.jsonl', lines(1), {
         Authorization: `Bearer ${laptopToken}`,
       });
-      expect(clash.status).toBe(400);
-      expect((await clash.json()).error).toMatch(/already has another file of notes mirrored as/);
-      expect(remoteCursors(hubDb, 'laptop')).toHaveLength(1);
+      expect(await beside.json()).toEqual({ lines: 1, events: 0, duplicates: 1, parse_errors: 0 });
+      expect(
+        remoteCursors(hubDb, 'laptop')
+          .map((c) => c.path)
+          .sort(),
+      ).toEqual(['2026/11/02.jsonl', path.join(dir, '2026', '11', '02.jsonl')].sort());
+      const own = hubDb
+        .prepare("SELECT mirror FROM raw_file WHERE path = '@laptop:2026/11/02.jsonl'")
+        .get() as { mirror: string };
+      expect(own.mirror.replace(/\\/g, '/')).toMatch(
+        /^devices\/laptop\/notes\/2026\/11\/02\.~[0-9a-f]{12}\.jsonl$/,
+      );
+      expect(readRawLine(hubDb, hubHome, rawLocator(hubDb, hubHome, ev as never) as never)).toBe(
+        notesLines()[3],
+      );
     } finally {
       deviceDb.close();
     }

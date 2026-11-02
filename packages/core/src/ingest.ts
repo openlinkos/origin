@@ -20,7 +20,7 @@ import {
   settleMirror,
 } from './mirror.js';
 import { assertComplete } from './mode.js';
-import { mirrorRelPath, parseRawPath, rawDir, remotePath } from './paths.js';
+import { distinctRelPath, mirrorRelPath, parseRawPath, rawDir, remotePath } from './paths.js';
 import { deriveProposal } from './proposals.js';
 import { deriveFollow, refreshThreads } from './threads.js';
 import { NAME_RE } from './tokens.js';
@@ -320,15 +320,22 @@ function ingestFile(
   let raw = latestRawFile(ctx.db, adapter.id, file.absPath);
   const content = openContent(ctx, file, raw);
   if (!content) return NOTHING;
-  // Generated content only grows, by construction, so it is never rewritten.
-  if (raw && !file.generated && (content.size < raw.bytes_ingested || !tailMatches(content, raw))) {
-    ctx.log?.(`rewrite detected, new generation: ${file.relPath}`);
+  // Generated content only grows, by construction, so it is never rewritten. A file whose mirror
+  // another file shares, as an earlier version let two files with one name do, goes on in a mirror
+  // of its own rather than write into the other's (see Raw mirrors in docs/architecture.md).
+  const rewritten =
+    raw && !file.generated && (content.size < raw.bytes_ingested || !tailMatches(content, raw));
+  const shared = raw !== null && sharesMirror(ctx.db, raw);
+  if (raw && (rewritten || shared)) {
+    ctx.log?.(
+      `${rewritten ? 'rewrite detected' : 'mirror shared with another file'}, new generation: ${file.relPath}`,
+    );
     const generation = raw.generation + 1;
     raw = createRawFile(
       ctx.db,
       adapter.id,
       file.absPath,
-      localMirror(adapter.id, file.relPath, generation),
+      newMirror(ctx.db, [adapter.id], file.relPath, generation, file.absPath),
       generation,
     );
     result.newGenerations++;
@@ -338,7 +345,7 @@ function ingestFile(
       ctx.db,
       adapter.id,
       file.absPath,
-      localMirror(adapter.id, file.relPath, 1),
+      newMirror(ctx.db, [adapter.id], file.relPath, 1, file.absPath),
       1,
     );
   }
@@ -598,16 +605,13 @@ export function appendRemote(
             duplicates: 0,
           };
         }
-        const rel = chunk.generation === 1 ? relPath : `${relPath}.g${chunk.generation}`;
-        const mirror = path.join('devices', chunk.device, chunk.source, rel);
-        // Two files of a device with the same relative path, such as a device's own source and
-        // lines appended to the hub under its token, would share a mirror and break it (invariant 3).
-        const holder = mirrorHolder(ctx.db, mirror);
-        if (holder) {
-          throw new OriginError(
-            `Device ${chunk.device} already has another file of ${chunk.source} mirrored as ${rel} (${parseRawPath(holder).originalPath}); send this one under another path.`,
-          );
-        }
+        const mirror = newMirror(
+          ctx.db,
+          ['devices', chunk.device, chunk.source],
+          relPath,
+          chunk.generation,
+          key,
+        );
         raw = createRawFile(ctx.db, chunk.source, key, mirror, chunk.generation);
       }
       if (chunk.offset !== raw.bytes_ingested) return { ok: false, bytes: raw.bytes_ingested };
@@ -1022,15 +1026,49 @@ function latestRawFile(db: Database, source: string, absPath: string): RawFileRo
   return row ?? null;
 }
 
+/** Whether a raw file has the mirror `mirror`, compared without case as file systems may. */
+function mirrorTaken(db: Database, mirror: string): boolean {
+  return (
+    db.prepare('SELECT 1 FROM raw_file WHERE lower(mirror) = lower(?) LIMIT 1').get(mirror) !==
+    undefined
+  );
+}
+
+/** Whether another raw file has this one's mirror, as an earlier version let two files have. */
+function sharesMirror(db: Database, raw: RawFileRow): boolean {
+  return (
+    db
+      .prepare('SELECT 1 FROM raw_file WHERE lower(mirror) = lower(?) AND id <> ? LIMIT 1')
+      .get(raw.mirror, raw.id) !== undefined
+  );
+}
+
 /**
- * The raw file whose mirror is `mirror`, compared without case as file systems may, by its path; or
- * null if no raw file has that mirror.
+ * The mirror of a new raw file, relative to raw/: `<parts>/<relPath>[.g<generation>]`, or, when
+ * another raw file already has that name (compared without case, as file systems may), the same
+ * with the file's mark before its extension, derived from its raw_file path `rawPath` (see
+ * distinctRelPath), so that two files with one relative path, such as an agent's directory before
+ * and after it moved, or a device's own source and lines appended to the hub under its token,
+ * never write into one mirror (invariant 3). mirrorRelPath gives back the relative path.
  */
-function mirrorHolder(db: Database, mirror: string): string | null {
-  const row = db
-    .prepare('SELECT path FROM raw_file WHERE lower(mirror) = lower(?) LIMIT 1')
-    .get(mirror) as { path: string } | undefined;
-  return row?.path ?? null;
+function newMirror(
+  db: Database,
+  parts: string[],
+  relPath: string,
+  generation: number,
+  rawPath: string,
+): string {
+  const named = (rel: string) => {
+    const safe = rel.replace(/\\/g, '/').replace(/^\/+/, '');
+    return path.join(...parts, generation === 1 ? safe : `${safe}.g${generation}`);
+  };
+  const usual = named(relPath);
+  if (!mirrorTaken(db, usual)) return usual;
+  const own = named(distinctRelPath(relPath.replace(/\\/g, '/'), rawPath));
+  if (!mirrorTaken(db, own)) return own;
+  throw new OriginError(
+    `No mirror name is free for ${rawPath}: both ${usual} and ${own} are taken.`,
+  );
 }
 
 function rawFileAt(
@@ -1043,12 +1081,6 @@ function rawFileAt(
     .prepare(`SELECT ${RAW_COLUMNS} FROM raw_file WHERE source = ? AND path = ? AND generation = ?`)
     .get(source, rawPath, generation) as RawFileRow | undefined;
   return row ?? null;
-}
-
-/** Mirror of a local file, relative to raw/: `<source>/<relPath>[.g<generation>]`. */
-function localMirror(source: string, relPath: string, generation: number): string {
-  const safeRel = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
-  return path.join(source, generation === 1 ? safeRel : `${safeRel}.g${generation}`);
 }
 
 function createRawFile(

@@ -23,6 +23,7 @@ import {
   localRawFiles,
   openDatabase,
   planRecall,
+  readMirror,
   recordRecall,
   remember,
   remoteCursors,
@@ -719,24 +720,27 @@ describe('pushing one file', () => {
     });
     // A full sync then has nothing left to send of these two, only the mirror of the fixture
     // itself, which this device ingested before the test. Its relative path is that of its copy,
-    // whose mirror on the hub it would overwrite: the hub refuses it, and the sync goes on.
+    // so the device, and then the hub, keep it in a mirror of its own, apart from the copy's.
     const fixture = path.join(
       fixtures,
       'D--demo-project',
       '0f1e2d3c-4b5a-4697-8877-665544332211.jsonl',
     );
-    expect(await sync()).toMatchObject({
-      files: 0,
-      eventsAdded: 0,
-      refused: [
-        {
-          source: 'claude-code',
-          path: fixture,
-          reason: expect.stringContaining('already has another file of claude-code mirrored as'),
-        },
-      ],
-      tombstonesApplied: 0,
-    });
-    expect(remoteCursors(hubDb, 'laptop')).toHaveLength(2);
+    expect(await sync()).toMatchObject({ files: 1, eventsAdded: 0, refused: [] });
+    expect(
+      remoteCursors(hubDb, 'laptop')
+        .map((c) => c.path)
+        .sort(),
+    ).toEqual([first, fixture, second].sort());
+    const mirrors = hubDb
+      .prepare('SELECT id, path, mirror FROM raw_file ORDER BY id')
+      .all() as unknown as Array<{ id: number; path: string; mirror: string }>;
+    expect(new Set(mirrors.map((m) => m.mirror.toLowerCase())).size).toBe(3);
+    for (const m of mirrors) {
+      const device = localRawFiles(deviceDb).find((f) => `@laptop:${f.path}` === m.path);
+      expect(readMirror(hubDb, path.join(tmp, 'hub'), m.id, 0, Number.MAX_SAFE_INTEGER)).toEqual(
+        readMirror(deviceDb, deviceHome, device?.id as number, 0, Number.MAX_SAFE_INTEGER),
+      );
+    }
   });
 });

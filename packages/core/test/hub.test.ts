@@ -36,6 +36,7 @@ import {
   tombstoneFeed,
   verifyToken,
 } from '../src/index.js';
+import { mirrorRelPath } from '../src/paths.js';
 import { applied, fakeAdapter, line, mirrorText } from './helpers.js';
 
 let dirs: string[];
@@ -321,24 +322,60 @@ describe('appendRemote', () => {
     expect(listEvents(db)).toHaveLength(2);
   });
 
-  it('refuses a file whose mirror another file of the device already has', () => {
-    const { adapter } = spyAdapter();
+  it('gives a file whose mirror name another file of the device has a mirror of its own', () => {
+    const { adapter, seen } = spyAdapter();
     appendRemote({ db, home }, adapter, chunk({ text: two }));
-    // Another original path with the same relative path, as a script writing to the hub with a
-    // device's token would send next to the device's own source; or the same, in another case.
-    for (const relPath of ['proj/s1.jsonl', 'PROJ/S1.jsonl']) {
-      expect(() =>
-        appendRemote({ db, home }, adapter, chunk({ path: relPath, relPath, text: two })),
-      ).toThrow(/already has another file of fake mirrored as/);
-    }
-    expect(remoteCursors(db, 'laptop').map((c) => c.path)).toEqual([
-      '/home/me/.fake/proj/s1.jsonl',
-    ]);
-    // The first file goes on as before.
-    const more = line('e3', 's1', 3000, 'user', 'third');
+    // Other original paths with the same relative path, as a device sends after its agent's
+    // directory moved, or a script writing to the hub with its token; or the same in another case.
+    const third = line('e3', 's1', 3000, 'user', 'third');
+    const fourth = line('e4', 's1', 4000, 'user', 'fourth');
     expect(
-      appendRemote({ db, home }, adapter, chunk({ offset: Buffer.byteLength(two), text: more })),
+      appendRemote({ db, home }, adapter, chunk({ path: '/moved/proj/s1.jsonl', text: third })),
     ).toMatchObject({ ok: true, eventsAdded: 1 });
+    expect(
+      appendRemote(
+        { db, home },
+        adapter,
+        chunk({ path: 'PROJ/S1.jsonl', relPath: 'PROJ/S1.jsonl', text: fourth }),
+      ),
+    ).toMatchObject({ ok: true, eventsAdded: 1 });
+    // The first file goes on as before, and each mirror holds its own file's lines.
+    appendRemote({ db, home }, adapter, chunk({ offset: Buffer.byteLength(two), text: third }));
+    const files = db
+      .prepare('SELECT id, source, path, generation, mirror FROM raw_file ORDER BY id')
+      .all() as unknown as Array<{
+      id: number;
+      source: string;
+      path: string;
+      generation: number;
+      mirror: string;
+    }>;
+    expect(files.map((f) => mirrorText(db, home, f.id))).toEqual([two + third, third, fourth]);
+    const mark = (p: string) => createHash('sha256').update(p).digest('hex').slice(0, 12);
+    expect(files.map((f) => f.mirror.replace(/\\/g, '/'))).toEqual([
+      'devices/laptop/fake/proj/s1.jsonl',
+      `devices/laptop/fake/proj/s1.~${mark('@laptop:/moved/proj/s1.jsonl')}.jsonl`,
+      `devices/laptop/fake/PROJ/S1.~${mark('@laptop:PROJ/S1.jsonl')}.jsonl`,
+    ]);
+    // Each is still read, and parsed, under its own relative path.
+    expect(files.map((f) => mirrorRelPath(f))).toEqual([
+      'proj/s1.jsonl',
+      'proj/s1.jsonl',
+      'PROJ/S1.jsonl',
+    ]);
+    expect(seen.map((c) => c.relPath)).toEqual([
+      'proj/s1.jsonl',
+      'proj/s1.jsonl',
+      'proj/s1.jsonl',
+      'PROJ/S1.jsonl',
+      'proj/s1.jsonl',
+    ]);
+    for (const id of ['fake:e3', 'fake:e4']) {
+      const ev = getEvent(db, id) as NonNullable<ReturnType<typeof getEvent>>;
+      expect(readRawLine(db, home, rawLocator(db, home, ev) as never)).toBe(
+        (id === 'fake:e3' ? third : fourth).trim(),
+      );
+    }
   });
 
   it('keeps events forgotten on the hub forgotten when a device pushes them again', () => {

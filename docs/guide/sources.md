@@ -77,7 +77,7 @@ curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=2026/11
 - **The body.** Event lines, at most 8 MiB, as `application/x-ndjson` or `text/plain`, possibly gzip-encoded. Use `--data-binary`, which sends a file as it is, rather than `-d`, which drops its line breaks; one line without a line break at the end, as `-d '{"id":…}'` sends it, is fine.
 - **The answer.** How many lines the hub read, how many new events they gave, how many it already had (`duplicates`), and how many are not valid events (`parse_errors`), which it keeps but reads nothing from.
 - **Sending again.** If you do not know whether a request arrived, send it again: lines the hub already has add nothing.
-- **A token of its own.** A device's token works too, and sends as that device; but the hub refuses a path that the device already sends for the same source from its own `sources/` directory.
+- **A token of its own.** A device's token works too, and sends as that device; lines sent with it under a path that the device's own `sources/` directory also has are kept in a file of their own, beside the device's.
 
 ## Choose ids and sessions
 
