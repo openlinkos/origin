@@ -98,6 +98,7 @@ node -e "const c=require('fs').readFileSync(process.argv[1],'utf8').replace(/\r\
    - `discover()` lists the files to ingest; it must not fail if the agent is not installed.
    - `parseLine()` is a pure, deterministic function from one raw line to events. It throws on malformed input; the ingester counts the failure and moves on.
    - Event ids must be stable across runs (use the agent's own message ids) so that re-syncing stays idempotent.
+   - Say who wrote each user message and meta event (`author`, with the field that says so in `authorSignal`, and `speaker` when the agent names one) where the agent's log records it, and which sessions are sub-agents' or headless runs (`sessionKinds`); without them, Origin decides by kind and text, as for older logs (see [Authors](docs/architecture.md#authors)).
    - Report the agent version so that format changes can be traced.
    - If the agent compresses its logs, mark those files with `compression: 'zstd'` in `discover()`; Origin ingests the decompressed content.
 3. Register the adapter in `allAdapters()` in `packages/adapters/src/index.ts`.
