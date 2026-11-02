@@ -3,7 +3,7 @@ import { parseEventLine } from '@openlinkos/origin-adapters';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type Config, parseConfig } from '../src/config.js';
 import { agentDir, isSafeLinesPath, linesPath, sessionFileBase } from '../src/files.js';
-import { draftsFromMessages, lineId, redact, speakerName, titleOf } from '../src/lines.js';
+import { draftsFromMessages, lineId, speakerName, titleOf } from '../src/lines.js';
 import { pluginLog } from '../src/log.js';
 import { Recorder, type TurnSource, triggerOfSessionKey } from '../src/recorder.js';
 import {
@@ -502,15 +502,8 @@ describe('who wrote each message', () => {
   });
 });
 
-describe('secrets', () => {
-  it('redacts Origin tokens and 1Password references everywhere', () => {
-    expect(redact('token ogn_Ab3_x-9 and op://OpenClaw/hub token/credential.')).toBe(
-      'token [redacted] and [redacted] token/credential.',
-    );
-    expect(redact('"op://Vault/Item/field"')).toBe('"[redacted]"');
-  });
-
-  it('never sends the 1Password tool results, and redacts what refers to them', async () => {
+describe('what happened, as it was', () => {
+  it('sends every message and tool result as it was, secrets and all', async () => {
     const { rec, sink } = recorder();
     const messages = [
       user(
@@ -533,12 +526,19 @@ describe('secrets', () => {
     ];
     rec.agentEnd({ messages, success: true }, agentCtx());
     await rec.idle();
-    const all = JSON.stringify(sink.lines());
-    expect(all).not.toContain('s3cr3t-pa55word');
-    expect(all).not.toMatch(/ogn_[A-Za-z0-9]/);
-    expect(all).not.toContain('op://');
-    expect(sink.lines().map((l) => l.kind)).toEqual(['message', 'tool_use', 'message']);
-    expect(sink.lines()[0]!.title).toBe('My hub token is [redacted]; put it in [redacted]');
+    const lines = sink.lines();
+    expect(lines.map((l) => [l.kind, l.text])).toEqual([
+      [
+        'message',
+        'My hub token is ogn_0123456789abcdef_XY; put it in op://OpenClaw/origin-hub/credential',
+      ],
+      ['tool_use', 'onepassword {"action":"get","ref":"op://OpenClaw/origin-hub/credential"}'],
+      ['tool_result', 'ogn_secretvalue and s3cr3t-pa55word'],
+      ['message', 'Stored: ogn_0123456789abcdef_XY'],
+    ]);
+    expect(lines[0]!.title).toMatch(/^My hub token is ogn_0123456789abcdef_XY; put it in op:/);
+    expect(lines[2]!.meta).toMatchObject({ toolName: 'onepassword', callId: 'call_9' });
+    parsed(lines);
   });
 });
 
@@ -701,10 +701,12 @@ describe('lines from the message hooks', () => {
       ['assistant', 'tool_use'],
       ['user', 'tool_result'],
       ['assistant', 'tool_use'],
+      ['user', 'tool_result'],
       ['assistant', 'message'],
     ]);
-    expect(JSON.stringify(lines)).not.toContain('hunter2-secret');
-    expect(JSON.stringify(lines)).not.toContain('op://');
+    // What a tool returned is sent as it was, whichever tool it is.
+    expect(lines[3]!.text).toBe('onepassword {"ref":"op://OpenClaw/x/credential"}');
+    expect(lines[4]).toMatchObject({ text: 'hunter2-secret', meta: { toolName: 'onepassword' } });
     expect(lines[0]).toMatchObject({
       title: 'Is the deploy stuck?',
       project: 'xiaohan',

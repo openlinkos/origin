@@ -13,7 +13,8 @@ The plugin was checked against OpenClaw 2026.10.6: its hooks and their payloads,
 - **Projects.** Each session's project is its agent's id, such as `main`, unless you name it after the channel or give one name to all (`projectBy`, `project`).
 - **Context.** Each line's `meta` holds the agent, the channel and its account, the session key and id, and the run, as OpenClaw gives them; a tool line also holds the tool's name and its call's id (`callId`), which pairs a call with its result.
 - **Stable ids.** A line's id is a hash of its session, its message's time, its role and kind, and its place in the message, not of who wrote it, so a message sent again, as after a lost answer or a restart, has the same id, and Origin adds nothing for it.
-- **What it leaves out.** The agents you do not list (`agents`); runs that are not a person's turn (`triggers`), such as heartbeats and cron jobs, with the messages they add; incognito threads; and every result of the 1Password plugin's agent tool (`onepassword`), which returns secret values. Before a line leaves the Gateway, Origin tokens (`ogn_…`) and 1Password references (`op://…`) in it are replaced with `[redacted]`.
+- **What it leaves out.** The agents you do not list (`agents`); runs that are not a person's turn (`triggers`), such as heartbeats and cron jobs, with the messages they add; and incognito threads.
+- **What happened, as it was.** Nothing in a line is redacted: a message, a tool call, or a tool's result is sent as the run had it, with whatever secret it holds, such as a token pasted into a message or a value a password manager's tool returned. To send no tool calls or results at all, set `includeTools` to `false`.
 
 ## Install
 
@@ -140,7 +141,7 @@ The context OpenClaw adds to a turn stays a `meta` line with neither field, whic
 - **From the time it is installed.** The plugin sends what the Gateway's runs show it. The first turn of a session sends the session's history as the model sees it then; what OpenClaw compacted away before is only in its summary.
 - **One session per key.** A session key's conversations, before and after `/new`, are one session in Origin.
 - **At the end of a run.** Lines are sent when a run ends, or before OpenClaw compacts them. A run cut short by a crash of the Gateway is sent with the session's next run, from the history; `reconcileOnEnd` also reads an ended session's transcript.
-- **Redaction is narrow.** It replaces Origin tokens and 1Password references, and leaves out the 1Password tool's results. A secret that reaches a message any other way is sent as it is.
+- **Secrets are sent as they are.** The plugin redacts nothing, so a secret that reaches a run reaches Origin. Hide an event that holds one with `origin forget` (see [Forgetting](./privacy.md#forgetting)).
 - **Retries ride on turns.** The spool is sent with the next turn and when the Gateway starts, not on a timer of its own.
 
 ## Troubleshooting

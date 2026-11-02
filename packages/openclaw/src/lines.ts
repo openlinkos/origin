@@ -54,24 +54,8 @@ export const TOOL_RESULT_MAX = 4000;
 export const TITLE_MAX = 80;
 /** Longest speaker, in characters, as event lines take it. */
 export const SPEAKER_MAX = 200;
-/**
- * Tools whose results never leave OpenClaw: the 1Password plugin's agent tool returns secret values
- * in its results, and they stay in the model's context and the transcript.
- */
-export const SECRET_TOOLS: readonly string[] = ['onepassword'];
 /** OpenClaw's marker of the runtime context it adds to a turn, which no one said. */
 const RUNTIME_CONTEXT_MARKER = '<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>';
-
-/** Origin hub tokens and 1Password references, replaced wherever they appear in a line. */
-const SECRET_RES = [/ogn_[A-Za-z0-9_-]+/g, /op:\/\/[^\s"'`<>()[\]{}]+/g];
-export const REDACTED = '[redacted]';
-
-/** `text` with every Origin token (`ogn_…`) and 1Password reference (`op://…`) replaced. */
-export function redact(text: string): string {
-  let out = text;
-  for (const re of SECRET_RES) out = out.replace(re, REDACTED);
-  return out;
-}
 
 /** A line id: `oc-` and 24 hex digits of a hash of what identifies the event in its session. */
 export function lineId(parts: ReadonlyArray<string | number>): string {
@@ -178,9 +162,12 @@ interface LineSpec {
   meta?: Record<string, unknown>;
 }
 
-/** A draft, or null when its text is empty once trimmed and redacted. */
+/**
+ * A draft, or null when its text is empty once trimmed. The text is what happened, as it was:
+ * nothing in it is replaced, and only tool calls and results are cut, to what Origin's adapters keep.
+ */
 function draft(info: SessionInfo, spec: LineSpec): Draft | null {
-  const text = redact(spec.text).trim();
+  const text = spec.text.trim();
   if (text.length === 0) return null;
   const meta = { ...info.meta, ...spec.meta };
   return {
@@ -199,9 +186,6 @@ function draft(info: SessionInfo, spec: LineSpec): Draft | null {
     },
   };
 }
-
-const isSecretTool = (name: string | null) =>
-  name !== null && SECRET_TOOLS.includes(name.toLowerCase());
 
 /** A message of `agent_end` or of a transcript: the message itself, or a transcript entry's. */
 function messageOf(item: unknown): Record<string, unknown> | null {
@@ -346,7 +330,6 @@ export function draftsFromMessages(
     } else if (role === 'toolResult') {
       if (!opts.includeTools) continue;
       const name = str(m.toolName);
-      if (isSecretTool(name)) continue;
       const callId = str(m.toolCallId);
       push(
         draft(info, {
@@ -453,7 +436,6 @@ export function draftsFromToolCall(
     meta,
   });
   if (use) out.push(use);
-  if (isSecretTool(name)) return out;
   const error = str(e.error);
   const resultText =
     e.result === undefined
