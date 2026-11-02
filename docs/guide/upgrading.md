@@ -65,9 +65,9 @@ A store records the version of its format. When a newer Origin opens an older st
 | 0.2.0 | 3 | Records the format version; adds whether the user named a session; reads the titles of Claude Code sessions from the lines already archived |
 | 0.3.0 | 4 | Reads the memory streams a hub archived before it could (see [Native memories](../sources.md#native-memories)) |
 | 0.4.0 | 4 | Adds the tables of recalls; the format, and what is stored, are unchanged |
-| Unreleased | 5 | Records the git branch of each session, and groups sessions into threads, from what is already archived; recall records can name a thread |
+| Unreleased | 6 | Records the git branch of each session, and groups sessions into threads, from what is already archived; recall records can name a thread; finds the entries agents proposed in the tool results already archived |
 
-Formats 2 and 3 were both introduced by 0.2.0. The details of each step are in [Architecture](../architecture.md#migrations).
+Formats 2 and 3 were both introduced by 0.2.0, and formats 5 and 6 come with the next release. The details of each step are in [Architecture](../architecture.md#migrations).
 
 - **Back up first.** An upgrade is careful, but a backup costs one command: `origin backup <dir>` (see [Backing up](./privacy.md#backing-up)). On a hub, run it inside the container before you replace it, for example `docker exec origin-hub origin backup /data/backup-0.2`.
 - **There is no downgrade.** An Origin that finds a store of a newer format refuses to open it and says to upgrade, without changing anything. To go back to an older version, restore the backup you made before upgrading; what was written since is lost.

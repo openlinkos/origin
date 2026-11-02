@@ -572,24 +572,29 @@ export function forget(
   input: ForgetInput,
   now = Date.now(),
 ): ForgetResult {
+  checkReason(input.reason);
+  return transaction(db, () => forgetInTransaction(db, id, input, now), { immediate: true });
+}
+
+/** Forget, as `forget` does, inside the caller's write transaction (see rejectProposal). */
+export function forgetInTransaction(
+  db: Database,
+  id: string,
+  input: ForgetInput,
+  now = Date.now(),
+): ForgetResult {
   const reason = checkReason(input.reason);
-  return transaction(
+  const q = statements(db);
+  const result = plan(db, q, id);
+  if (result.entries.length === 0 && result.events.length === 0) return result;
+  const tombstoneId = newTombstoneId();
+  insertTombstone(
     db,
-    () => {
-      const q = statements(db);
-      const result = plan(db, q, id);
-      if (result.entries.length === 0 && result.events.length === 0) return result;
-      const tombstoneId = newTombstoneId();
-      insertTombstone(
-        db,
-        { id: tombstoneId, target: id, reason, createdAt: now, origin: storeName(db) },
-        input.author ?? null,
-      );
-      applyForget(db, q, { id: tombstoneId, target: id });
-      return { ...result, tombstoneId };
-    },
-    { immediate: true },
+    { id: tombstoneId, target: id, reason, createdAt: now, origin: storeName(db) },
+    input.author ?? null,
   );
+  applyForget(db, q, { id: tombstoneId, target: id });
+  return { ...result, tombstoneId };
 }
 
 /** Refuse unless `id` is a forget in effect here. */

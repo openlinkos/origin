@@ -7,6 +7,7 @@ import {
   isEntryId,
 } from './entries.js';
 import { OriginError } from './errors.js';
+import { isProposalId } from './proposals.js';
 import { isRecallId, type RecallRecord, rebuildRecall, sessionRecalls } from './recall.js';
 import {
   EVENT_COLUMNS,
@@ -66,12 +67,13 @@ export function stubText(text: string, max = STUB_CHARS): string {
 export type Opened =
   | { kind: 'entry'; id: string }
   | { kind: 'recall'; id: string }
+  | { kind: 'proposal'; id: string }
   | { kind: 'thread'; id: string }
   | { kind: 'event'; id: string }
   | { kind: 'session'; session: SessionRow };
 
 /**
- * What an id opens: `ent_…` an entry, `rcl_…` a recall, `thr_…` a thread, an event's id
+ * What an id opens: `ent_…` an entry, `rcl_…` a recall, `prp_…` a proposal, `thr_…` a thread, an event's id
  * (`<source>:…`), visible or forgotten, the event; any other id a session, written as recalls record
  * one (`<source>:<session id>`) or as its id alone, with `source` when sessions of two sources have
  * that id. Null for an id this store does not know, such as a session whose events were all
@@ -81,6 +83,7 @@ export type Opened =
 export function resolveId(db: Database, id: string, source?: string): Opened | null {
   if (isEntryId(id)) return { kind: 'entry', id };
   if (isRecallId(id)) return { kind: 'recall', id };
+  if (isProposalId(id)) return { kind: 'proposal', id };
   if (isThreadId(id)) return threadSummary(db, id) ? { kind: 'thread', id } : null;
   const at = id.indexOf(':');
   if (at > 0) {
@@ -351,7 +354,12 @@ function inScope(s: SessionRow, scope: FollowScope): boolean {
 export function followTarget(db: Database, id: string, scope: FollowScope): FollowTarget | null {
   const opened = resolveId(db, id);
   if (!opened) return null;
-  const what: Record<string, string> = { entry: 'an entry', recall: 'a recall', event: 'an event' };
+  const what: Record<string, string> = {
+    entry: 'an entry',
+    recall: 'a recall',
+    event: 'an event',
+    proposal: 'a proposal',
+  };
   if (opened.kind !== 'session' && opened.kind !== 'thread') {
     throw new OriginError(
       `${id} is ${what[opened.kind]}: \`follow\` takes the id of a session or of a thread (thr_…).`,

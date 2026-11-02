@@ -86,6 +86,9 @@ export function schemaOf(db: Database): unknown[] {
 export function downgradeToV1(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    // Version 6: proposals.
+    db.exec('DROP TABLE IF EXISTS proposal_source');
+    db.exec('DROP TABLE IF EXISTS proposal');
     // Version 5: session branches and threads.
     db.exec('DROP INDEX IF EXISTS session_project');
     db.exec('ALTER TABLE session DROP COLUMN git_branch');
@@ -107,6 +110,21 @@ export function downgradeToV1(file: string): void {
     const same = JSON.stringify(schemaOf(db)) === JSON.stringify(schemaOf(reference));
     reference.close();
     if (!same) throw new Error('downgradeToV1 must undo every migration since 0.1.0');
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Turn a store of the latest version, closed, back into a store of version 5: without the tables of
+ * proposals, which version 6 added. Its events stay, so the migration derives the proposals again.
+ */
+export function downgradeToV5(file: string): void {
+  const db = new DatabaseSync(file);
+  try {
+    db.exec('DROP TABLE IF EXISTS proposal_source');
+    db.exec('DROP TABLE IF EXISTS proposal');
+    db.exec('PRAGMA user_version = 5');
   } finally {
     db.close();
   }

@@ -2,6 +2,7 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { CURRENT_VERSION, type Entry, getEntry } from './entries.js';
 import { OriginError } from './errors.js';
+import { getProposal, type Proposal, VISIBLE_PROPOSAL } from './proposals.js';
 import {
   EVENT_COLUMNS,
   getSession,
@@ -113,6 +114,11 @@ export interface ChangeFeed {
   entries: Entry[];
   /** Forgets and restores in the range, in the order they reached the store. */
   forgets: FeedForget[];
+  /**
+   * Proposals made in the range, pending or accepted as the page is read: those whose event is in
+   * the range of the events, whatever their kind, in the order they reached the store.
+   */
+  proposals: Proposal[];
   /** The cursor after the last item of the page: pass it as `after` to read on. */
   next: FeedCursor;
   /** Whether the range held more than the page: read on with `next` (without a cursor, older). */
@@ -184,10 +190,51 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
           ORDER BY e.seq ${after ? 'ASC' : 'DESC'} LIMIT ?`,
       )
       .all(...(params as never[]), limit + 1) as unknown as EventRecord[];
-    const moreEvents = rows.length > limit;
-    const page = rows.slice(0, limit);
+    let moreEvents = rows.length > limit;
+    let page = rows.slice(0, limit);
     if (!after) page.reverse();
-    const lastEvent = page.at(-1);
+    let nextEvent =
+      moreEvents && after && page.length > 0 ? (page.at(-1) as EventRecord).seq : ends.event;
+
+    // Proposals made in the range: those whose event is in the events' range, whatever its kind.
+    const proposalWhere = ['e.seq <= ?', VISIBLE_PROPOSAL];
+    const proposalParams: unknown[] = [nextEvent];
+    if (after) {
+      proposalWhere.push('e.seq > ?');
+      proposalParams.push(after.event);
+    } else {
+      proposalWhere.push('p.at >= ?');
+      proposalParams.push(since);
+    }
+    if (f.project !== undefined) {
+      proposalWhere.push('COALESCE(p.project, e.project) = ?');
+      proposalParams.push(f.project);
+    }
+    const proposalScope = sessionScope(f, 'e');
+    proposalWhere.push(...proposalScope.parts);
+    proposalParams.push(...proposalScope.values);
+    const proposalRows = db
+      .prepare(
+        `SELECT p.id, e.seq FROM proposal p JOIN event e ON e.id = p.event_id
+          WHERE ${proposalWhere.join(' AND ')}
+          ORDER BY e.seq ${after ? 'ASC' : 'DESC'} LIMIT ?`,
+      )
+      .all(...(proposalParams as never[]), limit + 1) as unknown as Array<{
+      id: string;
+      seq: number;
+    }>;
+    const moreProposals = proposalRows.length > limit;
+    const proposalPage = proposalRows.slice(0, limit);
+    if (!after) proposalPage.reverse();
+    if (moreProposals && after) {
+      // The page ends with the last proposal it lists; the events after it come with the next one.
+      nextEvent = (proposalPage.at(-1) as { seq: number }).seq;
+      page = page.filter((r) => r.seq <= nextEvent);
+      moreEvents = true;
+    }
+    const proposals = proposalPage
+      .map((r) => getProposal(db, r.id))
+      .filter((p): p is Proposal => p !== null);
 
     // Entries and forgets, in the order of change_log.
     const entryWhere = [
@@ -270,11 +317,12 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
       events: page.map(toEventRow),
       entries,
       forgets,
+      proposals,
       next: {
-        event: moreEvents && after && lastEvent ? lastEvent.seq : ends.event,
+        event: nextEvent,
         change: moreChanges && after && lastChange ? lastChange.seq : ends.change,
       },
-      more: moreEvents || moreChanges,
+      more: moreEvents || moreChanges || moreProposals,
     };
   });
 }

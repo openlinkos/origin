@@ -26,7 +26,7 @@ import {
   threadIdOf,
 } from '../src/index.js';
 import { fakeAdapter, line } from './helpers.js';
-import { legacyStore, schemaOf, store040, userVersion } from './legacy.js';
+import { downgradeToV5, legacyStore, schemaOf, store040, userVersion } from './legacy.js';
 
 let tmp: string;
 let home: string;
@@ -310,6 +310,59 @@ describe('a store of 0.4.0 (version 4)', () => {
        VALUES ('rcl_000000000001', 2, 'sessions', 'thread', ?, NULL, 20)`,
     ).run(thread);
     expect(() => db.prepare('DELETE FROM recall_item').run()).toThrow(/append-only/);
+    const fresh = openDatabase(path.join(tmp, 'fresh.db'));
+    expect(schemaOf(db)).toEqual(schemaOf(fresh));
+    fresh.close();
+    db.close();
+  });
+});
+
+describe('a store of version 5', () => {
+  it('gets the proposals of the tool results it already holds (version 6)', async () => {
+    // A hub that received a device's lines before it was upgraded: the result of `propose` is
+    // archived, but no proposal was derived from it.
+    const logs = path.join(tmp, 'logs');
+    fs.mkdirSync(logs);
+    const result = JSON.stringify(
+      {
+        proposal: 'prp_0000000000a1',
+        kind: 'cognition',
+        text: 'Prefers small, runnable increments.',
+        confidence: 0.6,
+        project: null,
+        valid_from: null,
+        valid_to: null,
+        note: null,
+        sources: [{ event_id: 'fake:1', quote: 'small increments' }],
+      },
+      null,
+      2,
+    );
+    fs.writeFileSync(
+      path.join(logs, 'a.jsonl'),
+      `${line('1', 's1', 1000, 'user', 'I like small increments that run.')}${line('2', 's1', 2000, 'user', result, 'tool_result')}`,
+    );
+    let db = openDatabase(file);
+    await syncSource({ db, home }, fakeAdapter(logs));
+    const derived = {
+      proposals: db.prepare('SELECT * FROM proposal').all(),
+      sources: db.prepare('SELECT * FROM proposal_source').all(),
+    };
+    expect(derived.proposals).toHaveLength(1);
+    db.close();
+    downgradeToV5(file);
+    const v5 = new DatabaseSync(file);
+    expect(userVersion(v5)).toBe(5);
+    expect(v5.prepare("SELECT 1 FROM sqlite_master WHERE name = 'proposal'").get()).toBeUndefined();
+    v5.close();
+
+    db = openDatabase(file);
+    expect(userVersion(db)).toBe(STORE_VERSION);
+    expect(STORE_VERSION).toBe(6);
+    expect({
+      proposals: db.prepare('SELECT * FROM proposal').all(),
+      sources: db.prepare('SELECT * FROM proposal_source').all(),
+    }).toEqual(derived);
     const fresh = openDatabase(path.join(tmp, 'fresh.db'));
     expect(schemaOf(db)).toEqual(schemaOf(fresh));
     fresh.close();

@@ -417,26 +417,51 @@ export function entryHistory(db: Database, id: string): Entry[] {
 const normalize = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
 
 /**
+ * A tool result that holds the result of `propose` (see proposals.ts, which reads it). Such a result
+ * is a proposal waiting for the person, so it is never found for a quote, and only accepting the
+ * proposal cites it.
+ */
+const PROPOSAL_RESULT = /"proposal":\s*"prp_[0-9a-f]{12}"/;
+
+/**
  * Find the newest visible event containing a quote (whitespace and case are ignored): a message, or
- * failing that a tool result. Tool calls are never matched: the call that is citing the quote is
- * itself logged as a tool call. The quote's words are looked up like a search query, so at most the
- * newest SCAN_LIMIT events of each kind that contain all of them are checked.
+ * failing that a tool result, other than the result of `propose`. Tool calls are never matched: the
+ * call that is citing the quote is itself logged as a tool call. The quote's words are looked up
+ * like a search query, so at most the newest SCAN_LIMIT events of each kind that contain all of them
+ * are checked.
  */
 function findQuote(db: Database, quote: string): EventRow | null {
   const needle = normalize(quote);
   for (const kind of ['message', 'tool_result'] as const) {
-    const id = findNewest(db, quote, kind, (text) => normalize(text).includes(needle));
+    const id = findNewest(
+      db,
+      quote,
+      kind,
+      (text) => normalize(text).includes(needle) && !PROPOSAL_RESULT.test(text),
+    );
     if (id) return getEvent(db, id);
   }
   return null;
 }
 
-/** Resolve sources to visible events (invariant 1, provenance; invariant 2, forgotten events cannot be cited). */
-function resolveSources(
+/** What resolving sources allows beyond the rules (see resolveSources). */
+export interface CiteOptions {
+  /** The event of the proposal being accepted, which only accepting it may cite. */
+  proposalEvent?: string;
+}
+
+/**
+ * Resolve sources to visible events (invariant 1, provenance; invariant 2, forgotten events cannot
+ * be cited). The event of a proposal is never cited, except by accepting that proposal: only the
+ * person accepts one (see proposals.ts).
+ */
+export function resolveSources(
   db: Database,
   inputs: SourceInput[],
+  opts: CiteOptions = {},
 ): Array<{ eventId: string; quote: string | null }> {
   const out = new Map<string, string | null>();
+  const proposalOf = db.prepare('SELECT id FROM proposal WHERE event_id = ?');
   for (const input of inputs) {
     const quote = input.quote?.trim() || null;
     let event: EventRow | null;
@@ -449,6 +474,14 @@ function resolveSources(
             ? `Event ${input.eventId} has been forgotten and cannot be cited.`
             : `Unknown event ${input.eventId}.`,
         );
+      }
+      if (input.eventId !== opts.proposalEvent) {
+        const proposal = proposalOf.get(input.eventId) as { id: string } | undefined;
+        if (proposal) {
+          throw new OriginError(
+            `Event ${input.eventId} holds proposal ${proposal.id}, which waits for the user: only they accept a proposal, in the Origin admin UI or CLI, and accepting it writes its entry.`,
+          );
+        }
       }
       if (quote && !normalize(event.text).includes(normalize(quote))) {
         throw new OriginError(`Quote not found in event ${input.eventId}: "${quote}"`);
@@ -538,27 +571,35 @@ export function insertEntry(db: Database, e: EntryRecordInput): void {
 
 /** Write a new entry. Every entry cites at least one visible event. */
 export function remember(db: Database, input: RememberInput, now = Date.now()): Entry {
+  return transaction(db, () => rememberInTransaction(db, input, now), { immediate: true });
+}
+
+/**
+ * Write a new entry, as `remember` does, inside the caller's write transaction. `opts` lets
+ * accepting a proposal cite the proposal's own event (see proposals.ts).
+ */
+export function rememberInTransaction(
+  db: Database,
+  input: RememberInput,
+  now = Date.now(),
+  opts: CiteOptions = {},
+): Entry {
   validateEntry(input);
   const id = newEntryId();
-  transaction(
-    db,
-    () =>
-      insertEntry(db, {
-        id,
-        kind: input.kind,
-        text: input.text.trim(),
-        confidence: input.confidence,
-        author: input.author,
-        project: input.project ?? null,
-        supersedes: null,
-        validFrom: input.validFrom ?? null,
-        validTo: input.validTo ?? null,
-        createdAt: now,
-        origin: storeName(db),
-        sources: resolveSources(db, input.sources),
-      }),
-    { immediate: true },
-  );
+  insertEntry(db, {
+    id,
+    kind: input.kind,
+    text: input.text.trim(),
+    confidence: input.confidence,
+    author: input.author,
+    project: input.project ?? null,
+    supersedes: null,
+    validFrom: input.validFrom ?? null,
+    validTo: input.validTo ?? null,
+    createdAt: now,
+    origin: storeName(db),
+    sources: resolveSources(db, input.sources, opts),
+  });
   return getEntry(db, id) as Entry;
 }
 

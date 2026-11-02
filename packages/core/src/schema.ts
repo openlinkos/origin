@@ -19,6 +19,9 @@
  *   its event is visible.
  * - session_thread: the sessions that are in a thread with others, and the thread's id; derived
  *   from session and session_follow and rebuildable (see threads.ts, version 5).
+ * - proposal / proposal_source: the entries agents proposed with the MCP tool `propose`, for the
+ *   person to accept or reject, and the events each cites, derived from the tool results that carry
+ *   them and rebuildable (see proposals.ts, version 6). Their status is derived, never stored.
  * - event_fts, message_fts, event_cjk: the search indexes, all keyed by seq and filled by
  *   triggers; rebuildSearchIndexes() rebuilds them. event_fts is a trigram index of every event
  *   that records only which events contain each trigram (detail=none), message_fts a full trigram
@@ -130,6 +133,31 @@ CREATE TABLE IF NOT EXISTS session_thread (
   PRIMARY KEY (source, session_id)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS session_thread_id ON session_thread (thread_id);
+
+CREATE TABLE IF NOT EXISTS proposal (
+  id         TEXT    PRIMARY KEY,
+  source     TEXT    NOT NULL,
+  session_id TEXT    NOT NULL,
+  event_id   TEXT    NOT NULL,
+  kind       TEXT    NOT NULL,
+  text       TEXT    NOT NULL,
+  confidence REAL    NOT NULL,
+  project    TEXT,
+  valid_from INTEGER,
+  valid_to   INTEGER,
+  note       TEXT,
+  at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS proposal_event   ON proposal (event_id);
+CREATE INDEX IF NOT EXISTS proposal_session ON proposal (source, session_id);
+CREATE INDEX IF NOT EXISTS proposal_at      ON proposal (at);
+CREATE TABLE IF NOT EXISTS proposal_source (
+  proposal_id TEXT NOT NULL,
+  event_id    TEXT NOT NULL,
+  quote       TEXT,
+  PRIMARY KEY (proposal_id, event_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS proposal_source_event ON proposal_source (event_id);
 
 CREATE TABLE IF NOT EXISTS event (
   seq           INTEGER PRIMARY KEY,

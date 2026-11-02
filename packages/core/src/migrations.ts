@@ -1,6 +1,7 @@
 import type { Database } from './db.js';
 import { OriginError } from './errors.js';
 import { sessionBranchQuery } from './ingest.js';
+import { deriveProposals } from './proposals.js';
 import { reparseMemories, reparseTitles } from './reparse.js';
 import { SCHEMA } from './schema.js';
 import { deriveThreads } from './threads.js';
@@ -103,7 +104,45 @@ export const MIGRATIONS: Migration[] = [
       deriveThreads(db);
     },
   },
+  {
+    // Proposals (see proposals.ts): derived from the tool results that carry them, which a store
+    // may hold already, such as a hub that received a device's lines before it was upgraded.
+    version: 6,
+    name: 'proposals from the tool results already archived',
+    up: ({ db }) => {
+      db.exec(PROPOSAL_TABLES_V6);
+      deriveProposals(db);
+    },
+  },
 ];
+
+/** The tables of proposals, as version 6 created them. */
+const PROPOSAL_TABLES_V6 = `
+CREATE TABLE IF NOT EXISTS proposal (
+  id         TEXT    PRIMARY KEY,
+  source     TEXT    NOT NULL,
+  session_id TEXT    NOT NULL,
+  event_id   TEXT    NOT NULL,
+  kind       TEXT    NOT NULL,
+  text       TEXT    NOT NULL,
+  confidence REAL    NOT NULL,
+  project    TEXT,
+  valid_from INTEGER,
+  valid_to   INTEGER,
+  note       TEXT,
+  at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS proposal_event   ON proposal (event_id);
+CREATE INDEX IF NOT EXISTS proposal_session ON proposal (source, session_id);
+CREATE INDEX IF NOT EXISTS proposal_at      ON proposal (at);
+CREATE TABLE IF NOT EXISTS proposal_source (
+  proposal_id TEXT NOT NULL,
+  event_id    TEXT NOT NULL,
+  quote       TEXT,
+  PRIMARY KEY (proposal_id, event_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS proposal_source_event ON proposal_source (event_id);
+`;
 
 /** The tables of threads, as version 5 created them. */
 const THREAD_TABLES_V5 = `

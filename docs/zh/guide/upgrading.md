@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-f2045e67
+sourceHash: sha256-e25fb01d
 ---
 
 # 升级
@@ -69,9 +69,9 @@ docker logs origin-hub     # shows the upgrade of the store, if any
 | 0.2.0 | 3 | 记录格式版本；记录会话名称是否由用户设定；从已归档的行中读取 Claude Code 会话的标题 |
 | 0.3.0 | 4 | 读取中枢在能读懂记忆流之前归档的记忆流（见[原生记忆](../sources.md#native-memories)） |
 | 0.4.0 | 4 | 新增召回记录的表；格式和已存的内容都不变 |
-| 尚未发布 | 5 | 根据已经归档的内容，记录每个会话的 git 分支，并把会话归入线索；召回记录可以指向一条线索 |
+| 尚未发布 | 6 | 根据已经归档的内容，记录每个会话的 git 分支，并把会话归入线索；召回记录可以指向一条线索；从已经归档的工具结果中找出 Agent 提议的条目 |
 
-格式 2 和 3 都是 0.2.0 引入的。每一步的细节见[架构](../architecture.md#migrations)。
+格式 2 和 3 都是 0.2.0 引入的，格式 5 和 6 随下一个版本发布。每一步的细节见[架构](../architecture.md#migrations)。
 
 - **先备份。** 升级是谨慎的，而备份只需一条命令：`origin backup <dir>`（见[备份](./privacy.md#backing-up)）。在中枢上，请在替换容器之前在容器内运行，比如 `docker exec origin-hub origin backup /data/backup-0.2`。
 - **不能降级。** Origin 发现库的格式比自己新时，会拒绝打开并提示升级，不做任何改动。要回到旧版本，请恢复升级前做的备份；在那之后写入的内容会丢失。

@@ -21,6 +21,7 @@ import {
 } from './mirror.js';
 import { assertComplete } from './mode.js';
 import { mirrorRelPath, parseRawPath, rawDir, remotePath } from './paths.js';
+import { deriveProposal } from './proposals.js';
 import { deriveFollow, refreshThreads } from './threads.js';
 import { NAME_RE } from './tokens.js';
 import type {
@@ -455,8 +456,11 @@ function appendLines(
       stats.eventsAdded++;
       // A memory event belongs to no conversation: it is counted in no session.
       if (ev.kind !== 'memory') touchedSessions.add(ev.sessionId);
-      // The result of `follow` links its session to the one it continues (see threads.ts).
-      deriveFollow(ctx.db, { ...ev, id: `${adapter.id}:${ev.id}`, source: adapter.id });
+      // The result of `follow` links its session to the one it continues (see threads.ts), and the
+      // result of `propose` holds a proposal (see proposals.ts).
+      const stored = { ...ev, id: `${adapter.id}:${ev.id}`, source: adapter.id };
+      deriveFollow(ctx.db, stored);
+      deriveProposal(ctx.db, stored);
     }
     if (parsed.memory) {
       try {
