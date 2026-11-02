@@ -10,7 +10,7 @@ import { mirrorRelPath, parseRawPath, rawDir } from './paths.js';
 import { deriveProposal } from './proposals.js';
 import { recordedAgentVersion } from './store.js';
 import { deriveFollow } from './threads.js';
-import type { ParsedLine, SourceAdapter } from './types.js';
+import type { EventInput, ParsedLine, SourceAdapter } from './types.js';
 
 /**
  * Parsing lines that are already mirrored again, for data migrations: when an adapter learns to
@@ -249,10 +249,18 @@ export function reparseAuthorship(ctx: MigrationContext): void {
     // A device's file is not on the hub: as at ingestion, its mirror stands in for it.
     const absPath = f.path.startsWith('@') ? path.join(rawDir(ctx.home), f.mirror) : f.path;
     const readLine = (n: number) => readMirrorLine(db, ctx.home, f.id, n);
-    const insert =
-      shared.get(f.mirror, f.id) === undefined
-        ? eventInserter(db, f.source, f.id, recordedAgentVersion(db, f.id))
-        : null;
+    // Made when a line first yields an event the store lacks, which is rare: finding the version
+    // the file's events record reads the events table.
+    let inserter: ReturnType<typeof eventInserter> | null | undefined;
+    const insert = (lineNo: number, ev: EventInput): boolean => {
+      if (inserter === undefined) {
+        inserter =
+          shared.get(f.mirror, f.id) === undefined
+            ? eventInserter(db, f.source, f.id, recordedAgentVersion(db, f.id))
+            : null;
+      }
+      return inserter !== null && inserter(lineNo, [ev]).length > 0;
+    };
     try {
       scanMirrorLines(db, ctx.home, f.id, AUTHOR_NEEDLES[f.source] ?? [''], (line, lineNo) => {
         if (line.trim().length === 0) return;
@@ -282,7 +290,7 @@ export function reparseAuthorship(ctx: MigrationContext): void {
             }
             continue;
           }
-          if (!insert || insert(lineNo, [ev]).length === 0) continue;
+          if (!insert(lineNo, ev)) continue;
           counts.added++;
           if (ev.kind !== 'memory') {
             touched.set(`${f.source}\n${ev.sessionId}`, {
