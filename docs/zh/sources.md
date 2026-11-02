@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-42a2c149
+sourceHash: sha256-f57ef04f
 ---
 
 # 会话来源
@@ -25,6 +25,7 @@ sourceHash: sha256-42a2c149
 - **格式：** 每行一个 JSON 对象。`type` 是 `user`、`assistant`、`ai-title`、`custom-title`、`agent-name`、`last-prompt`、`summary`、`system`、`mode`、`permission-mode`、`file-history-snapshot`、`attachment` 等之一。消息行带有 `uuid`、`parentUuid`、`timestamp`、`cwd`、`gitBranch`、`sessionId`、`version` 和 `message { role, content }`；`content` 是一个字符串，或由 `text` / `tool_use` / `tool_result` / `thinking` / `image` 块组成的数组。
 - **标题：** `{ type: "ai-title", aiTitle, sessionId }` 是 Claude Code 生成的标题，大约每一轮都会再写一次，并随着对话的进行而改变；最新的一行就是当前的标题。用户给出的名称（`/rename`、`--name`、hook 的 `sessionTitle`、Agent SDK 的 `renameSession()`）是一行 `{ type: "custom-title", customTitle, sessionId }`，同样会被再次写入，并且优先于 AI 生成的标题，即使它后面还有 `ai-title` 行。`{ type: "agent-name", agentName, sessionId }` 是会话在 Claude Code 的 Agent 视图中的名称；它出现在会话自己的记录中，而不只是子 Agent 的记录中，并且重复 AI 生成的标题或自定义标题。`{ type: "last-prompt", lastPrompt, leafUuid, sessionId }` 记录最近的一条提示。2.1 之前的版本写入的则是 `{ type: "summary", summary, leafUuid }` 行。
 - **谁写的**（按 2.1.303 核对，2026 年 11 月）：user 行在 `origin.kind` 中说明是谁发出的：`human` 表示用户输入的内容，`task-notification` 表示后台任务的通知，`peer` 或 `coordinator` 表示另一个 Agent 的消息，那个 Agent 的名字在 `origin.name` 中，id 在 `origin.from` 中。`promptSource` 说明提示是怎样输入的（`typed`、`queued`、`system`、`sdk`）。压缩写下的摘要是一条标有 `isCompactSummary` 的用户消息。子 Agent 的行标有 `isSidechain`，位于 `subagents/` 下的记录中；无界面运行（`claude -p`、Agent SDK）的每一行都记录 `sdk-cli` 或其他 `sdk-*` 形式的 `entrypoint`（否则是 `cli`）。更早的版本既不记录 `origin`，也不记录 `promptSource`。
+- **排队的提示：** 用户在 Agent 忙碌时发出的提示，写成一行 `attachment`，其中的 `attachment` 带有 `type` 为 `queued_command`、`prompt`（一个字符串，或文本和图片块）、`commandMode` 为 `prompt`，以及 `origin.kind` 为 `human`；Claude Code 把它交给正在进行的那一轮，不为它写 user 行。后台任务的通知也这样排队，`origin.kind` 为 `task-notification`，交给子 Agent 的消息也是如此。
 - **保留期：** 会话在 `cleanupPeriodDays`（默认 30）天后被删除。`memory/` 目录不受此限。
 - **Hook**（2026 年 11 月核对，[hooks](https://code.claude.com/docs/en/hooks)）：命令 hook 在标准输入上读取一个 JSON 事件，其中有 `session_id`、`transcript_path`（会话的记录文件）、`cwd` 和 `hook_event_name`；`SubagentStop` 还有 `agent_id`、`agent_type` 和 `agent_transcript_path`，即 `subagents/` 下子 Agent 的记录文件。记录文件是异步写入的，所以一轮的 `Stop` hook 运行时，文件里可能还没有这一轮的最后几行。带 `"async": true` 的 hook 在后台运行，Claude Code 不等待它；所有 `SessionEnd` hook 共用 1.5 秒。Origin 的采集 hook 在 `Stop`、`SubagentStop` 和 `PostCompact` 时运行（见[实时采集](architecture.md#live-ingestion)）。
 - **原生记忆：** `<cwd-slug>/memory/`——一个 `MEMORY.md` 索引，外加每条记忆一个带 frontmatter 的 Markdown 文件。范围限定在一台机器上的一个 git 仓库。会被导入，见[原生记忆](#native-memories)。

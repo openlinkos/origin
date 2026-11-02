@@ -18,7 +18,7 @@ import {
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { downgradeToV1, userVersion } from '../../core/test/legacy.js';
+import { downgradeToV1, downgradeToV7, userVersion } from '../../core/test/legacy.js';
 import {
   createClaudeCodeAdapter,
   parseClaudeCodeLine,
@@ -254,6 +254,153 @@ describe('who wrote a Claude Code input', () => {
       db.close();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('prompts the user queued while Claude Code was busy', () => {
+  const queued = (fields: Record<string, unknown>, attachment: Record<string, unknown>) =>
+    JSON.stringify({
+      type: 'attachment',
+      uuid: '44444444-4444-4444-8444-444444444444',
+      parentUuid: '22222222-2222-4222-8222-222222222222',
+      sessionId: SESSION,
+      timestamp: '2026-10-20T09:05:00.000Z',
+      cwd: 'D:\\demo\\project',
+      gitBranch: 'retry-fix',
+      version: '2.1.303',
+      entrypoint: 'cli',
+      userType: 'external',
+      isSidechain: false,
+      attachment: {
+        type: 'queued_command',
+        prompt: 'Also run the linter.',
+        commandMode: 'prompt',
+        origin: { kind: 'human' },
+        humanTurn: true,
+        ...attachment,
+      },
+      ...fields,
+    });
+  const parse = (line: string, rel = REL) => parseClaudeCodeLine(line, { ...ctx(9), relPath: rel });
+
+  it("become the owner's messages, under the line's uuid, with their text as written", () => {
+    expect(parse(queued({}, {}))).toEqual({
+      events: [
+        {
+          id: '44444444-4444-4444-8444-444444444444',
+          sessionId: SESSION,
+          parentId: '22222222-2222-4222-8222-222222222222',
+          ts: Date.parse('2026-10-20T09:05:00.000Z'),
+          project: 'project',
+          cwd: 'D:\\demo\\project',
+          gitBranch: 'retry-fix',
+          agentVersion: '2.1.303',
+          role: 'user',
+          kind: 'message',
+          text: 'Also run the linter.',
+          meta: { queued: true, userType: 'external', entrypoint: 'cli' },
+          author: 'owner',
+          authorSignal: 'queued_command',
+        },
+      ],
+    });
+    expect(
+      parse(
+        queued(
+          {},
+          {
+            prompt: [
+              { type: 'text', text: 'Look at this screenshot.' },
+              { type: 'image', source: { type: 'base64', data: 'iVBORw0KGgo=' } },
+            ],
+          },
+        ),
+      )?.events[0]?.text,
+    ).toBe('Look at this screenshot.\n[image]');
+  });
+
+  it("yields nothing for a queued notice, a sub-agent's, or another attachment", () => {
+    expect(
+      parse(
+        queued({}, { origin: { kind: 'task-notification' }, commandMode: 'task-notification' }),
+      ),
+    ).toBeNull();
+    expect(parse(queued({ isSidechain: true }, { isMeta: true }))).toBeNull();
+    expect(parse(queued({}, {}), `D--demo-project/${SESSION}/subagents/agent-a1.jsonl`)).toBeNull();
+    expect(parse(queued({}, { prompt: '   ' }))).toBeNull();
+    expect(
+      parse(JSON.stringify({ type: 'attachment', uuid: 'x', attachment: { type: 'date' } })),
+    ).toBeNull();
+  });
+
+  it('are recovered when a store of version 7 is upgraded, as a new store reads them', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-cc-queued-'));
+    try {
+      const projects = path.join(tmp, 'projects');
+      fs.mkdirSync(path.join(projects, 'D--demo-project'), { recursive: true });
+      const typed = (uuid: string, text: string, at: string) =>
+        JSON.stringify({
+          type: 'user',
+          uuid,
+          sessionId: SESSION,
+          timestamp: at,
+          cwd: 'D:\\demo\\project',
+          version: '2.1.303',
+          entrypoint: 'cli',
+          origin: { kind: 'human' },
+          promptSource: 'typed',
+          message: { role: 'user', content: text },
+        });
+      fs.writeFileSync(
+        path.join(projects, REL),
+        `${[
+          typed(
+            'a1000000-0000-4000-8000-000000000001',
+            'Fix the flaky upload test.',
+            '2026-10-20T09:00:00.000Z',
+          ),
+          queued({}, {}),
+          typed('a1000000-0000-4000-8000-000000000003', 'Then push.', '2026-10-20T09:09:00.000Z'),
+        ].join('\n')}\n`,
+      );
+      const adapter = () => createClaudeCodeAdapter({ projectsDir: projects });
+      const held = (db: Database) => ({
+        events: listEvents(db).map((e) => [e.id, e.ts, e.text, e.author, e.authorSignal]),
+        sessions: listSessions(db).map((s) => [s.sessionId, s.eventCount, s.endedAt]),
+      });
+
+      const freshHome = path.join(tmp, 'fresh');
+      const fresh = openDatabase(path.join(freshHome, 'origin.db'));
+      await syncSource({ db: fresh, home: freshHome }, adapter());
+      const expected = held(fresh);
+      expect(expected.events.map((e) => e[2])).toEqual([
+        'Fix the flaky upload test.',
+        'Also run the linter.',
+        'Then push.',
+      ]);
+
+      // Version 7 skipped attachment lines: the queued prompt is only in the mirror.
+      const home = path.join(tmp, 'device');
+      const file = path.join(home, 'origin.db');
+      const before = openDatabase(file);
+      const v6 = adapter();
+      await syncSource(
+        { db: before, home },
+        { ...v6, parseLine: (l, c) => (l.includes('"attachment"') ? null : v6.parseLine(l, c)) },
+      );
+      expect(listEvents(before)).toHaveLength(2);
+      before.close();
+      downgradeToV7(file);
+      const upgraded = openDatabase(file, { adapters: [adapter()] });
+      expect(userVersion(upgraded)).toBe(STORE_VERSION);
+      expect(held(upgraded)).toEqual(expected);
+      // And it goes on as a new store does: nothing is read twice.
+      expect(await syncSource({ db: upgraded, home }, adapter())).toMatchObject({ eventsAdded: 0 });
+      upgraded.close();
+      fresh.close();
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 });

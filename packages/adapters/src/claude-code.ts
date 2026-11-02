@@ -206,6 +206,16 @@ interface ClaudeLine {
   origin?: { kind?: string; name?: unknown };
   /** How a prompt was entered: `typed`, `queued`, `system`, `sdk`, … */
   promptSource?: string;
+  /**
+   * What an `attachment` line adds to the conversation; a `queued_command` is a prompt sent while
+   * the agent was busy, which Claude Code delivers into the turn under way.
+   */
+  attachment?: {
+    type?: string;
+    prompt?: string | ContentBlock[];
+    origin?: { kind?: string };
+    isMeta?: boolean;
+  };
   summary?: string;
   aiTitle?: string;
   customTitle?: string;
@@ -289,6 +299,7 @@ export function parseClaudeCodeLine(line: string, ctx: ParseContext): ParsedLine
     if (title.manual) parsed.manualTitle = true;
     return parsed;
   }
+  if (obj.type === 'attachment') return queuedPrompt(obj, ctx, fileSession);
   if (obj.type !== 'user' && obj.type !== 'assistant') return null;
   if (!obj.uuid || !obj.message) return null;
 
@@ -374,6 +385,62 @@ export function parseClaudeCodeLine(line: string, ctx: ParseContext): ParsedLine
       pushEvent(null, obj.isMeta ? 'meta' : 'message', textParts.join('\n'));
   }
   return { events };
+}
+
+/**
+ * The prompt of a `queued_command` attachment the user sent (`origin.kind` `human`) while the agent
+ * was busy: a user message of its own, the owner's, under the line's uuid, with its text as
+ * written. Claude Code delivers it into the turn under way and writes no user line for it. Queued
+ * task notifications, and what a sub-agent is handed this way, are no prompt of the user's, and
+ * yield nothing; the raw mirror keeps them.
+ */
+function queuedPrompt(
+  obj: ClaudeLine,
+  ctx: ParseContext,
+  fileSession: string | null,
+): ParsedLine | null {
+  const a = obj.attachment;
+  if (a?.type !== 'queued_command' || a.origin?.kind !== 'human' || a.isMeta === true) return null;
+  if (obj.isSidechain === true || inSubagents(ctx.relPath) || !obj.uuid) return null;
+  const sessionId = (obj.sessionId ?? fileSession ?? '').toLowerCase();
+  const prompt = a.prompt;
+  const text = (
+    typeof prompt === 'string'
+      ? prompt
+      : Array.isArray(prompt)
+        ? prompt
+            .map((b) => (b.type === 'text' ? (b.text ?? '') : b.type === 'image' ? '[image]' : ''))
+            .filter((s) => s.length > 0)
+            .join('\n')
+        : ''
+  ).trim();
+  if (!sessionId || text.length === 0) return null;
+  const ts = obj.timestamp ? Date.parse(obj.timestamp) : Number.NaN;
+  const meta: Record<string, unknown> = { queued: true };
+  if (obj.userType) meta.userType = obj.userType;
+  if (obj.entrypoint) meta.entrypoint = obj.entrypoint;
+  const headless = typeof obj.entrypoint === 'string' && obj.entrypoint.startsWith('sdk-');
+  return {
+    events: [
+      {
+        id: obj.uuid,
+        sessionId,
+        parentId: obj.parentUuid ?? null,
+        ts: Number.isFinite(ts) ? ts : Math.round(ctx.fileMtimeMs),
+        project: projectFromCwd(obj.cwd),
+        cwd: obj.cwd ?? null,
+        gitBranch: obj.gitBranch ?? null,
+        agentVersion: obj.version ?? null,
+        role: 'user',
+        kind: 'message',
+        text,
+        meta,
+        ...(headless
+          ? { author: 'system', authorSignal: 'entrypoint' }
+          : { author: 'owner', authorSignal: 'queued_command' }),
+      },
+    ],
+  };
 }
 
 function formatToolUse(block: ContentBlock): string {

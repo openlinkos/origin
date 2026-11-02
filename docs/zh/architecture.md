@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-6b292428
+sourceHash: sha256-3235d1e0
 ---
 
 # 架构
@@ -270,7 +270,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 | 5 | 线索（见[线索](#threads)）：`session.git_branch`，根据事件填写；`session_follow` 和 `session_thread`，根据库中已有的内容推导；以及指向线索的召回项，这是 `recall_item` 原来的约束不允许的：SQLite 无法就地修改约束，所以这张表连同它的行、索引和触发器被重新建立 |
 | 6 | 提议（见[提议](#proposals)）：`proposal` 和 `proposal_source`，从库中已有的、含有 `propose` 结果的工具结果推导，例如设备先于中枢升级时中枢已经收到的那些 |
 | 7 | 设备和 Agent（见[访问](#access)）：`api_token.kind` 和 `api_token.preset`。每个令牌保留它原来能做的（`readwrite`）；如果中枢保存着只有设备才会以它的名称发送的内容（从设备磁盘推送来的、路径为绝对路径的文件，或者它写下的条目、遗忘记录或召回），或者它从未被使用过，它就是设备的令牌，因为以前令牌都以设备命名；否则是 Agent 的令牌。`audit_log` 连同它的行和触发器被重新建立，使它的渠道可以是 `api` |
-| 8 | 作者（见[作者](#authors)）：`event_author` 和 `session_kind`，通过重新解析原始镜像中可能含有输入、或说明会话是什么的那些行来推导，设备和中枢都是如此（`raw/devices/<device>/…`，已封存的帧通过它的帧存储读取）；这样的行产生了库中没有的事件时（例如适配器新学会读取的事件），会补上这个事件，并重新聚合它的会话。内置来源的适配器是必需的；人自己的来源在用它的适配器打开库时解析（CLI 总是这样打开），否则保留由类型和正文得出的作者。线索会重新推导。它会报告进度，并与它的版本在同一个事务中执行，所以中断的升级会让库停留在版本 7 |
+| 8 | 作者（见[作者](#authors)）：`event_author` 和 `session_kind`，通过重新解析原始镜像中可能含有输入、或说明会话是什么的那些行来推导，设备和中枢都是如此（`raw/devices/<device>/…`，已封存的帧通过它的帧存储读取）；这样的行产生了库中没有的事件时（例如适配器新学会读取的事件：Claude Code 在 Agent 忙碌时排队的提示），会补上这个事件，并重新聚合它的会话。内置来源的适配器是必需的；人自己的来源在用它的适配器打开库时解析（CLI 总是这样打开），否则保留由类型和正文得出的作者。线索会重新推导。它会报告进度，并与它的版本在同一个事务中执行，所以中断的升级会让库停留在版本 7 |
 
 **什么时候需要迁移。** 除了已有数据不需要从中得到什么的新表、索引、视图或触发器之外，对库格式的任何改动都需要迁移：新增、重命名或删除列，修改约束，修改触发器或视图（`IF NOT EXISTS` 会保留旧的），需要为已有数据填写的派生行，或者因为适配器现在能从镜像的行中读出更多内容而需要重新解析这些行。*schema 迁移*就地修改表；*数据迁移*根据库中已有的内容（包括原始镜像）修改或填写行。两者都要保持不变量：原始镜像和事件永远不会被改写（不变量 3），被遗忘的内容保持被遗忘（不变量 2）。`core` 没有适配器，所以对于需要重新解析镜像中的行的数据迁移，由打开库的进程传入适配器；CLI 正是这样做的，并且在它执行第一个迁移之前，还会先设置好库的帧存储，以便中枢读取存储桶中的帧。
 
@@ -335,6 +335,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 - 文件：`<projects>/<cwd-slug>/<session-id>.jsonl`，以及 `<session-id>/subagents/` 下的子 Agent 记录。`tool-results/` 目录会被跳过，每个项目的 `memory/` 目录则作为记忆流读取（见[原生记忆](#native-memories)）。
 - `user` / `assistant` 行变成事件。文本块合并为一个 `message` 事件；每个 `tool_use` 和 `tool_result` 块各自成为一个事件（分别截断到 2,000 / 4,000 个字符）。`isMeta` 行变成 `meta` 事件。`thinking` 块不建立索引，但保留在原始镜像中。
 - 输入是谁写的（见[作者](#authors)），依次判断：子 Agent 的（`isSidechain`，或 `subagents/` 下的记录）属于 Agent；无界面运行的（`entrypoint` 为 `sdk-*`，`claude -p` 和 Agent SDK 的每一行都有）属于系统；然后是 `origin.kind`：`human` 属于主人，`task-notification` 属于系统，`peer` 和 `coordinator` 属于 Agent，说话人是 `origin.name`；压缩的摘要（`isCompactSummary`）属于系统；`promptSource` 为 `typed` 或 `queued` 的属于主人。2.1.303 之前的版本既不记录 `origin` 也不记录 `promptSource`，所以它们的其他输入按类型和正文读取。
+- 用户在 Agent 忙碌时排队发出的提示，即 `type` 为 `queued_command`、`origin.kind` 为 `human` 的 `attachment` 行，单独成为一个 `message` 事件，属于主人，以该行的 uuid 为 id，正文保持原样，meta 中记有 `queued`。排队的任务通知，以及以这种方式交给子 Agent 的内容，不产生任何事件；原始镜像保留它们。库在 Origin 能读取它们之前镜像的行，会在升级时产生这些事件（迁移 8）。
 - 会话自己的记录中（而不是其子 Agent 的记录中）的标题行设置它的标题。每种标题行都会被写入很多次，最新的一行就是当前的标题：`ai-title` 行由 Claude Code 随着对话的进行而生成；`custom-title` 行是用户给出的名称（`/rename`、`--name`），之后的 `ai-title` 行不会替换它；较旧的记录中则是 `summary` 行。`agent-name` 行重复这些标题之一，不会被读取。
 - 项目名取 `cwd` 的最后一段。
 
