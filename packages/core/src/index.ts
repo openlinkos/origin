@@ -23,6 +23,20 @@ export {
 } from './audit.js';
 export { type BackupResult, backupStore } from './backup.js';
 export {
+  type ChangeFeed,
+  changesSince,
+  decodeCursor,
+  encodeCursor,
+  encodeFeedCursor,
+  FEED_LIMIT_MAX,
+  FEED_WINDOW_MS,
+  type FeedCursor,
+  type FeedFilter,
+  type FeedForget,
+  type FeedSession,
+  parseFeedCursor,
+} from './changes.js';
+export {
   type Database,
   type OpenOptions,
   openDatabase,
