@@ -86,6 +86,8 @@ export function schemaOf(db: Database): unknown[] {
 export function downgradeToV1(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    // Version 8: authorship.
+    dropAuthorship(db);
     undoV7(db);
     // Version 6: proposals.
     db.exec('DROP TABLE IF EXISTS proposal_source');
@@ -117,13 +119,36 @@ export function downgradeToV1(file: string): void {
   }
 }
 
+/** The tables version 8 added: who wrote each input, and the kinds of sessions. */
+function dropAuthorship(db: DatabaseSync): void {
+  db.exec('DROP TABLE IF EXISTS event_author');
+  db.exec('DROP TABLE IF EXISTS session_kind');
+}
+
+/**
+ * Turn a store of the latest version, closed, back into a store of version 7: without the tables of
+ * authorship, which version 8 added. Its events and mirrors stay, so the migration derives who wrote
+ * each input again from the mirrors.
+ */
+export function downgradeToV7(file: string): void {
+  const db = new DatabaseSync(file);
+  try {
+    dropAuthorship(db);
+    db.exec('PRAGMA user_version = 7');
+  } finally {
+    db.close();
+  }
+}
+
 /**
  * Turn a store of the latest version, closed, back into a store of version 5: without the tables of
- * proposals, which version 6 added. Its events stay, so the migration derives the proposals again.
+ * proposals, which version 6 added, nor what versions 7 and 8 added. Its events stay, so the
+ * migrations derive the proposals again.
  */
 export function downgradeToV5(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    dropAuthorship(db);
     undoV7(db);
     db.exec('DROP TABLE IF EXISTS proposal_source');
     db.exec('DROP TABLE IF EXISTS proposal');
@@ -174,11 +199,13 @@ END;`);
 
 /**
  * Turn a store of the latest version, closed, back into a store of version 6: tokens without a
- * kind or a preset, which version 7 added, and the audit log without its `api` channel.
+ * kind or a preset, which version 7 added, and the audit log without its `api` channel, nor the
+ * tables of authorship, which version 8 added.
  */
 export function downgradeToV6(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    dropAuthorship(db);
     undoV7(db);
     db.exec('PRAGMA user_version = 6');
   } finally {

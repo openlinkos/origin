@@ -1,8 +1,9 @@
 import type { Database } from './db.js';
+import { transaction } from './db.js';
 import { OriginError } from './errors.js';
 import { sessionBranchQuery } from './ingest.js';
 import { deriveProposals } from './proposals.js';
-import { reparseMemories, reparseTitles } from './reparse.js';
+import { reparseAuthorship, reparseMemories, reparseTitles } from './reparse.js';
 import { SCHEMA } from './schema.js';
 import { deriveThreads } from './threads.js';
 import type { SourceAdapter } from './types.js';
@@ -41,6 +42,8 @@ export interface MigrationContext {
    * OriginError if the store was opened without it (core has no adapters of its own).
    */
   adapter(source: string): SourceAdapter;
+  /** The adapter of a source if the store was opened with one, else null. */
+  findAdapter(source: string): SourceAdapter | null;
   log(message: string): void;
 }
 
@@ -138,6 +141,19 @@ export const MIGRATIONS: Migration[] = [
       if (audit && !audit.sql.includes("'api'")) db.exec(AUDIT_LOG_V7);
     },
   },
+  {
+    // Who wrote each input (see authors.ts): derived from the lines already archived, which are
+    // parsed again for it, and threads again, since their branch rule counts only the owner's
+    // conversations. Lines that now yield an event they did not, such as the prompts Claude Code
+    // queued while the agent was busy, add it.
+    version: 8,
+    name: 'who wrote each input, from the lines already archived',
+    up: (ctx) => {
+      ctx.db.exec(AUTHOR_TABLES_V8);
+      reparseAuthorship(ctx);
+      deriveThreads(ctx.db);
+    },
+  },
 ];
 
 /**
@@ -199,6 +215,23 @@ END;
 CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log BEGIN
   SELECT RAISE(ABORT, 'audit_log is append-only');
 END;
+`;
+
+/** The tables of authorship, as version 8 created them. */
+const AUTHOR_TABLES_V8 = `
+CREATE TABLE IF NOT EXISTS event_author (
+  seq     INTEGER PRIMARY KEY,
+  author  TEXT    NOT NULL CHECK (author IN ('owner', 'person', 'agent', 'system')),
+  speaker TEXT,
+  signal  TEXT    NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_kind (
+  source     TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('child', 'headless')),
+  signal     TEXT NOT NULL,
+  PRIMARY KEY (source, session_id, kind, signal)
+) WITHOUT ROWID;
 `;
 
 /** The tables of proposals, as version 6 created them. */
@@ -385,6 +418,56 @@ function underLock<T>(db: Database, fn: () => T): T {
   }
 }
 
+/** What a migration, or a rebuild that parses mirrored lines again, is given (see MigrationContext). */
+function migrationContext(
+  db: Database,
+  home: string,
+  adapters: MigrateOptions['adapters'],
+  log: (message: string) => void,
+): MigrationContext {
+  const byId = new Map((Array.isArray(adapters) ? adapters : []).map((a) => [a.id, a]));
+  const find =
+    typeof adapters === 'function' ? adapters : (source: string) => byId.get(source) ?? null;
+  return {
+    db,
+    home,
+    adapter(source) {
+      const adapter = find(source);
+      if (!adapter) {
+        throw new OriginError(
+          `This step re-reads the store's ${source} mirrors, which needs the ${source} adapter: open the store with the origin command.`,
+        );
+      }
+      return adapter;
+    },
+    findAdapter: (source) => find(source) ?? null,
+    log,
+  };
+}
+
+/**
+ * Derive who wrote each input again, from scratch, from the raw mirrors (see reparseAuthorship), and
+ * the threads with it, whose branch rule counts only the owner's conversations: what ingestion keeps
+ * up to date as it goes. Needs the adapters of the sources whose mirrors the store holds, as
+ * migrations do (the built-in ones at least).
+ */
+export function rebuildAuthorship(
+  db: Database,
+  opts: Pick<MigrateOptions, 'home' | 'adapters' | 'log'>,
+): void {
+  const ctx = migrationContext(db, opts.home, opts.adapters, opts.log ?? (() => {}));
+  transaction(
+    db,
+    () => {
+      db.exec('DELETE FROM event_author');
+      db.exec('DELETE FROM session_kind');
+      reparseAuthorship(ctx);
+      deriveThreads(db);
+    },
+    { immediate: true },
+  );
+}
+
 /**
  * Bring a store to the latest version (see the top of this file), then apply the schema's
  * idempotent statements. Throws an OriginError for a store newer than this code, or when a
@@ -408,23 +491,7 @@ export function migrate(db: Database, opts: MigrateOptions): void {
     });
   } else if (found < latest || !stamped) {
     opts.beforeMigrate?.(db);
-    const list = opts.adapters;
-    const byId = new Map((Array.isArray(list) ? list : []).map((a) => [a.id, a]));
-    const find = typeof list === 'function' ? list : (source: string) => byId.get(source) ?? null;
-    const ctx: MigrationContext = {
-      db,
-      home: opts.home,
-      adapter(source) {
-        const adapter = find(source);
-        if (!adapter) {
-          throw new OriginError(
-            `This step re-reads the store's ${source} mirrors, which needs the ${source} adapter: open the store with the origin command.`,
-          );
-        }
-        return adapter;
-      },
-      log,
-    };
+    const ctx = migrationContext(db, opts.home, opts.adapters, log);
     // A store of 0.1.0 records no version yet: record 1, then go on from there.
     const steps: Array<{ version: number; name: string; up?: () => void }> = [
       { version: FIRST_VERSION, name: 'record the format version' },

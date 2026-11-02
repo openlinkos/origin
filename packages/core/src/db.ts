@@ -6,6 +6,7 @@ import zlib from 'node:zlib';
 import { cjkIndexText } from './cjk.js';
 import { OriginError } from './errors.js';
 import { type Migration, migrate, refuseNewerStore } from './migrations.js';
+import { promptTitle } from './prompt.js';
 import { BACKFILL_EFFECTS, NEEDS_BACKFILL } from './schema.js';
 import type { SourceAdapter } from './types.js';
 
@@ -29,8 +30,9 @@ export const JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024;
 
 /**
  * Functions the schema and the queries use, registered on every connection: `origin_cjk` fills the
- * CJK index from a trigger, and `origin_contains` checks a lowercased term against a text, ignoring
- * case beyond ASCII (which LIKE does not).
+ * CJK index from a trigger, `origin_contains` checks a lowercased term against a text, ignoring
+ * case beyond ASCII (which LIKE does not), and `origin_prompt` tells whether a text reads as a
+ * prompt (see promptTitle), for the rule of the owner's prompts in a query (see authors.ts).
  */
 function registerFunctions(db: Database): void {
   db.function('origin_cjk', { deterministic: true }, (text, kind) =>
@@ -40,6 +42,9 @@ function registerFunctions(db: Database): void {
     typeof text === 'string' && typeof needle === 'string' && text.toLowerCase().includes(needle)
       ? 1
       : 0,
+  );
+  db.function('origin_prompt', { deterministic: true }, (text) =>
+    typeof text === 'string' && promptTitle(text) !== null ? 1 : 0,
   );
 }
 

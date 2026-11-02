@@ -1,8 +1,12 @@
 import path from 'node:path';
+import { AUTHOR_SIGNAL_SQL, AUTHOR_SQL, SPEAKER_SQL } from './authors.js';
 import type { Database } from './db.js';
 import { readMirrorLine } from './mirror.js';
 import { parseRawPath, rawDir } from './paths.js';
-import type { EventKind, EventRow, Role, SessionRow } from './types.js';
+import { PROMPT_TITLE_MAX, promptTitle } from './prompt.js';
+import type { Author, EventKind, EventRow, Role, SessionRow } from './types.js';
+
+export { PROMPT_TITLE_MAX, promptTitle };
 
 export interface EventFilter {
   source?: string;
@@ -30,8 +34,13 @@ export interface SearchHit extends EventRow {
   snippet: string;
 }
 
+/**
+ * The columns of an event `e` as EventRow has them, its authorship included: who wrote an input, as
+ * derived and combined with its session's kind (see authors.ts).
+ */
 export const EVENT_COLUMNS = `e.id, e.source, e.session_id, e.parent_id, e.ts, e.project, e.cwd, e.git_branch,
-  e.role, e.kind, e.text, e.raw_file_id, e.raw_line, e.agent_version, e.meta`;
+  e.role, e.kind, e.text, e.raw_file_id, e.raw_line, e.agent_version, e.meta,
+  (${AUTHOR_SQL}) AS author, (${AUTHOR_SIGNAL_SQL}) AS author_signal, (${SPEAKER_SQL}) AS speaker`;
 
 /** Forgotten events are excluded from every query (invariant 2, recorded forgetting). */
 export const VISIBLE_EVENT = 'NOT EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_id = e.id)';
@@ -52,6 +61,9 @@ export interface RawEventRecord {
   raw_line: number;
   agent_version: string | null;
   meta: string | null;
+  author: string | null;
+  author_signal: string | null;
+  speaker: string | null;
   snippet?: string;
 }
 
@@ -72,6 +84,9 @@ export function toEventRow(r: RawEventRecord): EventRow {
     rawLine: r.raw_line,
     agentVersion: r.agent_version,
     meta: r.meta ? (JSON.parse(r.meta) as Record<string, unknown>) : null,
+    author: (r.author as Author | null) ?? null,
+    authorSignal: r.author_signal ?? null,
+    speaker: r.speaker ?? null,
   };
 }
 
@@ -166,47 +181,6 @@ export function listSessions(
     if (out.length >= limit) break;
   }
   return out;
-}
-
-/** At most this many characters of a prompt stand in for the name of a session without a title. */
-export const PROMPT_TITLE_MAX = 80;
-
-/** Text this long is no lone bracketed notice, and only its start can become a name. */
-const PROMPT_HEAD = 1000;
-
-/**
- * A user message as a provisional name for a session without a title, or null if it is not a
- * prompt the user typed. Agents add context and echo commands as user messages made of XML-style
- * elements (`<tag …>…</tag>`), such as Claude Code's `<command-name>`, `<local-command-stdout>`,
- * and `<local-command-caveat>`, or Codex's `<environment_context>`: the elements a message starts
- * with are skipped, and what follows them is the prompt. Nothing left, or only a bracketed notice
- * such as `[Request interrupted by user]`, is no prompt. Whitespace is collapsed, and the prompt cut
- * to `max` characters, PROMPT_TITLE_MAX by default.
- */
-export function promptTitle(text: string, max = PROMPT_TITLE_MAX): string | null {
-  let rest = text;
-  for (;;) {
-    rest = rest.trimStart();
-    const open = /^<([A-Za-z][\w.:-]*)(?:\s[^<>]*)?\/?>/.exec(rest);
-    if (!open) break;
-    const [tag, name = ''] = open;
-    if (tag.endsWith('/>')) {
-      rest = rest.slice(tag.length);
-      continue;
-    }
-    const close = rest.indexOf(`</${name}>`, tag.length);
-    if (close < 0) break; // not an element: a prompt that starts with `<`
-    rest = rest.slice(close + name.length + 3);
-  }
-  const long = rest.length > PROMPT_HEAD;
-  const prompt = (long ? rest.slice(0, PROMPT_HEAD) : rest).replace(/\s+/g, ' ').trim();
-  if (prompt.length === 0 || (!long && /^\[[^\]]*\]$/.test(prompt))) return null;
-  const chars = [...prompt];
-  if (chars.length <= max) return prompt;
-  return `${chars
-    .slice(0, max - 1)
-    .join('')
-    .trimEnd()}…`;
 }
 
 /**

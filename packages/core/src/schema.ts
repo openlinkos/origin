@@ -19,6 +19,10 @@
  *   its event is visible.
  * - session_thread: the sessions that are in a thread with others, and the thread's id; derived
  *   from session and session_follow and rebuildable (see threads.ts, version 5).
+ * - event_author / session_kind: who wrote each human-side input (a user message or meta event),
+ *   by its event's seq, with its speaker and the field that decided it; and which sessions a line
+ *   says are a child (an agent's) or a headless run (a program's). Derived from the raw lines and
+ *   rebuildable (see authors.ts, reparse.ts, version 8); events are never touched.
  * - proposal / proposal_source: the entries agents proposed with the MCP tool `propose`, for the
  *   person to accept or reject, and the events each cites, derived from the tool results that carry
  *   them and rebuildable (see proposals.ts, version 6). Their status is derived, never stored.
@@ -196,6 +200,20 @@ CREATE INDEX IF NOT EXISTS event_project ON event (project, ts);
 CREATE INDEX IF NOT EXISTS event_seq_ts  ON event (seq, ts);
 CREATE INDEX IF NOT EXISTS event_user_message ON event (source, session_id, ts)
   WHERE role = 'user' AND kind = 'message';
+
+CREATE TABLE IF NOT EXISTS event_author (
+  seq     INTEGER PRIMARY KEY,
+  author  TEXT    NOT NULL CHECK (author IN ('owner', 'person', 'agent', 'system')),
+  speaker TEXT,
+  signal  TEXT    NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_kind (
+  source     TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('child', 'headless')),
+  signal     TEXT NOT NULL,
+  PRIMARY KEY (source, session_id, kind, signal)
+) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS event_block (
   block     INTEGER PRIMARY KEY,

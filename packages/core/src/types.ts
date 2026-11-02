@@ -7,6 +7,29 @@ export type Role = 'user' | 'assistant' | 'system';
  */
 export type EventKind = 'message' | 'tool_use' | 'tool_result' | 'meta' | 'system' | 'memory';
 
+/**
+ * Who wrote an input (see authors.ts): the owner of this memory, as its source knows; another
+ * person, or a person not known to be the owner; an agent, such as a parent agent prompting a
+ * sub-agent; or the system, the agent's runtime or a program. Only human-side input has one: a
+ * user message or a meta event (role `user`, kind `message` or `meta`).
+ */
+export type Author = 'owner' | 'person' | 'agent' | 'system';
+
+/**
+ * What a session is, when one of its source's lines says so: an agent's session (`child`, a
+ * sub-agent or a workflow step, whose prompts an agent wrote) or a program's run (`headless`).
+ * Every input of such a session is the agent's or the system's, whatever it says itself.
+ */
+export type SessionKind = 'child' | 'headless';
+
+/** A line's statement that a session of its source is a child or a headless run (see SessionKind). */
+export interface SessionKindFact {
+  sessionId: string;
+  kind: SessionKind;
+  /** The field that says so, a short code (`task_type`, `subagent_spawned`, …). */
+  signal: string;
+}
+
 /** An event produced by an adapter (not yet stored; no source or raw locator). */
 export interface EventInput {
   /** Stable id, unique within the source (usually the source's own message uuid; block-level events append `#i`). */
@@ -23,6 +46,19 @@ export interface EventInput {
   text: string;
   agentVersion?: string | null;
   meta?: Record<string, unknown> | null;
+  /**
+   * Who wrote a human-side input (role `user`, kind `message` or `meta`), as its line shows: ignored
+   * on every other event. Without it, ingestion decides by the event's kind and text (see
+   * defaultAuthor in authors.ts).
+   */
+  author?: Author;
+  /** The field that decided `author`, a short code for debugging and the docs (`origin.kind`, …). */
+  authorSignal?: string;
+  /**
+   * Who said a human-side input, as its source shows people a name or label (`Alice`, `Speaker 2`,
+   * an agent's display name): 1 to 200 characters, never an opaque id. Ignored on other events.
+   */
+  speaker?: string | null;
 }
 
 /** A stored event row. */
@@ -42,6 +78,16 @@ export interface EventRow {
   rawLine: number;
   agentVersion: string | null;
   meta: Record<string, unknown> | null;
+  /**
+   * Who wrote a human-side input, all things considered (its effective author, see authors.ts): the
+   * agent's for any input of a child session, the system's for one of a headless run, otherwise the
+   * author its line shows. Null on every other event.
+   */
+  author: Author | null;
+  /** The field that decided `author` (see EventInput.authorSignal); null where `author` is. */
+  authorSignal: string | null;
+  /** Who said a human-side input, as its source named them, or null (see EventInput.speaker). */
+  speaker: string | null;
 }
 
 /** The result of parsing one raw line. */
@@ -67,6 +113,13 @@ export interface ParsedLine {
    * imports it as an entry (see docs/architecture.md#native-memories).
    */
   memory?: NativeMemory;
+  /**
+   * Sessions of this source that this line says are an agent's or a program's (see SessionKind):
+   * its own, as a ZCode line's `task_type` says, or another, as a Grok Build parent names the
+   * sub-agent it spawns. Kept apart from the events' own authors and combined with them when they
+   * are read, so that the order lines arrive in does not matter.
+   */
+  sessionKinds?: SessionKindFact[];
 }
 
 /**

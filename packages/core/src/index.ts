@@ -21,6 +21,17 @@ export {
   listAudit,
   recordAudit,
 } from './audit.js';
+export {
+  AUTHORS,
+  type Authorship,
+  cleanSpeaker,
+  defaultAuthor,
+  hasAuthor,
+  isAuthor,
+  isOwnerPrompt,
+  SESSION_KINDS,
+  SPEAKER_MAX,
+} from './authors.js';
 export { type BackupResult, backupStore } from './backup.js';
 export {
   type ChangeFeed,
@@ -144,6 +155,7 @@ export {
   FIRST_VERSION,
   type Migration,
   type MigrationContext,
+  rebuildAuthorship,
   STORE_VERSION,
   storeVersion,
 } from './migrations.js';
@@ -462,6 +474,7 @@ export {
   tombstoneFeed,
 } from './tombstones.js';
 export type {
+  Author,
   EventInput,
   EventKind,
   EventRow,
@@ -470,6 +483,8 @@ export type {
   ParseContext,
   ParsedLine,
   Role,
+  SessionKind,
+  SessionKindFact,
   SessionRow,
   SourceAdapter,
   SourceFile,

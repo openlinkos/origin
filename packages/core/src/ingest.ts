@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { authorWriter, recordSessionKind } from './authors.js';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { OriginError } from './errors.js';
@@ -492,6 +493,11 @@ function appendLines(
       setTitle.run(adapter.id, parsed.sessionId, parsed.sessionTitle, parsed.manualTitle ? 1 : 0);
       touchedSessions.add(parsed.sessionId);
     }
+    // A session this line says is an agent's or a program's: whose its inputs are changes, and with
+    // it whether it is the owner's conversation, so its threads are looked at again.
+    for (const fact of parsed.sessionKinds ?? []) {
+      if (recordSessionKind(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
+    }
   }
   for (const sessionId of touchedSessions) refreshSession(ctx.db, adapter.id, sessionId);
   refreshThreads(
@@ -531,27 +537,31 @@ export function eventInserter(
           raw_file_id, raw_line, agent_version, meta)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
+  // Who wrote an input is kept with it, derived from the same line (see authors.ts).
+  const keepAuthor = authorWriter(db);
   return (lineNo, events) =>
-    events.filter(
-      (ev) =>
-        insert.run(
-          `${source}:${ev.id}`,
-          source,
-          ev.sessionId,
-          ev.parentId ?? null,
-          ev.ts,
-          ev.project ?? null,
-          ev.cwd ?? null,
-          ev.gitBranch ?? null,
-          ev.role,
-          ev.kind,
-          ev.text,
-          rawFileId,
-          lineNo,
-          ev.agentVersion ?? agentVersion ?? null,
-          ev.meta ? JSON.stringify(ev.meta) : null,
-        ).changes > 0,
-    );
+    events.filter((ev) => {
+      const done = insert.run(
+        `${source}:${ev.id}`,
+        source,
+        ev.sessionId,
+        ev.parentId ?? null,
+        ev.ts,
+        ev.project ?? null,
+        ev.cwd ?? null,
+        ev.gitBranch ?? null,
+        ev.role,
+        ev.kind,
+        ev.text,
+        rawFileId,
+        lineNo,
+        ev.agentVersion ?? agentVersion ?? null,
+        ev.meta ? JSON.stringify(ev.meta) : null,
+      );
+      if (done.changes === 0) return false;
+      keepAuthor(Number(done.lastInsertRowid), ev);
+      return true;
+    });
 }
 
 /** A chunk of a device's raw mirror, replicated to a hub (see docs/architecture.md#personal-hub). */

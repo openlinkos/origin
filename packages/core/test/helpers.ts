@@ -1,13 +1,29 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { type Database, type EventKind, readMirror, type SourceAdapter } from '../src/index.js';
+import {
+  type Author,
+  type Database,
+  type EventKind,
+  readMirror,
+  type SessionKind,
+  type SourceAdapter,
+} from '../src/index.js';
 
 /**
  * Minimal fake source: one {"id","session","ts","role","text"} object per line, with optional
  * `kind`, `title`, `project`, `cwd`, `branch` (its git branch), and `parent`. Another `id` makes it
  * a second agent. Its files are the `.jsonl` files directly in `root`, which `locate` finds too.
+ * Who wrote an input: `author`, `signal`, and `speaker` on a line, as an adapter that reads them
+ * says; without them, ingestion decides by kind and text. A line with `kinds`, a list of
+ * `{ session, kind, signal }`, says which sessions are children or headless runs. A line with
+ * `learnt` yields its event only once the adapter has learnt to read it (`learnt: true`), as a
+ * newer adapter does with a line an older one skipped.
  */
-export function fakeAdapter(root: string, id = 'fake'): SourceAdapter {
+export function fakeAdapter(
+  root: string,
+  id = 'fake',
+  opts: { learnt?: boolean } = {},
+): SourceAdapter {
   return {
     id,
     displayName: 'Fake',
@@ -37,8 +53,19 @@ export function fakeAdapter(root: string, id = 'fake'): SourceAdapter {
         branch?: string;
         /** The id of the event it follows, as Claude Code's `parentUuid`. */
         parent?: string;
+        author?: Author;
+        signal?: string;
+        speaker?: string;
+        kinds?: Array<{ session: string; kind: SessionKind; signal: string }>;
+        learnt?: boolean;
       };
       if (o.title) return { events: [], sessionTitle: o.title, sessionId: o.session };
+      const sessionKinds = o.kinds?.map((k) => ({
+        sessionId: k.session,
+        kind: k.kind,
+        signal: k.signal,
+      }));
+      if (!o.id || (o.learnt && !opts.learnt)) return { events: [], sessionKinds };
       return {
         events: [
           {
@@ -52,8 +79,11 @@ export function fakeAdapter(root: string, id = 'fake'): SourceAdapter {
             cwd: o.cwd ?? null,
             gitBranch: o.branch ?? null,
             parentId: o.parent ?? null,
+            ...(o.author ? { author: o.author, authorSignal: o.signal ?? 'fake' } : {}),
+            ...(o.speaker ? { speaker: o.speaker } : {}),
           },
         ],
+        sessionKinds,
       };
     },
   };

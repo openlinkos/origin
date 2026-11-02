@@ -29,6 +29,18 @@ function ev(o: Partial<EventRow> & Pick<EventRow, 'role' | 'kind' | 'text'>): Ev
     rawLine: n,
     agentVersion: null,
     meta: null,
+    // A user message is the owner's and a meta event the system's unless a test says otherwise;
+    // other events have no author.
+    author:
+      o.role !== 'user'
+        ? null
+        : o.kind === 'message'
+          ? 'owner'
+          : o.kind === 'meta'
+            ? 'system'
+            : null,
+    authorSignal: null,
+    speaker: null,
     ...o,
   };
 }
