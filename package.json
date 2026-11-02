@@ -19,8 +19,8 @@
     "node": ">=22.16"
   },
   "scripts": {
-    "build": "tsc -b packages/core packages/adapters packages/mcp packages/admin packages/cli && node packages/admin/scripts/vendor.mjs",
-    "clean": "node -e \"for (const p of ['core','adapters','mcp','admin','cli']) require('node:fs').rmSync('packages/'+p+'/dist',{recursive:true,force:true})\"",
+    "build": "tsc -b packages/core packages/adapters packages/mcp packages/admin packages/openclaw packages/cli && node packages/admin/scripts/vendor.mjs",
+    "clean": "node -e \"for (const p of ['core','adapters','mcp','admin','openclaw','cli']) require('node:fs').rmSync('packages/'+p+'/dist',{recursive:true,force:true})\"",
     "test": "vitest run",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

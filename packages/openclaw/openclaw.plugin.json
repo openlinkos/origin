@@ -1,0 +1,154 @@
+{
+  "id": "origin",
+  "name": "Origin",
+  "description": "Writes this Gateway's agent sessions to Origin, a cross-agent personal memory, as event lines: into a directory an Origin device reads, or to your Origin hub.",
+  "categories": ["memory"],
+  "activation": {
+    "onStartup": true
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [{ "path": "token", "expected": "string" }]
+    }
+  },
+  "uiHints": {
+    "hub": {
+      "label": "Hub URL",
+      "help": "Your Origin hub, such as https://hub.example.com. Set this or dir.",
+      "placeholder": "https://hub.example.com"
+    },
+    "token": {
+      "label": "Hub token",
+      "help": "A token created on the hub with origin token create <name>; a SecretRef is resolved by the Gateway.",
+      "sensitive": true
+    },
+    "tokenEnv": {
+      "label": "Hub token variable",
+      "help": "The name of an environment variable of the Gateway that holds the hub token, instead of token."
+    },
+    "dir": {
+      "label": "Directory",
+      "help": "A directory an Origin device on this host reads, such as ~/.origin/sources/openclaw. Set this or hub."
+    },
+    "source": {
+      "label": "Source name",
+      "help": "The source the lines are recorded under in Origin.",
+      "advanced": true
+    },
+    "agents": {
+      "label": "Agents",
+      "help": "The ids of the agents to record; all agents when unset."
+    },
+    "triggers": {
+      "label": "Triggers",
+      "help": "The kinds of runs to record, such as user, cron, heartbeat; only user turns by default.",
+      "advanced": true
+    },
+    "projectBy": {
+      "label": "Project by",
+      "help": "Name each session's project after its agent or its channel.",
+      "advanced": true
+    },
+    "project": {
+      "label": "Project",
+      "help": "One project name for every session, instead of projectBy.",
+      "advanced": true
+    },
+    "includeTools": {
+      "label": "Include tool calls",
+      "advanced": true
+    },
+    "reconcileOnEnd": {
+      "label": "Reconcile on session end",
+      "help": "Read the end of an ended session's transcript and send what was missed. Needs conversation access.",
+      "advanced": true
+    },
+    "spoolDir": {
+      "label": "State directory",
+      "help": "Where undelivered lines and the record of sent ones are kept.",
+      "advanced": true
+    },
+    "timeoutMs": {
+      "label": "Delivery timeout (ms)",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "source": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{1,31}$",
+        "default": "openclaw"
+      },
+      "dir": {
+        "type": "string",
+        "minLength": 1
+      },
+      "hub": {
+        "type": "string",
+        "pattern": "^https?://"
+      },
+      "token": {
+        "anyOf": [
+          { "type": "string", "minLength": 1 },
+          {
+            "type": "object",
+            "required": ["source", "id"],
+            "properties": {
+              "source": { "type": "string" },
+              "provider": { "type": "string" },
+              "id": { "type": "string" }
+            }
+          }
+        ]
+      },
+      "tokenEnv": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "agents": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "minItems": 1,
+        "uniqueItems": true
+      },
+      "triggers": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "minItems": 1,
+        "uniqueItems": true,
+        "default": ["user"]
+      },
+      "projectBy": {
+        "type": "string",
+        "enum": ["agent", "channel"],
+        "default": "agent"
+      },
+      "project": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "includeTools": {
+        "type": "boolean",
+        "default": true
+      },
+      "reconcileOnEnd": {
+        "type": "boolean",
+        "default": false
+      },
+      "spoolDir": {
+        "type": "string",
+        "minLength": 1
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 60000,
+        "default": 5000
+      }
+    }
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "name": "@openlinkos/origin-openclaw",
+  "version": "0.4.0",
+  "description": "OpenClaw plugin for Origin: writes an OpenClaw agent's sessions to Origin as event lines, into a directory or to your hub.",
+  "keywords": [
+    "origin",
+    "openlinkos",
+    "openclaw",
+    "openclaw-plugin",
+    "ai-agents",
+    "memory",
+    "session-logs"
+  ],
+  "license": "MIT",
+  "author": "OpenLinkOS",
+  "homepage": "https://origin.openlinkos.com/guide/openclaw",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openlinkos/origin.git",
+    "directory": "packages/openclaw"
+  },
+  "bugs": {
+    "url": "https://github.com/openlinkos/origin/issues"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./openclaw.plugin.json": "./openclaw.plugin.json"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "!dist/**/.tsbuildinfo",
+    "openclaw.plugin.json"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "engines": {
+    "node": ">=22.16"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.10.6"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.10.6",
+      "minGatewayVersion": "2026.10.6"
+    },
+    "build": {
+      "openclawVersion": "2026.10.6",
+      "pluginSdkVersion": "2026.10.6"
+    },
+    "install": {
+      "npmSpec": "@openlinkos/origin-openclaw",
+      "minHostVersion": ">=2026.10.6"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

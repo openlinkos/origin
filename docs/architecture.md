@@ -37,7 +37,7 @@ The long-term direction is an AI that accompanies one person over time, where me
 
 **Current goal — a cross-agent personal memory over MCP:**
 
-- Archive local sessions from Claude Code, Codex, Cursor, ZCode, and Grok Build into one append-only store, and the sessions of anything else a person brings, written as *event lines*, a format any script can write, into a directory of their own or to their hub (see [Your own sources](#your-own-sources)). Origin reads them as it reads agents' logs; the programs that write them live outside it.
+- Archive local sessions from Claude Code, Codex, Cursor, ZCode, and Grok Build into one append-only store, and the sessions of anything else a person brings, written as *event lines*, a format any script can write, into a directory of their own or to their hub (see [Your own sources](#your-own-sources)). Origin reads them as it reads agents' logs; the programs that write them live outside it, the plugin for OpenClaw published with it included.
 - Import the memories agents keep for themselves (the memory files of Claude Code, ZCode, and Grok Build) as entries, so that what one agent remembers reaches the others.
 - Let any agent search the archive, walk the timeline, expand any answer to its original source, and record durable entries (memory / knowledge / cognition) via MCP.
 - Let the person inspect, correct, and forget entries via the `origin` CLI or the admin UI, on their hub or, with `origin ui`, on their own machine; forgetting must stick until the person restores what they forgot.
@@ -123,7 +123,7 @@ These are product guarantees. Each must be covered by tests, and code comments r
 
 ## Packages
 
-pnpm workspace, TypeScript (strict, ESM, NodeNext), Node.js ≥ 22.16 (for zstd in `node:zlib` and the online backup of `node:sqlite`). `core`, `adapters`, and `admin` use only Node built-ins; `mcp` depends on the official [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) and zod. The hub and its admin UI use Node's built-in `node:http`.
+pnpm workspace, TypeScript (strict, ESM, NodeNext), Node.js ≥ 22.16 (for zstd in `node:zlib` and the online backup of `node:sqlite`). `core`, `adapters`, `admin`, and `openclaw` use only Node built-ins; `mcp` depends on the official [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) and zod. The hub and its admin UI use Node's built-in `node:http`.
 
 | Package | Path | Responsibility | Depends on |
 |---|---|---|---|
@@ -132,10 +132,11 @@ pnpm workspace, TypeScript (strict, ESM, NodeNext), Node.js ≥ 22.16 (for zstd 
 | `@openlinkos/origin-mcp` | `packages/mcp` | MCP tools; servers over stdio and stateless HTTP, the server of a device connected to a hub, which merges the hub's answers into its own, and the server of a relay, which hands every tool call to the hub | core |
 | `@openlinkos/origin-admin` | `packages/admin` | The admin UI, of a hub and of `origin ui`: server-rendered pages, a JSON API, and its static assets | core |
 | `@openlinkos/origin` | `packages/cli` | The `origin` command, including `origin mcp`, `origin serve` (the hub), `origin ui`, `origin distill`, a device's or a relay's sync with its hub, and the hub's S3 client | core, adapters, mcp, admin |
+| `@openlinkos/origin-openclaw` | `packages/openclaw` | A plugin for OpenClaw, loaded by its Gateway: it writes the sessions of the Gateway's agents as event lines, into a source's directory or to a hub | — |
 
-All five packages are published to npm together under one version; people install `@openlinkos/origin`, which brings the others along. Before 1.0 the other four are internal: their APIs may change in any release.
+All six packages are published to npm together under one version. People install `@openlinkos/origin`, which brings `core`, `adapters`, `mcp`, and `admin` along; before 1.0 these four are internal, and their APIs may change in any release. `@openlinkos/origin-openclaw` is installed into OpenClaw instead, with OpenClaw's own command.
 
-`core` must not depend on any other package, and neither `mcp` nor `admin` may depend on `adapters`: the CLI injects ingestion into the servers as callbacks, and the HTTP servers of the hub and of `origin ui` live in the CLI, which mounts the admin UI's request handler. Adapters implement the `SourceAdapter` interface from `core`:
+`core` must not depend on any other package, nor may `openclaw`, which runs inside OpenClaw and reaches Origin only through the event lines it writes; neither `mcp` nor `admin` may depend on `adapters`: the CLI injects ingestion into the servers as callbacks, and the HTTP servers of the hub and of `origin ui` live in the CLI, which mounts the admin UI's request handler. Adapters implement the `SourceAdapter` interface from `core`:
 
 ```ts
 interface SourceAdapter {
@@ -287,7 +288,7 @@ A sync finds new lines by looking: `origin sync`, and `origin mcp` before tool c
 
 ### Your own sources
 
-The person's work also happens where no adapter of Origin's looks: in other agent runtimes, chat workspaces, notification streams, a notes pipeline. Rather than an adapter for each, Origin reads one format of its own, **event lines**: UTF-8 JSONL, one event per line, appended to by whatever writes them (the fields and rules are in [sources.md](sources.md#your-own-sources-event-lines)). The writers live outside Origin: a script that polls a service or subscribes to it appends lines, and Origin, which makes no network calls of its own (invariant 4), reads them as it reads an agent's log.
+The person's work also happens where no adapter of Origin's looks: in other agent runtimes, chat workspaces, notification streams, a notes pipeline. Rather than an adapter for each, Origin reads one format of its own, **event lines**: UTF-8 JSONL, one event per line, appended to by whatever writes them (the fields and rules are in [sources.md](sources.md#your-own-sources-event-lines)). The writers live outside Origin: a script that polls a service or subscribes to it appends lines, and Origin, which makes no network calls of its own (invariant 4), reads them as it reads an agent's log. The one writer published with Origin, its plugin for OpenClaw (`packages/openclaw`), is no exception: it runs in OpenClaw's Gateway, and Origin knows it only by the lines it writes.
 
 - **The directory is the registration.** Every directory under `sources/` in the store's home (`~/.origin/sources/<name>/`), or a link to one, is a source whose id is the directory's name, if that name is 2 to 32 lowercase letters, digits, and hyphens, starting with a letter, and is neither a built-in source's id nor one of `origin`, `hub`, `local`, `all`, and `devices` (which names a hub's mirrors of its devices' files, `raw/devices/…`). A directory with another name is ignored, with one warning on standard error per sync (`origin mcp` warns once). There is no table of sources: the CLI lists the directories whenever it lists its adapters, so a new directory is read by the next sync, and one that is removed is no longer read, while what was archived of it stays.
 - **One adapter.** Each such source is read by the lines adapter (`createLinesAdapter` in `adapters`), whose files are the `.jsonl` files at any depth below its directory, hidden ones left out, oldest first; its `locate` names the same files, so that one file can be ingested on its own (`syncFile`). A `VERSION` file in the directory names the version of what writes the source, which its events record as their agent version. From there, ingestion is the one above: cursors, rewrite detection, mirrors under `raw/<name>/`, sealing, titles, session aggregates, threads by `branch` (rule R2) and by follow links, proposals, and the change feed; recall sees the sessions of any source in its project, by `cwd` or by `project`.

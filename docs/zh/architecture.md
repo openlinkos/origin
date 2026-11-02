@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-b844cbb0
+sourceHash: sha256-d9e81c31
 ---
 
 # 架构
@@ -41,7 +41,7 @@ sourceHash: sha256-b844cbb0
 
 **当前目标——一份通过 MCP 提供的跨 Agent 个人记忆：**
 
-- 把 Claude Code、Codex、Cursor、ZCode、Grok Build 的本地会话归档进同一个只追加的库；人带来的其他任何东西，只要写成*事件行*（一种任何脚本都能写的格式）放进它自己的目录或者发给它的中枢，其会话也一并归档（见[你自己的来源](#your-own-sources)）。Origin 像读取 Agent 的记录一样读取它们；写入它们的程序在 Origin 之外。
+- 把 Claude Code、Codex、Cursor、ZCode、Grok Build 的本地会话归档进同一个只追加的库；人带来的其他任何东西，只要写成*事件行*（一种任何脚本都能写的格式）放进它自己的目录或者发给它的中枢，其会话也一并归档（见[你自己的来源](#your-own-sources)）。Origin 像读取 Agent 的记录一样读取它们；写入它们的程序在 Origin 之外，随 Origin 一起发布的 OpenClaw 插件也是如此。
 - 把 Agent 为自己保存的记忆（Claude Code、ZCode 和 Grok Build 的记忆文件）导入为条目，让一个 Agent 记住的内容也能到达其他 Agent。
 - 让任何 Agent 都能通过 MCP 检索归档、浏览时间线、把任何回答展开到它的原始来源，并记录持久的条目（记忆 / 知识 / 认知）。
 - 让人通过 `origin` CLI 或管理界面查看、纠正和遗忘条目，无论是在自己的中枢上，还是用 `origin ui` 在自己的机器上；遗忘必须持久生效，直到这个人恢复他遗忘的内容。
@@ -127,7 +127,7 @@ agents on C ──▶ origin mcp ──── every tool call (MCP over HTTP) �
 
 ## 包 {#packages}
 
-pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.16（需要 `node:zlib` 的 zstd 和 `node:sqlite` 的在线备份）。`core`、`adapters` 和 `admin` 只使用 Node 内置模块；`mcp` 依赖官方的 [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) 和 zod。中枢及其管理界面使用 Node 内置的 `node:http`。
+pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.16（需要 `node:zlib` 的 zstd 和 `node:sqlite` 的在线备份）。`core`、`adapters`、`admin` 和 `openclaw` 只使用 Node 内置模块；`mcp` 依赖官方的 [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) 和 zod。中枢及其管理界面使用 Node 内置的 `node:http`。
 
 | 包 | 路径 | 职责 | 依赖 |
 |---|---|---|---|
@@ -136,10 +136,11 @@ pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.16（�
 | `@openlinkos/origin-mcp` | `packages/mcp` | MCP 工具；基于 stdio 和无状态 HTTP 的 server，已接入中枢的设备上的 server（它把中枢的回答合并进自己的回答），以及中继上的 server（它把每一次工具调用都交给中枢） | core |
 | `@openlinkos/origin-admin` | `packages/admin` | 管理界面，供中枢和 `origin ui` 使用：服务器端渲染的页面、JSON API 及其静态资源 | core |
 | `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢）、`origin ui`、`origin distill`、设备或中继与中枢之间的同步，以及中枢的 S3 客户端 | core, adapters, mcp, admin |
+| `@openlinkos/origin-openclaw` | `packages/openclaw` | OpenClaw 的插件，由它的 Gateway 加载：把 Gateway 上各个 Agent 的会话写成事件行，写入某个来源的目录或发往中枢 | — |
 
-五个包以同一个版本号一起发布到 npm；用户安装 `@openlinkos/origin`，其余几个随之安装。1.0 之前，另外四个包属于内部实现，它们的 API 可能在任何版本中改变。
+六个包以同一个版本号一起发布到 npm。用户安装 `@openlinkos/origin`，`core`、`adapters`、`mcp` 和 `admin` 随之安装；1.0 之前，这四个包属于内部实现，它们的 API 可能在任何版本中改变。`@openlinkos/origin-openclaw` 则用 OpenClaw 自己的命令安装进 OpenClaw。
 
-`core` 不得依赖任何其他包，`mcp` 和 `admin` 都不得依赖 `adapters`：CLI 以回调的形式把采集注入各个 server，中枢和 `origin ui` 的 HTTP server 位于 CLI 中，并由它挂载管理界面的请求处理函数。适配器实现 `core` 中的 `SourceAdapter` 接口：
+`core` 不得依赖任何其他包，`openclaw` 也不得：它运行在 OpenClaw 里，只通过它写出的事件行与 Origin 打交道；`mcp` 和 `admin` 都不得依赖 `adapters`：CLI 以回调的形式把采集注入各个 server，中枢和 `origin ui` 的 HTTP server 位于 CLI 中，并由它挂载管理界面的请求处理函数。适配器实现 `core` 中的 `SourceAdapter` 接口：
 
 ```ts
 interface SourceAdapter {
@@ -291,7 +292,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 
 ### 你自己的来源 {#your-own-sources}
 
-人的工作也发生在 Origin 的适配器看不到的地方：其他 Agent 运行时、聊天工作区、通知流、笔记流水线。Origin 没有为每一种都写一个适配器，而是读取它自己的一种格式，**事件行**：UTF-8 的 JSONL，每行一个事件，由写入它的东西不断追加（字段与规则见 [sources.md](sources.md#your-own-sources-event-lines)）。写入者在 Origin 之外：一个轮询或订阅某个服务的脚本追加行，而 Origin 自己不发起任何网络调用（不变量 4），像读取 Agent 的记录一样读取它们。
+人的工作也发生在 Origin 的适配器看不到的地方：其他 Agent 运行时、聊天工作区、通知流、笔记流水线。Origin 没有为每一种都写一个适配器，而是读取它自己的一种格式，**事件行**：UTF-8 的 JSONL，每行一个事件，由写入它的东西不断追加（字段与规则见 [sources.md](sources.md#your-own-sources-event-lines)）。写入者在 Origin 之外：一个轮询或订阅某个服务的脚本追加行，而 Origin 自己不发起任何网络调用（不变量 4），像读取 Agent 的记录一样读取它们。随 Origin 一起发布的唯一一个写入者，即它的 OpenClaw 插件（`packages/openclaw`），也不例外：它运行在 OpenClaw 的 Gateway 中，Origin 只通过它写出的行认识它。
 
 - **目录就是注册。** 库的主目录下 `sources/` 中的每个目录（`~/.origin/sources/<name>/`），或者指向某个目录的链接，都是一个来源，其 id 就是目录名，前提是这个名称由 2 到 32 个小写字母、数字和连字符组成、以字母开头，既不是内置来源的 id，也不是 `origin`、`hub`、`local`、`all` 和 `devices` 之一（`devices` 用于中枢存放其设备文件的镜像，即 `raw/devices/…`）。其他名称的目录会被忽略，每次同步在标准错误上给出一条警告（`origin mcp` 只警告一次）。没有来源表：CLI 每次列出它的适配器时都会列出这些目录，所以新目录会在下一次同步时被读取；删除的目录不再被读取，而已归档的内容保留。
 - **同一个适配器。** 每个这样的来源都由事件行适配器（`adapters` 中的 `createLinesAdapter`）读取，它的文件是目录下任意深度的 `.jsonl` 文件，隐藏文件除外，最旧的在前；它的 `locate` 指向同样的文件，所以单个文件也可以单独采集（`syncFile`）。目录中的 `VERSION` 文件给出写入这个来源的程序的版本，它的事件把这个版本记录为 Agent 版本。此后的采集与上文相同：游标、重写检测、`raw/<name>/` 下的镜像、封存、标题、会话汇总、按 `branch`（规则 R2）和跟随链接形成的线索、提议，以及变更流；召回能看到它的项目中任何来源的会话，依据 `cwd` 或 `project`。
