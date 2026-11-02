@@ -58,6 +58,27 @@ appendFileSync(file, `${JSON.stringify(event)}\n`);
 - **Its version.** A `VERSION` file in the directory, with a version on its first line, such as `chat-bridge 1.4.2`, is recorded with the events as their agent's version.
 - **To your hub.** On a device connected to a [personal hub](./hub.md), `origin sync` sends the source's archived lines to the hub as it sends every agent's, and a relay sends the files' new lines straight to it.
 
+## Send lines to your hub
+
+A writer that runs on none of your devices, such as a chat bot or an agent runtime in the cloud, can send its lines straight to your [personal hub](./hub.md) instead. Give it a token of its own, created on the hub and named after it, such as `origin token create chat-bridge`, and post lines:
+
+```bash
+curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=2026/11/02.jsonl" \
+  -H "Authorization: Bearer $ORIGIN_TOKEN" \
+  -H "Content-Type: application/x-ndjson" \
+  --data-binary @lines.jsonl
+```
+
+```json
+{ "lines": 2, "events": 2, "duplicates": 0, "parse_errors": 0 }
+```
+
+- **Where they go.** The hub keeps the lines as file `path` of the source, here `2026/11/02.jsonl` of `chat-ops`, sent by the token's name, `chat-bridge`, and reads them as it reads what a device sends. They stay on the hub: devices never download them, and agents find them through the hub, as everything else there.
+- **The body.** Event lines, at most 8 MiB, as `application/x-ndjson` or `text/plain`, possibly gzip-encoded. Use `--data-binary`, which sends a file as it is, rather than `-d`, which drops its line breaks; one line without a line break at the end, as `-d '{"id":…}'` sends it, is fine.
+- **The answer.** How many lines the hub read, how many new events they gave, how many it already had (`duplicates`), and how many are not valid events (`parse_errors`), which it keeps but reads nothing from.
+- **Sending again.** If you do not know whether a request arrived, send it again: lines the hub already has add nothing.
+- **A token of its own.** A device's token works too, and sends as that device; but the hub refuses a path that the device already sends for the same source from its own `sources/` directory.
+
 ## Choose ids and sessions
 
 - **An id names one event, for good.** Give every event of a source its own `id`, and the same one each time you write it: the writer's own id, such as a chat message's, serves best. A line whose `id` the source already has adds nothing, so writing a line again, when you are not sure it was written, is safe.
@@ -89,6 +110,6 @@ origin recall --cwd ~/code/demo-app    # what an agent there is handed
 ## Limits
 
 - **Origin calls no network for you.** It reads files. A writer that takes events from a chat workspace or a notification service runs on its own, polling the service or subscribing to it, and appends lines; Origin never reaches the service, and needs no credentials for it.
-- **It looks; nothing tells it.** Your sources have no hooks: their lines arrive with the next `origin sync`, or within a minute while an agent runs `origin mcp`.
+- **It looks; nothing tells it.** Your sources have no hooks: their lines arrive with the next `origin sync`, or within a minute while an agent runs `origin mcp`; lines sent to the hub are read as they arrive.
 - **Not for memories.** The `memory` kind is refused: imported memories come only from the memory files agents keep for themselves. To record a decision or a fact, save an entry, citing the event.
 - **Not a place to edit.** A file rewritten rather than appended to is read again from its start, as a new generation, and its events that Origin has already read stay as they were.

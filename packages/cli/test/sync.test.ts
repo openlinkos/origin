@@ -718,8 +718,25 @@ describe('pushing one file', () => {
       files: 0,
     });
     // A full sync then has nothing left to send of these two, only the mirror of the fixture
-    // itself, which this device ingested before the test.
-    expect(await sync()).toMatchObject({ files: 1, eventsAdded: 0 });
-    expect(remoteCursors(hubDb, 'laptop')).toHaveLength(3);
+    // itself, which this device ingested before the test. Its relative path is that of its copy,
+    // whose mirror on the hub it would overwrite: the hub refuses it, and the sync goes on.
+    const fixture = path.join(
+      fixtures,
+      'D--demo-project',
+      '0f1e2d3c-4b5a-4697-8877-665544332211.jsonl',
+    );
+    expect(await sync()).toMatchObject({
+      files: 0,
+      eventsAdded: 0,
+      refused: [
+        {
+          source: 'claude-code',
+          path: fixture,
+          reason: expect.stringContaining('already has another file of claude-code mirrored as'),
+        },
+      ],
+      tombstonesApplied: 0,
+    });
+    expect(remoteCursors(hubDb, 'laptop')).toHaveLength(2);
   });
 });

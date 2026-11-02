@@ -1,8 +1,14 @@
 import http from 'node:http';
 import zlib from 'node:zlib';
+import {
+  BUILT_IN_SOURCE_IDS,
+  isLinesSourceId,
+  LINES_SOURCE_RULE,
+} from '@openlinkos/origin-adapters';
 import type { AdminHandler } from '@openlinkos/origin-admin';
 import {
   appendRemote,
+  appendRemoteLines,
   ConflictError,
   type Database,
   HUB_STORE_NAME,
@@ -28,6 +34,16 @@ import { hubAdapters } from '../sources.js';
 const MAX_BODY = 64 * 1024 * 1024;
 /** Most entries or tombstones in one replication request. */
 const MAX_RECORDS = 1000;
+/** Most bytes of event lines in one request to /v1/sources/<name>/lines, decompressed. */
+export const MAX_LINES_BODY = 8 * 1024 * 1024;
+/** The media types of a body of event lines. */
+const LINES_TYPES = ['application/x-ndjson', 'text/plain'];
+/** Longest path of a file of event lines appended on the hub. */
+const LINES_PATH_MAX = 200;
+/** A part of such a path: letters, digits, `.`, `_`, and `-`, from a letter or digit, not ending in a dot. */
+const PATH_SEGMENT_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?$/;
+/** Names Windows keeps for devices, with or without an extension, which no file may take there. */
+const DEVICE_NAME_RE = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i;
 
 export interface HubOptions {
   db: Database;
@@ -112,6 +128,12 @@ async function handle(
   if (!caller) {
     res.setHeader('WWW-Authenticate', 'Bearer');
     sendJson(res, 401, { error: 'Missing or invalid token.' });
+    return;
+  }
+
+  const lines = SOURCE_LINES_RE.exec(url.pathname);
+  if (lines) {
+    await appendSourceLines(opts, adapterFor, req, res, url, caller.name, lines[1] as string);
     return;
   }
 
@@ -220,6 +242,81 @@ async function handle(
   }
 }
 
+/** The path of the endpoint that appends event lines to a source of one's own. */
+const SOURCE_LINES_RE = /^\/v1\/sources\/([^/]*)\/lines$/;
+
+/**
+ * `POST /v1/sources/<name>/lines?path=<file>`: append event lines to file `path` of the source
+ * `<name>`, as sent by the token's device, for a writer without a device of its own (see
+ * docs/architecture.md#http-interface). The body's lines go to the end of the hub's mirror of that
+ * file, through the same ingestion as the mirrors devices push (appendRemoteLines); a last line
+ * without a line break ends with the body. Lines whose events the hub already has are mirrored but
+ * add nothing, so a writer may send again what it is unsure arrived.
+ */
+async function appendSourceLines(
+  opts: HubOptions,
+  adapterFor: (source: string) => SourceAdapter | null,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+  token: string,
+  name: string,
+): Promise<void> {
+  requireMethod(req, 'POST');
+  if (BUILT_IN_SOURCE_IDS.includes(name)) {
+    throw new HttpError(
+      400,
+      `${name} is a built-in source, whose logs its agent writes; append event lines to a source of your own.`,
+    );
+  }
+  if (!isLinesSourceId(name)) {
+    throw new HttpError(400, `Invalid source name "${name}": ${LINES_SOURCE_RULE}.`);
+  }
+  const file = linesPath(url.searchParams.get('path'));
+  const device = deviceOf(opts, token, url.searchParams.get('device'));
+  const type = (header(req, 'content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
+  if (!LINES_TYPES.includes(type)) {
+    throw new HttpError(415, `Send event lines as ${LINES_TYPES.join(' or ')}.`);
+  }
+  let data = await readBody(req, MAX_LINES_BODY);
+  if (data.length > 0 && data[data.length - 1] !== 0x0a) data = Buffer.concat([data, NEWLINE]);
+  const adapter = adapterFor(name) as SourceAdapter;
+  const r = appendRemoteLines({ db: opts.db, home: opts.home, log: opts.log }, adapter, {
+    device,
+    source: name,
+    path: file,
+    relPath: file,
+    data,
+  });
+  sendJson(res, 200, {
+    lines: r.linesRead,
+    events: r.eventsAdded,
+    duplicates: r.duplicates,
+    parse_errors: r.parseErrors,
+  });
+}
+
+const NEWLINE = Buffer.from('\n');
+
+/**
+ * The path of a file of event lines appended on the hub: relative, `/`-separated parts of letters,
+ * digits, `.`, `_`, and `-` that file systems everywhere take as they are, ending in `.jsonl`, at
+ * most LINES_PATH_MAX characters.
+ */
+function linesPath(value: string | null): string {
+  const rule = `"path" must be a relative path of at most ${LINES_PATH_MAX} characters, /-separated, ending in .jsonl, each part of letters, digits, ., _, and - starting with a letter or digit`;
+  if (!value) throw new HttpError(400, `Missing "path": ${rule}.`);
+  const segments = value.split('/');
+  if (
+    value.length > LINES_PATH_MAX ||
+    !value.endsWith('.jsonl') ||
+    segments.some((seg) => !PATH_SEGMENT_RE.test(seg) || DEVICE_NAME_RE.test(seg))
+  ) {
+    throw new HttpError(400, `Invalid "path" ${JSON.stringify(value)}: ${rule}.`);
+  }
+  return value;
+}
+
 /** Refused: a token used for a device other than the one it is named after. */
 function wrongDevice(token: string, named: string): HttpError {
   return new HttpError(
@@ -306,22 +403,29 @@ function requireMethod(req: http.IncomingMessage, ...methods: string[]): void {
   if (!methods.includes(req.method ?? '')) throw new HttpError(405, 'Method not allowed.');
 }
 
-async function readJson(req: http.IncomingMessage): Promise<unknown> {
+/** A request's body, decompressed when it is gzip-encoded; 413 beyond `max` bytes either way. */
+async function readBody(req: http.IncomingMessage, max: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY) throw new HttpError(413, 'Request body too large.');
+    if (size > max) throw new HttpError(413, 'Request body too large.');
     chunks.push(chunk as Buffer);
   }
-  let raw = Buffer.concat(chunks);
-  if (req.headers['content-encoding'] === 'gzip') {
-    try {
-      raw = zlib.gunzipSync(raw, { maxOutputLength: MAX_BODY });
-    } catch {
-      throw new HttpError(400, 'Invalid gzip body.');
+  const raw = Buffer.concat(chunks);
+  if (req.headers['content-encoding'] !== 'gzip') return raw;
+  try {
+    return zlib.gunzipSync(raw, { maxOutputLength: max });
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE') {
+      throw new HttpError(413, 'Request body too large.');
     }
+    throw new HttpError(400, 'Invalid gzip body.');
   }
+}
+
+async function readJson(req: http.IncomingMessage): Promise<unknown> {
+  const raw = await readBody(req, MAX_BODY);
   try {
     return JSON.parse(raw.toString('utf8'));
   } catch {

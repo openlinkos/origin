@@ -189,3 +189,17 @@ Each directory under `~/.origin/sources/` (or `$ORIGIN_HOME/sources/`) is a sour
 - **Version.** The first line of a `VERSION` file in the directory, if there is one, is recorded as the agent version of the events read after it.
 - **Mirrors.** As for agents, under `raw/<name>/` with the files' paths in the directory. A device connected to a hub pushes them, and the hub keeps them as `raw/devices/<device>/<name>/…`; a relay sends the files' lines to the hub instead.
 - **Reading.** `origin sync` reads every source, `origin sync --source <name>` one of them, and `origin mcp` looks for new lines every minute while an agent runs. There are no hooks.
+
+### On a hub
+
+A writer that runs on none of your devices, such as a bot or a runtime in the cloud, appends event lines to your hub instead, with a token of its own (see [Send lines to your hub](guide/sources.md#send-lines-to-your-hub)):
+
+```
+POST /v1/sources/<name>/lines?path=<path>
+Authorization: Bearer <token>
+Content-Type: application/x-ndjson
+```
+
+- **The file.** The lines go to the end of file `path` of the source `<name>`, as sent by the device the token is named after, and are mirrored as `raw/devices/<device>/<name>/<path>`. `path` is relative, made of `/`-separated parts of letters, digits, `.`, `_`, and `-`, each starting with a letter or digit, and ends in `.jsonl`; it has at most 200 characters. `<name>` follows the rules for names above.
+- **The body.** Event lines, as `application/x-ndjson` or `text/plain`, possibly gzip-encoded, at most 8 MiB once decompressed. A last line without a line break ends with the body.
+- **The answer.** `200 { "lines", "events", "duplicates", "parse_errors" }`: the lines read, the events they added, the lines whose events the hub already had, and the lines that are not valid events. Sending the same lines again is safe: they are mirrored again, as sent, and count as duplicates. `400` for an invalid name, path, or body (or a path that the token's device already has for that source under its own sources), `401` without a valid token, `403` for a token that serves no device, `413` for a body too large, `415` for another media type.

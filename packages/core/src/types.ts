@@ -140,7 +140,10 @@ export interface ParseContext {
 
 /** A session source adapter for one agent (Source, see docs/architecture.md). Parsing must be deterministic and LLM-free. */
 export interface SourceAdapter {
-  /** Stable id: claude-code / codex / cursor / zcode / grok. */
+  /**
+   * Stable id: claude-code / codex / cursor / zcode / grok, or the name of a source of one's own,
+   * read by the lines adapter (see docs/sources.md#your-own-sources-event-lines).
+   */
   id: string;
   displayName: string;
   /** Version of the source agent, if known. */
@@ -186,6 +189,8 @@ export interface SyncResult {
   linesRead: number;
   eventsAdded: number;
   parseErrors: number;
+  /** Lines that yielded events, all of which the store already had. */
+  duplicates: number;
   newGenerations: number;
   durationMs: number;
 }

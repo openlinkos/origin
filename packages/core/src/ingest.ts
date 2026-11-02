@@ -66,6 +66,8 @@ export interface AppendStats {
   linesRead: number;
   eventsAdded: number;
   parseErrors: number;
+  /** Lines that yielded events, all of which the store already had: lines sent again. */
+  duplicates: number;
 }
 
 /**
@@ -159,6 +161,7 @@ export function emptySyncResult(source: string): SyncResult {
     linesRead: 0,
     eventsAdded: 0,
     parseErrors: 0,
+    duplicates: 0,
     newGenerations: 0,
     durationMs: 0,
   };
@@ -452,7 +455,9 @@ function appendLines(
       continue;
     }
     if (!parsed) continue;
-    for (const ev of insert(lineNo, parsed.events)) {
+    const added = insert(lineNo, parsed.events);
+    if (parsed.events.length > 0 && added.length === 0) stats.duplicates++;
+    for (const ev of added) {
       stats.eventsAdded++;
       // A memory event belongs to no conversation: it is counted in no session.
       if (ev.kind !== 'memory') touchedSessions.add(ev.sessionId);
@@ -561,7 +566,7 @@ export interface RemoteChunk {
 }
 
 export type AppendResult =
-  | { ok: true; bytes: number; linesRead: number; eventsAdded: number; parseErrors: number }
+  | ({ ok: true; bytes: number } & AppendStats)
   | { ok: false; bytes: number };
 
 /**
@@ -584,19 +589,29 @@ export function appendRemote(
       if (!raw) {
         if (chunk.offset !== 0) return { ok: false, bytes: 0 };
         if (chunk.data.length === 0) {
-          return { ok: true, bytes: 0, linesRead: 0, eventsAdded: 0, parseErrors: 0 };
+          return {
+            ok: true,
+            bytes: 0,
+            linesRead: 0,
+            eventsAdded: 0,
+            parseErrors: 0,
+            duplicates: 0,
+          };
         }
         const rel = chunk.generation === 1 ? relPath : `${relPath}.g${chunk.generation}`;
-        raw = createRawFile(
-          ctx.db,
-          chunk.source,
-          key,
-          path.join('devices', chunk.device, chunk.source, rel),
-          chunk.generation,
-        );
+        const mirror = path.join('devices', chunk.device, chunk.source, rel);
+        // Two files of a device with the same relative path, such as a device's own source and
+        // lines appended to the hub under its token, would share a mirror and break it (invariant 3).
+        const holder = mirrorHolder(ctx.db, mirror);
+        if (holder) {
+          throw new OriginError(
+            `Device ${chunk.device} already has another file of ${chunk.source} mirrored as ${rel} (${parseRawPath(holder).originalPath}); send this one under another path.`,
+          );
+        }
+        raw = createRawFile(ctx.db, chunk.source, key, mirror, chunk.generation);
       }
       if (chunk.offset !== raw.bytes_ingested) return { ok: false, bytes: raw.bytes_ingested };
-      const stats: AppendStats = { linesRead: 0, eventsAdded: 0, parseErrors: 0 };
+      const stats: AppendStats = { linesRead: 0, eventsAdded: 0, parseErrors: 0, duplicates: 0 };
       if (chunk.data.length > 0) {
         const startedAt = Date.now();
         const mtime = chunk.mtimeMs;
@@ -632,6 +647,84 @@ export function appendRemote(
   );
   if (sealed !== null) settleMirror(ctx.db, ctx.home, sealed);
   return result;
+}
+
+/** A file of a device on a hub, and lines to append to it (see appendRemoteLines). */
+export interface RemoteLines {
+  device: string;
+  source: string;
+  /** The file's path, which keys it on the hub as `@<device>:<path>`. */
+  path: string;
+  /** Path relative to the adapter root, `/`-separated, naming its mirror. */
+  relPath: string;
+  /** Complete lines, each ending with `
+`. */
+  data: Buffer;
+}
+
+/** How often appendRemoteLines tries a piece again when another append moved the cursor first. */
+const APPEND_ATTEMPTS = 3;
+
+/**
+ * Append lines to the end of a device's file on a hub, as if the device had pushed them at the
+ * hub's cursor: the lines a writer without a device appends to a source of its own over HTTP (see
+ * docs/architecture.md#http-interface). Each piece of at most TRANSACTION_BYTES of lines (or one
+ * longer line) goes through appendRemote, at the latest generation the hub holds of the file, the
+ * first for a new one, so that the hub mirrors, parses, seals, and counts it as it does what devices
+ * push. Lines whose events the store already has are mirrored all the same, and count as
+ * duplicates, so that sending them again is safe. Returns the counts and the file's size after it.
+ */
+export function appendRemoteLines(
+  ctx: IngestContext,
+  adapter: SourceAdapter,
+  file: RemoteLines,
+): AppendStats & { bytes: number } {
+  if (file.data.length > 0 && file.data[file.data.length - 1] !== 0x0a) {
+    throw new OriginError('Lines must end with a line break.');
+  }
+  const total: AppendStats & { bytes: number } = {
+    bytes: 0,
+    linesRead: 0,
+    eventsAdded: 0,
+    parseErrors: 0,
+    duplicates: 0,
+  };
+  const key = remotePath(file.device, file.path);
+  let start = 0;
+  while (start < file.data.length) {
+    const nl = file.data.lastIndexOf(
+      0x0a,
+      Math.min(file.data.length, start + TRANSACTION_BYTES) - 1,
+    );
+    // A line longer than a transaction is taken whole.
+    const end = (nl >= start ? nl : file.data.indexOf(0x0a, start)) + 1;
+    const data = file.data.subarray(start, end);
+    let appended: AppendResult | null = null;
+    for (let attempt = 0; attempt < APPEND_ATTEMPTS && !appended?.ok; attempt++) {
+      const raw = latestRawFile(ctx.db, file.source, key);
+      appended = appendRemote(ctx, adapter, {
+        device: file.device,
+        source: file.source,
+        path: file.path,
+        relPath: file.relPath,
+        generation: raw?.generation ?? 1,
+        offset: raw?.bytes_ingested ?? 0,
+        data,
+        mtimeMs: Date.now(),
+        agentVersion: null,
+      });
+    }
+    if (!appended?.ok) {
+      throw new OriginError(`Other appends to ${file.path} kept moving its end; try again.`);
+    }
+    total.bytes = appended.bytes;
+    total.linesRead += appended.linesRead;
+    total.eventsAdded += appended.eventsAdded;
+    total.parseErrors += appended.parseErrors;
+    total.duplicates += appended.duplicates;
+    start = end;
+  }
+  return total;
 }
 
 /** The tail hash of a mirror once `data` is appended to it: of its last TAIL_WINDOW bytes. */
@@ -928,6 +1021,17 @@ function latestRawFile(db: Database, source: string, absPath: string): RawFileRo
     )
     .get(source, absPath) as RawFileRow | undefined;
   return row ?? null;
+}
+
+/**
+ * The raw file whose mirror is `mirror`, compared without case as file systems may, by its path; or
+ * null if no raw file has that mirror.
+ */
+function mirrorHolder(db: Database, mirror: string): string | null {
+  const row = db
+    .prepare('SELECT path FROM raw_file WHERE lower(mirror) = lower(?) LIMIT 1')
+    .get(mirror) as { path: string } | undefined;
+  return row?.path ?? null;
 }
 
 function rawFileAt(

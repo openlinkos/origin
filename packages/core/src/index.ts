@@ -118,16 +118,20 @@ export {
 } from './identity.js';
 export {
   type AppendResult,
+  type AppendStats,
   appendRemote,
+  appendRemoteLines,
   fingerprintSources,
   type IngestContext,
   listDevices,
   localRawFiles,
   type RemoteChunk,
+  type RemoteLines,
   refreshSession,
   remoteCursors,
   syncFile,
   syncSource,
+  TRANSACTION_BYTES,
 } from './ingest.js';
 export {
   IMPORTED_CONFIDENCE,

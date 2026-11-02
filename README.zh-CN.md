@@ -49,7 +49,7 @@ Origin 以**人**而不是工具为中心：
 | ZCode | ✅ | ✅ |
 | Grok Build | ✅ | ✅ |
 
-任何支持 MCP 的 Agent 现在都能查询归档和条目；归档某个 Agent 自己的会话则需要它的适配器，或者一个把会话写成事件行的脚本：其他 Agent 运行时、聊天工作区、通知流和笔记流水线都可以这样把会话写进 `~/.origin/sources/` 下的目录（见[接入你自己的来源](https://origin.openlinkos.com/zh/guide/sources)）。如何为各 Agent 注册 Origin，见[接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)；各 Agent 把会话存放在哪里，见[会话来源](https://origin.openlinkos.com/zh/sources)。
+任何支持 MCP 的 Agent 现在都能查询归档和条目；归档某个 Agent 自己的会话则需要它的适配器，或者一个把会话写成事件行的脚本：其他 Agent 运行时、聊天工作区、通知流和笔记流水线都可以这样把会话写进 `~/.origin/sources/` 下的目录，或者直接发给你的中枢（见[接入你自己的来源](https://origin.openlinkos.com/zh/guide/sources)）。如何为各 Agent 注册 Origin，见[接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)；各 Agent 把会话存放在哪里，见[会话来源](https://origin.openlinkos.com/zh/sources)。
 
 ## 快速开始
 

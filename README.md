@@ -49,7 +49,7 @@ Origin puts **you** at the center instead of the tool:
 | ZCode | ✅ | ✅ |
 | Grok Build | ✅ | ✅ |
 
-Any MCP-capable agent can already query the archive and entries. Archiving an agent's own sessions needs its adapter, or a script that writes them as event lines: other agent runtimes, chat workspaces, notification streams, and notes pipelines can all bring their sessions this way, into a directory under `~/.origin/sources/` (see [Bring your own source](docs/guide/sources.md)). To register Origin with each agent, see [Connect your agents](docs/guide/connect-agents.md). Where each agent stores its sessions is documented in [docs/sources.md](docs/sources.md).
+Any MCP-capable agent can already query the archive and entries. Archiving an agent's own sessions needs its adapter, or a script that writes them as event lines: other agent runtimes, chat workspaces, notification streams, and notes pipelines can all bring their sessions this way, into a directory under `~/.origin/sources/` or straight to your hub (see [Bring your own source](docs/guide/sources.md)). To register Origin with each agent, see [Connect your agents](docs/guide/connect-agents.md). Where each agent stores its sessions is documented in [docs/sources.md](docs/sources.md).
 
 ## Getting started
 

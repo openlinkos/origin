@@ -43,7 +43,7 @@ origin serve --host 127.0.0.1 --port 7077
 The hub speaks plain HTTP. Before you expose it beyond localhost, put it behind a reverse proxy or CDN that terminates TLS, and configure the proxy as follows:
 
 - Forward `/healthz`, `/mcp`, and `/v1/*` to the hub.
-- Allow request bodies of at least 16 MiB on `/v1/ingest`, which devices use to push session data.
+- Allow request bodies of at least 16 MiB on `/v1/ingest`, which devices use to push session data, and of 8 MiB on `/v1/sources/*/lines`, if programs append event lines to the hub (see [Append event lines](#append-event-lines)).
 - Do not cache `/mcp` or `/v1/*`.
 - If you enable the admin UI at `/admin`, also follow [Behind TLS and a CDN](./admin.md#behind-tls-and-a-cdn); in particular, set `ORIGIN_CLIENT_IP_HEADER`, or failed sign-ins from anyone count against you.
 
@@ -113,6 +113,19 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 # Codex CLI (reads the token from the ORIGIN_TOKEN environment variable)
 codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var ORIGIN_TOKEN
 ```
+
+## Append event lines
+
+Programs that run on none of your devices, such as a bot, an agent runtime in the cloud, or a pipeline, can bring their sessions to the hub as [event lines](./sources.md). Give each a token of its own, named after it, and post its lines to `POST /v1/sources/<name>/lines?path=<path>`:
+
+```bash
+origin token create chat-bridge     # on the hub, once; prints the token
+curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=incidents.jsonl" \
+  -H "Authorization: Bearer ogn_…" -H "Content-Type: application/x-ndjson" \
+  --data-binary @incidents.jsonl
+```
+
+The hub appends the lines to file `path` of the source `chat-ops`, as sent by the token's name, `chat-bridge`, archives and parses them as it does what devices send, and answers with how many lines it read, how many events were new, how many it already had, and how many were not valid events. Sending lines again is safe. A request holds at most 8 MiB of lines. See [Send lines to your hub](./sources.md#send-lines-to-your-hub).
 
 ## Forgetting
 

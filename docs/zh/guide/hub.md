@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-9dff1463
+sourceHash: sha256-21b43c1d
 ---
 
 # 个人中枢
@@ -47,7 +47,7 @@ origin serve --host 127.0.0.1 --port 7077
 中枢使用明文 HTTP。在 localhost 之外开放之前，请把它放在负责 TLS 的反向代理或 CDN 之后，并按以下要求配置代理：
 
 - 把 `/healthz`、`/mcp` 和 `/v1/*` 转发给中枢。
-- `/v1/ingest` 用于设备推送会话数据，请求体上限至少设为 16 MiB。
+- `/v1/ingest` 用于设备推送会话数据，请求体上限至少设为 16 MiB；如果有程序向中枢追加事件行，`/v1/sources/*/lines` 的请求体上限设为 8 MiB（见[追加事件行](#append-event-lines)）。
 - 不要缓存 `/mcp` 和 `/v1/*`。
 - 如果在 `/admin` 下启用了管理界面，还请按[放在 TLS 和 CDN 之后](./admin.md#behind-tls-and-a-cdn)配置；尤其要设置 `ORIGIN_CLIENT_IP_HEADER`，否则任何人的失败登录都会算在你头上。
 
@@ -117,6 +117,19 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 # Codex CLI（从环境变量 ORIGIN_TOKEN 读取令牌）
 codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var ORIGIN_TOKEN
 ```
+
+## 追加事件行 {#append-event-lines}
+
+不在你任何设备上运行的程序，例如机器人、云端的 Agent 运行时或流水线，可以把它们的会话以[事件行](./sources.md)带到中枢。为每个程序创建一个自己的令牌，以它命名，然后把它的行提交到 `POST /v1/sources/<name>/lines?path=<path>`：
+
+```bash
+origin token create chat-bridge     # 在中枢上执行一次；会打印令牌
+curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=incidents.jsonl" \
+  -H "Authorization: Bearer ogn_…" -H "Content-Type: application/x-ndjson" \
+  --data-binary @incidents.jsonl
+```
+
+中枢把这些行追加到来源 `chat-ops` 的文件 `path`，视为令牌名称 `chat-bridge` 发送的内容，像处理设备发来的内容一样归档并解析它们，然后回答它读到多少行、多少事件是新的、多少它已经有了，以及多少不是有效事件。再次发送同样的行是安全的。一个请求最多包含 8 MiB 的行。见[把行发给你的中枢](./sources.md#send-lines-to-your-hub)。
 
 ## 遗忘 {#forgetting}
 

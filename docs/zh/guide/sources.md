@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-dca6c2dc
+sourceHash: sha256-e19a4a4e
 ---
 
 # 接入你自己的来源
@@ -62,6 +62,27 @@ appendFileSync(file, `${JSON.stringify(event)}\n`);
 - **它的版本。** 目录中的 `VERSION` 文件，第一行写一个版本号，例如 `chat-bridge 1.4.2`，会作为事件的 Agent 版本记录下来。
 - **送往中枢。** 在接入了[个人中枢](./hub.md)的设备上，`origin sync` 会像发送每个 Agent 的记录一样，把这个来源已归档的行发送给中枢；中继则直接把这些文件新增的行发送给中枢。
 
+## 把行发给你的中枢 {#send-lines-to-your-hub}
+
+不在你任何设备上运行的写入者，例如聊天机器人或云端的 Agent 运行时，可以改为把它的行直接发给你的[个人中枢](./hub.md)。在中枢上为它创建一个自己的令牌，以它命名，例如 `origin token create chat-bridge`，然后提交行：
+
+```bash
+curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=2026/11/02.jsonl" \
+  -H "Authorization: Bearer $ORIGIN_TOKEN" \
+  -H "Content-Type: application/x-ndjson" \
+  --data-binary @lines.jsonl
+```
+
+```json
+{ "lines": 2, "events": 2, "duplicates": 0, "parse_errors": 0 }
+```
+
+- **去向。** 中枢把这些行保存为该来源的文件 `path`，这里是 `chat-ops` 的 `2026/11/02.jsonl`，发送者是令牌的名称 `chat-bridge`，并像读取设备发来的内容一样读取它们。它们只在中枢上：设备从不下载它们，Agent 通过中枢找到它们，与那里的其他一切相同。
+- **请求体。** 事件行，最多 8 MiB，类型为 `application/x-ndjson` 或 `text/plain`，可以用 gzip 编码。请使用 `--data-binary`，它按原样发送文件；`-d` 会去掉换行符。末尾没有换行符的单独一行，就像 `-d '{"id":…}'` 发送的那样，也没有问题。
+- **回答。** 中枢读到多少行、它们带来多少新事件、多少行它已经有了（`duplicates`），以及多少行不是有效事件（`parse_errors`），这些行会被保留，但不会读出任何内容。
+- **再发一次。** 如果不确定某个请求是否到达，就再发一次：中枢已有的行不会新增任何内容。
+- **自己的令牌。** 设备的令牌也能用，并以那台设备的身份发送；但如果那台设备已经从它自己的 `sources/` 目录为同一个来源发送某个路径，中枢会拒绝这个路径。
+
 ## 选择 id 与会话 {#choose-ids-and-sessions}
 
 - **一个 id 永远指同一个事件。** 让一个来源的每个事件都有自己的 `id`，并且每次写它时都用同一个：写入者自己的 id（例如聊天消息的 id）最合适。`id` 已在该来源中的行不会新增任何内容，所以在不确定某一行是否写成功时，再写一次是安全的。
@@ -93,6 +114,6 @@ origin recall --cwd ~/code/demo-app    # what an agent there is handed
 ## 限制 {#limits}
 
 - **Origin 不替你访问网络。** 它只读取文件。从聊天工作区或通知服务获取事件的写入者自己运行，轮询或订阅这个服务，然后追加行；Origin 从不访问这个服务，也不需要它的凭据。
-- **它靠查看，没有人通知它。** 你自己的来源没有 hook：它们的行随下一次 `origin sync` 到达，或者在 Agent 运行 `origin mcp` 期间一分钟之内到达。
+- **它靠查看，没有人通知它。** 你自己的来源没有 hook：它们的行随下一次 `origin sync` 到达，或者在 Agent 运行 `origin mcp` 期间一分钟之内到达；发给中枢的行一到就会被读取。
 - **不用于记忆。** `memory` 类会被拒绝：导入的记忆只来自 Agent 为自己保存的记忆文件。要记下一个决定或一条事实，请保存一个条目，并引用相应的事件。
 - **不是编辑的地方。** 被重写而不是被追加的文件，会作为新的一代从头再读一遍，Origin 已经读入的事件保持原样。

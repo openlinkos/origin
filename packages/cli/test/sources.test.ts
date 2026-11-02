@@ -13,9 +13,11 @@ import {
   getSession,
   initStoreName,
   listEvents,
+  listSessions,
   makeRelay,
   openDatabase,
   rawLocator,
+  readRawLine,
   remoteCursors,
   syncFile,
   syncSource,
@@ -23,7 +25,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HubConfig } from '../src/hub/config.js';
 import { relayWithHub } from '../src/hub/relay.js';
-import { createHubServer } from '../src/hub/server.js';
+import { createHubServer, MAX_LINES_BODY } from '../src/hub/server.js';
 import { syncWithHub } from '../src/hub/sync.js';
 import { main } from '../src/main.js';
 import { main as recall } from '../src/recall.js';
@@ -235,11 +237,13 @@ describe('your own sources on a hub', () => {
   let hubDb: Database;
   let server: http.Server;
   let url: string;
+  let botToken: string;
   let laptopToken: string;
 
   beforeEach(async () => {
     hubHome = path.join(tmp, 'hub');
     hubDb = openDatabase(path.join(hubHome, 'origin.db'));
+    botToken = createToken(hubDb, 'bot');
     laptopToken = createToken(hubDb, 'laptop');
     server = createHubServer({
       db: hubDb,
@@ -257,13 +261,138 @@ describe('your own sources on a hub', () => {
     hubDb.close();
   });
 
+  const post = (
+    name: string,
+    query: string,
+    body: string | Buffer,
+    headers: Record<string, string> = {},
+  ) =>
+    fetch(`${url}/v1/sources/${name}/lines${query}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${botToken}`,
+        'Content-Type': 'application/x-ndjson',
+        ...headers,
+      },
+      body,
+    });
   const lines = (n: number) =>
     notesLines()
       .slice(0, n)
       .map((l) => `${l}\n`)
       .join('');
 
-  it('parses the sources/ mirrors a device pushes', async () => {
+  it('appends event lines to the file of the token’s device, and parses them', async () => {
+    const res = await post('chat', '?path=2026/11/02.jsonl', lines(2));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ lines: 2, events: 2, duplicates: 0, parse_errors: 0 });
+
+    // The file is the bot's, named by its path, and mirrored as a device's file is.
+    expect(remoteCursors(hubDb, 'bot')).toEqual([
+      {
+        source: 'chat',
+        path: '2026/11/02.jsonl',
+        generation: 1,
+        bytes: Buffer.byteLength(lines(2)),
+      },
+    ]);
+    const ev = getEvent(hubDb, 'chat:a2');
+    expect(ev).toMatchObject({ sessionId: 'retry-1', parentId: 'a1', rawLine: 2 });
+    const loc = rawLocator(hubDb, hubHome, ev as NonNullable<typeof ev>);
+    expect(loc).toMatchObject({
+      device: 'bot',
+      originalPath: '2026/11/02.jsonl',
+      mirrorPath: path.join(hubHome, 'raw', 'devices', 'bot', 'chat', '2026', '11', '02.jsonl'),
+    });
+    expect(loc && readRawLine(hubDb, hubHome, loc)).toBe(notesLines()[1]);
+    expect(listSessions(hubDb, { source: 'chat' })[0]).toMatchObject({ title: 'Upload retries' });
+
+    // Sending again is safe: the mirror records what was sent, and nothing is added twice.
+    const again = await post('chat', '?path=2026/11/02.jsonl', lines(2));
+    expect(await again.json()).toEqual({ lines: 2, events: 0, duplicates: 2, parse_errors: 0 });
+    expect(remoteCursors(hubDb, 'bot')[0]?.bytes).toBe(2 * Buffer.byteLength(lines(2)));
+    expect(listEvents(hubDb, { source: 'chat' })).toHaveLength(2);
+
+    // Bad lines are counted; a last line without a line break ends with the body, as curl -d sends.
+    const rest = notesLines().slice(2);
+    const more = await post('chat', '?path=2026/11/02.jsonl', `${rest.join('\n')}\nnot json`);
+    expect(await more.json()).toEqual({ lines: 4, events: 2, duplicates: 0, parse_errors: 2 });
+    expect(getSession(hubDb, 'chat', 'retry-2')).toMatchObject({ eventCount: 2 });
+    expect(getSession(hubDb, 'chat', 'retry-1')?.thread).toMatch(/^thr_/);
+
+    // gzip-encoded, and text/plain, the same.
+    const gz = await post('chat', '?path=b.jsonl', zlib.gzipSync(lines(1)), {
+      'Content-Encoding': 'gzip',
+      'Content-Type': 'text/plain; charset=utf-8',
+    });
+    expect(await gz.json()).toMatchObject({ lines: 1, duplicates: 1 });
+  });
+
+  it('refuses requests without a valid token, name, path, type, or size', async () => {
+    const status = async (res: Promise<Response>) => (await res).status;
+    const ok = '?path=a.jsonl';
+    expect(await status(post('chat', ok, lines(1), { Authorization: '' }))).toBe(401);
+    expect(await status(post('chat', ok, lines(1), { Authorization: 'Bearer ogn_nope' }))).toBe(
+      401,
+    );
+    // A token sends only as its device, and no device takes the hub's name.
+    expect(await status(post('chat', `${ok}&device=laptop`, lines(1)))).toBe(403);
+    const hubToken = createToken(hubDb, 'hub');
+    expect(await status(post('chat', ok, lines(1), { Authorization: `Bearer ${hubToken}` }))).toBe(
+      403,
+    );
+
+    for (const name of [
+      'codex',
+      'claude-code',
+      'Chat',
+      'c',
+      'devices',
+      'all',
+      'my_chat',
+      'a%2Fb',
+    ]) {
+      expect(await status(post(name, ok, lines(1))), name).toBe(400);
+    }
+    for (const p of [
+      '',
+      '?path=',
+      '?path=a.txt',
+      '?path=../a.jsonl',
+      '?path=a/../../b.jsonl',
+      '?path=/abs.jsonl',
+      '?path=a%5Cb.jsonl',
+      '?path=a//b.jsonl',
+      '?path=.hidden.jsonl',
+      '?path=C:/a.jsonl',
+      '?path=nul.jsonl',
+      '?path=a/com1/b.jsonl',
+      `?path=${'a'.repeat(195)}.jsonl`,
+    ]) {
+      expect(await status(post('chat', p, lines(1))), p).toBe(400);
+    }
+    expect(await status(post('chat', `?path=${'a'.repeat(194)}.jsonl`, lines(1)))).toBe(200);
+    expect(await status(post('chat', ok, lines(1), { 'Content-Type': 'application/json' }))).toBe(
+      415,
+    );
+    expect(
+      await status(
+        fetch(`${url}/v1/sources/chat/lines${ok}`, {
+          headers: { Authorization: `Bearer ${botToken}` },
+        }),
+      ),
+    ).toBe(405);
+    // At most MAX_LINES_BODY bytes, as sent or once decompressed.
+    const big = Buffer.alloc(MAX_LINES_BODY + 1, 0x0a);
+    expect(await status(post('chat', ok, big))).toBe(413);
+    expect(await status(post('chat', ok, zlib.gzipSync(big), { 'Content-Encoding': 'gzip' }))).toBe(
+      413,
+    );
+    // Nothing but the one good request reached the store.
+    expect(remoteCursors(hubDb, 'bot').map((c) => c.path)).toEqual([`${'a'.repeat(194)}.jsonl`]);
+  });
+
+  it('parses the sources/ mirrors a device pushes, and keeps them apart from lines sent for it', async () => {
     const deviceHome = path.join(tmp, 'device');
     const deviceDb = openDatabase(path.join(deviceHome, 'origin.db'));
     try {
@@ -300,6 +429,14 @@ describe('your own sources on a hub', () => {
       expect(getSession(hubDb, 'notes', 'retry-1')?.thread).toBe(
         getSession(deviceDb, 'notes', 'retry-1')?.thread,
       );
+
+      // Lines sent with the laptop's token under the same path would share that mirror: refused.
+      const clash = await post('notes', '?path=2026/11/02.jsonl', lines(1), {
+        Authorization: `Bearer ${laptopToken}`,
+      });
+      expect(clash.status).toBe(400);
+      expect((await clash.json()).error).toMatch(/already has another file of notes mirrored as/);
+      expect(remoteCursors(hubDb, 'laptop')).toHaveLength(1);
     } finally {
       deviceDb.close();
     }

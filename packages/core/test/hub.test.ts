@@ -107,6 +107,7 @@ describe('appendRemote', () => {
       linesRead: 2,
       eventsAdded: 2,
       parseErrors: 0,
+      duplicates: 0,
     });
 
     const mirror = path.join(home, 'raw', 'devices', 'laptop', 'fake', 'proj', 's1.jsonl');
@@ -301,6 +302,43 @@ describe('appendRemote', () => {
     }
     expect(fs.existsSync(path.join(home, 'raw'))).toBe(false);
     expect(listEvents(db)).toEqual([]);
+  });
+
+  it('counts the lines whose events the store already had as duplicates', () => {
+    const { adapter } = spyAdapter();
+    appendRemote(
+      { db, home },
+      adapter,
+      chunk({ path: '/a/s1.jsonl', relPath: 'a/s1.jsonl', text: two }),
+    );
+    // The same lines in another file add nothing, though they are mirrored as sent.
+    const again = appendRemote(
+      { db, home },
+      adapter,
+      chunk({ path: '/b/s1.jsonl', relPath: 'b/s1.jsonl', text: two }),
+    );
+    expect(again).toMatchObject({ ok: true, linesRead: 2, eventsAdded: 0, duplicates: 2 });
+    expect(listEvents(db)).toHaveLength(2);
+  });
+
+  it('refuses a file whose mirror another file of the device already has', () => {
+    const { adapter } = spyAdapter();
+    appendRemote({ db, home }, adapter, chunk({ text: two }));
+    // Another original path with the same relative path, as a script writing to the hub with a
+    // device's token would send next to the device's own source; or the same, in another case.
+    for (const relPath of ['proj/s1.jsonl', 'PROJ/S1.jsonl']) {
+      expect(() =>
+        appendRemote({ db, home }, adapter, chunk({ path: relPath, relPath, text: two })),
+      ).toThrow(/already has another file of fake mirrored as/);
+    }
+    expect(remoteCursors(db, 'laptop').map((c) => c.path)).toEqual([
+      '/home/me/.fake/proj/s1.jsonl',
+    ]);
+    // The first file goes on as before.
+    const more = line('e3', 's1', 3000, 'user', 'third');
+    expect(
+      appendRemote({ db, home }, adapter, chunk({ offset: Buffer.byteLength(two), text: more })),
+    ).toMatchObject({ ok: true, eventsAdded: 1 });
   });
 
   it('keeps events forgotten on the hub forgotten when a device pushes them again', () => {
