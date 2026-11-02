@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-f8dba7fb
+sourceHash: sha256-332c36bb
 ---
 
 # 命令参考
@@ -10,7 +10,7 @@ origin status                                          各来源统计、条目�
 origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
 origin timeline  --session <id> [--all]                单个会话的事件（默认不含工具事件）
 origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
-origin show      <id> [--source <id>]                  显示条目、事件（以及它的原始来源）、会话或一次召回
+origin show      <id> [--source <id>]                  显示条目、事件（以及它的原始来源）、会话、线索或一次召回
 origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
 origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
 origin forget    <id> --reason <text> [--yes]          在每个库中隐藏条目或事件，并保存为记录（需加 --yes 确认）
@@ -39,7 +39,7 @@ origin push                                            与 origin sync 相同（
 - **来源 id**：`claude-code`、`codex`、`cursor`、`grok` 与 `zcode`。
 - **条目类型**：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。
 - **条目**：列出和检索到的都是当前的条目。已被取代的版本，以及有效期已经结束的条目（例如文件已被删除的导入记忆），用 `origin entries --history` 或 `origin show` 才能看到。从 Agent 为自己保存的记忆文件导入的条目会标记为导入的。
-- **id 形式**：条目如 `ent_5f0c2a9e41b7`；事件如 `claude-code:<uuid>` 或 `codex:<session>:o12`；遗忘记录（遗忘与恢复留下的记录）如 `tmb_3a9d70c1e2f4`；召回如 `rcl_7d2e9a0b1c3f`。会话用它的 Agent 给的 id，例如一个 UUID。
+- **id 形式**：条目如 `ent_5f0c2a9e41b7`；事件如 `claude-code:<uuid>` 或 `codex:<session>:o12`；遗忘记录（遗忘与恢复留下的记录）如 `tmb_3a9d70c1e2f4`；召回如 `rcl_7d2e9a0b1c3f`；线索，即属于同一件工作的那些会话（见[线索](./concepts.md#threads)），如 `thr_4c1e9a7b2d30`。会话用它的 Agent 给的 id，例如一个 UUID；`origin timeline` 会在会话 id 旁显示它的线索。
 - CLI 输出为英文。
 
 ## 检索 {#searching}
@@ -78,7 +78,7 @@ Sources:
       ↳ claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
 ```
 
-对会话 id，`show` 以卡片的形式显示这个会话，就是 MCP 工具 `get` 交给 Agent 的那张：它的名称和时间、开启它前 20 轮的提示、从中写下的条目、它拿到的召回，以及同一项目中紧挨在它前后的会话，每样都带着 id，可以接着 `show`。两个 Agent 的会话 id 相同时，用 `--source` 选其中一个。
+对会话 id，`show` 以卡片的形式显示这个会话，就是 MCP 工具 `get` 交给 Agent 的那张：它的名称和时间、它所在的线索（如果有的话）、开启它前 20 轮的提示、从中写下的条目、它拿到的召回，以及同一项目中紧挨在它前后的会话，每样都带着 id，可以接着 `show`。两个 Agent 的会话 id 相同时，用 `--source` 选其中一个。
 
 ```console
 $ origin show 9d3b6f20-5a1e-4c7d-8b2f-6e0a4c9d1b3f
@@ -87,6 +87,7 @@ Name        Store format
 Directory   /home/dana/code/origin
 Time        2026-10-20 09:58 – 11:20
 Events      186 events, 2 turns
+Thread      thr_4c1e9a7b2d30, 2 sessions  (origin show thr_4c1e9a7b2d30)
 
 Turns:
     1. [2026-10-20 09:58] How should we version the store format?
@@ -106,6 +107,32 @@ Before      codex 2026-10-19 17:30  “Sketch the store layout”
 After       —
 
 Its events: origin timeline --session 9d3b6f20-5a1e-4c7d-8b2f-6e0a4c9d1b3f
+```
+
+对线索 id，`show` 以卡片的形式显示这条线索，就是 `get` 交给 Agent 的那张：它的名称、项目和时间，它的前 20 个会话（从旧到新），这些会话所属的 Agent 和所在的工作分支，从中写下的条目，以及它的最后一条提示。
+
+```console
+$ origin show thr_4c1e9a7b2d30
+Thread      thr_4c1e9a7b2d30  project origin
+Name        Store format
+Time        2026-10-20 09:58 – 2026-10-22 16:05
+Sessions    2 sessions, of claude-code, codex
+Branches    store-format
+
+Sessions:
+  [2026-10-20 09:58] claude-code   186 events  Store format
+      ↳ 9d3b6f20-5a1e-4c7d-8b2f-6e0a4c9d1b3f
+  [2026-10-22 15:12] codex          74 events  “Write the migration for the new column”
+      ↳ 0199b7c4-2d1e-7f3a-8b5c-6d7e8f9a0b1c
+
+Entries written from it:
+  [2026-10-20 10:42] memory  No schema versioning or migrations before the first release; test against a fresh ORIGIN_HOME.
+      ↳ ent_5f0c2a9e41b7
+
+Last prompt [2026-10-22 16:01] run the migration tests on Windows too
+      ↳ codex:0199b7c4-2d1e-7f3a-8b5c-6d7e8f9a0b1c:o212
+
+A session of it: origin show <session id>
 ```
 
 ## 召回 {#recall}

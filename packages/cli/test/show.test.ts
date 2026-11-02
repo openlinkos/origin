@@ -7,6 +7,7 @@ import {
   openDatabase,
   remember,
   syncSource,
+  threadIdOf,
   transaction,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -122,5 +123,55 @@ describe('origin show <session id>', () => {
     out = [];
     expect(await main(['show', 's1', '--source', 'twin'])).toBe(0);
     expect(out.join('\n')).toContain('Session     s1  twin, project demo');
+  });
+});
+
+describe('origin show <thread id>', () => {
+  it('prints the thread card: its sessions, agents, branches, entries, and last prompt', async () => {
+    const src = path.join(tmp, 'branch');
+    fs.mkdirSync(src);
+    const at = (id: string, session: string, ts: number, role: string, text: string) =>
+      `${JSON.stringify({ id, session, ts, role, text, branch: 'feat-cache' })}\n`;
+    fs.writeFileSync(
+      path.join(src, 't1.jsonl'),
+      at('c1', 't1', 5000, 'user', 'Start the cache rework') +
+        at('c2', 't1', 5010, 'assistant', 'Started.'),
+    );
+    fs.writeFileSync(
+      path.join(src, 't2.jsonl'),
+      at('d1', 't2', 9000, 'user', 'Finish the cache rework') +
+        at('d2', 't2', 9010, 'assistant', 'Finished.'),
+    );
+    const db = openDatabase(dbPath(home));
+    await syncSource({ db, home }, { ...fakeAdapter(src), id: 'agent' });
+    const written = remember(db, {
+      kind: 'memory',
+      text: 'The cache rework is finished.',
+      confidence: 0.9,
+      author: 'test',
+      sources: [{ eventId: 'agent:d2' }],
+    }).id;
+    const thread = threadIdOf('agent', 't1');
+    db.close();
+
+    expect(await main(['timeline', '--since', '1970-01-01'])).toBe(0);
+    expect(out.join('\n')).toContain(`↳ t2  thread ${thread}`);
+    out = [];
+    expect(await main(['show', thread])).toBe(0);
+    const text = out.join('\n');
+    expect(text).toContain(`Thread      ${thread}  project demo`);
+    expect(text).toContain('Name        Start the cache rework');
+    expect(text).toContain('Sessions    2 sessions, of agent');
+    expect(text).toContain('Branches    feat-cache');
+    expect(text).toMatch(/agent {7} {4}2 events {2}“Start the cache rework”\n {6}↳ t1/);
+    expect(text).toMatch(
+      new RegExp(`memory {2}The cache rework is finished\\.\\n {6}↳ ${written}`),
+    );
+    expect(text).toMatch(/Last prompt \[.*\] Finish the cache rework\n {6}↳ agent:d1/);
+    out = [];
+    expect(await main(['show', 't2'])).toBe(0);
+    expect(out.join('\n')).toContain(`Thread      ${thread}, 2 sessions`);
+    expect(await main(['show', 'thr_000000000000'])).toBe(1);
+    expect(out.at(-1)).toBe('Not found: thr_000000000000');
   });
 });

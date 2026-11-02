@@ -34,6 +34,7 @@ import {
   isRecallId,
   isRelay,
   isStoreNameFixed,
+  isThreadId,
   lastRelayed,
   listAdminSessions,
   listAudit,
@@ -81,6 +82,7 @@ import {
   type GetResult,
   isRecallResult,
   isSessionResult,
+  isThreadResult,
   type RecallResult,
   type SearchResult,
   type SessionResult,
@@ -90,7 +92,9 @@ import {
   serveReplica,
   serveStdio,
   sessionResult,
+  type ThreadResult,
   type TimelineResult,
+  threadResult,
   WATCH_INTERVAL_MS,
 } from '@openlinkos/origin-mcp';
 import { cmdAgents } from './agents.js';
@@ -558,7 +562,15 @@ async function relayStatus(ctx: Ctx): Promise<number> {
 /** A session as the CLI lists it, from this store or from the hub. */
 type ShownSession = Pick<
   SessionRow,
-  'sessionId' | 'source' | 'project' | 'title' | 'prompt' | 'startedAt' | 'endedAt' | 'eventCount'
+  | 'sessionId'
+  | 'source'
+  | 'project'
+  | 'title'
+  | 'prompt'
+  | 'startedAt'
+  | 'endedAt'
+  | 'eventCount'
+  | 'thread'
 >;
 
 /** An event as the CLI lists it. `cwd` is undefined when the hub's answer does not carry it. */
@@ -593,6 +605,7 @@ const fromSessionView = (v: SessionView): ShownSession => ({
   startedAt: parseIso(v.started),
   endedAt: parseIso(v.ended),
   eventCount: v.events,
+  thread: v.thread ?? null,
 });
 
 const fromEventView = (v: EventView): ShownEvent => ({
@@ -656,9 +669,12 @@ function printSessions(sessions: ShownSession[]): number {
     console.log(
       `  ${fmtTime(s.startedAt)}–${fmtTime(s.endedAt)}  ${s.source.padEnd(11)} ${(s.project ?? '—').padEnd(24)} ${String(s.eventCount).padStart(5)} events  ${oneLine(name, 60)}`,
     );
-    console.log(`           ↳ ${s.sessionId}`);
+    console.log(`           ↳ ${s.sessionId}${s.thread ? `  thread ${s.thread}` : ''}`);
   }
-  console.log(`\n${count(sessions.length, 'session')}. View one: origin timeline --session <id>`);
+  const threads = sessions.some((s) => s.thread) ? '; a thread: origin show <thr_ id>' : '';
+  console.log(
+    `\n${count(sessions.length, 'session')}. View one: origin timeline --session <id>${threads}`,
+  );
   return 0;
 }
 
@@ -889,6 +905,11 @@ async function cmdShow(ctx: Ctx, args: string[]): Promise<number> {
   if (isRelay(ctx.db)) return showFromHub(relayHub(ctx), id, values.source);
   if (isRecallId(id)) return showRecall(ctx, id);
   if (isEntryId(id)) return showEntry(ctx, id);
+  if (isThreadId(id)) {
+    if (!resolveId(ctx.db, id)) return notFound(ctx, id);
+    printThread(threadResult(ctx.db, id));
+    return 0;
+  }
   // An event, or a session: by its id, or as `<source>:<session id>`.
   const opened = resolveId(ctx.db, id, values.source);
   if (opened?.kind === 'session') {
@@ -936,6 +957,11 @@ function printSession(s: SessionResult): void {
   if (s.cwd) console.log(`Directory   ${s.cwd}`);
   console.log(`Time        ${fmtDateTime(started)} – ${until}`);
   console.log(`Events      ${count(s.events, 'event')}, ${count(s.turns, 'turn')}`);
+  if (s.thread) {
+    console.log(
+      `Thread      ${s.thread.id}, ${count(s.thread.sessions, 'session')}  (origin show ${s.thread.id})`,
+    );
+  }
   if (s.prompts.length > 0) {
     console.log('\nTurns:');
     for (const p of s.prompts) {
@@ -980,6 +1006,46 @@ function printSession(s: SessionResult): void {
   console.log(`\nIts events: origin timeline --session ${s.session}`);
 }
 
+/**
+ * A thread as `origin show` prints it: its card (see threadResult in the MCP package), the same on
+ * a device and, from its hub, on a relay.
+ */
+function printThread(t: ThreadResult): void {
+  const started = parseIso(t.started);
+  const ended = parseIso(t.ended);
+  const until = fmtDate(started) === fmtDate(ended) ? fmtTime(ended) : fmtDateTime(ended);
+  const total = t.sessions.length + t.more_sessions;
+  console.log(`Thread      ${t.thread}  project ${t.project ?? '—'}`);
+  console.log(`Name        ${oneLine(t.title ?? '—', 100)}`);
+  console.log(`Time        ${fmtDateTime(started)} – ${until}`);
+  console.log(`Sessions    ${count(total, 'session')}, of ${t.agents.join(', ')}`);
+  if (t.branches.length > 0) console.log(`Branches    ${t.branches.join(', ')}`);
+  console.log('\nSessions:');
+  for (const s of t.sessions) {
+    // A session without a title is named by its first prompt, in quotes: the user's words.
+    const name = s.title ?? (s.prompt ? `“${s.prompt}”` : '');
+    console.log(
+      `  [${fmtDateTime(parseIso(s.started))}] ${s.source.padEnd(11)} ${String(s.events).padStart(5)} events  ${oneLine(name, 80)}`,
+    );
+    console.log(`      ↳ ${s.session}`);
+  }
+  if (t.more_sessions > 0) console.log(`  … and ${count(t.more_sessions, 'more session')}`);
+  if (t.entries.length > 0) {
+    console.log('\nEntries written from it:');
+    for (const e of t.entries) {
+      console.log(`  [${fmtDateTime(Date.parse(e.created))}] ${e.kind}  ${oneLine(e.text, 120)}`);
+      console.log(`      ↳ ${e.id}`);
+    }
+  }
+  if (t.last_prompt) {
+    console.log(
+      `\nLast prompt [${fmtDateTime(Date.parse(t.last_prompt.time))}] ${oneLine(t.last_prompt.text, 120)}`,
+    );
+    console.log(`      ↳ ${t.last_prompt.id}`);
+  }
+  console.log('\nA session of it: origin show <session id>');
+}
+
 /** A recall as the hub has it, for `origin show` on a relay. */
 function printRecall(r: RecallResult): void {
   const at = OCCASIONS[r.occasion as RecallRecord['occasion']] ?? r.occasion;
@@ -1010,6 +1076,10 @@ async function showFromHub(hub: HubConfig, id: string, source?: string): Promise
   const r = (await askHub(hub, 'get', source ? { id, source } : { id })) as GetResult;
   if (isSessionResult(r)) {
     printSession(r);
+    return 0;
+  }
+  if (isThreadResult(r)) {
+    printThread(r);
     return 0;
   }
   if (isRecallResult(r)) {

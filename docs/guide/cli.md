@@ -6,7 +6,7 @@ origin status                                          Per-source counts, entrie
 origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
 origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
 origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
-origin show      <id> [--source <id>]                  Show an entry, an event (with its original source), a session, or a recall
+origin show      <id> [--source <id>]                  Show an entry, an event (with its original source), a session, a thread, or a recall
 origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
 origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
 origin forget    <id> --reason <text> [--yes]          Hide an entry or event on every store, as a record (needs --yes)
@@ -35,7 +35,7 @@ origin push                                            Same as origin sync (kept
 - **Source ids** are `claude-code`, `codex`, `cursor`, `grok`, and `zcode`.
 - **Entry kinds** are `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries).
 - **Entries** listed and found are the current ones. Superseded versions, and entries whose validity has ended (such as an imported memory whose file was deleted), appear with `origin entries --history` and in `origin show`. Entries imported from the memory files agents keep for themselves are marked as imported.
-- **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting and restoring leave, and `rcl_7d2e9a0b1c3f` for recalls. Sessions go by the id their agent gives them, such as a UUID.
+- **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting and restoring leave, `rcl_7d2e9a0b1c3f` for recalls, and `thr_4c1e9a7b2d30` for threads, the sessions of one piece of work (see [Threads](./concepts.md#threads)). Sessions go by the id their agent gives them, such as a UUID; `origin timeline` shows a session's thread next to its id.
 
 ## Searching
 
@@ -73,7 +73,7 @@ Sources:
       ↳ claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
 ```
 
-For a session id, `show` prints the session as a card, the one the MCP tool `get` hands agents: its name and time, the prompts that start its first 20 turns, the entries written from it, the recalls it was handed, and the sessions just before and after it in its project, with the id of each, to `show` next. When sessions of two agents have the same id, `--source` picks one.
+For a session id, `show` prints the session as a card, the one the MCP tool `get` hands agents: its name and time, its thread, if it is in one, the prompts that start its first 20 turns, the entries written from it, the recalls it was handed, and the sessions just before and after it in its project, with the id of each, to `show` next. When sessions of two agents have the same id, `--source` picks one.
 
 ```console
 $ origin show 9d3b6f20-5a1e-4c7d-8b2f-6e0a4c9d1b3f
@@ -82,6 +82,7 @@ Name        Store format
 Directory   /home/dana/code/origin
 Time        2026-10-20 09:58 – 11:20
 Events      186 events, 2 turns
+Thread      thr_4c1e9a7b2d30, 2 sessions  (origin show thr_4c1e9a7b2d30)
 
 Turns:
     1. [2026-10-20 09:58] How should we version the store format?
@@ -101,6 +102,32 @@ Before      codex 2026-10-19 17:30  “Sketch the store layout”
 After       —
 
 Its events: origin timeline --session 9d3b6f20-5a1e-4c7d-8b2f-6e0a4c9d1b3f
+```
+
+For a thread id, `show` prints the thread as a card, as `get` hands it to agents: its name, project, and time, its first 20 sessions, oldest first, the agents and work branches they were of, the entries written from them, and its last prompt.
+
+```console
+$ origin show thr_4c1e9a7b2d30
+Thread      thr_4c1e9a7b2d30  project origin
+Name        Store format
+Time        2026-10-20 09:58 – 2026-10-22 16:05
+Sessions    2 sessions, of claude-code, codex
+Branches    store-format
+
+Sessions:
+  [2026-10-20 09:58] claude-code   186 events  Store format
+      ↳ 9d3b6f20-5a1e-4c7d-8b2f-6e0a4c9d1b3f
+  [2026-10-22 15:12] codex          74 events  “Write the migration for the new column”
+      ↳ 0199b7c4-2d1e-7f3a-8b5c-6d7e8f9a0b1c
+
+Entries written from it:
+  [2026-10-20 10:42] memory  No schema versioning or migrations before the first release; test against a fresh ORIGIN_HOME.
+      ↳ ent_5f0c2a9e41b7
+
+Last prompt [2026-10-22 16:01] run the migration tests on Windows too
+      ↳ codex:0199b7c4-2d1e-7f3a-8b5c-6d7e8f9a0b1c:o212
+
+A session of it: origin show <session id>
 ```
 
 ## Recall
