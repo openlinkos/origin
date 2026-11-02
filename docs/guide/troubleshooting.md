@@ -71,13 +71,22 @@ Results from an agent end with `Note: the Origin hub was not consulted (the hub 
 
 A device keeps working without its hub: it answers from its own store after waiting 2 seconds for the hub (`ORIGIN_HUB_TIMEOUT_MS`), saves what agents write locally, and sends it on the next sync. Only correcting or forgetting something that only the hub has needs the hub.
 
-Run `origin hub status`: it shows when the device last synced, the error of the last sync that failed, and whether the hub accepts the token now. A message that the hub `rejected the token (HTTP 401)` means the token was revoked or mistyped: create a new one on the hub and connect again (see [Create tokens](./hub.md#create-tokens)). Check the TLS proxy or CDN in front of the hub (see [Put it behind TLS](./hub.md#put-it-behind-tls)) and `GET /healthz`, which needs no token.
+Run `origin hub status`: it shows when the device last synced, the error of the last sync that failed, and whether the hub accepts the token now. A message that the hub `rejected the token (HTTP 401)` means the token was revoked or mistyped: connect the device again, with `origin hub connect <url>` and your approval in the admin UI, or with a new token created on the hub (see [Devices and agents](./hub.md#devices-and-agents)). Check the TLS proxy or CDN in front of the hub (see [Put it behind TLS](./hub.md#put-it-behind-tls)) and `GET /healthz`, which needs no token.
 
 ### The token belongs to another device {#the-token-belongs-to-another-device}
 
 `origin hub connect` fails with `This token belongs to device "laptop", but this store is named "desktop"; …`, or the hub refuses requests with 403.
 
 A hub token works only for the device it is named after, and a device is known by its store's name. Either create a token named after this store on the hub (`origin token create desktop`) and connect with it, or, if this machine is `laptop`, connect it under that name with `--device laptop`. A store keeps its name once it has written entries or tombstones under it (`This store is named "desktop" and keeps that name, …`); entries imported from agents' memory files do not count.
+
+### An agent or a device cannot sign in to the hub {#an-agent-or-a-device-cannot-sign-in-to-the-hub}
+
+`claude mcp login origin` or `codex mcp login origin` reports that the server does not support OAuth, `origin hub connect <url>` says the hub `does not let devices connect by browser`, or the hub's page says `This sign-in cannot go on`.
+
+- Agents and devices sign in through the hub's [admin UI](./admin.md), so it must be served at `/admin` on the hub's own address (`--admin`, or `ORIGIN_ADMIN=on`), not on a listener of its own, and a proxy in front of the hub must forward `/.well-known/oauth-*` and `/oauth/*` (see [Put it behind TLS](./hub.md#put-it-behind-tls)). Otherwise, use tokens (see [Devices and agents](./hub.md#devices-and-agents)).
+- Claude Code signs in only to a hub served over https, or at `localhost` or `127.0.0.1`.
+- `Could not read the app's description at https://…`: Claude Code and Codex describe themselves by documents at claude.ai and chatgpt.com, which the hub fetches; the hub must reach them over https, and refuses addresses on private networks.
+- An agent that worked before and now asks to sign in again was revoked, signed out, or reached the end of the time you allowed it, or one of its refresh tokens was used twice, which revokes it: sign it in again.
 
 ### A relay warns about sessions not sent yet {#a-relay-warns-about-sessions-not-sent-yet}
 

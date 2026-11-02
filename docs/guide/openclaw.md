@@ -82,10 +82,10 @@ OpenClaw lets a plugin it does not bundle read a run's messages at its end only 
 
 ### Send to your hub
 
-Create a token on the hub, named after the Gateway's host, and give it to the plugin:
+Create an agent's token on the hub, named after the Gateway's host, and give it to the plugin:
 
 ```bash
-origin token create openclaw-us       # on the hub, or: docker exec origin-hub origin token create openclaw-us
+origin token create openclaw-us --agent   # on the hub, or: docker exec origin-hub origin token create openclaw-us --agent
 ```
 
 The token's name is the device the lines are recorded under: the hub keeps them as files of the source `openclaw` sent by `openclaw-us`, beside what your devices send. Give each Gateway a token of its own. Keep the token out of `openclaw.json`: as a SecretRef, as above, the Gateway resolves it from 1Password when it loads the plugin; or put it in an environment variable of the Gateway's service and name that variable:

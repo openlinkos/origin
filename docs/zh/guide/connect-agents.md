@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-7cc20485
+sourceHash: sha256-2d68cccd
 ---
 
 # 接入 Agent
@@ -100,7 +100,44 @@ server 会告诉 Agent 如何使用这些工具，你只需用自然语言提问
 如果你在多台机器上使用 Agent，或者使用云端 Agent，可以运行一个[个人中枢](./hub.md)：
 
 - 已接入中枢的设备上，上面这些本地 `origin mcp` 注册照常可用：server 根据设备自己的库作答，补充中枢的回答，并把 Agent 保存的内容同步到中枢。
-- 云端 Agent 没有本地会话记录，用各自的令牌直接注册中枢的 `/mcp` 地址。例如在 Claude Code 中：`claude mcp add --scope user --transport http origin https://hub.example.com/mcp --header "Authorization: Bearer ogn_…"`。
+- 没有本地会话记录的 Agent，例如在云端机器上运行的 Agent，直接注册中枢的 `/mcp` 地址。中枢在 `/admin` 下提供[管理界面](./admin.md)时，Claude Code 和 Codex 通过你的浏览器用 OAuth 登录它；其他 Agent 使用令牌。
+
+### 用 OAuth 登录 {#sign-in-with-oauth}
+
+Claude Code：
+
+```bash
+claude mcp add --scope user --transport http origin https://hub.example.com/mcp
+claude mcp login origin
+```
+
+`claude mcp add` 只保存中枢，并不登录。要登录，可以在命令行中运行 `claude mcp login origin`，它会在你的浏览器里打开中枢；也可以在 Claude Code 里运行 `/mcp` 并选择 `origin`。在没有浏览器的机器上，例如通过 SSH 时，`claude mcp login origin --no-browser` 会改为打印链接：在你自己的电脑上打开它，再把浏览器最后停留的地址粘贴回来（请用 `ssh -t` 连接，因为粘贴需要终端）。
+
+Codex CLI：
+
+```bash
+codex mcp add origin --url https://hub.example.com/mcp
+codex mcp login origin
+```
+
+在浏览器中，如果还没有登录中枢的管理界面，请先登录，然后中枢会询问是否允许这个 Agent。页面显示 Agent 的名称、之后浏览器会回到哪里（对于你电脑上的 Agent，是 `localhost` 加一个端口），并让你选择这个 Agent 能做什么（读写或只读）以及有效多久（1 到 365 天）。允许之后，Agent 会收到它的令牌：一个有效期一小时的访问令牌，它用刷新令牌不断续期，直到你选择的期限为止。Agent 以自己的名称（例如 `claude-code`）出现在管理界面的**设备和 Agent**页面，你可以随时在那里吊销它，它写入的内容也以这个名称记为作者。`claude mcp logout origin` 也会让 Claude Code 在中枢上退出登录；单独运行 `claude mcp remove origin` 只会让 Claude Code 忘掉这个中枢，所以还请在中枢上吊销这个 Agent。
+
+两个 Agent 都能自己弄清楚如何登录：中枢对不带令牌的请求的回答，会把它们指向中枢的 OAuth 元数据（遵循 MCP 授权规范，使用 PKCE）。Claude Code 用 claude.ai 上的一份文档描述自己，Codex 用 chatgpt.com 上的一份，中枢通过 https 获取这些文档，所以中枢需要能访问这两个地址；没有这类文档的 Agent 则改为向中枢注册。Claude Code 只在 `localhost` 或 `127.0.0.1` 上登录使用明文 `http://` 地址的中枢；在其他任何地方，请通过 https 提供中枢。
+
+### 使用令牌 {#use-a-token}
+
+对于不能打开浏览器的 Agent，例如在 CI 中运行的 Agent，或者在没有在 `/admin` 下提供管理界面的中枢上，请在中枢上添加一个带令牌的 Agent（在管理界面中用**添加 Agent**，或者运行 `origin token create ci --agent`，只读取的 Agent 再加上 `--readonly`；见[设备和 Agent](./hub.md#devices-and-agents)），再把令牌交给它：
+
+```bash
+# Claude Code
+claude mcp add --scope user --transport http origin https://hub.example.com/mcp --header "Authorization: Bearer ogn_…"
+
+# Codex CLI，令牌放在环境变量中
+export ORIGIN_TOKEN=ogn_…
+codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var ORIGIN_TOKEN
+```
+
+添加 Agent 时，管理界面会显示这些命令，令牌已填在其中。只读的 Agent 只能看到读取类的工具。
 
 ## 更新 Origin 之后 {#after-updating-origin}
 

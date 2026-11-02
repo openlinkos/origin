@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-466f6804
+sourceHash: sha256-12c36207
 ---
 
 # 常见问题
@@ -75,13 +75,22 @@ Agent 得到的结果末尾带有 `Note: the Origin hub was not consulted (the h
 
 没有中枢，设备也照常工作：它等待中枢 2 秒（`ORIGIN_HUB_TIMEOUT_MS`）后用自己的库作答，把 Agent 写下的内容先存在本地，下一次同步时再发送。只有纠正或遗忘只在中枢上才有的内容，才需要中枢。
 
-运行 `origin hub status`：它显示设备上次同步的时间、上一次失败的同步的错误，以及中枢现在是否接受这个令牌。提示中枢 `rejected the token (HTTP 401)`，说明令牌已被吊销或输错了：在中枢上创建新令牌，再重新连接（见[创建令牌](./hub.md#create-tokens)）。还要检查中枢前面的 TLS 代理或 CDN（见[放在 TLS 之后](./hub.md#put-it-behind-tls)），以及不需要令牌的 `GET /healthz`。
+运行 `origin hub status`：它显示设备上次同步的时间、上一次失败的同步的错误，以及中枢现在是否接受这个令牌。提示中枢 `rejected the token (HTTP 401)`，说明令牌已被吊销或输错了：请重新接入这台设备，用 `origin hub connect <url>` 并在管理界面中批准，或者用在中枢上新建的令牌（见[设备和 Agent](./hub.md#devices-and-agents)）。还要检查中枢前面的 TLS 代理或 CDN（见[放在 TLS 之后](./hub.md#put-it-behind-tls)），以及不需要令牌的 `GET /healthz`。
 
 ### 令牌属于另一台设备 {#the-token-belongs-to-another-device}
 
 `origin hub connect` 失败，提示 `This token belongs to device "laptop", but this store is named "desktop"; …`，或者中枢以 403 拒绝请求。
 
 中枢令牌只对以它命名的那台设备有效，而设备以它的库的名称为人所知。要么在中枢上创建一个以这个库命名的令牌（`origin token create desktop`），用它来连接；要么，如果这台机器就是 `laptop`，用 `--device laptop` 以那个名称连接。库一旦以某个名称写过条目或遗忘记录，就会保留这个名称（`This store is named "desktop" and keeps that name, …`）；从 Agent 记忆文件导入的条目不算在内。
+
+### Agent 或设备无法登录中枢 {#an-agent-or-a-device-cannot-sign-in-to-the-hub}
+
+`claude mcp login origin` 或 `codex mcp login origin` 报告服务器不支持 OAuth，`origin hub connect <url>` 提示中枢 `does not let devices connect by browser`，或者中枢的页面显示 `This sign-in cannot go on`（中文界面中是“这次登录无法继续”）。
+
+- Agent 和设备通过中枢的[管理界面](./admin.md)登录，所以管理界面必须在中枢自己地址的 `/admin` 下提供（`--admin` 或 `ORIGIN_ADMIN=on`），而不是在单独的监听地址上；中枢前面的代理也必须转发 `/.well-known/oauth-*` 和 `/oauth/*`（见[放在 TLS 之后](./hub.md#put-it-behind-tls)）。否则，请使用令牌（见[设备和 Agent](./hub.md#devices-and-agents)）。
+- Claude Code 只登录通过 https 提供的中枢，或者 `localhost`、`127.0.0.1` 上的中枢。
+- `Could not read the app's description at https://…`：Claude Code 和 Codex 用 claude.ai 和 chatgpt.com 上的文档描述自己，由中枢去获取；中枢必须能通过 https 访问它们，并且会拒绝私有网络上的地址。
+- 以前能用、现在又要求重新登录的 Agent，是被吊销了、退出了登录，或者已到你允许的期限；也可能是它的某个刷新令牌被使用了两次，这会吊销它。请让它重新登录。
 
 ### 中继警告有会话还没有发送 {#a-relay-warns-about-sessions-not-sent-yet}
 

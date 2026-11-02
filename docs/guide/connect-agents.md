@@ -96,7 +96,44 @@ The server tells agents how to use these tools, so you can simply ask questions 
 If you use agents on several machines, or cloud agents, you can run a [personal hub](./hub.md):
 
 - On a device that is connected to the hub, the local `origin mcp` registrations above keep working. The server answers from the device's own store, adds the hub's answers, and syncs what agents save to the hub.
-- Cloud agents, which have no local session logs, register the hub's `/mcp` URL directly with their own token. For example, in Claude Code: `claude mcp add --scope user --transport http origin https://hub.example.com/mcp --header "Authorization: Bearer ogn_…"`.
+- Agents without local session logs, such as one on a cloud machine, register the hub's `/mcp` URL directly. Claude Code and Codex sign in to it with OAuth, through your browser, when the hub serves its [admin UI](./admin.md) at `/admin`; other agents use a token.
+
+### Sign in with OAuth
+
+Claude Code:
+
+```bash
+claude mcp add --scope user --transport http origin https://hub.example.com/mcp
+claude mcp login origin
+```
+
+`claude mcp add` saves the hub without signing in. Sign in from the shell with `claude mcp login origin`, which opens the hub in your browser, or inside Claude Code: run `/mcp` and choose `origin`. On a machine without a browser, such as over SSH, `claude mcp login origin --no-browser` prints the link instead: open it on your own computer, then paste back the address your browser ends up at (connect with `ssh -t`, since pasting needs a terminal).
+
+Codex CLI:
+
+```bash
+codex mcp add origin --url https://hub.example.com/mcp
+codex mcp login origin
+```
+
+In the browser, sign in to your hub's admin UI if you have not yet, and the hub asks whether to allow the agent. It shows the agent's name, where your browser returns afterwards (`localhost` and a port, for an agent on your computer), and lets you choose what the agent may do, read and write or read only, and for how long, from 1 to 365 days. Allow it, and the agent receives its tokens: an access token for an hour, which it renews with a refresh token until the time you chose. The agent appears on the admin UI's **Devices and agents** page under its name, such as `claude-code`, where you can revoke it at any time, and what it writes is recorded with that name as author. `claude mcp logout origin` signs Claude Code out on the hub too; `claude mcp remove origin` alone only forgets the hub in Claude Code, so revoke the agent on the hub as well.
+
+Both agents find out how to sign in by themselves: the hub's answer to a request without a token points them to its OAuth metadata (the MCP authorization specification, with PKCE). Claude Code describes itself by a document at claude.ai, and Codex by one at chatgpt.com, which the hub fetches over https, so the hub needs to reach them; agents without such a document register with the hub instead. Claude Code signs in to a hub at a plain `http://` address only on `localhost` or `127.0.0.1`; serve the hub over https everywhere else.
+
+### Use a token
+
+For an agent that cannot open a browser, such as one in CI, or for a hub without the admin UI at `/admin`, add an agent with a token on the hub (**Add an agent** in the admin UI, or `origin token create ci --agent`, with `--readonly` for one that only reads; see [Devices and agents](./hub.md#devices-and-agents)), and give it the token:
+
+```bash
+# Claude Code
+claude mcp add --scope user --transport http origin https://hub.example.com/mcp --header "Authorization: Bearer ogn_…"
+
+# Codex CLI, with the token in an environment variable
+export ORIGIN_TOKEN=ogn_…
+codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var ORIGIN_TOKEN
+```
+
+The admin UI shows these commands with the token in them when you add the agent. An agent that only reads sees only the tools that read.
 
 ## After updating Origin
 

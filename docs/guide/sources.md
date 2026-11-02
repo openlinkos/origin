@@ -60,7 +60,7 @@ appendFileSync(file, `${JSON.stringify(event)}\n`);
 
 ## Send lines to your hub
 
-A writer that runs on none of your devices, such as a chat bot or an agent runtime in the cloud, can send its lines straight to your [personal hub](./hub.md) instead. Give it a token of its own, created on the hub and named after it, such as `origin token create chat-bridge`, and post lines:
+A writer that runs on none of your devices, such as a chat bot or an agent runtime in the cloud, can send its lines straight to your [personal hub](./hub.md) instead. Give it an agent's token of its own, created on the hub and named after it, such as `origin token create chat-bridge --agent`, and post lines:
 
 ```bash
 curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=2026/11/02.jsonl" \

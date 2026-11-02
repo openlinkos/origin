@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-fbae6ba2
+sourceHash: sha256-31ecb699
 ---
 
 # 接入 OpenClaw
@@ -86,10 +86,10 @@ openclaw plugins install npm-pack:/tmp/openlinkos-origin-openclaw-*.tgz --force 
 
 ### 发往你的中枢 {#send-to-your-hub}
 
-在中枢上创建一个令牌，以 Gateway 所在的主机命名，然后把它交给插件：
+在中枢上创建一个 Agent 令牌，以 Gateway 所在的主机命名，然后把它交给插件：
 
 ```bash
-origin token create openclaw-us       # on the hub, or: docker exec origin-hub origin token create openclaw-us
+origin token create openclaw-us --agent   # on the hub, or: docker exec origin-hub origin token create openclaw-us --agent
 ```
 
 令牌的名字就是记录这些行时所用的设备：中枢把它们保存为由 `openclaw-us` 发送的来源 `openclaw` 的文件，与你的设备发来的内容放在一起。给每个 Gateway 一个自己的令牌。不要把令牌写进 `openclaw.json`：像上面那样写成 SecretRef，Gateway 加载插件时会从 1Password 解析它；或者把它放进 Gateway 服务的一个环境变量，并写上这个变量的名字：

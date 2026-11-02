@@ -36,7 +36,7 @@ Without Docker, on any machine with Origin installed (`npm install -g @openlinko
 origin serve --host 127.0.0.1 --port 7077
 ```
 
-`GET /healthz` reports health without authentication, and `POST /mcp` is the MCP endpoint. Add `--admin` to also serve the [admin UI](./admin.md) at `/admin`.
+`GET /healthz` reports health without authentication, and `POST /mcp` is the MCP endpoint. Add `--admin` to also serve the [admin UI](./admin.md) at `/admin`; with it there, devices and agents sign in through you, in your browser, rather than with tokens you copy (see [Devices and agents](#devices-and-agents)).
 
 ## The landing page
 
@@ -46,44 +46,68 @@ Search engines are asked to stay away from the whole hub (`/robots.txt` disallow
 
 If you present the hub under your own name, set `ORIGIN_POWERED_BY=off` to leave the credit to Origin off the page; the admin UI keeps its links to the project.
 
-Every other path, except `/healthz` and the admin UI with its own sign-in, needs a token (see [Create tokens](#create-tokens)). A request without one gets `401` with `{"error":"Missing or invalid token.","docs":"https://origin.openlinkos.com/guide/hub"}`, whose `docs` is this guide.
+Every other path, except `/healthz`, the admin UI with its own sign-in, and the sign-in endpoints of agents and devices under `/.well-known/` and `/oauth/`, needs a token (see [Devices and agents](#devices-and-agents)). A request without one gets `401` with `{"error":"Missing or invalid token.","docs":"https://origin.openlinkos.com/guide/hub"}`, whose `docs` is this guide.
 
 ## Put it behind TLS
 
 The hub speaks plain HTTP. Before you expose it beyond localhost, put it behind a reverse proxy or CDN that terminates TLS, and configure the proxy as follows:
 
-- Forward `/healthz`, `/mcp`, and `/v1/*` to the hub, and `/`, `/robots.txt`, and `/assets/*` for its [landing page](#the-landing-page).
+- Forward `/healthz`, `/mcp`, and `/v1/*` to the hub, and `/`, `/robots.txt`, and `/assets/*` for its [landing page](#the-landing-page). With the admin UI at `/admin`, also forward `/.well-known/oauth-protected-resource`, `/.well-known/oauth-protected-resource/mcp`, `/.well-known/oauth-authorization-server`, and `/oauth/*`, through which agents and devices sign in.
 - Allow request bodies of at least 16 MiB on `/v1/ingest`, which devices use to push session data, and of 8 MiB on `/v1/sources/*/lines`, if programs append event lines to the hub (see [Append event lines](#append-event-lines)).
-- Do not cache `/mcp` or `/v1/*`.
+- Do not cache `/mcp`, `/v1/*`, or `/oauth/*`.
 - If you enable the admin UI at `/admin`, also follow [Behind TLS and a CDN](./admin.md#behind-tls-and-a-cdn); in particular, set `ORIGIN_CLIENT_IP_HEADER`, or failed sign-ins from anyone count against you.
 
-## Create tokens
+## Devices and agents
 
-Every request except `/healthz` and the [landing page](#the-landing-page) needs a bearer token. Create one token per device or cloud agent, on the hub, and name a device's token after the device:
+Everything that reaches the hub does so for you: your **devices**, the machines that sync their sessions with it, and your **agents**, the cloud agents, bots, and pipelines that use its MCP endpoint. Each has a name and credentials that you can revoke at any time, on the admin UI's **Devices and agents** page, or with `origin token list` and `origin token revoke <name>` on the hub. There are no other people: the hub is yours alone.
+
+With the [admin UI](./admin.md) served at `/admin` on the hub's own address (`--admin`), devices and agents that can open a browser sign in through you, and no token is copied anywhere:
+
+- A device runs `origin hub connect <url>`, and you approve it in the admin UI (see [Connect a device](#connect-a-device)).
+- Claude Code, Codex, and other MCP clients sign in with OAuth: they open the hub in your browser, you allow them, and they keep and renew their own tokens (see [Connect a cloud agent](#connect-a-cloud-agent)).
+
+For a program that cannot open a browser, such as a bot, a CI job, or a pipeline, or on a hub without the admin UI at `/admin`, create a token on the hub:
 
 ```bash
-origin token create laptop          # prints the token once, starting with ogn_
+origin token create laptop                         # a device's token, named after it; printed once, starting with ogn_
+origin token create ci --agent                     # an agent's token: MCP, and event lines
+origin token create dashboard --agent --readonly   # an agent that only reads
 origin token list
-origin token revoke laptop
+origin token revoke ci
 ```
 
-With Docker, run the same commands through `docker exec`, for example `docker exec origin-hub origin token create laptop`. If you enable the [admin UI](./admin.md), you can also create and revoke tokens there, with the connection commands for each new token ready to copy.
+With Docker, run the same commands through `docker exec`, for example `docker exec origin-hub origin token create laptop`. In the admin UI, **Add an agent** creates an agent's token and shows it once, with the commands that use it.
 
-A token's name is a device name: the token `laptop` sends and receives sessions, entries, and tombstones only for the device `laptop`, and the hub refuses it for any other device. So a stolen token can never write as another device.
-
-The hub stores only a hash of each token, so copy the token when it is printed. If a token is lost, revoke it and create a new one with the same name; the device keeps its name and reconnects with the new token. If a device is retired, revoke its token. Entries record the agent and the device as author, for example `claude-code@laptop`; an agent that connects to the hub directly is recorded with its token name, for example `ci`.
+- **What each may do.** A device, and an agent unless you choose otherwise, is *read and write*: everything a token can do. An agent can be *read only*: it searches and reads through MCP, without the tools that write (`remember`, `propose`, `correct`, `forget`), and sends nothing to the hub. Tokens you created before this existed keep working as they did, as read and write.
+- **A device's token works only for it.** A token's name is a device name: the token `laptop` sends and receives sessions, entries, and tombstones only for the device `laptop`, and the hub refuses it for any other device. So a stolen token can never write as another device.
+- The hub stores only a hash of each token, so copy a token when it is printed. If a device loses its token, revoke it and connect the device again, by browser or with a new token of the same name; the device keeps its name. If a device is retired, revoke it. Entries record the agent and the device as author, for example `claude-code@laptop`; an agent that connects to the hub directly is recorded with its name, for example `ci`, or `claude-code` for Claude Code signed in with OAuth.
 
 ## Connect a device
 
 On each machine with agent session logs:
 
 ```bash
-origin hub connect https://hub.example.com --token ogn_… --device laptop
+origin hub connect https://hub.example.com
 origin hub status
 origin sync
 ```
 
-- The hub knows the device by its store's name: `ORIGIN_DEVICE`, or the host name, when the store was first used. That name must be the name of the device's token; `origin hub connect` and `origin hub status` check it with the hub, and if they differ, refuse and say how to fix it. `--device` renames a store that has not saved an entry or forgotten anything yet; after that, the store keeps its name, and its token must be created under that name. `origin hub disconnect` removes the connection.
+`origin hub connect` asks the hub for a code, and prints where to approve the device:
+
+```text
+To connect laptop to https://hub.example.com, open this link, sign in, and approve it:
+
+    https://hub.example.com/admin/activate?code=BCDF-GHJK
+
+or open https://hub.example.com/admin/activate and enter the code BCDF-GHJK. It expires in 10 minutes.
+Waiting for approval…
+```
+
+Open the link in any browser, on any device, sign in to the admin UI, check that the code is the one the command shows, and choose **Connect laptop**. Within a few seconds the command receives the device's token and connects. If a device of that name is connected already, the page says so, and approving gives the name to the new one: the token of the old one stops working. Approve only a code you have just seen on your own device.
+
+On a hub without the admin UI at `/admin`, create a token for the device on the hub and connect with it: `origin hub connect https://hub.example.com --token ogn_… --device laptop`.
+
+- The hub knows the device by its store's name: `ORIGIN_DEVICE`, or the host name, when the store was first used. It connects under that name, and its token is named after it; `origin hub connect` and `origin hub status` check it with the hub, and if they differ, refuse and say how to fix it. `--device` renames a store that has not saved an entry or forgotten anything yet; after that, the store keeps its name, and a token created for it must have that name. `origin hub disconnect` removes the connection.
 - `ORIGIN_HUB_URL` and `ORIGIN_HUB_TOKEN` override the stored connection.
 - `origin sync` ingests local sessions, sends the raw mirrors and the entries and tombstones written on the device, and applies the hub's tombstones. It is safe to re-run: a sync picks up where the previous one stopped. `origin push` does the same.
 
@@ -98,10 +122,12 @@ A device normally keeps a complete memory of its own, including a compressed cop
 Connect an empty store with `--relay`:
 
 ```bash
-origin hub connect https://hub.example.com --token ogn_… --device vps --relay
+origin hub connect https://hub.example.com --device vps --relay
 origin sync
 origin status
 ```
+
+Approve the device in the admin UI as for any device, or pass a token created on the hub with `--token`.
 
 - Only a store that holds nothing yet can become a relay. If this machine already has a store with sessions or entries, Origin refuses and changes nothing; set `ORIGIN_HOME` to a new directory and connect that one. A relay stays a relay; to keep a complete store on the machine again, use another new `ORIGIN_HOME`.
 - `origin sync` sends the new complete lines of every session log to the hub, which archives and parses them as if the device had sent its own copy, and `origin status` shows, for each source, how many files and bytes are still to send. Agents' ingest hooks and `origin mcp` send new lines as they run, as on any device.
@@ -114,7 +140,21 @@ The design is in [Relays](../architecture.md#relays).
 
 ## Connect a cloud agent
 
-Cloud agents have no local session logs, so they talk to the hub directly, each with its own token:
+Cloud agents have no local session logs, so they talk to the hub directly. Claude Code and Codex sign in with OAuth, through your browser:
+
+```bash
+# Claude Code: add the hub, then sign in with /mcp inside Claude Code, or from the shell
+claude mcp add --scope user --transport http origin https://hub.example.com/mcp
+claude mcp login origin
+
+# Codex CLI
+codex mcp add origin --url https://hub.example.com/mcp
+codex mcp login origin
+```
+
+The agent opens the hub in your browser. Sign in to the admin UI, and allow it, choosing what it may do (read and write, or read only) and for how long (1 to 365 days). It then keeps its own tokens and renews them, and it appears under **Devices and agents**, where you can revoke it at any time; `claude mcp logout origin` signs Claude Code out. See [Connect your agents](./connect-agents.md#using-a-personal-hub) for the details.
+
+An agent that cannot open a browser uses a token instead (see [Devices and agents](#devices-and-agents)):
 
 ```bash
 # Claude Code
@@ -126,10 +166,10 @@ codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var OR
 
 ## Append event lines
 
-Programs that run on none of your devices, such as a bot, an agent runtime in the cloud, or a pipeline, can bring their sessions to the hub as [event lines](./sources.md). Give each a token of its own, named after it, and post its lines to `POST /v1/sources/<name>/lines?path=<path>`:
+Programs that run on none of your devices, such as a bot, an agent runtime in the cloud, or a pipeline, can bring their sessions to the hub as [event lines](./sources.md). Give each an agent's token of its own, named after it, and post its lines to `POST /v1/sources/<name>/lines?path=<path>`:
 
 ```bash
-origin token create chat-bridge     # on the hub, once; prints the token
+origin token create chat-bridge --agent    # on the hub, once; prints the token
 curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=incidents.jsonl" \
   -H "Authorization: Bearer ogn_…" -H "Content-Type: application/x-ndjson" \
   --data-binary @incidents.jsonl
@@ -143,7 +183,7 @@ Forgetting through the hub works as on one machine (see [Privacy and your data](
 
 ## Manage it in a browser
 
-The hub can serve an [admin UI](./admin.md) for you: an overview of your devices and storage, your sessions and entries, search, correcting and forgetting, tokens, and an audit log. It is off by default; enable it with `origin serve --admin` (or `ORIGIN_ADMIN=on`) and sign in with the password the hub prints to its log on that first start, or one you set with `origin admin password` or `ORIGIN_ADMIN_PASSWORD`.
+The hub can serve an [admin UI](./admin.md) for you: an overview of your devices and storage, your sessions and entries, search, correcting and forgetting, your devices and agents, and an audit log. It is off by default; enable it with `origin serve --admin` (or `ORIGIN_ADMIN=on`). At the first sign-in, choose your username, and enter the password the hub prints to its log on that first start, or one you set with `origin admin password` or `ORIGIN_ADMIN_PASSWORD`; from then on you sign in with both.
 
 ## Keep raw mirrors in a bucket
 

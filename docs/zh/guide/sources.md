@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-2855be80
+sourceHash: sha256-1e1eb990
 ---
 
 # 接入你自己的来源
@@ -64,7 +64,7 @@ appendFileSync(file, `${JSON.stringify(event)}\n`);
 
 ## 把行发给你的中枢 {#send-lines-to-your-hub}
 
-不在你任何设备上运行的写入者，例如聊天机器人或云端的 Agent 运行时，可以改为把它的行直接发给你的[个人中枢](./hub.md)。在中枢上为它创建一个自己的令牌，以它命名，例如 `origin token create chat-bridge`，然后提交行：
+不在你任何设备上运行的写入者，例如聊天机器人或云端的 Agent 运行时，可以改为把它的行直接发给你的[个人中枢](./hub.md)。在中枢上为它创建一个自己的 Agent 令牌，以它命名，例如 `origin token create chat-bridge --agent`，然后提交行：
 
 ```bash
 curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=2026/11/02.jsonl" \

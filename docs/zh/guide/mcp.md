@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-017baf0c
+sourceHash: sha256-4ec76b45
 ---
 
 # MCP 工具
@@ -12,8 +12,8 @@ Origin 通过 [Model Context Protocol](https://modelcontextprotocol.io) 提供�
 
 - **在设备上**，Agent 启动 `origin mcp`，通过 stdio 提供服务。它从设备自己的库作答。在连接了[个人中枢](./hub.md)的设备上，它还会同时询问中枢，并合并两边的答案；在[中继](./hub.md#run-a-device-as-a-relay)上，它把每次调用都交给中枢。
 - **在中枢上**，`POST /mcp` 通过 MCP Streamable HTTP 提供同样的工具，无状态，响应为 JSON（不用服务器推送事件，`GET` 会返回 405），所以可以放在任何代理或 CDN 之后。这是给云端 Agent 和其他没有本地会话日志的客户端用的：
-  - 必须带 `Authorization: Bearer <token>`，令牌在中枢上创建（`origin token create <name>`）。
-  - `X-Origin-Client: <agent>` 可选。通过这次请求写下的条目记为 `<agent>@<令牌名>`；不带这个头时只记令牌名。
+  - 必须带 `Authorization: Bearer <token>`：在中枢上创建的令牌（`origin token create <name> --agent`），或者通过 OAuth 登录的 Agent 的访问令牌，Claude Code 和 Codex 会自己获取（见[接入 Agent](./connect-agents.md#sign-in-with-oauth)）。只读的 Agent 只拿到读取类工具，没有 `remember`、`propose`、`correct` 和 `forget`。
+  - `X-Origin-Client: <agent>` 可选。通过这次请求写下的条目记为 `<agent>@<名称>`，名称是令牌的名称或已登录 Agent 的名称；不带这个头时只记这个名称。
   - `X-Origin-Device: <name>` 可选，带了就必须等于令牌名，否则中枢以 403 拒绝请求。
 
 ```bash

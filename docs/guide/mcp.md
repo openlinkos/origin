@@ -8,8 +8,8 @@ There are two ways in, with the same tools:
 
 - **On a device**, agents start `origin mcp`, which serves over stdio. It answers from the device's store. On a device connected to a [personal hub](./hub.md), it also asks the hub and merges both answers; on a [relay](./hub.md#run-a-device-as-a-relay), it hands every call to the hub.
 - **On a hub**, `POST /mcp` serves the same tools over MCP Streamable HTTP, statelessly, with JSON responses (no server-sent events, and `GET` is refused with 405), so it works behind any proxy or CDN. This is for cloud agents and other clients without local session logs:
-  - `Authorization: Bearer <token>` is required, with a token created on the hub (`origin token create <name>`).
-  - `X-Origin-Client: <agent>` is optional. Entries written through the request are recorded as `<agent>@<token name>`, or as the token's name alone without the header.
+  - `Authorization: Bearer <token>` is required: a token created on the hub (`origin token create <name> --agent`), or the access token of an agent signed in with OAuth, which Claude Code and Codex get by themselves (see [Connect your agents](./connect-agents.md#sign-in-with-oauth)). An agent that may only read is served the tools that read, without `remember`, `propose`, `correct`, and `forget`.
+  - `X-Origin-Client: <agent>` is optional. Entries written through the request are recorded as `<agent>@<name>`, the name being the token's or the signed-in agent's, or as that name alone without the header.
   - `X-Origin-Device: <name>` is optional, and must be the token's name if sent; otherwise the hub refuses the request with 403.
 
 ```bash

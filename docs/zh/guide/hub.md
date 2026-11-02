@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-cfefe472
+sourceHash: sha256-b1a92831
 ---
 
 # 个人中枢
@@ -40,7 +40,7 @@ curl http://localhost:7077/healthz
 origin serve --host 127.0.0.1 --port 7077
 ```
 
-`GET /healthz` 用于健康检查，不需要鉴权；`POST /mcp` 是 MCP 端点。加上 `--admin` 还会在 `/admin` 下提供[管理界面](./admin.md)。
+`GET /healthz` 用于健康检查，不需要鉴权；`POST /mcp` 是 MCP 端点。加上 `--admin` 还会在 `/admin` 下提供[管理界面](./admin.md)；有了它，设备和 Agent 会经由你、在你的浏览器里登录，而不是用你复制过去的令牌（见[设备和 Agent](#devices-and-agents)）。
 
 ## 公开首页 {#the-landing-page}
 
@@ -50,44 +50,68 @@ origin serve --host 127.0.0.1 --port 7077
 
 如果你以自己的名义展示这个中枢，设置 `ORIGIN_POWERED_BY=off` 可以去掉页面上对 Origin 的署名；管理界面中指向项目的链接仍然保留。
 
-除 `/healthz` 和有自己登录的管理界面外，其他所有路径都需要令牌（见[创建令牌](#create-tokens)）。没有令牌的请求会收到 `401` 和 `{"error":"Missing or invalid token.","docs":"https://origin.openlinkos.com/guide/hub"}`，其中的 `docs` 就是本指南。
+除 `/healthz`、有自己登录的管理界面，以及 Agent 和设备在 `/.well-known/` 和 `/oauth/` 下的登录端点外，其他所有路径都需要令牌（见[设备和 Agent](#devices-and-agents)）。没有令牌的请求会收到 `401` 和 `{"error":"Missing or invalid token.","docs":"https://origin.openlinkos.com/guide/hub"}`，其中的 `docs` 就是本指南。
 
 ## 放在 TLS 之后 {#put-it-behind-tls}
 
 中枢使用明文 HTTP。在 localhost 之外开放之前，请把它放在负责 TLS 的反向代理或 CDN 之后，并按以下要求配置代理：
 
-- 把 `/healthz`、`/mcp` 和 `/v1/*` 转发给中枢；为了[公开首页](#the-landing-page)，还要转发 `/`、`/robots.txt` 和 `/assets/*`。
+- 把 `/healthz`、`/mcp` 和 `/v1/*` 转发给中枢；为了[公开首页](#the-landing-page)，还要转发 `/`、`/robots.txt` 和 `/assets/*`。管理界面在 `/admin` 下时，还要转发 `/.well-known/oauth-protected-resource`、`/.well-known/oauth-protected-resource/mcp`、`/.well-known/oauth-authorization-server` 和 `/oauth/*`，Agent 和设备通过它们登录。
 - `/v1/ingest` 用于设备推送会话数据，请求体上限至少设为 16 MiB；如果有程序向中枢追加事件行，`/v1/sources/*/lines` 的请求体上限设为 8 MiB（见[追加事件行](#append-event-lines)）。
-- 不要缓存 `/mcp` 和 `/v1/*`。
+- 不要缓存 `/mcp`、`/v1/*` 和 `/oauth/*`。
 - 如果在 `/admin` 下启用了管理界面，还请按[放在 TLS 和 CDN 之后](./admin.md#behind-tls-and-a-cdn)配置；尤其要设置 `ORIGIN_CLIENT_IP_HEADER`，否则任何人的失败登录都会算在你头上。
 
-## 创建令牌 {#create-tokens}
+## 设备和 Agent {#devices-and-agents}
 
-除 `/healthz` 和[公开首页](#the-landing-page)外，每个请求都需要 bearer 令牌。在中枢上为每台设备或每个云端 Agent 各建一个令牌，设备的令牌以设备命名：
+所有访问中枢的东西都代表你：你的**设备**，也就是与中枢同步会话的机器；以及你的 **Agent**，也就是使用中枢 MCP 端点的云端 Agent、机器人和流水线。每一个都有自己的名称和凭据，你可以随时吊销它们：在管理界面的**设备和 Agent**页面，或者在中枢上用 `origin token list` 和 `origin token revoke <name>`。没有其他人：中枢只属于你一个人。
+
+[管理界面](./admin.md)在中枢自己地址的 `/admin` 下提供时（`--admin`），能打开浏览器的设备和 Agent 会经由你来登录，不需要到处复制令牌：
+
+- 设备运行 `origin hub connect <url>`，由你在管理界面中批准（见[接入设备](#connect-a-device)）。
+- Claude Code、Codex 和其他 MCP 客户端用 OAuth 登录：它们在你的浏览器里打开中枢，由你允许，之后它们自己保管并续期自己的令牌（见[接入云端 Agent](#connect-a-cloud-agent)）。
+
+对于不能打开浏览器的程序，例如机器人、CI 任务或流水线，或者在没有在 `/admin` 下提供管理界面的中枢上，请在中枢上创建令牌：
 
 ```bash
-origin token create laptop          # 令牌只显示一次，以 ogn_ 开头
+origin token create laptop                         # 设备的令牌，以设备命名；只显示一次，以 ogn_ 开头
+origin token create ci --agent                     # Agent 的令牌：MCP 和事件行
+origin token create dashboard --agent --readonly   # 只读取的 Agent
 origin token list
-origin token revoke laptop
+origin token revoke ci
 ```
 
-使用 Docker 时，通过 `docker exec` 运行同样的命令，例如 `docker exec origin-hub origin token create laptop`。如果启用了[管理界面](./admin.md)，也可以在那里创建和吊销令牌，每个新令牌的接入命令都已准备好，可以直接复制。
+使用 Docker 时，通过 `docker exec` 运行同样的命令，例如 `docker exec origin-hub origin token create laptop`。在管理界面中，**添加 Agent** 会创建一个 Agent 的令牌并显示一次，同时给出使用它的命令。
 
-令牌名就是设备名：令牌 `laptop` 只能为设备 `laptop` 发送和接收会话、条目和遗忘记录，中枢不接受它代表其他任何设备。所以即使令牌被盗，也无法冒充另一台设备写入。
-
-中枢只保存令牌的哈希，所以请在令牌显示时复制下来。令牌丢失时，请吊销它，再用同一个名称新建一个；设备保留原来的名称，用新令牌重新接入即可。设备退役时，请吊销它的令牌。条目会把 Agent 和设备记为作者，例如 `claude-code@laptop`；直接连接中枢的 Agent 则记为它的令牌名，例如 `ci`。
+- **各自能做什么。** 设备，以及你没有另作选择的 Agent，都是*读写*的：令牌能做的一切都可以做。Agent 也可以是*只读*的：它通过 MCP 搜索和读取，没有写入类工具（`remember`、`propose`、`correct`、`forget`），也不向中枢发送任何内容。在有这项设置之前创建的令牌照旧可用，都是读写的。
+- **设备的令牌只对它自己有效。** 令牌名就是设备名：令牌 `laptop` 只能为设备 `laptop` 发送和接收会话、条目和遗忘记录，中枢不接受它代表其他任何设备。所以即使令牌被盗，也无法冒充另一台设备写入。
+- 中枢只保存令牌的哈希，所以请在令牌显示时复制下来。设备丢失令牌时，请吊销它，再重新接入这台设备，通过浏览器，或者用一个同名的新令牌；设备保留原来的名称。设备退役时，请吊销它。条目会把 Agent 和设备记为作者，例如 `claude-code@laptop`；直接连接中枢的 Agent 则记为它的名称，例如 `ci`，通过 OAuth 登录的 Claude Code 记为 `claude-code`。
 
 ## 接入设备 {#connect-a-device}
 
 在每台有 Agent 会话记录的机器上：
 
 ```bash
-origin hub connect https://hub.example.com --token ogn_… --device laptop
+origin hub connect https://hub.example.com
 origin hub status
 origin sync
 ```
 
-- 中枢以设备的库名称来识别设备：也就是库第一次使用时的 `ORIGIN_DEVICE` 或主机名。这个名称必须与设备的令牌名相同；`origin hub connect` 和 `origin hub status` 会向中枢核对，不一致时拒绝并说明如何解决。`--device` 可以给一个还没有保存过条目、也没有遗忘过任何内容的库改名；此后库会一直保持这个名称，它的令牌也必须以这个名称创建。`origin hub disconnect` 用于断开连接。
+`origin hub connect` 向中枢要一个验证码，并打印在哪里批准这台设备：
+
+```text
+To connect laptop to https://hub.example.com, open this link, sign in, and approve it:
+
+    https://hub.example.com/admin/activate?code=BCDF-GHJK
+
+or open https://hub.example.com/admin/activate and enter the code BCDF-GHJK. It expires in 10 minutes.
+Waiting for approval…
+```
+
+在任意设备的任意浏览器中打开这个链接，登录管理界面，核对验证码与命令显示的一致，然后选择**接入 laptop**。几秒之内，命令就会收到设备的令牌并完成接入。如果已经有同名的设备接入，页面会说明；批准后这个名称归新设备，旧设备的令牌随即失效。只批准你刚刚在自己设备上看到的验证码。
+
+在没有在 `/admin` 下提供管理界面的中枢上，请在中枢上为设备创建令牌，再用它接入：`origin hub connect https://hub.example.com --token ogn_… --device laptop`。
+
+- 中枢以设备的库名称来识别设备：也就是库第一次使用时的 `ORIGIN_DEVICE` 或主机名。设备以这个名称接入，它的令牌也以它命名；`origin hub connect` 和 `origin hub status` 会向中枢核对，不一致时拒绝并说明如何解决。`--device` 可以给一个还没有保存过条目、也没有遗忘过任何内容的库改名；此后库会一直保持这个名称，为它创建的令牌也必须使用这个名称。`origin hub disconnect` 用于断开连接。
 - 环境变量 `ORIGIN_HUB_URL`、`ORIGIN_HUB_TOKEN` 会覆盖保存的连接配置。
 - `origin sync` 会采集本机会话，发送原始镜像以及在本机写下的条目和遗忘记录，再应用中枢的遗忘记录。可以随时重跑：同步会从上次停下的位置继续。`origin push` 的作用相同。
 
@@ -102,10 +126,12 @@ Agent 运行期间，Claude Code 和 Codex 的采集 hook 会在每一轮结束�
 用 `--relay` 接入一个空库：
 
 ```bash
-origin hub connect https://hub.example.com --token ogn_… --device vps --relay
+origin hub connect https://hub.example.com --device vps --relay
 origin sync
 origin status
 ```
+
+和其他设备一样，在管理界面中批准这台设备，或者用 `--token` 传入在中枢上创建的令牌。
 
 - 只有还没有保存任何内容的库才能成为中继。如果这台机器上已经有一个保存了会话或条目的库，Origin 会拒绝，并且不做任何改动；请把 `ORIGIN_HOME` 设为一个新目录，再接入那个库。中继会一直是中继；要在这台机器上重新保有完整的库，请再使用一个新的 `ORIGIN_HOME`。
 - `origin sync` 把每份会话记录新增的完整行发送给中枢，中枢像收到设备自己的副本一样归档并解析它们；`origin status` 按来源显示还有多少文件和字节尚未发送。和其他设备一样，Agent 的采集 hook 和 `origin mcp` 在运行中也会发送新的行。
@@ -118,7 +144,21 @@ origin status
 
 ## 接入云端 Agent {#connect-a-cloud-agent}
 
-云端 Agent 没有本地会话记录，所以直接连接中枢，各用自己的令牌：
+云端 Agent 没有本地会话记录，所以直接连接中枢。Claude Code 和 Codex 通过你的浏览器用 OAuth 登录：
+
+```bash
+# Claude Code：添加中枢，然后在 Claude Code 中用 /mcp 登录，或者在命令行中登录
+claude mcp add --scope user --transport http origin https://hub.example.com/mcp
+claude mcp login origin
+
+# Codex CLI
+codex mcp add origin --url https://hub.example.com/mcp
+codex mcp login origin
+```
+
+Agent 会在你的浏览器里打开中枢。登录管理界面，然后允许它，并选择它能做什么（读写或只读）以及有效多久（1 到 365 天）。之后它自己保管并续期自己的令牌，并出现在**设备和 Agent**中，你可以随时在那里吊销它；`claude mcp logout origin` 让 Claude Code 退出登录。详见[接入 Agent](./connect-agents.md#using-a-personal-hub)。
+
+不能打开浏览器的 Agent 改用令牌（见[设备和 Agent](#devices-and-agents)）：
 
 ```bash
 # Claude Code
@@ -130,10 +170,10 @@ codex mcp add origin --url https://hub.example.com/mcp --bearer-token-env-var OR
 
 ## 追加事件行 {#append-event-lines}
 
-不在你任何设备上运行的程序，例如机器人、云端的 Agent 运行时或流水线，可以把它们的会话以[事件行](./sources.md)带到中枢。为每个程序创建一个自己的令牌，以它命名，然后把它的行提交到 `POST /v1/sources/<name>/lines?path=<path>`：
+不在你任何设备上运行的程序，例如机器人、云端的 Agent 运行时或流水线，可以把它们的会话以[事件行](./sources.md)带到中枢。为每个程序创建一个它自己的 Agent 令牌，以它命名，然后把它的行提交到 `POST /v1/sources/<name>/lines?path=<path>`：
 
 ```bash
-origin token create chat-bridge     # 在中枢上执行一次；会打印令牌
+origin token create chat-bridge --agent    # 在中枢上执行一次；会打印令牌
 curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=incidents.jsonl" \
   -H "Authorization: Bearer ogn_…" -H "Content-Type: application/x-ndjson" \
   --data-binary @incidents.jsonl
@@ -147,7 +187,7 @@ curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=inciden
 
 ## 在浏览器中管理 {#manage-it-in-a-browser}
 
-中枢可以为你提供一个[管理界面](./admin.md)：设备和存储的概览、你的会话和条目、检索、纠正和遗忘、令牌，以及审计日志。它默认关闭；用 `origin serve --admin`（或 `ORIGIN_ADMIN=on`）启用，并用中枢第一次启动时打印在日志里的密码登录，或者用你通过 `origin admin password` 或 `ORIGIN_ADMIN_PASSWORD` 设置的密码登录。
+中枢可以为你提供一个[管理界面](./admin.md)：设备和存储的概览、你的会话和条目、检索、纠正和遗忘、你的设备和 Agent，以及审计日志。它默认关闭；用 `origin serve --admin`（或 `ORIGIN_ADMIN=on`）启用。第一次登录时，选择你的用户名，并输入中枢第一次启动时打印在日志里的密码，或者你通过 `origin admin password` 或 `ORIGIN_ADMIN_PASSWORD` 设置的密码；此后登录都需要这两项。
 
 ## 把原始镜像放进存储桶 {#keep-raw-mirrors-in-a-bucket}
 
