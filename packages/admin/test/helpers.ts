@@ -127,9 +127,12 @@ export class Browser {
     );
   }
 
-  /** Sign in through the login form. */
-  async login(password: string): Promise<TestResponse> {
-    const res = await this.post('/admin/login', { password, next: '/admin/' });
+  /**
+   * Sign in through the login form, as the owner `username`: the first sign-in of a hub without a
+   * username chooses it.
+   */
+  async login(password: string, username = 'owner'): Promise<TestResponse> {
+    const res = await this.post('/admin/login', { username, password, next: '/admin/' });
     await this.get('/admin/');
     return res;
   }

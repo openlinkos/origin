@@ -132,5 +132,5 @@ export class SignInLink {
 
 /** The actor of the audit log for the owner signed in to `origin ui`. */
 export const LOCAL_ACTOR = 'local';
-/** The actor for the owner signed in to the hub's admin UI. */
+/** The actor for the owner signed in to the hub's admin UI before a username was set. */
 export const HUB_ACTOR = ADMIN_OWNER;

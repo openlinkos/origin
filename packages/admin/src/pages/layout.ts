@@ -12,7 +12,6 @@ export type NavKey =
   | 'entries'
   | 'recalls'
   | 'proposals'
-  | 'devices'
   | 'tokens'
   | 'connect'
   | 'tombstones'
@@ -28,7 +27,10 @@ interface NavItem {
   hubOnly?: boolean;
 }
 
-/** The sidebar of a mode: `origin ui` has no devices, tokens, connection commands, or sign-ins. */
+/**
+ * The sidebar of a mode: `origin ui` has no devices and agents, connection commands, or sign-ins.
+ * A hub's devices, with what each sent, are under Devices and agents.
+ */
 function navFor(ctx: Ctx): typeof NAV {
   if (ctx.mode === 'hub') return NAV;
   return NAV.map((g) => ({ ...g, items: g.items.filter((i) => !i.hubOnly) })).filter(
@@ -50,8 +52,7 @@ const NAV: Array<{ label?: MessageKey; items: NavItem[] }> = [
   {
     label: 'nav.groupSettings',
     items: [
-      { key: 'devices', path: 'devices', label: 'nav.devices', icon: 'laptop', hubOnly: true },
-      { key: 'tokens', path: 'tokens', label: 'nav.tokens', icon: 'key-round', hubOnly: true },
+      { key: 'tokens', path: 'tokens', label: 'nav.tokens', icon: 'laptop', hubOnly: true },
       { key: 'connect', path: 'connect', label: 'nav.connect', icon: 'plug', hubOnly: true },
       { key: 'tombstones', path: 'tombstones', label: 'nav.tombstones', icon: 'eraser' },
       { key: 'audit', path: 'audit', label: 'nav.audit', icon: 'scroll-text' },

@@ -463,11 +463,22 @@ describe('tokens', () => {
     expect(token).toMatch(/^ogn_[A-Za-z0-9_-]{43}$/);
     expect(JSON.stringify(db.prepare('SELECT * FROM api_token').all())).not.toContain(token);
 
-    expect(verifyToken(db, token, 2000)).toEqual({ name: 'laptop' });
+    expect(verifyToken(db, token, 2000)).toEqual({
+      name: 'laptop',
+      kind: 'device',
+      preset: 'readwrite',
+    });
     expect(verifyToken(db, `${token}x`, 2000)).toBeNull();
     expect(verifyToken(db, 'not-a-token', 2000)).toBeNull();
     expect(listTokens(db)).toEqual([
-      { name: 'laptop', createdAt: 1000, lastUsedAt: 2000, revokedAt: null },
+      {
+        name: 'laptop',
+        kind: 'device',
+        preset: 'readwrite',
+        createdAt: 1000,
+        lastUsedAt: 2000,
+        revokedAt: null,
+      },
     ]);
 
     expect(() => createToken(db, 'laptop')).toThrow(/is active; revoke it first/);
@@ -486,10 +497,40 @@ describe('tokens', () => {
     const renewed = createToken(db, 'laptop', 4000);
     expect(renewed).not.toBe(token);
     expect(verifyToken(db, token, 5000)).toBeNull();
-    expect(verifyToken(db, renewed, 5000)).toEqual({ name: 'laptop' });
+    expect(verifyToken(db, renewed, 5000)).toMatchObject({ name: 'laptop' });
     expect(listTokens(db)).toEqual([
-      { name: 'laptop', createdAt: 4000, lastUsedAt: 5000, revokedAt: null },
+      {
+        name: 'laptop',
+        kind: 'device',
+        preset: 'readwrite',
+        createdAt: 4000,
+        lastUsedAt: 5000,
+        revokedAt: null,
+      },
     ]);
+  });
+
+  it('belong to a device or an agent, with a preset; readonly is for agents', () => {
+    const bot = createToken(db, 'bot', 1000, { kind: 'agent', preset: 'readonly' });
+    expect(verifyToken(db, bot, 2000)).toEqual({ name: 'bot', kind: 'agent', preset: 'readonly' });
+    createToken(db, 'ci', 1000, { kind: 'agent' });
+    expect(listTokens(db).map((t) => [t.name, t.kind, t.preset])).toEqual([
+      ['bot', 'agent', 'readonly'],
+      ['ci', 'agent', 'readwrite'],
+    ]);
+    expect(() => createToken(db, 'desk', 1000, { preset: 'readonly' })).toThrow(
+      /readonly is for agents/,
+    );
+    expect(() =>
+      createToken(db, 'desk', 1000, { kind: 'agent', preset: 'everything' as never }),
+    ).toThrow(/Unknown preset/);
+    // A revoked agent's name can become a device's, with a new token.
+    revokeToken(db, 'ci', 3000);
+    createToken(db, 'ci', 4000);
+    expect(listTokens(db).find((t) => t.name === 'ci')).toMatchObject({
+      kind: 'device',
+      preset: 'readwrite',
+    });
   });
 
   it('records use at most once a minute', () => {

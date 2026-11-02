@@ -1082,3 +1082,18 @@ a.admin-cell-title:hover {
     padding-inline: var(--ol-space-3);
   }
 }
+
+/* What an app asking for access is known by, on the consent page: one fact per line. */
+.admin-consent-facts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ol-color-fg-muted);
+  font-size: var(--ol-font-size-sm);
+}
+
+.admin-consent-facts li {
+  display: flex;
+  align-items: center;
+  gap: var(--ol-space-2);
+}

@@ -468,7 +468,8 @@ export function devicesPage(ctx: Ctx, devices: DeviceSummary[]): void {
   const t = ctx.t;
   renderPage(ctx, 200, {
     title: t('nav.devices'),
-    nav: 'devices',
+    nav: 'tokens',
+    crumbs: [{ label: t('nav.tokens'), href: '/admin/tokens' }],
     heading: t('nav.devices'),
     actions: linkButton(ctx, {
       href: '/admin/connect',
@@ -501,8 +502,11 @@ export function devicePage(ctx: Ctx, d: DeviceDetail): void {
   const shown = files.slice(page * DEVICE_FILES, (page + 1) * DEVICE_FILES);
   renderPage(ctx, 200, {
     title: d.device.device,
-    nav: 'devices',
-    crumbs: [{ label: t('nav.devices'), href: '/admin/devices' }],
+    nav: 'tokens',
+    crumbs: [
+      { label: t('nav.tokens'), href: '/admin/tokens' },
+      { label: t('nav.devices'), href: '/admin/devices' },
+    ],
     heading: d.device.device,
     badges: deviceStatus(ctx, d.device),
     body: html`${pageIntro(ctx, { description: t('devices.help') })}
@@ -568,10 +572,15 @@ export function connectPage(ctx: Ctx, s: Snippets): void {
     }),
     body: html`${pageIntro(ctx, { description: t('connect.intro') })}
     ${s.known ? '' : alert(ctx, 'info', t('connect.noPublicUrl'))}
+    ${s.oauth ? '' : alert(ctx, 'info', t('connect.oauthOff'))}
     ${connectSnippetsBlock(ctx, s)}`,
   });
 }
 
+/**
+ * How to connect a device and the agents: by browser sign-in when the hub offers it (the device
+ * flow, and MCP OAuth), else with a token; and a token for agents that cannot open a browser.
+ */
 export function connectSnippetsBlock(ctx: Ctx, s: Snippets): SafeHtml {
   const t = ctx.t;
   return html`${section({
@@ -585,8 +594,18 @@ export function connectSnippetsBlock(ctx: Ctx, s: Snippets): SafeHtml {
       title: t('connect.agents'),
       description: t('connect.agentsHelp'),
       body: html`<div class="ol-stack">
-        ${snippet(ctx, 'snippet-claude', 'Claude Code', s.claude)}
-        ${snippet(ctx, 'snippet-codex', 'Codex CLI', s.codex)}
+        ${snippet(ctx, 'snippet-claude', s.oauth ? t('connect.claudeLabel') : 'Claude Code', s.claude)}
+        ${snippet(ctx, 'snippet-codex', s.oauth ? t('connect.codexLabel') : 'Codex CLI', s.codex)}
       </div>`,
+    })}
+    ${section({
+      title: t('connect.headless'),
+      description: t('connect.headlessHelp'),
+      body: linkButton(ctx, {
+        href: '/admin/tokens/new',
+        label: t('connect.createToken'),
+        icon: 'plus',
+        size: 'sm',
+      }),
     })}`;
 }

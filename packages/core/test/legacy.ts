@@ -86,6 +86,7 @@ export function schemaOf(db: Database): unknown[] {
 export function downgradeToV1(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    undoV7(db);
     // Version 6: proposals.
     db.exec('DROP TABLE IF EXISTS proposal_source');
     db.exec('DROP TABLE IF EXISTS proposal');
@@ -123,9 +124,63 @@ export function downgradeToV1(file: string): void {
 export function downgradeToV5(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    undoV7(db);
     db.exec('DROP TABLE IF EXISTS proposal_source');
     db.exec('DROP TABLE IF EXISTS proposal');
     db.exec('PRAGMA user_version = 5');
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Undo version 7 and the tables added with it: tokens without a kind or a preset, the audit log
+ * without the `api` channel, and no OAuth tables.
+ */
+function undoV7(db: DatabaseSync): void {
+  for (const table of [
+    'oauth_token',
+    'oauth_grant',
+    'oauth_code',
+    'oauth_client',
+    'device_request',
+  ]) {
+    db.exec(`DROP TABLE IF EXISTS ${table}`);
+  }
+  db.exec('ALTER TABLE api_token DROP COLUMN kind');
+  db.exec('ALTER TABLE api_token DROP COLUMN preset');
+  db.exec(`
+CREATE TABLE audit_log_v6 (
+  id         INTEGER PRIMARY KEY,
+  at         INTEGER NOT NULL,
+  actor      TEXT    NOT NULL,
+  channel    TEXT    NOT NULL CHECK (channel IN ('ui', 'cli')),
+  action     TEXT    NOT NULL,
+  target     TEXT,
+  detail     TEXT,
+  ip         TEXT,
+  user_agent TEXT
+);
+INSERT INTO audit_log_v6 SELECT * FROM audit_log WHERE channel IN ('ui', 'cli');
+DROP TABLE audit_log;
+ALTER TABLE audit_log_v6 RENAME TO audit_log;
+CREATE TRIGGER audit_log_no_update BEFORE UPDATE ON audit_log BEGIN
+  SELECT RAISE(ABORT, 'audit_log is append-only');
+END;
+CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log BEGIN
+  SELECT RAISE(ABORT, 'audit_log is append-only');
+END;`);
+}
+
+/**
+ * Turn a store of the latest version, closed, back into a store of version 6: tokens without a
+ * kind or a preset, which version 7 added, and the audit log without its `api` channel.
+ */
+export function downgradeToV6(file: string): void {
+  const db = new DatabaseSync(file);
+  try {
+    undoV7(db);
+    db.exec('PRAGMA user_version = 6');
   } finally {
     db.close();
   }

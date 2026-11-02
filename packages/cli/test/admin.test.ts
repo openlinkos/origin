@@ -361,12 +361,19 @@ describe('admin UI on the hub', () => {
   it('rate-limits failed sign-ins', async () => {
     const b = new Browser(hub.url);
     for (let i = 0; i < 10; i++) {
-      expect((await b.post('/admin/login', { password: `wrong-guess-${i}` })).status).toBe(401);
+      expect(
+        (await b.post('/admin/login', { username: 'owner', password: `wrong-guess-${i}` })).status,
+      ).toBe(401);
     }
-    const eleventh = await b.post('/admin/login', { password: 'wrong-guess-10' });
+    const eleventh = await b.post('/admin/login', {
+      username: 'owner',
+      password: 'wrong-guess-10',
+    });
     expect(eleventh.status).toBe(429);
     expect(Number(eleventh.headers['retry-after'])).toBeGreaterThan(0);
-    expect((await b.post('/admin/login', { password: PASSWORD })).status).toBe(429);
+    expect((await b.post('/admin/login', { username: 'owner', password: PASSWORD })).status).toBe(
+      429,
+    );
   });
 
   it('generates a password on the first start and logs it only that once', async () => {
@@ -408,8 +415,10 @@ describe('admin UI on the hub', () => {
       const again = new Browser(second.url);
       for (const [k, v] of b.jar) again.jar.set(k, v);
       expect((await again.get('/admin/')).status).toBe(200);
+      // The first sign-in also chose the owner's username.
       expect(listAudit(db).map((r) => [r.action, r.actor])).toEqual([
         ['login', 'owner'],
+        ['username.set', 'owner'],
         ['password.generate', 'hub'],
       ]);
       expect(JSON.stringify(listAudit(db))).not.toContain(password);
@@ -495,9 +504,8 @@ describe('admin UI on the hub', () => {
     expect(created.status).toBe(200);
     const token = /ogn_[A-Za-z0-9_-]{43}/.exec(created.text)?.[0];
     expect(token).toBeDefined();
-    expect(created.text).toContain(
-      `origin hub connect https://hub.example.com --token ${token} --device desk`,
-    );
+    // An agent's token, with the commands that use it, its event lines included.
+    expect(created.text).toContain('/v1/sources/desk/lines?path=events.jsonl');
     expect(created.text).toContain(`--header &quot;Authorization: Bearer ${token}&quot;`);
     expect(created.text).toContain('--bearer-token-env-var ORIGIN_TOKEN');
 

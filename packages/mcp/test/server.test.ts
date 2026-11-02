@@ -753,3 +753,24 @@ describe('proposals', () => {
     );
   });
 });
+
+describe('a read-only connection', () => {
+  it('has the reading tools only, and says so', async () => {
+    const server = createOriginServer({ db, home, readOnly: true, syncIntervalMs: 0 });
+    const reader = new Client({ name: 'reader', version: '1.0.0' });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await Promise.all([reader.connect(clientSide), server.mcp.connect(serverSide)]);
+    const { tools } = await reader.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual(
+      ['brief', 'changes', 'follow', 'get', 'search', 'sources', 'timeline'].sort(),
+    );
+    expect(reader.getInstructions()).toContain('This connection is read-only');
+    const r = (await reader.callTool({
+      name: 'remember',
+      arguments: { kind: 'memory', text: 'x', confidence: 1, sources: [{ quote: 'SQLite' }] },
+    })) as { isError?: boolean; content: Array<{ text: string }> };
+    expect(r.isError).toBe(true);
+    expect(r.content[0]?.text).toMatch(/remember/);
+    await reader.close();
+  });
+});

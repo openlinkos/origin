@@ -4,6 +4,8 @@ import {
   type AdminHandler,
   checkAdminExposure,
   createAdminHandler,
+  createOAuthServer,
+  type OAuthServer,
 } from '@openlinkos/origin-admin';
 import {
   type Database,
@@ -15,6 +17,7 @@ import {
   type SourceAdapter,
   sealIdleMirrors,
 } from '@openlinkos/origin-core';
+import { type ClientMetadataOptions, createClientResolver } from './client-metadata.js';
 import { createHubServer } from './server.js';
 
 /** How the hub serves its admin UI (see docs/architecture.md#admin-ui). */
@@ -29,6 +32,8 @@ export interface HubAdminOptions {
   listen?: { host: string; port: number } | null;
   /** scrypt parameters for new password hashes, for tests. */
   passwordParams?: ScryptParams;
+  /** How client metadata documents are fetched, for tests (see client-metadata.ts). */
+  clientMetadata?: ClientMetadataOptions;
 }
 
 /**
@@ -122,6 +127,7 @@ export function createAdminServer(handler: AdminHandler): http.Server {
  */
 export async function startHub(o: StartHubOptions): Promise<RunningHub> {
   let handler: AdminHandler | undefined;
+  let oauth: OAuthServer | undefined;
   const separate = o.admin?.listen ?? null;
   if (o.admin) {
     checkAdminExposure(separate ? separate.host : o.host, o.admin.publicUrl ?? null);
@@ -145,6 +151,14 @@ export async function startHub(o: StartHubOptions): Promise<RunningHub> {
         detail: { source: prepared.credential.source, sessionsEnded: prepared.sessionsEnded },
       });
     }
+    // Agents and devices sign in by browser only where the owner approves them: at /admin on the
+    // hub's own port. With the UI on a listener of its own, the hub offers no OAuth.
+    const resolveClient = separate
+      ? null
+      : createClientResolver(o.db, {
+          userAgent: `Origin/${o.version} (hub; client metadata)`,
+          ...o.admin.clientMetadata,
+        });
     handler = createAdminHandler({
       db: o.db,
       home: o.home,
@@ -152,8 +166,18 @@ export async function startHub(o: StartHubOptions): Promise<RunningHub> {
       publicUrl: o.admin.publicUrl ?? null,
       clientIpHeader: o.admin.clientIpHeader ?? null,
       credential: prepared.credential,
+      oauth: resolveClient ? { resolveClient } : null,
       log: o.log,
     });
+    if (resolveClient) {
+      oauth = createOAuthServer({
+        db: o.db,
+        publicUrl: o.admin.publicUrl ?? null,
+        clientIpHeader: o.admin.clientIpHeader ?? null,
+        resolveClient,
+        log: o.log,
+      });
+    }
   }
   const hub = createHubServer({
     db: o.db,
@@ -162,6 +186,7 @@ export async function startHub(o: StartHubOptions): Promise<RunningHub> {
     version: o.version,
     log: o.log,
     admin: separate ? undefined : handler,
+    oauth,
     poweredBy: o.poweredBy,
   });
   await listen(hub, o.port, o.host);

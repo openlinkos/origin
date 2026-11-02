@@ -26,6 +26,7 @@ import {
   eventActivity,
   type ForgetResult,
   forget,
+  type GrantInfo,
   getEntry,
   getEvent,
   getRecall,
@@ -37,12 +38,14 @@ import {
   ingestHealth,
   isEntryForgotten,
   isEventForgotten,
+  isGrantActive,
   latestAgentVersions,
   listAdminSessions,
   listAudit,
   listDevices,
   listEntries,
   listEvents,
+  listGrants,
   listProjects,
   listProposals,
   listRecalls,
@@ -53,8 +56,11 @@ import {
   listTokens,
   listTombstones,
   OriginError,
+  type Preset,
+  type PrincipalKind,
   type Proposal,
   type ProposalCard,
+  parsePreset,
   planForget,
   planRestore,
   proposalState,
@@ -77,6 +83,7 @@ import {
   rejectProposal,
   remember,
   restore,
+  revokeGrant,
   revokeToken,
   type SearchHit,
   type SessionRow,
@@ -118,12 +125,14 @@ export const ENTRY_RECALLS = 10;
 export const TURN_EVENT_BUDGET = 1500;
 /** The overview's chart covers this many days, today included. */
 export const ACTIVITY_DAYS = 30;
+/** Agents signed in by OAuth stay listed this long after they were revoked or expired. */
+export const ENDED_GRANTS_MS = 30 * 86_400_000;
 /** Storage on disk is measured again after this long (it stats every mirror with a bucket). */
 const STORAGE_TTL_MS = 60_000;
 
 /** Who is acting, for the audit log. */
 export interface Actor {
-  /** `owner` once signed in to a hub, `local` in `origin ui`, `anonymous` before. */
+  /** The owner's username once signed in to a hub, `local` in `origin ui`, `anonymous` before. */
   actor: string;
   ip: string | null;
   userAgent: string | null;
@@ -677,13 +686,44 @@ export interface TombstoneDetail {
   forget: TombstoneSummary | null;
 }
 
+/** How to connect a device or an agent, before anything is created for it. */
 export interface Snippets {
   hubUrl: string;
   /** False when no public URL is configured and the URL is a placeholder. */
   known: boolean;
+  /**
+   * Devices and agents sign in by browser (the admin UI is at /admin on the hub's own port, where
+   * the OAuth endpoints are); otherwise the commands need a token.
+   */
+  oauth: boolean;
   device: string;
   claude: string;
   codex: string;
+}
+
+/** How to use the token of an agent, with the token in the commands. */
+export interface AgentSnippets {
+  hubUrl: string;
+  known: boolean;
+  claude: string;
+  codex: string;
+  /** Appending event lines; null for a readonly agent, which cannot. */
+  lines: string | null;
+}
+
+/** A device of the owner: its token, if it has one, and what it sent, if anything. */
+export interface DeviceAccess {
+  name: string;
+  token: TokenInfo | null;
+  data: DeviceSummary | null;
+}
+
+/** Everything that reaches the hub for its owner (see docs/architecture.md#access). */
+export interface Access {
+  devices: DeviceAccess[];
+  agents: TokenInfo[];
+  /** Agents signed in by OAuth, the active ones first. */
+  grants: Array<GrantInfo & { active: boolean }>;
 }
 
 /** Ids are opaque, but bounded: they go into queries, never into SQL. */
@@ -729,19 +769,70 @@ export function planDigest(plan: ForgetResult): string {
   return createHash('sha256').update(canonical).digest('hex').slice(0, 32);
 }
 
-/** Copy-paste commands to connect a device or an agent. */
-export function connectSnippets(
-  publicUrl: URL | null,
-  token = '<token>',
-  device = '<device-name>',
-): Snippets {
-  const hubUrl = publicUrl ? publicUrl.origin : 'https://hub.example.com';
+const hubUrlOf = (publicUrl: URL | null) =>
+  publicUrl ? publicUrl.origin : 'https://hub.example.com';
+
+/**
+ * Copy-paste commands to connect a device or an agent: by browser sign-in when the hub offers it,
+ * so that no token is copied, and otherwise with a token.
+ */
+export function connectSnippets(publicUrl: URL | null, oauth: boolean): Snippets {
+  const hubUrl = hubUrlOf(publicUrl);
+  const install = 'npm install -g @openlinkos/origin';
+  if (oauth) {
+    return {
+      hubUrl,
+      known: publicUrl !== null,
+      oauth,
+      device: `${install}\norigin hub connect ${hubUrl}\norigin sync`,
+      claude: `claude mcp add --scope user --transport http origin ${hubUrl}/mcp\nclaude mcp login origin`,
+      codex: `codex mcp add origin --url ${hubUrl}/mcp\ncodex mcp login origin`,
+    };
+  }
+  const agent = agentSnippets(publicUrl, 'agent', '<token>', 'readwrite');
   return {
     hubUrl,
     known: publicUrl !== null,
-    device: `npm install -g @openlinkos/origin\norigin hub connect ${hubUrl} --token ${token} --device ${device}\norigin sync`,
+    oauth,
+    device: `${install}\norigin hub connect ${hubUrl} --token <token> --device <device-name>\norigin sync`,
+    claude: agent.claude,
+    codex: agent.codex,
+  };
+}
+
+/** Names a source of one's own can have (as the adapters' rule says), for the event lines command. */
+const SOURCE_NAME_RE = /^[a-z][a-z0-9-]{1,31}$/;
+const NOT_SOURCES = [
+  'claude-code',
+  'codex',
+  'cursor',
+  'grok',
+  'zcode',
+  'origin',
+  'hub',
+  'local',
+  'all',
+  'devices',
+];
+
+/** Commands that use an agent's token: Claude Code, Codex, and, when it may write, event lines. */
+export function agentSnippets(
+  publicUrl: URL | null,
+  name: string,
+  token: string,
+  preset: Preset,
+): AgentSnippets {
+  const hubUrl = hubUrlOf(publicUrl);
+  const source = SOURCE_NAME_RE.test(name) && !NOT_SOURCES.includes(name) ? name : 'my-source';
+  return {
+    hubUrl,
+    known: publicUrl !== null,
     claude: `claude mcp add --scope user --transport http origin ${hubUrl}/mcp --header "Authorization: Bearer ${token}"`,
     codex: `export ORIGIN_TOKEN=${token}\ncodex mcp add origin --url ${hubUrl}/mcp --bearer-token-env-var ORIGIN_TOKEN`,
+    lines:
+      preset === 'readwrite'
+        ? `curl -sS -X POST "${hubUrl}/v1/sources/${source}/lines?path=events.jsonl" \\\n  -H "Authorization: Bearer ${token}" -H "Content-Type: application/x-ndjson" \\\n  --data-binary @events.jsonl`
+        : null,
   };
 }
 
@@ -767,6 +858,8 @@ export class AdminService {
       hubStore?: boolean;
       /** Called after an entry is written, or a forget or restore (`origin ui` then syncs). */
       afterWrite?: () => void;
+      /** Devices and agents can sign in by browser (OAuth), at /admin on the hub's own port. */
+      oauth?: boolean;
     },
   ) {}
 
@@ -992,15 +1085,65 @@ export class AdminService {
     return listTokens(this.db);
   }
 
-  /** Create a hub token. It is returned once and never shown again. */
-  createToken(who: Actor, name: unknown): { name: string; token: string; snippets: Snippets } {
-    const tokenName = typeof name === 'string' ? name.trim() : '';
-    const token = coreCreateToken(this.db, tokenName);
-    this.audit(who, 'token.create', tokenName, null);
+  /**
+   * Everything that reaches the hub for its owner: devices (by their tokens, and those that sent
+   * data under a name without a token, such as one revoked long ago), agents with a token, and
+   * agents signed in by OAuth.
+   */
+  access(now: number): Access {
+    const tokens = listTokens(this.db);
+    const data = new Map(this.devices(now).map((d) => [d.device, d]));
+    const agents = tokens.filter((t) => t.kind === 'agent');
+    const agentNames = new Set(agents.map((t) => t.name));
+    const devices: DeviceAccess[] = tokens
+      .filter((t) => t.kind === 'device')
+      .map((t) => ({ name: t.name, token: t, data: data.get(t.name) ?? null }));
+    const named = new Set(devices.map((d) => d.name));
+    for (const d of data.values()) {
+      if (!named.has(d.device) && !agentNames.has(d.device)) {
+        devices.push({ name: d.device, token: null, data: d });
+      }
+    }
+    devices.sort((a, b) => a.name.localeCompare(b.name));
+    // Agents signed in by OAuth: the active ones, and those that ended in the last 30 days.
+    const grants = listGrants(this.db)
+      .map((g) => ({ ...g, active: isGrantActive(g, now) }))
+      .filter((g) => g.active || (g.revokedAt ?? g.expiresAt) > now - ENDED_GRANTS_MS);
+    grants.sort((a, b) => Number(b.active) - Number(a.active) || b.createdAt - a.createdAt);
+    return { devices, agents, grants };
+  }
+
+  /** The grant with this id, for its revoke page. */
+  grant(id: unknown, now: number): GrantInfo & { active: boolean } {
+    const grantId = checkId(id, 'grant');
+    const grant = this.access(now).grants.find((g) => g.id === grantId);
+    if (!grant) throw new HttpError(404, `Unknown agent ${grantId}.`);
+    return grant;
+  }
+
+  /**
+   * Create a token for a device or an agent of the owner. It is returned once and never shown
+   * again, with the commands that use it.
+   */
+  createToken(
+    who: Actor,
+    input: { name: unknown; kind?: unknown; preset?: unknown },
+    now = Date.now(),
+  ): { name: string; kind: PrincipalKind; preset: Preset; token: string; snippets: AgentSnippets } {
+    const tokenName = typeof input.name === 'string' ? input.name.trim() : '';
+    if (input.kind !== 'device' && input.kind !== 'agent') {
+      throw new OriginError(`Unknown kind "${String(input.kind)}"; expected device or agent.`);
+    }
+    const kind: PrincipalKind = input.kind;
+    const preset = parsePreset(input.preset);
+    const token = coreCreateToken(this.db, tokenName, now, { kind, preset });
+    this.audit(who, 'token.create', tokenName, { kind, preset });
     return {
       name: tokenName,
+      kind,
+      preset,
       token,
-      snippets: connectSnippets(this.o.publicUrl, token, tokenName),
+      snippets: agentSnippets(this.o.publicUrl, tokenName, token, preset),
     };
   }
 
@@ -1010,6 +1153,25 @@ export class AdminService {
       throw new OriginError(`No active token named ${tokenName}.`);
     }
     this.audit(who, 'token.revoke', tokenName, null);
+  }
+
+  /** Revoke an agent signed in by OAuth: its tokens stop working at once. */
+  revokeGrant(who: Actor, id: unknown, now = Date.now()): GrantInfo {
+    const grantId = checkId(id, 'grant');
+    const grant = revokeGrant(this.db, grantId, 'owner', now);
+    if (!grant) throw new OriginError('This agent is not signed in any more.');
+    this.audit(who, 'grant.revoke', grant.name, { client: grant.clientName });
+    return grant;
+  }
+
+  /** Record an OAuth or device decision of the owner (ids and names only). */
+  recordDecision(
+    who: Actor,
+    action: string,
+    target: string,
+    detail: Record<string, string | number | boolean> | null = null,
+  ): void {
+    this.audit(who, action, target, detail);
   }
 
   projects(): Array<{ project: string; sessions: number; events: number }> {
@@ -2031,7 +2193,7 @@ export class AdminService {
   }
 
   connect(): Snippets {
-    return connectSnippets(this.o.publicUrl);
+    return connectSnippets(this.o.publicUrl, this.o.oauth === true);
   }
 
   adminSessions(now: number): AdminSessionInfo[] {

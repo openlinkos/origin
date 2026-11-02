@@ -39,7 +39,7 @@ export const zh: Messages = {
   'nav.recalls': '召回',
   'nav.proposals': '提议',
   'nav.devices': '设备',
-  'nav.tokens': '令牌',
+  'nav.tokens': '设备和 Agent',
   'nav.connect': '接入',
   'nav.tombstones': '遗忘记录',
   'nav.audit': '审计日志',
@@ -116,12 +116,19 @@ export const zh: Messages = {
   'action.copied': '已复制',
 
   'auth.signIn': '登录',
-  'auth.signInHelp': '输入这个中枢的管理密码。',
+  'auth.signInHelp': '输入你的用户名和这个中枢的管理密码。',
+  'auth.chooseTitle': '选择你的用户名',
+  'auth.chooseHelp':
+    '这个中枢还没有用户名。请作为中枢的主人选择你的用户名，并输入管理密码：以后登录都需要这两项。',
+  'auth.username': '用户名',
+  'auth.usernameHint':
+    '2 到 32 个小写字母、数字、“-”、“_”或“.”。以后要修改，在中枢上运行 origin admin username。',
+  'auth.badCredentials': '用户名或密码不正确。',
   'auth.statement': '本地优先、跨 Agent 的记忆，服务于你的 AI 编码 Agent。',
   'auth.password': '管理密码',
-  'auth.forgot': '忘记密码？',
+  'auth.forgot': '忘记密码或用户名？',
   'auth.passwordHint':
-    '中枢第一次启动时，会把生成的密码打印到它的日志中。要设置新密码，请在中枢上运行（这会让所有会话退出登录）：',
+    '中枢第一次启动时，会把生成的密码打印到它的日志中。要设置新密码（这会让所有会话退出登录），或者查看、修改用户名，请在中枢上运行：',
   'auth.badPassword': '密码不正确。',
   'auth.tooMany': '失败次数过多，请在 {min} 分钟后重试。',
   'auth.busy': '同时进行的登录尝试过多，请稍后重试。',
@@ -266,24 +273,47 @@ export const zh: Messages = {
 
   'connect.title': '接入设备和 Agent',
   'connect.intro':
-    '每台设备、每个云端 Agent 都需要自己的令牌。设备的令牌以设备命名：这个名称就是设备接入时使用的设备名，令牌不能用于其他设备。把 <token> 和 <device-name> 替换为实际的值，或者先创建令牌，就能得到已填好的命令。',
-  'connect.createToken': '创建令牌',
+    '能打开浏览器的设备和 Agent 都经由你来登录：每一个都由你在这个中枢上批准，不需要到处复制令牌。不能打开浏览器的程序，请为它添加一个带令牌的 Agent。',
+  'connect.createToken': '添加 Agent',
   'connect.noPublicUrl':
     '尚未配置公开 URL，所以命令里显示的是 https://hub.example.com。请把它替换为这个中枢的地址，或者用 --public-url 启动中枢。',
   'connect.device': '有 Agent 会话的设备',
   'connect.deviceHelp':
-    '在每台运行 Agent 的机器上：以令牌的名称接入一次，再同步。之后这台机器上的 origin mcp 会根据自己的库和这个中枢作答，并在 Agent 运行期间同步。',
+    '在每台运行 Agent 的机器上接入一次：命令显示链接和验证码时，在这个中枢上批准这台设备；它以自己存储库的名称接入。然后同步。之后这台机器上的 origin mcp 会根据自己的库和这个中枢作答，并在 Agent 运行期间同步。',
   'connect.deviceLabel': '安装、接入并同步',
-  'connect.agents': '云端 Agent',
-  'connect.agentsHelp': '没有本地会话记录的 Agent 直接通过 MCP 访问中枢。',
+  'connect.agents': 'Claude Code 和 Codex',
+  'connect.agentsHelp':
+    '没有本地会话记录的 Agent 直接通过 MCP 访问中枢。先添加中枢，再登录：Agent 会在你的浏览器里打开这个中枢，由你批准，之后它自己保管并续期自己的令牌。',
+  'connect.claudeLabel':
+    'Claude Code：添加中枢，然后在 Claude Code 中运行 /mcp，或者在命令行中登录',
+  'connect.codexLabel': 'Codex CLI：添加中枢并登录',
+  'connect.headless': '不能打开浏览器的 Agent',
+  'connect.headlessHelp':
+    '机器人、CI 任务或流水线，请添加一个带令牌的 Agent：令牌只显示一次，同时给出使用它的命令。',
+  'connect.oauthOff':
+    '通过浏览器登录需要管理界面挂在中枢自己地址的 /admin 下。这个中枢把它放在别处，所以请用令牌：在中枢上运行 origin token create <name>，在设备上运行 origin hub connect <url> --token <token>。',
 
-  'tokens.title': '访问令牌',
+  'tokens.title': '设备和 Agent',
   'tokens.help':
-    '设备和 Agent 用这些 bearer 令牌访问 MCP 和复制接口。令牌名就是设备名：令牌只能为同名的设备发送和接收数据。令牌只以哈希形式保存，只显示一次。',
-  'tokens.create': '创建令牌',
-  'tokens.none': '还没有令牌',
-  'tokens.noneHelp':
-    '为每台需要访问这个中枢的设备创建一个以它命名的令牌，并为每个云端 Agent 各创建一个令牌。',
+    '为你接入这个中枢的一切：同步会话的设备，以及你的 Agent，无论是用令牌还是通过浏览器登录。它们都可以在这里吊销。凭据只以哈希形式保存；令牌只显示一次。',
+  'tokens.create': '添加 Agent',
+  'tokens.connectDevice': '接入设备',
+  'tokens.devices': '设备',
+  'tokens.devicesHelp':
+    '每台设备以自己的名称接入：在它运行 origin hub connect 时在这里批准，或者使用以它命名的令牌。设备只能为自己发送和接收数据。',
+  'tokens.deviceData': '各设备发送的数据',
+  'tokens.noDevices': '还没有设备',
+  'tokens.noDevicesHelp': '在设备上运行 origin hub connect，然后在这里批准。',
+  'tokens.agents': '使用令牌的 Agent',
+  'tokens.agentsHelp':
+    '供不能通过浏览器登录的程序使用，例如机器人、CI 任务或流水线：一个带预设权限的令牌。',
+  'tokens.noAgents': '还没有使用令牌的 Agent',
+  'tokens.noAgentsHelp': '为不能通过浏览器登录的程序添加一个。',
+  'tokens.apps': '通过浏览器登录的 Agent',
+  'tokens.appsHelp':
+    '通过 OAuth 登录的 Claude Code、Codex 和其他 MCP 客户端：每一个都是一个 Agent，拥有你选择的权限，直到过期或被你吊销。',
+  'tokens.noApps': '还没有通过浏览器登录的 Agent',
+  'tokens.noAppsHelp': '把这个中枢添加到 Claude Code 或 Codex，在它们要求时登录。',
   'tokens.name': '名称',
   'tokens.created': '创建时间',
   'tokens.lastUsed': '最近使用',
@@ -291,22 +321,85 @@ export const zh: Messages = {
   'tokens.actions': '操作',
   'tokens.active': '有效',
   'tokens.revoked': '已吊销',
+  'tokens.expired': '已过期',
   'tokens.revoke': '吊销',
-  'tokens.revokedNotice': '已吊销 {name}。使用该令牌的请求现在会被拒绝。',
+  'tokens.preset': '权限',
+  'tokens.app': '应用',
+  'tokens.agent': 'Agent',
+  'tokens.signedIn': '登录时间',
+  'tokens.expires': '过期时间',
+  'tokens.revokedNotice': '已吊销 {name}。使用它的凭据的请求现在会被拒绝。',
   'tokens.createHelp':
-    '设备的令牌请用设备名命名：令牌只对同名的设备有效。云端 Agent 的令牌请用 Agent 命名。令牌只显示一次。',
-  'tokens.nameHelp':
-    '小写字母、数字、“.”、“_”和“-”。这就是设备名：设备以这个名称接入，如下面的命令所示。',
-  'tokens.createButton': '创建令牌',
-  'tokens.createdTitle': '令牌已创建',
+    'Agent 的令牌可以访问中枢的 MCP 端点；拥有读写权限时，还可以访问追加事件行的端点。请用 Agent 的名称命名。令牌只显示一次，同时给出使用它的命令。',
+  'tokens.nameHelp': '小写字母、数字、“.”、“_”和“-”。这个 Agent 写入的内容会记在这个名称下。',
+  'tokens.createButton': '添加 Agent',
+  'tokens.createdTitle': 'Agent 已添加',
   'tokens.shownOnce':
-    '请现在复制 {name} 的令牌。它不会被保存，也不会再显示；如果丢失，请吊销它，再用同一个名称新建一个。',
+    '请现在复制 {name} 的令牌。它不会被保存，也不会再显示；如果丢失，请吊销它，再重新添加这个 Agent。',
   'tokens.token': '令牌',
   'tokens.done': '完成',
-  'tokens.revokeTitle': '吊销令牌',
-  'tokens.revokeHelp':
-    '吊销 {name} 会立即拒绝所有使用它的请求。之后如需为 {name} 换一个令牌，用同一个名称新建即可。',
+  'tokens.useIt': '使用方法',
+  'tokens.useItHelp': '可直接粘贴，令牌已填在其中。',
+  'tokens.linesLabel': '追加事件行（见文档中的“接入你自己的来源”）',
+  'tokens.revokeTitle': '吊销',
+  'tokens.revokeHelp': '吊销 {name} 会立即拒绝所有使用它的令牌的请求。',
+  'tokens.revokeDeviceHelp':
+    '吊销 {name} 会立即拒绝这台设备的所有请求。要重新接入，在它上面运行 origin hub connect。',
   'tokens.revokeButton': '吊销 {name}',
+  'preset.readwrite': '读写',
+  'preset.readonly': '只读',
+  'preset.readwriteHelp': '搜索、读取、记住、提议、更正和遗忘，以及追加事件行。',
+  'preset.readonlyHelp': '只能搜索和读取：没有写入类工具，也不能向中枢发送数据。',
+  'grants.revokeTitle': '吊销通过浏览器登录的 Agent',
+  'grants.revokeHelp':
+    '吊销 {name}（{client}）会立即拒绝它的令牌：要回来，它需要重新登录，并由你再次批准。',
+  'grants.revokeButton': '吊销 {name}',
+  'grants.by.owner': '已吊销',
+  'grants.by.client': '已退出登录',
+  'grants.by.reuse': '已吊销：有令牌被使用了两次',
+
+  'consent.title': '允许访问你的记忆',
+  'consent.heading': '{client} 想使用你的 Origin 记忆',
+  'consent.unnamed': '一个应用',
+  'consent.intro':
+    '如果你允许，{client} 会成为你（{username}）在这个中枢上的一个 Agent：它可以按你选择的权限、在你选择的时间内使用中枢的 MCP 工具，直到你在“设备和 Agent”中吊销它。',
+  'consent.returnsTo': '你作出选择后，浏览器会回到 {host}。',
+  'consent.localWarning':
+    '只有当你刚刚在自己电脑上的应用里开始登录时才允许：监听 localhost 地址的应用无法证明自己是哪个应用。',
+  'consent.document': '这个应用在 {host} 描述自己。',
+  'consent.registered': '这个应用是自行向中枢注册的：它的名称只是它自己的说法。',
+  'consent.access': '权限',
+  'consent.readonlyOnly': '这个应用只请求了只读权限。',
+  'consent.duration': '有效期',
+  'consent.days': '{n} 天',
+  'consent.allow': '允许',
+  'consent.deny': '拒绝',
+  'consent.errorTitle': '这次登录无法继续',
+  'consent.errorHelp': '请从应用里重新开始登录。',
+
+  'activate.title': '接入设备',
+  'activate.help': '输入设备上 origin hub connect 显示的验证码。',
+  'activate.code': '验证码',
+  'activate.continue': '继续',
+  'activate.heading': '把设备 {device} 接入你的中枢？',
+  'activate.intro':
+    '有一台设备请求以 {device} 的名称接入这个中枢。批准后，它会得到一个设备令牌：它把自己的会话、条目和遗忘记录发送到这个中枢，并接收你在别处遗忘的内容。',
+  'activate.asked': '请求时间',
+  'activate.from': '来自',
+  'activate.expires': '验证码过期时间',
+  'activate.replaces':
+    '已经有一台名为 {device} 的设备接入。批准后这个名称归这台设备：{device} 当前使用的令牌会失效。',
+  'activate.check': '只有当你刚刚亲自运行了 origin hub connect，并且验证码与它显示的一致时才批准。',
+  'activate.approve': '接入 {device}',
+  'activate.deny': '拒绝',
+  'activate.approved': '{device} 已接入',
+  'activate.approvedHelp': '设备会在几秒内收到令牌，它上面的 origin hub connect 随即完成。',
+  'activate.denied': '{device} 未接入',
+  'activate.deniedHelp': '设备上的命令会停止并说明原因。',
+  'activate.unknown':
+    '没有设备在用这个验证码等待。请检查验证码，或者再次运行 origin hub connect 获取新的。',
+  'activate.used': '这个验证码已经用过了。',
+  'activate.expired': '这个验证码已过期。请再次运行 origin hub connect 获取新的。',
 
   'filter.project': '项目',
   'filter.all': '全部',
@@ -603,7 +696,8 @@ export const zh: Messages = {
   'proposal.note': 'Agent 的说明',
 
   'audit.title': '审计日志',
-  'audit.help': '来自这个界面和 CLI 的管理操作，只记录 id 和数量。日志只追加。',
+  'audit.help':
+    '来自这个界面和 CLI 的管理操作，以及设备和 Agent 在中枢上对自己访问权限所做的操作（api），只记录 id 和数量。日志只追加。',
   'audit.none': '还没有记录',
   'audit.noneHelp': '登录、令牌变更、在这里写入的条目和遗忘操作，都会在发生时记录下来。',
   'audit.actor': '操作者',

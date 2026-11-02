@@ -114,7 +114,92 @@ export const MIGRATIONS: Migration[] = [
       deriveProposals(db);
     },
   },
+  {
+    // Devices and agents (see tokens.ts): each token is the credential of a device or of an agent
+    // of the owner, with a preset; tokens made before keep what they could do (readwrite). Requests
+    // of devices and agents to the hub are audited on a channel of their own.
+    version: 7,
+    name: 'tokens of devices and agents, and an audit channel for the hub API',
+    up: ({ db }) => {
+      if (!hasColumn(db, 'api_token', 'kind')) {
+        db.exec(
+          "ALTER TABLE api_token ADD COLUMN kind TEXT NOT NULL DEFAULT 'device' CHECK (kind IN ('device', 'agent'))",
+        );
+      }
+      if (!hasColumn(db, 'api_token', 'preset')) {
+        db.exec(
+          "ALTER TABLE api_token ADD COLUMN preset TEXT NOT NULL DEFAULT 'readwrite' CHECK (preset IN ('readwrite', 'readonly'))",
+        );
+      }
+      classifyTokensV7(db);
+      const audit = db
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'audit_log'")
+        .get() as { sql: string } | undefined;
+      if (audit && !audit.sql.includes("'api'")) db.exec(AUDIT_LOG_V7);
+    },
+  },
 ];
+
+/**
+ * Version 7: a token is a device's when the hub holds what only a device sends under its name (a
+ * file it pushed from its own disk, at an absolute path, or an entry, a tombstone, or a recall it
+ * wrote), or when it was never used, as tokens were named after devices; otherwise it is an
+ * agent's (a cloud agent that used /mcp, or a program that appended event lines, at relative
+ * paths). Either keeps working as before.
+ */
+function classifyTokensV7(db: Database): void {
+  const tokens = db.prepare('SELECT name, last_used_at FROM api_token').all() as Array<{
+    name: string;
+    last_used_at: number | null;
+  }>;
+  if (tokens.length === 0) return;
+  const devices = new Set<string>();
+  const pushed = db
+    .prepare("SELECT path FROM raw_file WHERE substr(path, 1, 1) = '@'")
+    .all() as Array<{ path: string }>;
+  for (const { path } of pushed) {
+    const colon = path.indexOf(':');
+    if (colon < 0) continue;
+    if (/^([\\/]|[A-Za-z]:[\\/])/.test(path.slice(colon + 1))) devices.add(path.slice(1, colon));
+  }
+  for (const table of ['entry', 'tombstone', 'recall']) {
+    if (!hasTable(db, table) || !hasColumn(db, table, 'origin')) continue;
+    for (const r of db.prepare(`SELECT DISTINCT origin FROM ${table}`).all() as Array<{
+      origin: string;
+    }>) {
+      devices.add(r.origin);
+    }
+  }
+  const setKind = db.prepare('UPDATE api_token SET kind = ? WHERE name = ?');
+  for (const t of tokens) {
+    setKind.run(t.last_used_at === null || devices.has(t.name) ? 'device' : 'agent', t.name);
+  }
+}
+
+/** audit_log again, with the channel `api`; its rows keep their ids, and its triggers go with it. */
+const AUDIT_LOG_V7 = `
+CREATE TABLE audit_log_v7 (
+  id         INTEGER PRIMARY KEY,
+  at         INTEGER NOT NULL,
+  actor      TEXT    NOT NULL,
+  channel    TEXT    NOT NULL CHECK (channel IN ('ui', 'cli', 'api')),
+  action     TEXT    NOT NULL,
+  target     TEXT,
+  detail     TEXT,
+  ip         TEXT,
+  user_agent TEXT
+);
+INSERT INTO audit_log_v7 (id, at, actor, channel, action, target, detail, ip, user_agent)
+  SELECT id, at, actor, channel, action, target, detail, ip, user_agent FROM audit_log;
+DROP TABLE audit_log;
+ALTER TABLE audit_log_v7 RENAME TO audit_log;
+CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log BEGIN
+  SELECT RAISE(ABORT, 'audit_log is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log BEGIN
+  SELECT RAISE(ABORT, 'audit_log is append-only');
+END;
+`;
 
 /** The tables of proposals, as version 6 created them. */
 const PROPOSAL_TABLES_V6 = `

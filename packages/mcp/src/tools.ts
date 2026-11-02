@@ -242,8 +242,23 @@ export type ToolArgs<N extends ToolName> = z.output<
 
 export type ToolHandlers = { [N in ToolName]: (args: ToolArgs<N>) => Promise<CallToolResult> };
 
-export function registerOriginTools(mcp: McpServer, handlers: ToolHandlers): void {
+/**
+ * The tools that write, or propose what to write: a connection with the `readonly` preset (see
+ * docs/architecture.md#access) is served without them.
+ */
+export const WRITE_TOOLS: readonly ToolName[] = ['remember', 'propose', 'correct', 'forget'];
+
+/** What a read-only connection is told, after the usual guidance. */
+export const READ_ONLY_NOTE =
+  '- This connection is read-only: it has no `remember`, `propose`, `correct`, or `forget`, so it can read the memory but not change it.';
+
+export function registerOriginTools(
+  mcp: McpServer,
+  handlers: ToolHandlers,
+  opts: { readOnly?: boolean } = {},
+): void {
   for (const name of TOOL_NAMES) {
+    if (opts.readOnly && WRITE_TOOLS.includes(name)) continue;
     const handler = handlers[name] as (args: unknown) => Promise<CallToolResult>;
     mcp.registerTool(
       name,

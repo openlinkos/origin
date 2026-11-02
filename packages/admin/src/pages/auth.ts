@@ -5,31 +5,48 @@ import { alert, linkButton, pageIntro } from './components.js';
 import { brand, csrfField, openSourceNote, renderPage } from './layout.js';
 
 /** The password field and the submit button of the sign-in and re-authentication forms. */
-function passwordFields(ctx: Ctx, submit: string) {
-  return html`<input type="text" name="username" value="origin-admin" autocomplete="username" hidden>
-        <div class="ol-field">
+function passwordField(ctx: Ctx, autofocus: boolean) {
+  return html`<div class="ol-field">
           <label class="ol-label" for="password">${ctx.t('auth.password')}</label>
-          <input class="ol-input ol-input-lg" id="password" type="password" name="password" required autocomplete="current-password" spellcheck="false" autofocus>
-        </div>
-        <button type="submit" class="ol-btn ol-btn-primary ol-btn-lg ol-btn-block">${submit}</button>`;
+          <input class="ol-input ol-input-lg" id="password" type="password" name="password" required autocomplete="current-password" spellcheck="false"${autofocus ? html` autofocus` : ''}>
+        </div>`;
 }
 
-export function loginPage(ctx: Ctx, status: number, o: { next: string; error?: string }): void {
+const submit = (label: string) =>
+  html`<button type="submit" class="ol-btn ol-btn-primary ol-btn-lg ol-btn-block">${label}</button>`;
+
+/**
+ * The hub's sign-in: the owner's username and the admin password. A hub without a username yet (a
+ * new one, or one upgraded from a version without usernames) asks the owner to choose one, with
+ * the password they already have.
+ */
+export function loginPage(
+  ctx: Ctx,
+  status: number,
+  o: { next: string; error?: string; choose: boolean; username?: string },
+): void {
   const t = ctx.t;
   renderPage(ctx, status, {
     title: t('auth.signIn'),
     bare: true,
-    body: html`<h1 class="ol-auth-title">${t('auth.signIn')}</h1>
-      <p>${t('auth.signInHelp')}</p>
+    body: html`<h1 class="ol-auth-title">${o.choose ? t('auth.chooseTitle') : t('auth.signIn')}</h1>
+      <p>${o.choose ? t('auth.chooseHelp') : t('auth.signInHelp')}</p>
       ${o.error ? alert(ctx, 'danger', o.error) : ''}
       <form method="post" action="/admin/login" class="ol-stack">
         <input type="hidden" name="next" value="${o.next}">
-        ${passwordFields(ctx, t('auth.signIn'))}
+        <div class="ol-field">
+          <label class="ol-label" for="username">${t('auth.username')}</label>
+          <input class="ol-input ol-input-lg" id="username" type="text" name="username" required autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" value="${o.username ?? ''}"${o.choose ? html` pattern="[a-z0-9._\\-]{2,32}" aria-describedby="username-hint"` : ''} autofocus>
+          ${o.choose ? html`<p class="ol-hint" id="username-hint">${t('auth.usernameHint')}</p>` : ''}
+        </div>
+        ${passwordField(ctx, false)}
+        ${submit(o.choose ? t('auth.chooseTitle') : t('auth.signIn'))}
       </form>
       <details class="ol-details">
         <summary>${t('auth.forgot')}</summary>
         <p class="ol-hint">${t('auth.passwordHint')}</p>
-        <div class="ol-code"><pre><code>origin admin password</code></pre></div>
+        <div class="ol-code"><pre><code>origin admin password
+origin admin username</code></pre></div>
       </details>
       ${openSourceNote(ctx)}`,
   });
@@ -64,7 +81,9 @@ export function reauthPage(ctx: Ctx, status: number, o: { next: string; error?: 
       <form method="post" action="/admin/reauth" class="ol-stack">
         ${csrfField(ctx)}
         <input type="hidden" name="next" value="${o.next}">
-        ${passwordFields(ctx, t('auth.confirm'))}
+        <input type="text" name="username" value="${ctx.username ?? ''}" autocomplete="username" hidden>
+        ${passwordField(ctx, true)}
+        ${submit(t('auth.confirm'))}
         ${linkButton(ctx, { href: '/admin/', label: t('action.cancel'), variant: 'ghost', block: true })}
       </form>`,
   });

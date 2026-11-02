@@ -8,15 +8,19 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   backupStore,
+  createToken,
   FIRST_VERSION,
   getEntry,
+  listAudit,
   listSessions,
+  listTokens,
   type Migration,
   OriginError,
   openDatabase,
   openMemoryDatabase,
   rawLocator,
   readRawLine,
+  recordAudit,
   remember,
   STORE_VERSION,
   searchEvents,
@@ -26,7 +30,14 @@ import {
   threadIdOf,
 } from '../src/index.js';
 import { fakeAdapter, line } from './helpers.js';
-import { downgradeToV5, legacyStore, schemaOf, store040, userVersion } from './legacy.js';
+import {
+  downgradeToV5,
+  downgradeToV6,
+  legacyStore,
+  schemaOf,
+  store040,
+  userVersion,
+} from './legacy.js';
 
 let tmp: string;
 let home: string;
@@ -367,11 +378,68 @@ describe('a store of version 5', () => {
 
     db = openDatabase(file);
     expect(userVersion(db)).toBe(STORE_VERSION);
-    expect(STORE_VERSION).toBe(6);
+    expect(STORE_VERSION).toBe(7);
     expect({
       proposals: db.prepare('SELECT * FROM proposal').all(),
       sources: db.prepare('SELECT * FROM proposal_source').all(),
     }).toEqual(derived);
+    const fresh = openDatabase(path.join(tmp, 'fresh.db'));
+    expect(schemaOf(db)).toEqual(schemaOf(fresh));
+    fresh.close();
+    db.close();
+  });
+});
+
+describe('a store of version 6', () => {
+  it('makes each token a device or an agent, readwrite, and audits the hub API (version 7)', () => {
+    let db = openDatabase(file);
+    for (const name of ['laptop', 'bot', 'ci', 'fresh', 'desk']) createToken(db, name, 1000);
+    const used = db.prepare('UPDATE api_token SET last_used_at = 2000 WHERE name = ?');
+    for (const name of ['laptop', 'bot', 'ci', 'desk']) used.run(name);
+    const file_ = db.prepare(
+      `INSERT INTO raw_file (source, path, generation, mirror, bytes_ingested, first_seen_at, updated_at)
+       VALUES (?, ?, 1, ?, 0, 1, 1)`,
+    );
+    // Pushed from a device's disk, and lines a program appended under its token.
+    file_.run(
+      'claude-code',
+      `@laptop:${['C:', 'Users', 'dana', '.claude', 'projects', 'p', 's.jsonl'].join('\\')}`,
+      'devices/laptop/a',
+    );
+    file_.run('chat-ops', '@bot:incidents.jsonl', 'devices/bot/b');
+    db.prepare(
+      `INSERT INTO entry (id, kind, text, confidence, author, root, created_at, origin)
+       VALUES ('ent_00000000000d', 'memory', 'From the desk.', 1, 'user@desk', 'ent_00000000000d', 3000, 'desk')`,
+    ).run();
+    recordAudit(db, { actor: 'owner', channel: 'ui', action: 'login' }, 4000);
+    db.close();
+    downgradeToV6(file);
+    const v6 = new DatabaseSync(file);
+    expect(userVersion(v6)).toBe(6);
+    expect(() =>
+      v6
+        .prepare("INSERT INTO audit_log (at, actor, channel, action) VALUES (1, 'x', 'api', 'y')")
+        .run(),
+    ).toThrow(/CHECK/);
+    v6.close();
+
+    db = openDatabase(file);
+    expect(userVersion(db)).toBe(STORE_VERSION);
+    expect(
+      Object.fromEntries(listTokens(db).map((t) => [t.name, `${t.kind} ${t.preset}`])),
+    ).toEqual({
+      bot: 'agent readwrite',
+      ci: 'agent readwrite',
+      desk: 'device readwrite',
+      fresh: 'device readwrite',
+      laptop: 'device readwrite',
+    });
+    recordAudit(db, { actor: 'dana / ci', channel: 'api', action: 'grant.revoke' }, 5000);
+    expect(listAudit(db).map((r) => [r.channel, r.action])).toEqual([
+      ['api', 'grant.revoke'],
+      ['ui', 'login'],
+    ]);
+    expect(() => db.prepare('DELETE FROM audit_log').run()).toThrow(/append-only/);
     const fresh = openDatabase(path.join(tmp, 'fresh.db'));
     expect(schemaOf(db)).toEqual(schemaOf(fresh));
     fresh.close();

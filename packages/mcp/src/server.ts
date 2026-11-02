@@ -19,6 +19,7 @@ import {
   CLOSE_TIMEOUT_MS,
   INSTRUCTIONS,
   onDisconnect,
+  READ_ONLY_NOTE,
   refreshGate,
   registerOriginTools,
   startWatch,
@@ -60,6 +61,11 @@ export interface OriginServerOptions {
    * says otherwise, and finds its work tree on disk. A hub has none (see briefIn).
    */
   cwd?: string;
+  /**
+   * Serve the reading tools only, for an agent with the `readonly` preset: without `remember`,
+   * `propose`, `correct`, and `forget` (see WRITE_TOOLS).
+   */
+  readOnly?: boolean;
 }
 
 export interface OriginServer {
@@ -147,11 +153,13 @@ export function createOriginServer(opts: OriginServerOptions): OriginServer {
   const refresh = refreshGate(opts.sync, opts.syncIntervalMs ?? 10_000, opts.log);
   const mcp = new McpServer(
     { name: 'origin', version: opts.version ?? '0.0.0' },
-    { instructions: INSTRUCTIONS },
+    { instructions: opts.readOnly ? `${INSTRUCTIONS}\n${READ_ONLY_NOTE}` : INSTRUCTIONS },
   );
   const author =
     opts.author ?? (() => (opts.device ? `${agentName(mcp)}@${opts.device}` : agentName(mcp)));
-  registerOriginTools(mcp, localHandlers(opts.db, opts.home, refresh, author, opts.cwd ?? null));
+  registerOriginTools(mcp, localHandlers(opts.db, opts.home, refresh, author, opts.cwd ?? null), {
+    readOnly: opts.readOnly,
+  });
   let unwatch = () => {};
   return {
     mcp,

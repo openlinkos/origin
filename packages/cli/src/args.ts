@@ -171,11 +171,18 @@ export const ARGS = {
   },
   token: {
     sub: {
-      create: { options: {}, positionals: [1, 1], usage: 'Usage: origin token create <name>' },
+      create: {
+        options: {
+          agent: { type: 'boolean', default: false },
+          readonly: { type: 'boolean', default: false },
+        },
+        positionals: [1, 1],
+        usage: 'Usage: origin token create <name> [--agent [--readonly]]',
+      },
       list: { options: {}, usage: 'Usage: origin token list' },
       revoke: { options: {}, positionals: [1, 1], usage: 'Usage: origin token revoke <name>' },
     },
-    usage: 'Usage: origin token create <name> | list | revoke <name>',
+    usage: 'Usage: origin token create <name> [--agent [--readonly]] | list | revoke <name>',
   },
   admin: {
     sub: {
@@ -191,9 +198,14 @@ export const ARGS = {
         options: { limit: { type: 'string' } },
         usage: 'Usage: origin admin audit [--limit 50]',
       },
+      username: {
+        options: {},
+        positionals: [0, 1],
+        usage: 'Usage: origin admin username [<name>]',
+      },
     },
     usage:
-      'Usage: origin admin password [--generate] | sessions [--revoke-all] | audit [--limit 50]',
+      'Usage: origin admin password [--generate] | username [<name>] | sessions [--revoke-all] | audit [--limit 50]',
   },
   hub: {
     sub: {
@@ -204,16 +216,13 @@ export const ARGS = {
           relay: { type: 'boolean', default: false },
         },
         positionals: [1, 1],
-        required: {
-          token: '--token is required: create one on the hub with origin token create <name>.',
-        },
-        usage: 'Usage: origin hub connect <url> --token <token> [--device <name>] [--relay]',
+        usage: 'Usage: origin hub connect <url> [--token <token>] [--device <name>] [--relay]',
       },
       status: { options: {}, usage: 'Usage: origin hub status' },
       disconnect: { options: {}, usage: 'Usage: origin hub disconnect' },
     },
     usage:
-      'Usage: origin hub connect <url> --token <token> [--device <name>] [--relay] | status | disconnect',
+      'Usage: origin hub connect <url> [--token <token>] [--device <name>] [--relay] | status | disconnect',
   },
   raw: {
     sub: {

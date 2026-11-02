@@ -3,8 +3,8 @@ import type { Database } from './db.js';
 import { secretHash } from './tokens.js';
 
 /**
- * Admin UI sessions (see docs/architecture.md#admin-ui). The hub has one admin password and no
- * user names (see password.ts), so every session belongs to its owner.
+ * Admin UI sessions (see docs/architecture.md#admin-ui). The hub has one owner, with one username
+ * and one admin password (see password.ts), so every session belongs to the owner.
  */
 export const ADMIN_OWNER = 'owner';
 /** A session ends after this long without a request. */

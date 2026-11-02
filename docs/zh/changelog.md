@@ -11,6 +11,11 @@ Origin 所有值得注意的改动都列在这里。版本号遵循[语义化版
 - 在浏览器中打开中枢的地址，会看到一个公开首页，而不再是一个光秃秃的 JSON 错误：Origin 的标志和名称，一句说明这个中枢是什么的话（中文或英文），管理界面在 `/admin` 下提供时有一个**登录**按钮，以及「由开源的 Origin 驱动」和指向网站与源代码的链接。页面不显示库里的任何内容。请求 JSON 的客户端会收到 `{"service":"origin","docs":"https://origin.openlinkos.com/"}`，`/robots.txt` 让搜索引擎不收录整个中枢（个人中枢不进搜索结果）；以自己的名义展示中枢时，设置 `ORIGIN_POWERED_BY=off` 可以去掉署名。中枢前面的代理还需要转发 `/`、`/robots.txt` 和 `/assets/*`。
 - 没有有效令牌的请求仍然被拒绝并返回 `401`；JSON 响应体现在还有 `docs`，即中枢指南的地址。
 - 管理界面的每个页面底部显示 Origin 的版本，以及指向文档、GitHub 上的源代码和反馈问题表单的链接；中枢和 `origin ui` 的登录页在表单下方说明 Origin 是开源软件。
+- **你的用户名。** 中枢只有一个主人，现在你用自己的用户名和管理密码登录它的管理界面。第一次登录时选定用户名，无论是新的中枢，还是从早先版本升级而来的中枢，密码都用你已有的那个；`origin admin username <name>` 可以修改它。审计日志用它来指称你。
+- **设备和 Agent。** 现在每个令牌都属于一台设备或一个 Agent（云端 Agent、机器人或流水线），Agent 的令牌是*读写*或*只读*的：只读的 Agent 只有读取类的 MCP 工具，也不向中枢发送任何内容。管理界面的「令牌」页改为「设备和 Agent」：你的设备及其令牌和它们最近发送的数据，使用令牌的 Agent，以及通过 OAuth 登录的 Agent，每一个都可以吊销；**添加 Agent** 只显示一次令牌，并附上现成的命令：Claude Code、Codex 和事件行。在中枢上，`origin token create <name> --agent [--readonly]` 创建 Agent 的令牌，`origin token list` 列出全部，`origin token revoke` 可以吊销其中任何一个。之前创建的令牌照旧可用。
+- **Agent 用 OAuth 登录。** 管理界面在中枢地址的 `/admin` 下提供时，中枢就是它的 MCP 端点的 OAuth 授权服务器，如 MCP 授权规范所述：`claude mcp add --scope user --transport http origin https://hub.example.com/mcp` 之后运行 `claude mcp login origin`（或者在 Claude Code 中运行 `/mcp`），以及 `codex mcp add origin --url https://hub.example.com/mcp` 之后运行 `codex mcp login origin`，都会在你的浏览器里打开中枢，由你允许这个 Agent，并选择它能做什么、有效多久，不需要复制任何令牌。它支持客户端元数据文档和动态客户端注册，只支持 PKCE（`S256`），支持资源指示符、一次性授权码，以及轮换的刷新令牌，刷新令牌一旦被重复使用，这个 Agent 就会被吊销。`/mcp` 返回的 `401` 现在会说明中枢的 OAuth 元数据在哪里。中枢前面的代理还必须转发 `/.well-known/oauth-protected-resource`、`/.well-known/oauth-protected-resource/mcp`、`/.well-known/oauth-authorization-server` 和 `/oauth/*`。
+- **设备经由你的批准接入。** 不带 `--token` 的 `origin hub connect <url>` 会打印一个链接和一个验证码；打开链接，登录管理界面，批准「把设备 laptop 接入你的中枢？」，设备就会以它的库名称收到自己的令牌。`--token` 仍然可用，没有在 `/admin` 下提供管理界面的中枢需要用它。
+- **升级。** 库格式升级到版本 7：令牌有了类型和预设权限（如果中枢保存着只有设备才会以这个令牌的名称发送的数据，或者这个令牌从未用过，它就是设备的令牌，否则是 Agent 的令牌），审计日志新增一个渠道，用于记录设备和 Agent 通过中枢 API 所做的操作。升级中枢后，登录一次它的管理界面，选定你的用户名；不需要做其他任何事，设备和 Agent 也保留各自的令牌。
 
 ## [0.4.0] - 2026-10-30 {#_0-4-0-2026-10-30}
 

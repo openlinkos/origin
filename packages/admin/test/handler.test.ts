@@ -6,11 +6,13 @@ import path from 'node:path';
 import {
   createToken,
   type Database,
+  getAdminUsername,
   hashAdminPassword,
   listAudit,
   openDatabase,
   type ScryptParams,
   setAdminPassword,
+  setAdminUsername,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ADMIN_ROUTES, type AdminOptions, createAdminHandler } from '../src/index.js';
@@ -29,6 +31,7 @@ beforeEach(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-admin-ui-'));
   db = openDatabase(path.join(tmp, 'origin.db'));
   await setAdminPassword(db, PASSWORD, { params: FAST });
+  setAdminUsername(db, 'owner');
   servers = [];
   clock = Date.now();
 });
@@ -118,7 +121,7 @@ describe('request checks', () => {
       request(`${base}/admin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
-        body: `password=${PASSWORD}`,
+        body: `username=owner&password=${PASSWORD}`,
       });
     expect((await login({ Origin: 'https://evil.example' })).status).toBe(403);
     expect((await login({ Origin: base, 'Sec-Fetch-Site': 'cross-site' })).status).toBe(403);
@@ -194,7 +197,7 @@ describe('request checks', () => {
     const login = await request(`${base}/admin/api/login`, {
       method: 'POST',
       headers: { Origin: base, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: token }),
+      body: JSON.stringify({ username: 'owner', password: token }),
     });
     expect(login.status).toBe(401);
     // Even if the stored hash were a token's, a token never signs in.
@@ -202,7 +205,9 @@ describe('request checks', () => {
     db.prepare("UPDATE setting SET value = ? WHERE key = 'admin.password'").run(
       await hashAdminPassword(token, FAST),
     );
-    expect((await new Browser(base).post('/admin/login', { password: token })).status).toBe(401);
+    expect(
+      (await new Browser(base).post('/admin/login', { username: 'owner', password: token })).status,
+    ).toBe(401);
   });
 });
 
@@ -210,7 +215,7 @@ describe('sessions', () => {
   it('use a strict, host-only cookie on loopback http', async () => {
     const base = await serve();
     const b = new Browser(base);
-    const res = await b.post('/admin/login', { password: PASSWORD });
+    const res = await b.post('/admin/login', { username: 'owner', password: PASSWORD });
     expect(res.status).toBe(303);
     expect(res.headers.location).toBe('/admin/');
     const cookie = res.setCookies.find((c) => c.startsWith('origin-admin='));
@@ -221,18 +226,23 @@ describe('sessions', () => {
   it('use a __Host- Secure cookie from an https public origin', async () => {
     const base = await serve({ publicUrl: new URL('https://hub.example.com') });
     const b = new Browser(base, 'https://hub.example.com');
-    const res = await b.api('POST', 'login', { password: PASSWORD });
+    const res = await b.api('POST', 'login', { username: 'owner', password: PASSWORD });
     expect(res.status).toBe(200);
     const cookie = res.setCookies.find((c) => c.startsWith('__Host-origin-admin='));
     expect(cookie).toMatch(/; Path=\/; SameSite=Lax; Secure; HttpOnly$/);
-    expect(res.json()).toEqual({ signedIn: true, fresh: true, csrf: expect.any(String) });
+    expect(res.json()).toEqual({
+      signedIn: true,
+      fresh: true,
+      username: 'owner',
+      csrf: expect.any(String),
+    });
   });
 
   it('accept only the __Host- cookie behind an https public URL', async () => {
     const base = await serve({ publicUrl: new URL('https://hub.example.com') });
     const headers = { Host: 'hub.example.com' };
     const b = new Browser(base, 'https://hub.example.com');
-    await b.api('POST', 'login', { password: PASSWORD }, headers);
+    await b.api('POST', 'login', { username: 'owner', password: PASSWORD }, headers);
     const id = b.jar.get('__Host-origin-admin') ?? '';
     expect(id).not.toBe('');
     const as = async (cookie: string) =>
@@ -284,9 +294,14 @@ describe('sessions', () => {
   it('end when idle, and never redirect off-site after sign-in', async () => {
     const base = await serve();
     const b = new Browser(base);
-    const res = await b.post('/admin/login', { password: PASSWORD, next: 'https://evil.example/' });
+    const res = await b.post('/admin/login', {
+      username: 'owner',
+      password: PASSWORD,
+      next: 'https://evil.example/',
+    });
     expect(res.headers.location).toBe('/admin/');
     const res2 = await b.post('/admin/login', {
+      username: 'owner',
       password: PASSWORD,
       next: '//evil.example/admin/',
     });
@@ -312,6 +327,9 @@ describe('routes', () => {
         "/admin/prefs (none)",
         "/admin/tokens (fresh)",
         "/admin/tokens/revoke (fresh)",
+        "/admin/grants/revoke (fresh)",
+        "/admin/oauth/authorize (fresh)",
+        "/admin/activate (fresh)",
         "/admin/proposal/accept (session)",
         "/admin/proposal/reject (session)",
         "/admin/correct (session)",
@@ -324,6 +342,7 @@ describe('routes', () => {
         "/admin/api/reauth (session)",
         "/admin/api/tokens (fresh)",
         "/admin/api/token-revoke (fresh)",
+        "/admin/api/grant-revoke (fresh)",
         "/admin/api/entries (session)",
         "/admin/api/correct (session)",
         "/admin/api/proposal-accept (session)",
@@ -345,22 +364,31 @@ describe('routes', () => {
     const base = await serve();
     const b = new Browser(base);
     for (let i = 0; i < 10; i++) {
-      expect((await b.post('/admin/login', { password: `wrong-guess-${i}` })).status).toBe(401);
+      expect(
+        (await b.post('/admin/login', { username: 'owner', password: `wrong-guess-${i}` })).status,
+      ).toBe(401);
     }
-    const blocked = await b.post('/admin/login', { password: PASSWORD });
+    const blocked = await b.post('/admin/login', { username: 'owner', password: PASSWORD });
     expect(blocked.status).toBe(429);
     expect(Number(blocked.headers['retry-after'])).toBeGreaterThan(500);
-    expect((await b.post('/admin/login', { password: PASSWORD })).status).toBe(429);
+    expect((await b.post('/admin/login', { username: 'owner', password: PASSWORD })).status).toBe(
+      429,
+    );
     expect(listAudit(db).map((r) => r.action)).toEqual(['login.blocked', 'login.failed']);
     expect(JSON.stringify(listAudit(db))).not.toContain('wrong-guess');
     clock += 10 * 60_000 + 1;
-    expect((await b.post('/admin/login', { password: PASSWORD })).status).toBe(303);
+    expect((await b.post('/admin/login', { username: 'owner', password: PASSWORD })).status).toBe(
+      303,
+    );
   });
 
   it('count concurrent wrong passwords exactly, checking one at a time', async () => {
     const base = await serve();
     const attempts = Array.from({ length: 20 }, (_, i) =>
-      new Browser(base).api('POST', 'login', { password: `concurrent-guess-${i}` }),
+      new Browser(base).api('POST', 'login', {
+        username: 'owner',
+        password: `concurrent-guess-${i}`,
+      }),
     );
     const statuses = (await Promise.all(attempts)).map((r) => r.status).sort();
     expect(statuses.filter((s) => s === 401)).toHaveLength(10);
@@ -485,13 +513,84 @@ describe('pages', () => {
   });
 });
 
+describe('the owner username', () => {
+  it('is chosen at the first sign-in, with the admin password, and then required', async () => {
+    db.prepare("DELETE FROM setting WHERE key = 'admin.username'").run();
+    const base = await serve();
+    const page = await request(`${base}/admin/login`);
+    expect(page.text).toContain('Choose your username');
+    expect(page.text).toContain('2 to 32 lowercase letters');
+    const b = new Browser(base);
+    const bad = await b.post('/admin/login', { username: 'x', password: PASSWORD });
+    expect(bad.status).toBe(400);
+    expect(bad.text).toContain('Invalid username');
+    const wrong = await b.post('/admin/login', { username: 'dana', password: 'not the password' });
+    expect(wrong.status).toBe(401);
+    expect(wrong.text).toContain('That password was not accepted.');
+    expect(getAdminUsername(db)).toBeNull();
+    // Typed with capitals and spaces, kept in lowercase.
+    const ok = await b.post('/admin/login', {
+      username: ' Dana ',
+      password: PASSWORD,
+      next: '/admin/',
+    });
+    expect(ok.status).toBe(303);
+    expect(getAdminUsername(db)).toBe('dana');
+    expect(
+      listAudit(db)
+        .slice(0, 2)
+        .map((r) => [r.actor, r.action]),
+    ).toEqual([
+      ['dana', 'login'],
+      ['dana', 'username.set'],
+    ]);
+    // From now on the username is checked, and a wrong one fails like a wrong password.
+    const other = await new Browser(base).post('/admin/login', {
+      username: 'eve',
+      password: PASSWORD,
+    });
+    expect(other.status).toBe(401);
+    expect(other.text).toContain('That username and password were not accepted.');
+    expect(getAdminUsername(db)).toBe('dana');
+    expect((await new Browser(base).login(PASSWORD, 'DANA')).status).toBe(303);
+    expect((await new Browser(base).api('POST', 'login', { password: PASSWORD })).status).toBe(401);
+    // Actions are audited under the username, and the reauth form names it for password managers.
+    await b.get('/admin/tokens/new');
+    const created = await b.post('/admin/tokens', { name: 'ci' });
+    expect(created.status).toBe(200);
+    expect(listAudit(db)[0]).toMatchObject({ actor: 'dana', action: 'token.create', target: 'ci' });
+    clock += 11 * 60_000;
+    const reauth = await b.get('/admin/reauth?next=/admin/');
+    expect(reauth.text).toContain(
+      '<input type="text" name="username" value="dana" autocomplete="username" hidden>',
+    );
+  });
+
+  it('is set at the first sign-in after an upgrade: earlier sessions count as signed out', async () => {
+    const base = await serve();
+    const b = new Browser(base);
+    await b.login(PASSWORD);
+    expect((await b.get('/admin/')).status).toBe(200);
+    // A hub of an earlier version had sessions but no username.
+    db.prepare("DELETE FROM setting WHERE key = 'admin.username'").run();
+    const after = await b.get('/admin/');
+    expect(after.status).toBe(303);
+    expect(after.headers.location).toMatch(/^\/admin\/login/);
+    expect((await b.get('/admin/login')).text).toContain('Choose your username');
+    expect((await b.login(PASSWORD, 'dana')).status).toBe(303);
+    expect((await b.get('/admin/')).status).toBe(200);
+    expect(getAdminUsername(db)).toBe('dana');
+  });
+});
+
 describe('the admin password', () => {
   it('signs in through a form that password managers recognize', async () => {
     const base = await serve();
     const page = await request(`${base}/admin/login`);
-    expect(page.text).toContain(
-      '<input type="text" name="username" value="origin-admin" autocomplete="username" hidden>',
+    expect(page.text).toMatch(
+      /<label class="ol-label" for="username">Username<\/label>\s*<input class="ol-input ol-input-lg" id="username" type="text" name="username" required autocomplete="username"/,
     );
+    expect(page.text).not.toContain('origin-admin');
     expect(page.text).toMatch(
       /<label class="ol-label" for="password">Admin password<\/label>\s*<input class="ol-input ol-input-lg" id="password" type="password" name="password" required autocomplete="current-password"/,
     );
@@ -507,7 +606,10 @@ describe('the admin password', () => {
     const base = await serve({
       credential: { source: 'env', hash: await hashAdminPassword(env, FAST) },
     });
-    expect((await new Browser(base).post('/admin/login', { password: PASSWORD })).status).toBe(401);
+    expect(
+      (await new Browser(base).post('/admin/login', { username: 'owner', password: PASSWORD }))
+        .status,
+    ).toBe(401);
     const b = new Browser(base);
     expect((await b.login(env)).status).toBe(303);
     expect((await b.get('/admin/')).status).toBe(200);
@@ -600,5 +702,71 @@ describe('a device', () => {
     expect(second.text).toContain('51–60 of 60');
     expect(second.text).toContain('s00.jsonl');
     expect(second.text).not.toContain('s59.jsonl');
+  });
+});
+
+describe('devices and agents', () => {
+  it('lists devices, agents with a preset, and agents signed in by browser, each revocable', async () => {
+    createToken(db, 'laptop');
+    createToken(db, 'reader', clock, { kind: 'agent', preset: 'readonly' });
+    const base = await serve();
+    const b = new Browser(base);
+    await b.login(PASSWORD);
+    const page = await b.get('/admin/tokens');
+    expect(page.status).toBe(200);
+    expect(pageProblems(page.text)).toEqual([]);
+    expect(page.text).toContain('<h1');
+    expect(page.text).toContain('Devices and agents');
+    expect(page.text).toContain('Agents with a token');
+    expect(page.text).toContain('Read only');
+    expect(page.text).toContain('href="/admin/tokens/revoke?name=reader"');
+    const zh = await b.get('/admin/tokens', { 'Accept-Language': 'zh-CN' });
+    expect(zh.text).toContain('设备和 Agent');
+
+    // A readonly agent: a token, with the Claude Code and Codex commands, and no event lines.
+    await b.get('/admin/tokens/new');
+    const created = await b.post('/admin/tokens', { name: 'notes-bot', preset: 'readonly' });
+    expect(created.status).toBe(200);
+    expect(pageProblems(created.text)).toEqual([]);
+    const token = /ogn_[A-Za-z0-9_-]{43}/.exec(created.text)?.[0] ?? '';
+    expect(created.text).toContain(
+      `claude mcp add --scope user --transport http origin https://hub.example.com/mcp --header &quot;Authorization: Bearer ${token}&quot;`,
+    );
+    expect(created.text).toContain(`export ORIGIN_TOKEN=${token}`);
+    expect(created.text).not.toContain('/v1/sources/');
+    const readwrite = await b.post('/admin/tokens', { name: 'chat-ops' });
+    expect(readwrite.text).toContain('/v1/sources/chat-ops/lines?path=events.jsonl');
+    expect(listAudit(db)[0]).toMatchObject({
+      actor: 'owner',
+      action: 'token.create',
+      target: 'chat-ops',
+      detail: { kind: 'agent', preset: 'readwrite' },
+    });
+    const bad = await b.post('/admin/tokens', { name: 'x', preset: 'everything' });
+    expect(bad.status).toBe(400);
+    expect(bad.text).toContain('Unknown preset');
+  });
+
+  it('show the connect page by browser sign-in when the hub offers it, and with tokens when not', async () => {
+    const withOAuth = await serve({
+      oauth: {
+        resolveClient: async () => {
+          throw new Error('no fetching here');
+        },
+      },
+    });
+    const b = new Browser(withOAuth);
+    await b.login(PASSWORD);
+    const page = await b.get('/admin/connect');
+    expect(pageProblems(page.text)).toEqual([]);
+    expect(page.text).toContain('origin hub connect https://hub.example.com\norigin sync');
+    expect(page.text).toContain('claude mcp login origin');
+    expect(page.text).toContain('codex mcp login origin');
+    const plain = await serve();
+    const c = new Browser(plain);
+    await c.login(PASSWORD);
+    const tokens = await c.get('/admin/connect');
+    expect(tokens.text).toContain('--token &lt;token&gt; --device &lt;device-name&gt;');
+    expect(tokens.text).toContain('Signing in by browser needs the admin UI');
   });
 });

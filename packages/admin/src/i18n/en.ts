@@ -41,7 +41,7 @@ export const en = {
   'nav.recalls': 'Recalls',
   'nav.proposals': 'Proposals',
   'nav.devices': 'Devices',
-  'nav.tokens': 'Tokens',
+  'nav.tokens': 'Devices and agents',
   'nav.connect': 'Connect',
   'nav.tombstones': 'Forgotten',
   'nav.audit': 'Audit log',
@@ -118,12 +118,19 @@ export const en = {
   'action.copied': 'Copied',
 
   'auth.signIn': 'Sign in',
-  'auth.signInHelp': 'Enter the admin password of this hub.',
+  'auth.signInHelp': 'Enter your username and the admin password of this hub.',
+  'auth.chooseTitle': 'Choose your username',
+  'auth.chooseHelp':
+    "This hub has no username yet. Choose yours, as the hub's owner, and enter the admin password: from now on you sign in with both.",
+  'auth.username': 'Username',
+  'auth.usernameHint':
+    '2 to 32 lowercase letters, digits, "-", "_", or ".". To change it later, run origin admin username on the hub.',
+  'auth.badCredentials': 'That username and password were not accepted.',
   'auth.statement': 'Local-first, cross-agent memory for your AI coding agents.',
   'auth.password': 'Admin password',
-  'auth.forgot': 'Forgot the password?',
+  'auth.forgot': 'Forgot the password or the username?',
   'auth.passwordHint':
-    'On its first start, the hub prints a generated password to its log. To set a new one, run this on the hub (it signs out every session):',
+    'On its first start, the hub prints a generated password to its log. To set a new password (which signs out every session), or to see and change the username, run these on the hub:',
   'auth.badPassword': 'That password was not accepted.',
   'auth.tooMany': 'Too many failed attempts. Try again in {min} min.',
   'auth.busy': 'Too many sign-in attempts at once. Try again in a moment.',
@@ -275,24 +282,47 @@ export const en = {
 
   'connect.title': 'Connect devices and agents',
   'connect.intro':
-    "Each device and each cloud agent needs its own token. A device's token is named after the device: that name is the device name it connects under, and the token works for no other device. Replace <token> and <device-name>, or create a token to get these commands filled in.",
-  'connect.createToken': 'Create token',
+    'Devices and agents that can open a browser sign in through you: you approve each one on this hub, and no token is copied anywhere. For a program that cannot, add an agent with a token.',
+  'connect.createToken': 'Add an agent',
   'connect.noPublicUrl':
     'No public URL is configured, so the commands show https://hub.example.com. Replace it with the address of this hub, or start the hub with --public-url.',
   'connect.device': 'A device with agent sessions',
   'connect.deviceHelp':
-    'On each machine where agents run: connect once, under the name of its token, then sync. origin mcp on that machine then answers from its own store and from this hub, and syncs while agents run.',
+    "On each machine where agents run: connect once and approve the device on this hub when the command shows a link and a code; it connects under its store's name. Then sync. origin mcp on that machine answers from its own store and from this hub, and syncs while agents run.",
   'connect.deviceLabel': 'Install, connect, and sync',
-  'connect.agents': 'Cloud agents',
-  'connect.agentsHelp': 'Agents without local session logs talk to the hub directly over MCP.',
+  'connect.agents': 'Claude Code and Codex',
+  'connect.agentsHelp':
+    'Agents without local session logs talk to the hub directly over MCP. Add the hub, then sign in: the agent opens this hub in your browser, you approve it, and it keeps its own tokens, which it renews.',
+  'connect.claudeLabel':
+    'Claude Code: add the hub, then run /mcp in Claude Code, or sign in from the shell',
+  'connect.codexLabel': 'Codex CLI: add the hub and sign in',
+  'connect.headless': 'Agents that cannot open a browser',
+  'connect.headlessHelp':
+    'For a bot, a CI job, or a pipeline, add an agent with a token: the token is shown once, with the commands to use it.',
+  'connect.oauthOff':
+    "Signing in by browser needs the admin UI at /admin on the hub's own address. This hub serves it elsewhere, so use tokens: origin token create <name> on the hub, and origin hub connect <url> --token <token> on a device.",
 
-  'tokens.title': 'Access tokens',
+  'tokens.title': 'Devices and agents',
   'tokens.help':
-    "Devices and agents use these bearer tokens for MCP and replication. A token's name is a device name: the token sends and receives data only for the device of that name. Tokens are stored as hashes and shown only once.",
-  'tokens.create': 'Create token',
-  'tokens.none': 'No tokens yet',
-  'tokens.noneHelp':
-    'Create one token for each device, named after it, and one for each cloud agent that should reach this hub.',
+    'Everything that reaches this hub for you: your devices, which sync their sessions, and your agents, with a token or signed in by browser. Revoke any of them here. Credentials are stored as hashes; a token is shown only once.',
+  'tokens.create': 'Add an agent',
+  'tokens.connectDevice': 'Connect a device',
+  'tokens.devices': 'Devices',
+  'tokens.devicesHelp':
+    'Each device connects under its name, approved here when it runs origin hub connect, or with a token named after it. A device sends and receives data only for itself.',
+  'tokens.deviceData': 'What each device sent',
+  'tokens.noDevices': 'No devices yet',
+  'tokens.noDevicesHelp': 'Run origin hub connect on a device, then approve it here.',
+  'tokens.agents': 'Agents with a token',
+  'tokens.agentsHelp':
+    'For programs that cannot sign in by browser, such as a bot, a CI job, or a pipeline: a token with a preset.',
+  'tokens.noAgents': 'No agents with a token',
+  'tokens.noAgentsHelp': 'Add one for a program that cannot sign in by browser.',
+  'tokens.apps': 'Agents signed in by browser',
+  'tokens.appsHelp':
+    'Claude Code, Codex, and other MCP clients that signed in with OAuth: each is an agent with the access you chose, until it expires or you revoke it.',
+  'tokens.noApps': 'No agents signed in by browser',
+  'tokens.noAppsHelp': 'Add this hub to Claude Code or Codex, and sign in when they ask.',
   'tokens.name': 'Name',
   'tokens.created': 'Created',
   'tokens.lastUsed': 'Last used',
@@ -300,22 +330,89 @@ export const en = {
   'tokens.actions': 'Actions',
   'tokens.active': 'active',
   'tokens.revoked': 'revoked',
+  'tokens.expired': 'expired',
   'tokens.revoke': 'Revoke',
-  'tokens.revokedNotice': 'Revoked {name}. Requests with that token are now rejected.',
+  'tokens.preset': 'Access',
+  'tokens.app': 'App',
+  'tokens.agent': 'Agent',
+  'tokens.signedIn': 'Signed in',
+  'tokens.expires': 'Expires',
+  'tokens.revokedNotice': 'Revoked {name}. Requests with its credentials are now rejected.',
   'tokens.createHelp':
-    "For a device, use the device's name: the token works only for the device of that name. For a cloud agent, name it after the agent. The token is shown once.",
+    "An agent's token reaches the hub's MCP endpoint and, with read and write, the endpoint that appends event lines. Name it after the agent. The token is shown once, with the commands to use it.",
   'tokens.nameHelp':
-    'Lowercase letters, digits, ".", "_" and "-". This is the device name: the device connects under it, as in the commands below.',
-  'tokens.createButton': 'Create token',
-  'tokens.createdTitle': 'Token created',
+    'Lowercase letters, digits, ".", "_" and "-". What the agent writes is recorded under this name.',
+  'tokens.createButton': 'Add agent',
+  'tokens.createdTitle': 'Agent added',
   'tokens.shownOnce':
-    'Copy the token for {name} now. It is not stored and will never be shown again; if you lose it, revoke it and create a new one with the same name.',
+    'Copy the token for {name} now. It is not stored and will never be shown again; if you lose it, revoke it and add the agent again.',
   'tokens.token': 'Token',
   'tokens.done': 'Done',
-  'tokens.revokeTitle': 'Revoke a token',
-  'tokens.revokeHelp':
-    'Revoking {name} rejects every request that uses it, immediately. To give {name} a new token afterwards, create one with the same name.',
+  'tokens.useIt': 'Use it',
+  'tokens.useItHelp': 'Ready to paste, with the token in them.',
+  'tokens.linesLabel': 'Append event lines (see Bring your own source in the documentation)',
+  'tokens.revokeTitle': 'Revoke',
+  'tokens.revokeHelp': 'Revoking {name} rejects every request that uses its token, immediately.',
+  'tokens.revokeDeviceHelp':
+    'Revoking {name} rejects every request of that device, immediately. To connect it again, run origin hub connect on it.',
   'tokens.revokeButton': 'Revoke {name}',
+  'preset.readwrite': 'Read and write',
+  'preset.readonly': 'Read only',
+  'preset.readwriteHelp':
+    'Search, read, remember, propose, correct, and forget; and append event lines.',
+  'preset.readonlyHelp': 'Search and read only: no tools that write, and nothing sent to the hub.',
+  'grants.revokeTitle': 'Revoke an agent signed in by browser',
+  'grants.revokeHelp':
+    'Revoking {name} ({client}) rejects its tokens at once: to come back, it signs in again, and you approve it again.',
+  'grants.revokeButton': 'Revoke {name}',
+  'grants.by.owner': 'revoked',
+  'grants.by.client': 'signed out',
+  'grants.by.reuse': 'revoked: a token was used twice',
+
+  'consent.title': 'Allow access to your memory',
+  'consent.heading': '{client} wants to use your Origin memory',
+  'consent.unnamed': 'An app',
+  'consent.intro':
+    "If you allow it, {client} becomes one of your agents on this hub, {username}: it can use the hub's MCP tools with the access you choose, for the time you choose, until you revoke it on Devices and agents.",
+  'consent.returnsTo': 'After you answer, your browser returns to {host}.',
+  'consent.localWarning':
+    'Allow it only if you just started signing in from an app on your own computer: an app that listens on a localhost address cannot prove which app it is.',
+  'consent.document': 'The app describes itself at {host}.',
+  'consent.registered': 'The app registered itself with this hub: its name is its own claim.',
+  'consent.access': 'Access',
+  'consent.readonlyOnly': 'This app asked for read-only access.',
+  'consent.duration': 'For how long',
+  'consent.days': '{n} {n|day|days}',
+  'consent.allow': 'Allow',
+  'consent.deny': 'Deny',
+  'consent.errorTitle': 'This sign-in cannot go on',
+  'consent.errorHelp': 'Start signing in again from the app.',
+
+  'activate.title': 'Connect a device',
+  'activate.help': 'Enter the code that origin hub connect shows on the device.',
+  'activate.code': 'Code',
+  'activate.continue': 'Continue',
+  'activate.heading': 'Connect device {device} to your hub?',
+  'activate.intro':
+    'A device asked to connect to this hub as {device}. If you approve, it gets a device token: it sends its sessions, entries, and forgets to this hub, and receives what you forget elsewhere.',
+  'activate.asked': 'Asked',
+  'activate.from': 'From',
+  'activate.expires': 'The code expires',
+  'activate.replaces':
+    'A device named {device} is connected already. Approving gives the name to this one: the token {device} uses now stops working.',
+  'activate.check':
+    'Approve only if you just ran origin hub connect yourself and the code matches the one it shows.',
+  'activate.approve': 'Connect {device}',
+  'activate.deny': 'Deny',
+  'activate.approved': '{device} is connected',
+  'activate.approvedHelp':
+    'The device receives its token within a few seconds, and origin hub connect finishes on it.',
+  'activate.denied': '{device} was not connected',
+  'activate.deniedHelp': 'The command on the device stops and says so.',
+  'activate.unknown':
+    'No device is waiting with this code. Check it, or run origin hub connect again for a new one.',
+  'activate.used': 'This code was already used.',
+  'activate.expired': 'This code expired. Run origin hub connect again for a new one.',
 
   'filter.project': 'Project',
   'filter.all': 'All',
@@ -629,7 +726,7 @@ export const en = {
 
   'audit.title': 'Audit log',
   'audit.help':
-    'Administrative actions from this UI and the CLI, with ids and counts only. The log is append-only.',
+    'Administrative actions from this UI and the CLI, and what devices and agents did to their own access on the hub (api), with ids and counts only. The log is append-only.',
   'audit.none': 'Nothing recorded yet',
   'audit.noneHelp':
     'Sign-ins, token changes, entries written here, and forget operations are recorded as they happen.',

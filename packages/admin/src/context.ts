@@ -40,6 +40,8 @@ export interface Ctx {
   version: string;
   ip: string | null;
   userAgent: string | null;
+  /** The owner's username on a hub; null in `origin ui`, and on a hub before the first sign-in. */
+  username: string | null;
 }
 
 /** A query parameter, or ''. */
@@ -59,9 +61,14 @@ export function pageParam(ctx: Ctx): number {
   return Number.isInteger(n) && n > 0 && n < 100_000 ? n : 0;
 }
 
+/** Who acts, for the audit log: on a hub, the owner by their username. */
 export function actorOf(ctx: Ctx): Actor {
   return {
-    actor: ctx.session ? (ctx.mode === 'local' ? LOCAL_ACTOR : HUB_ACTOR) : 'anonymous',
+    actor: ctx.session
+      ? ctx.mode === 'local'
+        ? LOCAL_ACTOR
+        : (ctx.username ?? HUB_ACTOR)
+      : 'anonymous',
     ip: ctx.ip,
     userAgent: ctx.userAgent,
   };

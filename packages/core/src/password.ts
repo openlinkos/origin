@@ -6,16 +6,19 @@ import { getSetting, setSetting } from './settings.js';
 import { TOKEN_PREFIX } from './tokens.js';
 
 /**
- * The hub's admin password (see docs/architecture.md#admin-ui): one per hub, with no user names.
- * It comes from ORIGIN_ADMIN_PASSWORD when that is set, and otherwise from the store, where it is
- * set with `origin admin password` or generated on the first start with the admin UI enabled. Only
- * a scrypt hash is kept, in the local `setting` table, which is never replicated.
+ * The hub's admin password (see docs/architecture.md#admin-ui): one per hub, the password of its
+ * one owner, who signs in with it and their username (see below). It comes from
+ * ORIGIN_ADMIN_PASSWORD when that is set, and otherwise from the store, where it is set with
+ * `origin admin password` or generated on the first start with the admin UI enabled. Only a scrypt
+ * hash is kept, in the local `setting` table, which is never replicated.
  */
 export const ADMIN_PASSWORD_MIN_LENGTH = 10;
 export const ADMIN_PASSWORD_MAX_LENGTH = 1024;
 
 /** `setting` keys: the hash of the stored password, and the credential sessions were created under. */
 const PASSWORD_SETTING = 'admin.password';
+/** `setting` key: the owner's username, chosen at the first sign-in or set with the CLI. */
+const USERNAME_SETTING = 'admin.username';
 const CREDENTIAL_SETTING = 'admin.credential';
 const STORED_FINGERPRINT = 'stored';
 const ENV_FINGERPRINT_PREFIX = 'env:';
@@ -236,4 +239,39 @@ export async function verifyAdminPassword(
   const encoded = credential.source === 'env' ? credential.hash : getSetting(db, PASSWORD_SETTING);
   if (encoded === null) return false;
   return verifyAdminPasswordHash(input, encoded);
+}
+
+/**
+ * The owner's username: 2 to 32 lowercase letters, digits, `-`, `_`, and `.`. A hub has one person
+ * (see docs/architecture.md#personal-hub), so there is one username; the owner chooses it at the
+ * first sign-in, with the admin password (a hub upgraded from a version without usernames keeps
+ * its password), or sets it with `origin admin username`. It is not a secret.
+ */
+export const ADMIN_USERNAME_RE = /^[a-z0-9._-]{2,32}$/;
+
+/** A username as typed: without surrounding spaces, in lowercase. */
+export function normalizeAdminUsername(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+/** Throw unless `name` (normalized) can be the owner's username. */
+export function checkAdminUsername(name: string): void {
+  if (!ADMIN_USERNAME_RE.test(name)) {
+    throw new OriginError(
+      `Invalid username "${name}": use 2 to 32 lowercase letters, digits, "-", "_", or ".".`,
+    );
+  }
+}
+
+/** The owner's username, or null while none is set (a new hub, or one upgraded before its first sign-in). */
+export function getAdminUsername(db: Database): string | null {
+  return getSetting(db, USERNAME_SETTING);
+}
+
+/** Set the owner's username; returns it as stored (normalized). */
+export function setAdminUsername(db: Database, value: unknown): string {
+  const name = normalizeAdminUsername(value);
+  checkAdminUsername(name);
+  setSetting(db, USERNAME_SETTING, name);
+  return name;
 }

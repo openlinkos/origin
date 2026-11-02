@@ -110,7 +110,9 @@ describe('usage never opens the store', () => {
     [['forget', 'ent_1'], 'A reason is required'],
     [['token'], 'Missing a subcommand.'],
     [['token', 'make', 'laptop'], 'Unknown subcommand "make".'],
-    [['hub', 'connect', 'https://hub.example.com'], '--token is required'],
+    [['hub', 'connect'], 'An argument is missing.'],
+    [['token', 'create', 'ci', '--read-only'], "Unknown option '--read-only'"],
+    [['admin', 'username', 'a', 'b'], 'Too many arguments.'],
     [['raw', 'upload', '--concurency', '4'], "Unknown option '--concurency'"],
   ])('origin %j is refused with its usage before the store is opened', async (argv, message) => {
     const before = snapshot();
@@ -180,6 +182,11 @@ describe('the arguments table', () => {
     expect(checkArgs('hub', ['connect', 'https://hub.example.com', '--token', 'ogn_x'])).toEqual({
       kind: 'run',
     });
+    // Without a token, the owner approves the device in the hub's admin UI.
+    expect(checkArgs('hub', ['connect', 'https://hub.example.com'])).toEqual({ kind: 'run' });
+    expect(checkArgs('token', ['create', 'ci', '--agent', '--readonly'])).toEqual({ kind: 'run' });
+    expect(checkArgs('admin', ['username'])).toEqual({ kind: 'run' });
+    expect(checkArgs('admin', ['username', 'dana'])).toEqual({ kind: 'run' });
     // After `--`, --help is an argument, not a request for help.
     expect(checkArgs('search', ['--', '--help'])).toEqual({ kind: 'run' });
   });

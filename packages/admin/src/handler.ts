@@ -1,9 +1,21 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   type AdminCredential,
+  checkAdminUsername,
+  checkAuthorizationRequest,
+  createAuthorizationCode,
   type Database,
+  decideDeviceRequest,
+  getAdminUsername,
+  getDeviceRequest,
+  isClientIdUrl,
+  normalizeAdminUsername,
   OriginError,
+  type Preset,
+  parsePreset,
+  setAdminUsername,
   verifyAdminPassword,
+  withParams,
 } from '@openlinkos/origin-core';
 import { Assets } from './assets.js';
 import {
@@ -44,9 +56,20 @@ import {
   sessionCookie,
 } from './http.js';
 import { negotiateLang, translator } from './i18n/index.js';
+import { type ClientResolver, mcpResource, oauthIssuer } from './oauth.js';
 import { errorPage, localLoginPage, loginPage, reauthPage } from './pages/auth.js';
 import { eventPage, eventRawPage, searchPage, sessionsPage } from './pages/browse.js';
 import { beforeParam, beforeTombstone } from './pages/components.js';
+import {
+  AUTHORIZE_PARAMS,
+  activateCodePage,
+  activateConfirmPage,
+  activateDonePage,
+  authorizeFields,
+  authorizeUrl,
+  consentErrorPage,
+  consentPage,
+} from './pages/consent.js';
 import {
   correctPage,
   entriesPage,
@@ -62,7 +85,13 @@ import { proposalPage, proposalsPage } from './pages/proposals.js';
 import { recallPage, recallsPage } from './pages/recalls.js';
 import { auditPage, signinsPage, tombstonePage, tombstonesPage } from './pages/records.js';
 import { sessionPage, threadPage } from './pages/session.js';
-import { newTokenPage, revokeTokenPage, tokenCreatedPage, tokensPage } from './pages/tokens.js';
+import {
+  newTokenPage,
+  revokeGrantPage,
+  revokeTokenPage,
+  tokenCreatedPage,
+  tokensPage,
+} from './pages/tokens.js';
 import { queryAll } from './pages/workbench.js';
 import { CheckQueue, type LimiterOptions, LOGIN_LIMITS, LoginLimiter } from './ratelimit.js';
 import {
@@ -97,6 +126,12 @@ export interface AdminOptions {
   credential?: AdminCredential;
   /** When the hub started, for the uptime shown on the overview. */
   startedAt?: number;
+  /**
+   * The hub's OAuth authorization server (see oauth.ts), when the UI is mounted at /admin on the
+   * hub's own port: its consent page and the page that approves devices. `resolveClient` fetches
+   * a client's metadata document (the CLI's, a network call). Without it, neither page exists.
+   */
+  oauth?: { resolveClient: ClientResolver } | null;
   log?: (message: string) => void;
   /** Clock and limits, for tests. */
   now?: () => number;
@@ -147,6 +182,8 @@ interface State {
   sessions: SessionStore;
   /** `origin ui` only: the Host values it answers to, and its sign-in link. */
   local: { hosts: ReadonlySet<string>; link: SignInLink; failureLoggedAt: number | null } | null;
+  /** The OAuth pages, on a hub whose UI is at /admin on its own port. */
+  oauth: { resolveClient: ClientResolver } | null;
   assets: Assets;
   limiter: LoginLimiter;
   checks: CheckQueue;
@@ -287,8 +324,13 @@ async function checkPassword(
   s: State,
   password: unknown,
   mode: 'login' | 'reauth',
+  /** At sign-in, the username typed: it must be the owner's, once there is one. */
+  username?: string,
 ): Promise<PasswordCheck> {
   const client = ctx.ip ?? 'unknown';
+  const expected = mode === 'login' ? getAdminUsername(s.db) : null;
+  // The password is checked either way, so that a wrong username takes as long as a wrong password.
+  const usernameOk = expected === null || safeEqual(username ?? '', expected);
   const queued = s.checks.run(async (): Promise<PasswordCheck> => {
     const limit = s.limiter.check(client, ctx.now);
     if (!limit.ok) {
@@ -304,10 +346,14 @@ async function checkPassword(
         message: ctx.t('auth.tooMany', { min: Math.ceil(limit.retryAfterSec / 60) }),
       };
     }
-    if (!(await verifyAdminPassword(s.db, s.credential, password))) {
+    if (!(await verifyAdminPassword(s.db, s.credential, password)) || !usernameOk) {
       const failures = s.limiter.fail(client, ctx.now);
       if (failures === 1) s.service.recordAuth(actorOf(ctx), `${mode}.failed`, { failures });
-      return { ok: false, status: 401, message: ctx.t('auth.badPassword') };
+      return {
+        ok: false,
+        status: 401,
+        message: ctx.t(expected === null ? 'auth.badPassword' : 'auth.badCredentials'),
+      };
     }
     return { ok: true };
   });
@@ -321,6 +367,38 @@ async function checkPassword(
     ctx.res.setHeader('Retry-After', String(result.retryAfterSec));
   }
   return result;
+}
+
+/**
+ * Sign in to the hub with a username and the admin password. A hub without a username yet takes
+ * the one typed, once the password is right: the owner chooses it at the first sign-in.
+ */
+async function signIn(
+  ctx: Ctx,
+  s: State,
+): Promise<{ ok: true } | { ok: false; status: number; message: string; retryAfterSec?: number }> {
+  const choose = getAdminUsername(s.db) === null;
+  const typed = normalizeAdminUsername(ctx.body.username);
+  if (choose) {
+    try {
+      checkAdminUsername(typed);
+    } catch (err) {
+      return { ok: false, status: 400, message: (err as Error).message };
+    }
+  }
+  const r = await checkPassword(ctx, s, ctx.body.password, 'login', typed);
+  if (!r.ok) return r;
+  if (choose && getAdminUsername(s.db) === null) {
+    ctx.username = setAdminUsername(s.db, typed);
+    s.service.recordAuth(
+      { actor: ctx.username, ip: ctx.ip, userAgent: ctx.userAgent },
+      'username.set',
+    );
+  } else {
+    ctx.username = getAdminUsername(s.db);
+  }
+  startSession(ctx, s);
+  return { ok: true };
 }
 
 /** Start a new session (never reusing one presented with the request) and set its cookie. */
@@ -407,6 +485,135 @@ function setPref(ctx: Ctx, name: string, value: string | null): void {
 }
 
 // ---------------------------------------------------------------------------------------------
+// OAuth: the consent page, and the page that approves a device (see oauth.ts)
+
+/** A form field as an authorization request parameter: absent when it was not sent. */
+function bodyParam(ctx: Ctx, name: string): string | null {
+  const v = ctx.body[name];
+  return typeof v === 'string' ? v : null;
+}
+
+/**
+ * The page's Content-Security-Policy, with the app's address added to `form-action`: allowing or
+ * denying sends the browser back to the app, a redirect that browsers check against it.
+ */
+function consentCsp(ctx: Ctx, redirectUri: string): void {
+  ctx.res.setHeader(
+    'Content-Security-Policy',
+    CSP.replace("form-action 'self'", `form-action 'self' ${new URL(redirectUri).origin}`),
+  );
+}
+
+/**
+ * `/admin/oauth/authorize`: check an authorization request, fetching the app's metadata document
+ * first when its client id is a URL, then show the consent page (GET) or carry out the owner's
+ * answer (POST): a one-time code, or `access_denied`, sent back to the app with the request's
+ * `state` and the issuer.
+ */
+async function authorize(
+  ctx: Ctx,
+  s: State,
+  get: (name: string) => string | null,
+  decide: boolean,
+): Promise<void> {
+  const issuer = s.oauth ? oauthIssuer(ctx.req, s.publicUrl) : null;
+  if (!s.oauth || issuer === null) throw new HttpError(404, 'Not found.');
+  if (!decide) {
+    const repeated = AUTHORIZE_PARAMS.find((k) => ctx.url.searchParams.getAll(k).length > 1);
+    if (repeated) return consentErrorPage(ctx, 400, `The parameter ${repeated} is repeated.`);
+  }
+  const clientId = get('client_id');
+  if (clientId && isClientIdUrl(clientId)) {
+    try {
+      await s.oauth.resolveClient(clientId);
+    } catch (err) {
+      if (!(err instanceof OriginError)) throw err;
+      return consentErrorPage(ctx, 400, err.message);
+    }
+  }
+  const check = checkAuthorizationRequest(s.db, get, { resource: mcpResource(issuer), issuer });
+  if (!check.ok) {
+    if (check.redirect === null) return consentErrorPage(ctx, 400, check.description);
+    return redirect(ctx.res, check.redirect);
+  }
+  const r = check.request;
+  if (!decide) {
+    consentCsp(ctx, r.redirectUri);
+    return consentPage(ctx, { request: r, params: authorizeFields(get) });
+  }
+  const app = r.client.name || r.client.id;
+  if (field(ctx, 'decision') !== 'allow') {
+    ctx.service.recordDecision(actorOf(ctx), 'oauth.deny', app.slice(0, 100));
+    return redirect(
+      ctx.res,
+      withParams(r.redirectUri, {
+        error: 'access_denied',
+        error_description: 'The owner denied access.',
+        state: r.state,
+        iss: issuer,
+      }),
+    );
+  }
+  let code: string;
+  const days = Number(field(ctx, 'days'));
+  let preset: Preset;
+  try {
+    preset = parsePreset(field(ctx, 'preset'));
+    code = createAuthorizationCode(s.db, r, { preset, days }, ctx.now);
+  } catch (err) {
+    if (!(err instanceof OriginError)) throw err;
+    return consentErrorPage(ctx, 400, err.message);
+  }
+  ctx.service.recordDecision(actorOf(ctx), 'oauth.allow', app.slice(0, 100), { preset, days });
+  redirect(ctx.res, withParams(r.redirectUri, { code, state: r.state, iss: issuer }));
+}
+
+/** `GET /admin/activate`: the code of a waiting device, then what it asks, to approve or deny. */
+function activate(ctx: Ctx, s: State): void {
+  if (!s.oauth) throw new HttpError(404, 'Not found.');
+  const code = query(ctx, 'code').slice(0, 16);
+  if (!code) {
+    activateCodePage(ctx, 200, {});
+    return;
+  }
+  const r = getDeviceRequest(s.db, code);
+  const problem = !r
+    ? ctx.t('activate.unknown')
+    : r.status !== 'pending'
+      ? ctx.t('activate.used')
+      : ctx.now >= r.expiresAt
+        ? ctx.t('activate.expired')
+        : null;
+  if (!r || problem) {
+    activateCodePage(ctx, 400, { code, error: problem ?? '' });
+    return;
+  }
+  activateConfirmPage(ctx, 200, { request: r });
+}
+
+/** `POST /admin/activate`: the owner approves or denies a waiting device. */
+function decideDevice(ctx: Ctx, s: State): void {
+  if (!s.oauth) throw new HttpError(404, 'Not found.');
+  const code = field(ctx, 'code').slice(0, 16);
+  const approve = field(ctx, 'decision') === 'approve';
+  try {
+    const r = decideDeviceRequest(s.db, code, approve, ctx.now);
+    ctx.service.recordDecision(actorOf(ctx), approve ? 'device.approve' : 'device.deny', r.device, {
+      replaces: r.replaces,
+    });
+    activateDonePage(ctx, { device: r.device, approved: approve });
+  } catch (err) {
+    if (!(err instanceof OriginError)) throw err;
+    const r = getDeviceRequest(s.db, code);
+    if (r && r.status === 'pending' && ctx.now < r.expiresAt) {
+      activateConfirmPage(ctx, 400, { request: r, error: err.message });
+      return;
+    }
+    activateCodePage(ctx, 400, { code, error: err.message });
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Pages
 
 const page = (
@@ -440,14 +647,21 @@ const PAGES: Route[] = [
   hubPage('GET', '/login', 'none', (ctx) => {
     const next = safeNext(query(ctx, 'next'));
     if (ctx.session) return redirect(ctx.res, next);
-    loginPage(ctx, 200, { next });
+    loginPage(ctx, 200, { next, choose: ctx.username === null });
   }),
   page('GET', '/login', 'none', redeemLink, undefined, LOCAL),
   hubPage('POST', '/login', 'none', async (ctx, s) => {
     const next = safeNext(field(ctx, 'next'));
-    const r = await checkPassword(ctx, s, ctx.body.password, 'login');
-    if (!r.ok) return loginPage(ctx, r.status, { next, error: r.message });
-    startSession(ctx, s);
+    const choose = ctx.username === null;
+    const r = await signIn(ctx, s);
+    if (!r.ok) {
+      return loginPage(ctx, r.status, {
+        next,
+        choose,
+        username: field(ctx, 'username').slice(0, 64),
+        error: r.message,
+      });
+    }
     redirect(ctx.res, next);
   }),
   page('POST', '/logout', 'session', (ctx, s) => {
@@ -484,7 +698,7 @@ const PAGES: Route[] = [
     const revoked = query(ctx, 'revoked');
     tokensPage(
       ctx,
-      ctx.service.tokens(),
+      ctx.service.access(ctx.now),
       revoked ? ctx.t('tokens.revokedNotice', { name: revoked }) : undefined,
     );
   }),
@@ -495,17 +709,30 @@ const PAGES: Route[] = [
     'fresh',
     (ctx) => {
       try {
-        tokenCreatedPage(ctx, ctx.service.createToken(actorOf(ctx), ctx.body.name));
+        tokenCreatedPage(
+          ctx,
+          ctx.service.createToken(
+            actorOf(ctx),
+            { name: ctx.body.name, kind: 'agent', preset: ctx.body.preset },
+            ctx.now,
+          ),
+        );
       } catch (err) {
         if (!(err instanceof OriginError)) throw err;
-        newTokenPage(ctx, 400, { name: field(ctx, 'name'), error: err.message });
+        newTokenPage(ctx, 400, {
+          name: field(ctx, 'name'),
+          preset: field(ctx, 'preset') === 'readonly' ? 'readonly' : 'readwrite',
+          error: err.message,
+        });
       }
     },
     () => '/admin/tokens/new',
   ),
-  hubPage('GET', '/tokens/revoke', 'fresh', (ctx) =>
-    revokeTokenPage(ctx, 200, { name: query(ctx, 'name') }),
-  ),
+  hubPage('GET', '/tokens/revoke', 'fresh', (ctx) => {
+    const name = query(ctx, 'name');
+    const token = ctx.service.tokens().find((t) => t.name === name);
+    revokeTokenPage(ctx, 200, { name, device: token?.kind === 'device' });
+  }),
   hubPage(
     'POST',
     '/tokens/revoke',
@@ -521,6 +748,43 @@ const PAGES: Route[] = [
       redirect(ctx.res, `/admin/tokens?revoked=${encodeURIComponent(name)}`);
     },
     () => '/admin/tokens',
+  ),
+  hubPage('GET', '/grants/revoke', 'fresh', (ctx) =>
+    revokeGrantPage(ctx, 200, { grant: ctx.service.grant(query(ctx, 'id'), ctx.now) }),
+  ),
+  hubPage(
+    'POST',
+    '/grants/revoke',
+    'fresh',
+    (ctx) => {
+      const id = field(ctx, 'id');
+      try {
+        const grant = ctx.service.revokeGrant(actorOf(ctx), id, ctx.now);
+        redirect(ctx.res, `/admin/tokens?revoked=${encodeURIComponent(grant.name)}`);
+      } catch (err) {
+        if (!(err instanceof OriginError)) throw err;
+        revokeGrantPage(ctx, 400, { grant: ctx.service.grant(id, ctx.now), error: err.message });
+      }
+    },
+    () => '/admin/tokens',
+  ),
+  hubPage('GET', '/oauth/authorize', 'fresh', (ctx, s) =>
+    authorize(ctx, s, (k) => ctx.url.searchParams.get(k), false),
+  ),
+  hubPage(
+    'POST',
+    '/oauth/authorize',
+    'fresh',
+    (ctx, s) => authorize(ctx, s, (k) => bodyParam(ctx, k), true),
+    (ctx) => authorizeUrl(authorizeFields((k) => bodyParam(ctx, k))),
+  ),
+  hubPage('GET', '/activate', 'fresh', (ctx, s) => activate(ctx, s)),
+  hubPage(
+    'POST',
+    '/activate',
+    'fresh',
+    (ctx, s) => decideDevice(ctx, s),
+    (ctx) => `/admin/activate?code=${encodeURIComponent(field(ctx, 'code').slice(0, 16))}`,
   ),
 
   page('GET', '/sessions', 'session', (ctx) => {
@@ -742,10 +1006,14 @@ const API: Route[] = [
     ),
   ),
   hubApi('POST', 'login', 'none', async (ctx, s) => {
-    const r = await checkPassword(ctx, s, ctx.body.password, 'login');
+    const r = await signIn(ctx, s);
     if (!r.ok) return json(ctx, r.status, { error: r.message, retryAfterSec: r.retryAfterSec });
-    const csrf = startSession(ctx, s);
-    json(ctx, 200, { signedIn: true, fresh: true, csrf });
+    json(ctx, 200, {
+      signedIn: true,
+      fresh: true,
+      csrf: ctx.session?.csrf,
+      username: ctx.username,
+    });
   }),
   api('POST', 'logout', 'session', (ctx, s) => {
     endSession(ctx, s);
@@ -766,13 +1034,28 @@ const API: Route[] = [
   hubApi('GET', 'device', 'session', (ctx) =>
     json(ctx, 200, ctx.service.device(query(ctx, 'name'), ctx.now)),
   ),
-  hubApi('GET', 'tokens', 'session', (ctx) => json(ctx, 200, { tokens: ctx.service.tokens() })),
+  hubApi('GET', 'tokens', 'session', (ctx) => {
+    const access = ctx.service.access(ctx.now);
+    json(ctx, 200, { tokens: ctx.service.tokens(), grants: access.grants });
+  }),
   hubApi('POST', 'tokens', 'fresh', (ctx) =>
-    json(ctx, 201, ctx.service.createToken(actorOf(ctx), ctx.body.name)),
+    json(
+      ctx,
+      201,
+      ctx.service.createToken(
+        actorOf(ctx),
+        { name: ctx.body.name, kind: ctx.body.kind ?? 'device', preset: ctx.body.preset },
+        ctx.now,
+      ),
+    ),
   ),
   hubApi('POST', 'token-revoke', 'fresh', (ctx) => {
     ctx.service.revokeToken(actorOf(ctx), ctx.body.name);
     json(ctx, 200, { revoked: ctx.body.name });
+  }),
+  hubApi('POST', 'grant-revoke', 'fresh', (ctx) => {
+    const grant = ctx.service.revokeGrant(actorOf(ctx), ctx.body.id, ctx.now);
+    json(ctx, 200, { revoked: grant.name });
   }),
   api('GET', 'projects', 'session', (ctx) => json(ctx, 200, { projects: ctx.service.projects() })),
   api('GET', 'sessions', 'session', (ctx) =>
@@ -965,7 +1248,16 @@ export const LOCAL_ROUTES: RouteList = routeList(ROUTES.local);
 // ---------------------------------------------------------------------------------------------
 // Dispatch
 
-function sessionFrom(req: IncomingMessage, s: State, origins: RequestOrigins, now: number) {
+function sessionFrom(
+  req: IncomingMessage,
+  s: State,
+  origins: RequestOrigins,
+  now: number,
+  username: string | null,
+) {
+  // A hub's sessions are its owner's, who has a username: a session from before usernames (an
+  // upgraded hub) counts as signed out, so that the next sign-in sets one.
+  if (s.mode === 'hub' && username === null) return null;
   const cookies = parseCookies(req.headers.cookie);
   // `origin ui` reads only its own cookie. Behind an https public URL, the plain cookie counts only
   // on a loopback tunnel: a sibling subdomain can plant an ordinary cookie for this host (session
@@ -1035,6 +1327,7 @@ async function dispatch(
     version: s.version,
     ip: clientIpOf(req, s.clientIpHeader),
     userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
+    username: s.mode === 'hub' ? getAdminUsername(s.db) : null,
   };
   ctxRef.ctx = ctx;
 
@@ -1083,7 +1376,7 @@ async function dispatch(
     rejectCrossSite(req);
   }
 
-  ctx.session = sessionFrom(req, s, origins, now);
+  ctx.session = sessionFrom(req, s, origins, now, ctx.username);
   if (route.auth !== 'none') {
     if (!ctx.session) {
       if (isApi) throw new HttpError(401, 'Sign in first.');
@@ -1130,9 +1423,11 @@ export function createAdminHandler(options: AdminOptions): AdminHandler {
       startedAt: options.startedAt ?? now(),
       publicUrl,
       hubStore: true,
+      oauth: Boolean(options.oauth),
     }),
     sessions: storedSessions(options.db),
     local: null,
+    oauth: options.oauth ?? null,
     assets: new Assets(),
     limiter: new LoginLimiter(options.loginLimits ?? LOGIN_LIMITS),
     checks: new CheckQueue(),
@@ -1167,6 +1462,7 @@ export function createLocalAdmin(options: LocalAdminOptions): LocalAdmin {
     }),
     sessions: new MemorySessions(),
     local: { hosts: localHosts(options.port), link, failureLoggedAt: null },
+    oauth: null,
     assets: new Assets(),
     limiter: new LoginLimiter(LOGIN_LIMITS),
     checks: new CheckQueue(),

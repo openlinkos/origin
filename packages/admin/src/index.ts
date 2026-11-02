@@ -21,5 +21,17 @@ export {
   type LandingHandler,
   type LandingOptions,
 } from './landing.js';
+export {
+  authorizationServerMetadata,
+  type ClientResolver,
+  createOAuthServer,
+  DEFAULT_SCOPE,
+  mcpResource,
+  type OAuthServer,
+  type OAuthServerOptions,
+  oauthIssuer,
+  protectedResourceMetadata,
+  resourceMetadataUrl,
+} from './oauth.js';
 export type { HubLink } from './service.js';
 export { LOCAL_ACTOR, SIGN_IN_LINK_MS } from './sessions.js';

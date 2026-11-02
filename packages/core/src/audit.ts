@@ -5,17 +5,19 @@ import type { Database } from './db.js';
  * (see docs/architecture.md#admin-ui). Triggers reject every UPDATE and DELETE. Details hold ids
  * and counts only, never entry or event text, so that hidden content stays hidden (invariant 2).
  */
-export type AuditChannel = 'ui' | 'cli';
+export type AuditChannel = 'ui' | 'cli' | 'api';
 
 /** Ids, names, counts, and flags. Never the text of an entry or event. */
 export type AuditDetail = Record<string, string | number | boolean | null | ReadonlyArray<string>>;
 
 export interface AuditInput {
   /**
-   * `owner` for the hub's admin UI, `local` for `origin ui`, `anonymous` before sign-in, `cli` for
-   * the command line, `hub` at startup.
+   * The owner's username for the hub's admin UI (`owner` before one was set), `local` for
+   * `origin ui`, `anonymous` before sign-in, `cli` for the command line, `hub` at startup; on the
+   * hub's API, `<username> / <agent>` for an agent of the owner and the device's name for a device.
    */
   actor: string;
+  /** `ui`: the admin UI; `cli`: the command line; `api`: a request of a device or an agent to the hub. */
   channel: AuditChannel;
   /** A dotted action name, e.g. `token.create`, `forget`, `login.failed`. */
   action: string;

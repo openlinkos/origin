@@ -70,10 +70,12 @@ export {
 export {
   CLOSE_TIMEOUT_MS,
   INSTRUCTIONS,
+  READ_ONLY_NOTE,
   registerOriginTools,
   TOOL_NAMES,
   type ToolArgs,
   type ToolHandlers,
   type ToolName,
   WATCH_INTERVAL_MS,
+  WRITE_TOOLS,
 } from './tools.js';

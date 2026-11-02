@@ -9,6 +9,7 @@ import {
   type AdminHandler,
   createLandingHandler,
   type LandingHandler,
+  type OAuthServer,
 } from '@openlinkos/origin-admin';
 import {
   appendRemote,
@@ -19,6 +20,7 @@ import {
   initStoreName,
   NAME_RE,
   OriginError,
+  type Principal,
   parseReplicaEntry,
   parseReplicaRecall,
   parseTombstoneRecord,
@@ -29,7 +31,7 @@ import {
   type SourceAdapter,
   storeName,
   tombstoneFeed,
-  verifyToken,
+  verifyBearer,
 } from '@openlinkos/origin-core';
 import { handleMcpHttp } from '@openlinkos/origin-mcp';
 import { hubAdapters } from '../sources.js';
@@ -66,6 +68,12 @@ export interface HubOptions {
    * sign-in; bearer tokens are never checked there, and its sessions are never accepted elsewhere.
    */
   admin?: AdminHandler;
+  /**
+   * The OAuth authorization server of /mcp (see docs/architecture.md#access), when the admin UI is
+   * mounted at /admin here: the owner approves agents and devices there. Without it, the OAuth
+   * paths answer 404 and a 401 from /mcp names no metadata.
+   */
+  oauth?: OAuthServer;
   /**
    * Credit Origin on the public landing page at `/`, with links to its site and source; on unless
    * set to false (ORIGIN_POWERED_BY=off). The admin UI keeps its links either way.
@@ -140,14 +148,23 @@ async function handle(
     await opts.admin(req, res, url);
     return;
   }
+  // The OAuth metadata and endpoints, which need no token; nothing there without the admin UI.
+  if (url.pathname.startsWith('/.well-known/') || url.pathname.startsWith('/oauth/')) {
+    if (opts.oauth && (await opts.oauth.handle(req, res, url))) return;
+    throw new HttpError(404, 'Not found.');
+  }
 
   const token = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? '')?.[1];
-  const caller = token ? verifyToken(opts.db, token) : null;
+  const caller = token ? verifyBearer(opts.db, token) : null;
   if (!caller) {
-    res.setHeader('WWW-Authenticate', 'Bearer');
+    res.setHeader(
+      'WWW-Authenticate',
+      opts.oauth && url.pathname === '/mcp' ? opts.oauth.challenge(req) : 'Bearer',
+    );
     sendJson(res, 401, { error: 'Missing or invalid token.', docs: HUB_GUIDE_URL });
     return;
   }
+  checkAccess(caller, req, url);
 
   const lines = SOURCE_LINES_RE.exec(url.pathname);
   if (lines) {
@@ -165,6 +182,7 @@ async function handle(
         version: opts.version,
         log: opts.log,
         author,
+        readOnly: caller.preset === 'readonly',
       });
       return;
     }
@@ -257,6 +275,26 @@ async function handle(
     }
     default:
       throw new HttpError(404, 'Not found.');
+  }
+}
+
+/**
+ * What a principal may do (see docs/architecture.md#access): an access token from OAuth is for
+ * /mcp only, the resource it was issued for; and a `readonly` agent posts nothing to the
+ * replication API (on /mcp it is served without the tools that write).
+ */
+function checkAccess(caller: Principal, req: http.IncomingMessage, url: URL): void {
+  if (caller.via === 'oauth' && url.pathname !== '/mcp') {
+    throw new HttpError(
+      403,
+      `This token was issued for the hub's MCP endpoint (/mcp) only; ${url.pathname} needs a device's token.`,
+    );
+  }
+  if (caller.preset === 'readonly' && req.method === 'POST' && url.pathname !== '/mcp') {
+    throw new HttpError(
+      403,
+      `"${caller.name}" is a read-only agent: it can read through /mcp, and send nothing to the hub.`,
+    );
   }
 }
 

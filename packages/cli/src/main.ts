@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import { KNOWN_SOURCE_IDS } from '@openlinkos/origin-adapters';
 import { parseListen, parsePublicUrl, SIGN_IN_LINK_MS } from '@openlinkos/origin-admin';
 import {
+  activeGrantNamed,
   assertComplete,
   backupStore,
   checkRelayable,
@@ -22,6 +23,7 @@ import {
   entrySummary,
   fingerprintSources,
   generateAdminPassword,
+  getAdminUsername,
   getEntry,
   getEvent,
   getRecall,
@@ -31,6 +33,7 @@ import {
   isEntryForgotten,
   isEntryId,
   isEventForgotten,
+  isGrantActive,
   isProposalId,
   isRecallId,
   isRelay,
@@ -42,6 +45,7 @@ import {
   listDevices,
   listEntries,
   listEvents,
+  listGrants,
   listProjects,
   listRecalls,
   listSessions,
@@ -61,12 +65,14 @@ import {
   recordAudit,
   relayPending,
   resolveId,
+  revokeGrant,
   revokeToken,
   type SessionRow,
   type SourceAdapter,
   searchEntries,
   searchEvents,
   setAdminPassword,
+  setAdminUsername,
   setStoreName,
   sourcesDir,
   stats,
@@ -113,6 +119,7 @@ import {
   writeHubConfig,
 } from './hub/config.js';
 import { checkHub } from './hub/connect.js';
+import { connectByBrowser } from './hub/device-flow.js';
 import { type RelaySyncResult, relayWithHub } from './hub/relay.js';
 import { askHub } from './hub/remote.js';
 import { RetentionWatch, retentionWarning, retentionWarnings } from './hub/retention.js';
@@ -167,10 +174,12 @@ Personal hub:
                    [--admin | --admin-listen <host:port>] [--public-url <url>]   Also serve the admin UI
                    [--raw-s3-endpoint <url> --raw-s3-bucket <name> [--raw-s3-prefix <p>]]   Keep sealed frames in a bucket
   origin raw       upload [--remove] [--concurrency 8]    Move sealed frames still on the hub's disk to its bucket (run on the hub)
-  origin token     create <name> | list | revoke <name>  Manage the hub's access tokens (run on the hub)
+  origin token     create <name> [--agent [--readonly]] | list | revoke <name>   Tokens of devices and agents (run on the hub)
   origin admin     password [--generate]                 Set the admin UI password; signs out every session (run on the hub)
+  origin admin     username [<name>]                     Show or change the owner's username (run on the hub)
   origin admin     sessions [--revoke-all] | audit [--limit 50]       Admin UI sessions and the audit log
-  origin hub       connect <url> --token <token> [--device <name>] [--relay] | status | disconnect
+  origin hub       connect <url> [--token <token>] [--device <name>] [--relay] | status | disconnect
+                                                         Without --token, approve the device in the hub's admin UI
   origin push                                            Same as origin sync (kept for existing schedules)
 
 Entry kinds: ${ENTRY_KINDS.join(' · ')}. Time values: 7d / 24h / 30m / 2w or YYYY-MM-DD.
@@ -438,7 +447,7 @@ async function cmdSync(ctx: Ctx, args: string[]): Promise<number> {
 
 /** What a relay says when it has no hub to send to or to ask. */
 const RELAY_UNCONNECTED =
-  "This store is a relay and is not connected to a hub: it keeps no sessions of its own, and its agents' sessions wait in their own logs. Connect it with: origin hub connect <url> --token <token> --relay";
+  "This store is a relay and is not connected to a hub: it keeps no sessions of its own, and its agents' sessions wait in their own logs. Connect it with: origin hub connect <url> --relay";
 
 /** The hub of a relay, which can do nothing without one. */
 function relayHub(ctx: Ctx): HubConfig {
@@ -1614,13 +1623,20 @@ async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
   if (bucket) {
     console.log(`Sealed frames go to ${bucket.location} at ${bucket.config.endpoint.origin}`);
   }
-  if (listTokens(ctx.db).every((t) => t.revokedAt !== null)) {
-    console.log('No active tokens yet. Create one with: origin token create <name>');
-  }
   if (hub.adminUrl) {
     const where =
       admin?.publicUrl && !admin.listen ? `${admin.publicUrl.origin}/admin/` : hub.adminUrl;
     console.log(`Admin UI at ${where}`);
+    if (getAdminUsername(ctx.db) === null) {
+      console.log('The first sign-in there sets your username, with the admin password.');
+    }
+    if (!admin?.listen) {
+      console.log(
+        'Devices connect with: origin hub connect <url>, approved in the admin UI; agents sign in to <url>/mcp by browser (OAuth).',
+      );
+    }
+  } else if (listTokens(ctx.db).every((t) => t.revokedAt !== null)) {
+    console.log('No active tokens yet. Create one with: origin token create <name>');
   }
   await new Promise<void>((resolve) => {
     const stop = () => void hub.close().then(resolve);
@@ -1640,51 +1656,115 @@ function auditCli(
   recordAudit(ctx.db, { actor: 'cli', channel: 'cli', action, target, detail: detail ?? null });
 }
 
+/**
+ * `origin token`: the tokens of the owner's devices and agents, and, in the list and to revoke, the
+ * agents signed in by OAuth (see docs/architecture.md#access).
+ */
 function cmdToken(ctx: Ctx, args: string[]): number {
-  const [action, name] = args;
-  if (action === 'create' && name) {
-    const token = createToken(ctx.db, name);
-    auditCli(ctx, 'token.create', name);
+  const [action, ...rest] = args;
+  if (action === 'create') {
+    const { values, positionals } = parseArgs({
+      args: rest,
+      allowPositionals: true,
+      options: ARGS.token.sub.create.options,
+    });
+    const name = positionals[0] as string;
+    const agent = values.agent || values.readonly;
+    const preset = values.readonly ? 'readonly' : 'readwrite';
+    const token = createToken(ctx.db, name, Date.now(), {
+      kind: agent ? 'agent' : 'device',
+      preset,
+    });
+    recordAudit(ctx.db, {
+      actor: 'cli',
+      channel: 'cli',
+      action: 'token.create',
+      target: name,
+      detail: { kind: agent ? 'agent' : 'device', preset },
+    });
     console.log(
-      `Token for ${name} (shown once, store it safely):\n\n  ${token}\n\nA device uses it only under its name: origin hub connect <url> --token <token> --device ${name}`,
+      agent
+        ? `Token for the agent ${name}, ${preset} (shown once, store it safely):\n\n  ${token}\n\nUse it as a bearer token on the hub's /mcp${preset === 'readwrite' ? ', and to append event lines' : ''}.`
+        : `Token for the device ${name} (shown once, store it safely):\n\n  ${token}\n\nA device uses it only under its name: origin hub connect <url> --token <token> --device ${name}`,
     );
     return 0;
   }
+  const name = rest[0];
   if (action === 'revoke' && name) {
-    if (!revokeToken(ctx.db, name)) {
-      console.error(`No active token named ${name}.`);
-      return 1;
+    if (revokeToken(ctx.db, name)) {
+      auditCli(ctx, 'token.revoke', name);
+      console.log(`Revoked ${name}.`);
+      return 0;
     }
-    auditCli(ctx, 'token.revoke', name);
-    console.log(`Revoked ${name}.`);
-    return 0;
+    const grant = activeGrantNamed(ctx.db, name);
+    if (grant && revokeGrant(ctx.db, grant.id, 'owner')) {
+      auditCli(ctx, 'grant.revoke', name);
+      console.log(`Revoked ${name} (${grant.clientName || 'an app'}, signed in by browser).`);
+      return 0;
+    }
+    console.error(`No active token or agent named ${name}.`);
+    return 1;
   }
   if (action === 'list') {
     const tokens = listTokens(ctx.db);
-    if (tokens.length === 0) {
-      console.log('No tokens yet. Create one with: origin token create <name>');
+    // Agents signed in by OAuth: the active ones, and those that ended in the last 30 days.
+    const listedSince = Date.now() - 30 * 86_400_000;
+    const grants = listGrants(ctx.db).filter(
+      (g) => isGrantActive(g) || (g.revokedAt ?? g.expiresAt) > listedSince,
+    );
+    if (tokens.length === 0 && grants.length === 0) {
+      console.log(
+        'No devices or agents yet. Connect a device with origin hub connect <url>, approved in the admin UI, or create a token with: origin token create <name>',
+      );
       return 0;
     }
-    console.log(
-      table(
-        tokens.map((t) => [
-          t.name,
-          fmtDateTime(t.createdAt),
-          fmtDateTime(t.lastUsedAt),
-          t.revokedAt === null ? 'active' : `revoked ${fmtDate(t.revokedAt)}`,
-        ]),
-        ['name', 'created', 'last used', 'status'],
-      ),
-    );
+    if (tokens.length > 0) {
+      console.log(
+        table(
+          tokens.map((t) => [
+            t.name,
+            t.kind,
+            t.preset,
+            fmtDateTime(t.createdAt),
+            fmtDateTime(t.lastUsedAt),
+            t.revokedAt === null ? 'active' : `revoked ${fmtDate(t.revokedAt)}`,
+          ]),
+          ['name', 'kind', 'access', 'created', 'last used', 'status'],
+        ),
+      );
+    }
+    if (grants.length > 0) {
+      const now = Date.now();
+      if (tokens.length > 0) console.log('');
+      console.log('Agents signed in by browser (OAuth):');
+      console.log(
+        table(
+          grants.map((g) => [
+            g.name,
+            oneLine(g.clientName || '—', 30),
+            g.preset,
+            fmtDateTime(g.createdAt),
+            fmtDateTime(g.lastUsedAt),
+            g.revokedAt !== null
+              ? `${g.revokedBy === 'client' ? 'signed out' : 'revoked'} ${fmtDate(g.revokedAt)}`
+              : isGrantActive(g, now)
+                ? `until ${fmtDate(g.expiresAt)}`
+                : 'expired',
+          ]),
+          ['name', 'app', 'access', 'signed in', 'last used', 'status'],
+        ),
+      );
+    }
     return 0;
   }
-  console.error('Usage: origin token create <name> | list | revoke <name>');
+  console.error('Usage: origin token create <name> [--agent [--readonly]] | list | revoke <name>');
   return 2;
 }
 
 const ADMIN_USAGE = `Usage:
   origin admin password               Set the admin UI password: asked twice on a terminal, or one line on stdin
   origin admin password --generate    Generate a random password and print it once
+  origin admin username [<name>]      Show the owner's username, or change it
   origin admin sessions [--revoke-all]
   origin admin audit [--limit 50]
 
@@ -1709,6 +1789,20 @@ async function cmdAdmin(ctx: Ctx, args: string[]): Promise<number> {
       );
     }
     console.log(`Admin password set. Signed out ${count(ended, 'admin session')}.`);
+    return 0;
+  }
+  if (area === 'username') {
+    const [name] = rest;
+    if (name === undefined) {
+      const current = getAdminUsername(ctx.db);
+      console.log(
+        current ?? 'No username yet: the first sign-in to the admin UI sets it, or set it here.',
+      );
+      return 0;
+    }
+    const set = setAdminUsername(ctx.db, name);
+    auditCli(ctx, 'username.set', set);
+    console.log(`The owner's username is now ${set}. Sign in to the admin UI with it.`);
     return 0;
   }
   if (area === 'sessions') {
@@ -1854,8 +1948,10 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
       options: ARGS.hub.sub.connect.options,
     });
     const url = positionals[0];
-    if (!url || !values.token) {
-      console.error('Usage: origin hub connect <url> --token <token> [--device <name>] [--relay]');
+    if (!url) {
+      console.error(
+        'Usage: origin hub connect <url> [--token <token>] [--device <name>] [--relay]',
+      );
       return 2;
     }
     // A relay keeps nothing but cursors, so only an empty store becomes one (see core's mode.ts).
@@ -1872,7 +1968,11 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
         );
       }
     }
-    const hub = { url: normalizeHubUrl(url), token: values.token, device };
+    const hubUrl = normalizeHubUrl(url);
+    // Without a token, the owner approves the device in the hub's admin UI (RFC 8628).
+    const token =
+      values.token ?? (await connectByBrowser(hubUrl, device, { log: (m) => console.error(m) }));
+    const hub = { url: hubUrl, token, device };
     await checkHub(hub, { renamable: !isStoreNameFixed(ctx.db) });
     if (device !== current) setStoreName(ctx.db, device);
     if (values.relay) makeRelay(ctx.db);
@@ -1887,7 +1987,7 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
   if (action === 'status') {
     const hub = hubOf(ctx);
     if (!hub) {
-      console.log('Not connected to a hub. Connect with: origin hub connect <url> --token <token>');
+      console.log('Not connected to a hub. Connect with: origin hub connect <url>');
       return 0;
     }
     console.log(`Hub         ${hub.url}\nDevice      ${hub.device}`);
@@ -1912,7 +2012,7 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
     return 0;
   }
   console.error(
-    'Usage: origin hub connect <url> --token <token> [--device <name>] [--relay] | status | disconnect',
+    'Usage: origin hub connect <url> [--token <token>] [--device <name>] [--relay] | status | disconnect',
   );
   return 2;
 }

@@ -52,9 +52,18 @@
  *   unasked (see recall.ts), and what it handed, by id, with each item's layer, score, and size. Only ids and
  *   a hash of the prompt, never text, so that a forget hides nothing a recall could still show.
  *   Append-only: triggers reject updates and deletes.
- * - api_token: hub access tokens (name and SHA-256 hash; the token itself is never stored).
+ * - api_token: hub access tokens (name and SHA-256 hash; the token itself is never stored), each
+ *   the credential of a device or an agent of the owner (`kind`), with what it may do (`preset`:
+ *   readwrite, or readonly for an agent; both added in version 7).
+ * - oauth_client, oauth_code, oauth_grant, oauth_token: the hub as an OAuth authorization server
+ *   for its /mcp (see oauth.ts): clients registered or described by a metadata document, one-time
+ *   authorization codes, the grants the owner approved (each an agent of the owner), and their
+ *   access and refresh tokens, stored as SHA-256 hashes only.
+ * - device_request: devices waiting for the owner to approve them in the admin UI (RFC 8628), by
+ *   a hash of their device code.
  * - setting: small key-value state, local to this store and never replicated: the store's name,
- *   a device's replication cursors, or the scrypt hash of the hub's admin password.
+ *   a device's replication cursors, or the scrypt hash of the hub's admin password and its owner's
+ *   username.
  * - admin_session: server-side admin UI sessions (only a hash of the session id is stored). The
  *   key_name column predates the single admin password and now always holds `owner`.
  * - audit_log: append-only record of administrative actions with ids and counts only, never
@@ -409,8 +418,75 @@ CREATE TABLE IF NOT EXISTS api_token (
   hash         TEXT    NOT NULL UNIQUE,
   created_at   INTEGER NOT NULL,
   last_used_at INTEGER,
-  revoked_at   INTEGER
+  revoked_at   INTEGER,
+  kind         TEXT    NOT NULL DEFAULT 'device' CHECK (kind IN ('device', 'agent')),
+  preset       TEXT    NOT NULL DEFAULT 'readwrite' CHECK (preset IN ('readwrite', 'readonly'))
 );
+
+CREATE TABLE IF NOT EXISTS oauth_client (
+  id            TEXT    PRIMARY KEY,
+  name          TEXT    NOT NULL,
+  uri           TEXT,
+  redirect_uris TEXT    NOT NULL,
+  document      INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL,
+  expires_at    INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS oauth_code (
+  hash         TEXT    PRIMARY KEY,
+  client_id    TEXT    NOT NULL,
+  client_name  TEXT    NOT NULL,
+  redirect_uri TEXT    NOT NULL,
+  challenge    TEXT    NOT NULL,
+  preset       TEXT    NOT NULL CHECK (preset IN ('readwrite', 'readonly')),
+  scope        TEXT    NOT NULL,
+  resource     TEXT    NOT NULL,
+  days         INTEGER NOT NULL,
+  created_at   INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL,
+  used_at      INTEGER,
+  grant_id     TEXT
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS oauth_grant (
+  id           TEXT    PRIMARY KEY,
+  name         TEXT    NOT NULL,
+  client_id    TEXT    NOT NULL,
+  client_name  TEXT    NOT NULL,
+  preset       TEXT    NOT NULL CHECK (preset IN ('readwrite', 'readonly')),
+  scope        TEXT    NOT NULL,
+  resource     TEXT    NOT NULL,
+  created_at   INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL,
+  last_used_at INTEGER,
+  revoked_at   INTEGER,
+  revoked_by   TEXT
+);
+CREATE INDEX IF NOT EXISTS oauth_grant_name ON oauth_grant (name);
+
+CREATE TABLE IF NOT EXISTS oauth_token (
+  hash       TEXT    PRIMARY KEY,
+  grant_id   TEXT    NOT NULL,
+  kind       TEXT    NOT NULL CHECK (kind IN ('access', 'refresh')),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at    INTEGER
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS oauth_token_grant ON oauth_token (grant_id);
+
+CREATE TABLE IF NOT EXISTS device_request (
+  hash       TEXT    PRIMARY KEY,
+  user_code  TEXT    NOT NULL UNIQUE,
+  device     TEXT    NOT NULL,
+  ip         TEXT,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  interval_s INTEGER NOT NULL,
+  polled_at  INTEGER,
+  status     TEXT    NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'done')),
+  decided_at INTEGER
+) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS setting (
   key   TEXT PRIMARY KEY,
@@ -433,7 +509,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   id         INTEGER PRIMARY KEY,
   at         INTEGER NOT NULL,
   actor      TEXT    NOT NULL,
-  channel    TEXT    NOT NULL CHECK (channel IN ('ui', 'cli')),
+  channel    TEXT    NOT NULL CHECK (channel IN ('ui', 'cli', 'api')),
   action     TEXT    NOT NULL,
   target     TEXT,
   detail     TEXT,
