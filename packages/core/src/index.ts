@@ -398,7 +398,7 @@ export {
   searchEvents,
   type TermKind,
 } from './search.js';
-export { getSetting, setSetting } from './settings.js';
+export { getSetting, PULL_TOMBSTONES_AGAIN, setSetting } from './settings.js';
 export {
   commandLine,
   type EventFilter,

@@ -870,6 +870,27 @@ export function coverArrival(db: Database, entryId: string, growthOrigin: string
   }
 }
 
+/**
+ * Cover an event stored after a forget that targets it was made, as when an upgrade reads an event
+ * from a line an earlier version skipped, and that line's event was forgotten on a hub that read
+ * it first: the forgets in effect whose target it is cover it now, by the rules (invariant 2).
+ * Forgets whose coverage grows are logged again under `growthOrigin`. Must run inside a write
+ * transaction, after the event is inserted.
+ */
+export function coverEventArrival(db: Database, eventId: string, growthOrigin: string): void {
+  const concerned = db
+    .prepare(
+      `SELECT t.id, t.target FROM tombstone t WHERE t.target = ? AND ${IN_EFFECT}
+       ORDER BY t.created_at, t.id`,
+    )
+    .all(eventId) as unknown as Array<{ id: string; target: string }>;
+  if (concerned.length === 0) return;
+  const q = statements(db);
+  for (const t of concerned) {
+    if (applyForget(db, q, t).grown) relog(db, 'tombstone', t.id, growthOrigin);
+  }
+}
+
 /** A tombstone of this store with what it covers here, as it is sent to other stores. */
 export function exportTombstone(db: Database, id: string): TombstoneRecord | null {
   const row = db

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { authorWriter, hasAuthor, recordSessionKind } from './authors.js';
 import { OriginError } from './errors.js';
+import { coverEventArrival } from './forgetting.js';
 import { storeName } from './identity.js';
 import { eventInserter, refreshSession } from './ingest.js';
 import { importMemory } from './memories.js';
@@ -8,6 +9,7 @@ import type { MigrationContext } from './migrations.js';
 import { readMirrorLine, scanMirrorLines } from './mirror.js';
 import { mirrorRelPath, parseRawPath, rawDir } from './paths.js';
 import { deriveProposal } from './proposals.js';
+import { PULL_TOMBSTONES_AGAIN, setSetting } from './settings.js';
 import { recordedAgentVersion } from './store.js';
 import { deriveFollow } from './threads.js';
 import type { EventInput, ParsedLine, SourceAdapter } from './types.js';
@@ -230,6 +232,8 @@ export function reparseAuthorship(ctx: MigrationContext): void {
     'SELECT 1 FROM raw_file WHERE lower(mirror) = lower(?) AND id <> ? LIMIT 1',
   );
   const keepAuthor = authorWriter(db);
+  // Looked up once an event is added: a store without a name gets one when it needs it.
+  let growthOrigin: string | null = null;
   const touched = new Map<string, { source: string; sessionId: string }>();
   const skipped = new Set<string>();
   const counts = { inputs: 0, added: 0, kinds: 0, errors: 0 };
@@ -301,6 +305,9 @@ export function reparseAuthorship(ctx: MigrationContext): void {
           const event = { ...ev, id, source: f.source };
           deriveFollow(db, event);
           deriveProposal(db, event);
+          // A hub that read the line first may have forgotten its event already (invariant 2).
+          growthOrigin ??= storeName(db);
+          coverEventArrival(db, id, growthOrigin);
         }
         for (const fact of parsed.sessionKinds ?? []) {
           if (recordSessionKind(db, f.source, fact)) counts.kinds++;
@@ -312,6 +319,9 @@ export function reparseAuthorship(ctx: MigrationContext): void {
     }
   }
   for (const s of touched.values()) refreshSession(db, s.source, s.sessionId);
+  // A device that dropped its hub's forget of one of these events, which it did not have then,
+  // pulls the hub's tombstones again.
+  if (counts.added > 0) setSetting(db, PULL_TOMBSTONES_AGAIN, String(Date.now()));
   const seconds = Math.round((Date.now() - started) / 1000);
   ctx.log(
     `Read who wrote ${counts.inputs + counts.added} inputs (${counts.added} of them new events) and ${counts.kinds} kinds of session from ${todo.length} archived files in ${seconds} s.`,

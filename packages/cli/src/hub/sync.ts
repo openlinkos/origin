@@ -9,6 +9,7 @@ import {
   type OwnChange,
   ownChanges,
   ownRecalls,
+  PULL_TOMBSTONES_AGAIN,
   parseTombstoneRecord,
   type ReplicaEntry,
   readMirrorLines,
@@ -59,6 +60,8 @@ export interface HubSyncResult {
 /** Settings keys of a device's cursors for one hub. */
 export const pushedKey = (hub: HubConfig) => `hub.pushed:${hub.url}`;
 export const pulledKey = (hub: HubConfig) => `hub.pulled:${hub.url}`;
+/** When this device last pulled every tombstone of a hub again (see PULL_TOMBSTONES_AGAIN). */
+export const pulledAgainKey = (hub: HubConfig) => `hub.pulled-again:${hub.url}`;
 /** How far a device has sent its recalls to a hub: a sequence number of its recall table. */
 export const recallsKey = (hub: HubConfig) => `hub.recalls:${hub.url}`;
 /** When the last sync with this hub finished, in milliseconds, for `origin ui` and `origin status`. */
@@ -343,7 +346,11 @@ export async function pullTombstones(opts: HubSyncOptions, call: Call, result: H
   // Rule 3 is left to the hub for entries it already has (see unpushedOnly).
   const judge = unpushedOnly(opts.db, Number(getSetting(opts.db, pushedKey(opts.hub)) ?? '0'));
   const key = pulledKey(opts.hub);
-  let after = Number(getSetting(opts.db, key) ?? '0');
+  // The store holds events now that it did not when it pulled some forgets, which then covered
+  // nothing here and were not kept: every tombstone is pulled again, once.
+  const again = getSetting(opts.db, PULL_TOMBSTONES_AGAIN);
+  const fromStart = again !== null && getSetting(opts.db, pulledAgainKey(opts.hub)) !== again;
+  let after = fromStart ? 0 : Number(getSetting(opts.db, key) ?? '0');
   for (;;) {
     const page = (await call(
       'GET',
@@ -367,6 +374,7 @@ export async function pullTombstones(opts: HubSyncOptions, call: Call, result: H
     }
     if (page.more !== true) break;
   }
+  if (fromStart) setSetting(opts.db, pulledAgainKey(opts.hub), again);
 }
 
 /**

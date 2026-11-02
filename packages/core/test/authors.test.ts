@@ -8,9 +8,12 @@ import {
   type Database,
   defaultAuthor,
   getEvent,
+  getSetting,
   listEvents,
   openDatabase,
+  PULL_TOMBSTONES_AGAIN,
   rebuildAuthorship,
+  receiveTombstone,
   type SourceAdapter,
   STORE_VERSION,
   syncSource,
@@ -293,7 +296,48 @@ describe('a store of an earlier version', () => {
       'fake:l1': ['owner', 'text', null],
       'fake:h1': ['system', 'entry', null],
     });
+    // A device that read the new event first, and pulls the hub's forgets again.
+    expect(getSetting(db, PULL_TOMBSTONES_AGAIN)).not.toBeNull();
     fresh.close();
+  });
+
+  it('hides an event it now reads that a forget it kept already targets (invariant 2)', async () => {
+    const content = jsonl(
+      { id: 'p1', session: 's1', ts: 1000, role: 'user', text: 'Deploy it.' },
+      { id: 'l1', session: 's1', ts: 1200, role: 'user', text: 'my token', learnt: true },
+    );
+    appendRemote({ db, home }, fakeAdapter(logs), {
+      device: 'laptop',
+      source: 'fake',
+      path: '/home/me/.fake/s1.jsonl',
+      relPath: 's1.jsonl',
+      generation: 1,
+      offset: 0,
+      data: Buffer.from(content),
+    });
+    // The device, upgraded first, read the event and forgot it; this hub kept the forget, which
+    // covered nothing here.
+    receiveTombstone(
+      db,
+      {
+        id: 'tmb_00000000000000000000000000000001',
+        target: 'fake:l1',
+        reason: 'a secret',
+        createdAt: 5000,
+        origin: 'laptop',
+        entries: [],
+        events: ['fake:l1'],
+      },
+      { growthOrigin: 'hub' },
+    );
+    db.close();
+    downgradeToV7(path.join(home, 'origin.db'));
+    db = openDatabase(path.join(home, 'origin.db'), {
+      adapters: [fakeAdapter(logs, 'fake', { learnt: true })],
+    });
+    expect(getEvent(db, 'fake:l1')).toBeNull();
+    expect(db.prepare("SELECT 1 FROM event WHERE id = 'fake:l1'").get()).toBeDefined();
+    expect(listEvents(db).map((e) => e.id)).toEqual(['fake:p1']);
   });
 
   it('stays at version 7 when the upgrade fails half-way, and is upgraded on the next open', async () => {

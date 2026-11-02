@@ -19,6 +19,7 @@ import {
   rawLocator,
   readMirror,
   readRawLine,
+  rebuildAuthorship,
   revokeToken,
   syncSource,
 } from '@openlinkos/origin-core';
@@ -154,6 +155,72 @@ describe('personal hub', () => {
     expect(getEvent(deviceDb, USER_EVENT)).toBeNull();
     expect((await push()).tombstonesApplied).toBe(0);
     expect(getEvent(hubDb, USER_EVENT)).toBeNull();
+  });
+
+  it('pulls the forgets again once an upgrade reads events the device lacked (invariant 2)', async () => {
+    // A device of an earlier version, which skipped the prompts Claude Code queued, pushes its
+    // mirror; the hub, upgraded first, reads the queued prompt, and the user forgets it there.
+    const projects = path.join(tmp, 'projects');
+    fs.mkdirSync(path.join(projects, 'D--demo-project'), { recursive: true });
+    const session = '5e5e5e5e-0000-4000-8000-000000000001';
+    const queued = '5e5e5e5e-0000-4000-8000-0000000000aa';
+    fs.writeFileSync(
+      path.join(projects, 'D--demo-project', `${session}.jsonl`),
+      `${[
+        {
+          type: 'user',
+          uuid: '5e5e5e5e-0000-4000-8000-000000000002',
+          sessionId: session,
+          timestamp: '2026-10-20T09:00:00.000Z',
+          cwd: 'D:\\demo\\project',
+          origin: { kind: 'human' },
+          message: { role: 'user', content: 'Fix the flaky test.' },
+        },
+        {
+          type: 'attachment',
+          uuid: queued,
+          sessionId: session,
+          timestamp: '2026-10-20T09:01:00.000Z',
+          cwd: 'D:\\demo\\project',
+          attachment: {
+            type: 'queued_command',
+            prompt: 'My token is hunter2',
+            origin: { kind: 'human' },
+          },
+        },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join('\n')}\n`,
+    );
+    const home3 = path.join(tmp, 'device3');
+    const db3 = openDatabase(path.join(home3, 'origin.db'));
+    try {
+      const adapter = createClaudeCodeAdapter({ projectsDir: projects });
+      const earlier = {
+        ...adapter,
+        parseLine: (l: string, c: Parameters<typeof adapter.parseLine>[1]) =>
+          l.includes('"attachment"') ? null : adapter.parseLine(l, c),
+      };
+      await syncSource({ db: db3, home: home3 }, earlier);
+      await syncWithHub({ db: db3, home: home3, hub });
+      const id = `claude-code:${queued}`;
+      expect(getEvent(hubDb, id)?.text).toBe('My token is hunter2');
+      const client = await hubClient();
+      await client.callTool({ name: 'forget', arguments: { id, reason: 'a secret' } });
+      await client.close();
+      // The forget reaches the device, and covers nothing there.
+      expect((await syncWithHub({ db: db3, home: home3, hub })).tombstonesApplied).toBe(0);
+
+      // Upgraded, the device reads the queued prompt from its mirror, and its next sync hides it.
+      rebuildAuthorship(db3, { home: home3, adapters: [adapter] });
+      expect(getEvent(db3, id)?.text).toBe('My token is hunter2');
+      expect((await syncWithHub({ db: db3, home: home3, hub })).tombstonesApplied).toBe(1);
+      expect(getEvent(db3, id)).toBeNull();
+      // Once: the next sync pulls after its cursor again.
+      expect((await syncWithHub({ db: db3, home: home3, hub })).tombstonesApplied).toBe(0);
+    } finally {
+      db3.close();
+    }
   });
 
   it('serves a device agent from its own store, then syncs what it wrote', async () => {
