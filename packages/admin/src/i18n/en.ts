@@ -20,6 +20,14 @@ export const en = {
   'ago.hours': '{n} h ago',
   'ago.days': '{n} d ago',
   'app.docs': 'Documentation',
+  'app.source': 'GitHub',
+  'app.reportIssue': 'Report an issue',
+  'app.openSource': 'Origin is open source.',
+  'app.project': 'Origin, the project',
+  'landing.title': 'Origin hub',
+  'landing.lead':
+    "A personal Origin hub: it keeps the memory of one person's AI agents across their devices.",
+  'landing.poweredBy': 'Powered by Origin, open source',
 
   'nav.label': 'Sections',
   'nav.menu': 'Menu',

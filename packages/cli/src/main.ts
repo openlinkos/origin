@@ -116,7 +116,7 @@ import { checkHub } from './hub/connect.js';
 import { type RelaySyncResult, relayWithHub } from './hub/relay.js';
 import { askHub } from './hub/remote.js';
 import { RetentionWatch, retentionWarning, retentionWarnings } from './hub/retention.js';
-import { type HubAdminOptions, startHub } from './hub/serve.js';
+import { type HubAdminOptions, poweredByEnv, startHub } from './hub/serve.js';
 import { type HubSyncResult, lastHubSync, syncWithHub } from './hub/sync.js';
 import { readNewPassword } from './password.js';
 import {
@@ -1593,6 +1593,7 @@ async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
     throw new OriginError(`Invalid port: ${values.port}`);
   }
   const admin = adminOptions(values);
+  const poweredBy = poweredByEnv(process.env.ORIGIN_POWERED_BY);
   const bucket = setUpFrames(ctx.db, ctx.home, {
     command: 'serve',
     flags: values,
@@ -1607,6 +1608,7 @@ async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
     version: VERSION,
     log: (m) => console.error(m),
     admin,
+    poweredBy,
   });
   console.log(`Origin hub listening on ${hub.url} (data: ${ctx.home})`);
   if (bucket) {

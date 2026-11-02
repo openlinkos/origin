@@ -73,11 +73,14 @@ export type IconName = (typeof ICON_NAMES)[number];
 /** Symbol ids carry a prefix, so they cannot collide with the ids of a page. */
 const PREFIX = 'i-';
 
+/** What drawing icons needs of a page: the icons it used so far, and where their shapes are. */
+export type IconHost = Pick<Ctx, 'icons' | 'assets'>;
+
 /**
  * An icon, drawn from the page's own symbols: `<svg class="ol-icon"><use href="#i-search"/></svg>`.
  * The name is recorded on the request, and the layout inlines only the symbols a page uses.
  */
-export function icon(ctx: Ctx, name: IconName, size?: 'sm' | 'lg'): SafeHtml {
+export function icon(ctx: IconHost, name: IconName, size?: 'sm' | 'lg'): SafeHtml {
   ctx.icons.add(name);
   const cls = size ? `ol-icon ol-icon-${size}` : 'ol-icon';
   return html`<svg class="${cls}" aria-hidden="true"><use href="#${PREFIX}${name}"/></svg>`;
@@ -87,7 +90,7 @@ export function icon(ctx: Ctx, name: IconName, size?: 'sm' | 'lg'): SafeHtml {
  * One hidden `<svg>` with a `<symbol>` for each icon the page used. The shapes come from the design
  * system and were checked to be plain markup when they were loaded (see `Assets`).
  */
-export function iconSprite(ctx: Ctx): SafeHtml {
+export function iconSprite(ctx: IconHost): SafeHtml {
   const names = [...ctx.icons].sort();
   if (names.length === 0) return html``;
   const viewBox = ctx.assets.iconViewBox;

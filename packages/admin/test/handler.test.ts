@@ -429,6 +429,47 @@ describe('pages', () => {
     expect(signedIn[5]?.text).toContain('class="ol-auth-card"');
   });
 
+  it('credit the open-source project: at the foot of the app, and under the sign-in form', async () => {
+    const base = await serve();
+    const login = await request(`${base}/admin/login`);
+    expect(login.text).toContain(
+      '<p class="ol-hint ol-cluster admin-oss"><span>Origin is open source.</span><a href="https://origin.openlinkos.com/" rel="noreferrer">Documentation</a><a href="https://github.com/openlinkos/origin" rel="noreferrer">GitHub</a></p>',
+    );
+    // Under the form, inside the card.
+    const card = login.text.slice(login.text.indexOf('class="ol-auth-card"'));
+    expect(card.indexOf('</form>')).toBeLessThan(card.indexOf('admin-oss'));
+    expect(card.indexOf('admin-oss')).toBeLessThan(card.indexOf('class="ol-auth-foot"'));
+    const zhLogin = await request(`${base}/admin/login`, {
+      headers: { 'Accept-Language': 'zh-CN' },
+    });
+    expect(zhLogin.text).toContain(
+      '<span>Origin 是开源软件。</span><a href="https://origin.openlinkos.com/zh/" rel="noreferrer">文档</a><a href="https://github.com/openlinkos/origin" rel="noreferrer">GitHub</a>',
+    );
+
+    const b = new Browser(base);
+    await b.login(PASSWORD);
+    const footer = (text: string) =>
+      /<footer class="ol-footer admin-foot">[\s\S]*?<\/footer>/.exec(text)?.[0];
+    for (const p of ['/admin/', '/admin/tokens', '/admin/entries', '/admin/entry?id=ent_0000']) {
+      const page = await b.get(p);
+      expect(footer(page.text), p).toBe(`<footer class="ol-footer admin-foot">
+      <span>Origin vtest</span>
+      <a href="https://origin.openlinkos.com/" rel="noreferrer">Documentation</a>
+      <a href="https://github.com/openlinkos/origin" rel="noreferrer">GitHub</a>
+      <a href="https://github.com/openlinkos/origin/issues/new/choose" rel="noreferrer">Report an issue</a>
+    </footer>`);
+      // After the content, inside the main column.
+      expect(page.text.indexOf('</main>'), p).toBeLessThan(page.text.indexOf('admin-foot'));
+      expect(pageProblems(page.text), p).toEqual([]);
+    }
+    await b.post('/admin/prefs', { lang: 'zh', next: '/admin/' });
+    const zh = footer((await b.get('/admin/')).text) ?? '';
+    expect(zh).toContain('<a href="https://origin.openlinkos.com/zh/" rel="noreferrer">文档</a>');
+    expect(zh).toContain('rel="noreferrer">反馈问题</a>');
+    // Signed out, the sign-in card has no app footer.
+    expect(login.text).not.toContain('admin-foot');
+  });
+
   it('switch the theme with POST buttons that show the current choice', async () => {
     const base = await serve();
     const auto = await request(`${base}/admin/login`);

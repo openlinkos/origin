@@ -19,6 +19,13 @@ export const zh: Messages = {
   'ago.hours': '{n} 小时前',
   'ago.days': '{n} 天前',
   'app.docs': '文档',
+  'app.source': 'GitHub',
+  'app.reportIssue': '反馈问题',
+  'app.openSource': 'Origin 是开源软件。',
+  'app.project': 'Origin 项目',
+  'landing.title': 'Origin 中枢',
+  'landing.lead': '个人 Origin 中枢：在一个人的各台设备之间，保存其 AI Agent 的记忆。',
+  'landing.poweredBy': '由开源的 Origin 驱动',
 
   'nav.label': '栏目',
   'nav.menu': '菜单',

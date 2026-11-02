@@ -1071,3 +1071,14 @@ a.admin-cell-title:hover {
 :is(.ol-layout-dashboard, .ol-layout-supporting) .ol-dl dd {
   text-align: end;
 }
+
+/* The project's links at the foot of every page of the app, in line with the content. */
+.admin-foot {
+  padding-inline: var(--ol-space-5);
+}
+
+@media (width <= 860px) {
+  .admin-foot {
+    padding-inline: var(--ol-space-3);
+  }
+}
