@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import {
+  type Author,
   changesSince,
   correct,
   type Database,
@@ -20,6 +21,7 @@ import {
   getEvent,
   getRecall,
   getSession,
+  hasAuthor,
   isEntryForgotten,
   isEntryId,
   isEventForgotten,
@@ -55,6 +57,7 @@ import {
   sessionKey,
   sessionNames,
   stubText,
+  type TurnStart,
   usedRefs,
 } from '@openlinkos/origin-core';
 import type { ToolArgs } from './tools.js';
@@ -93,7 +96,17 @@ export interface EntryView {
   origin?: Found;
 }
 
-export interface EventView {
+/**
+ * Who wrote an input that the user did not (see authors.ts in core): `person`, `agent`, or
+ * `system`, and the speaker its source named, when it named one. The user's own messages, and
+ * events that are no input, carry neither, so results read as they always have for them.
+ */
+export interface WrittenBy {
+  by?: 'person' | 'agent' | 'system';
+  speaker?: string;
+}
+
+export interface EventView extends WrittenBy {
   id: string;
   time: string;
   source: string;
@@ -161,7 +174,7 @@ export interface EntryStub {
 }
 
 /** An event in one line: its text on one line, cut short. */
-export interface EventStub {
+export interface EventStub extends WrittenBy {
   id: string;
   time: string;
   role: string;
@@ -170,7 +183,7 @@ export interface EventStub {
 }
 
 /** Where a turn of a session starts: its prompt, or the command the agent acted on. */
-export interface PromptStub {
+export interface PromptStub extends WrittenBy {
   turn: number;
   id: string;
   time: string;
@@ -423,6 +436,17 @@ export function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…[+${text.length - max} chars]` : text;
 }
 
+/** `{ by, speaker }` for an input the user did not write, else nothing (see WrittenBy). */
+export function writtenBy(e: {
+  role: string;
+  kind: string;
+  author?: Author | null;
+  speaker?: string | null;
+}): WrittenBy {
+  if (!hasAuthor(e) || !e.author || e.author === 'owner') return {};
+  return e.speaker ? { by: e.author, speaker: e.speaker } : { by: e.author };
+}
+
 export function eventView(e: EventRow, maxText: number): EventView {
   return {
     id: e.id,
@@ -431,6 +455,7 @@ export function eventView(e: EventRow, maxText: number): EventView {
     project: e.project,
     session: e.sessionId,
     role: e.role,
+    ...writtenBy(e),
     kind: e.kind,
     text: clip(e.text, maxText),
   };
@@ -445,9 +470,23 @@ export function entryStub(e: Entry): EntryStub {
   };
 }
 
-export function eventStub(e: Pick<EventRow, 'id' | 'ts' | 'role' | 'kind' | 'text'>): EventStub {
-  return { id: e.id, time: isoLocal(e.ts), role: e.role, kind: e.kind, text: stubText(e.text) };
+export function eventStub(
+  e: Pick<EventRow, 'id' | 'ts' | 'role' | 'kind' | 'text'> &
+    Partial<Pick<EventRow, 'author' | 'speaker'>>,
+): EventStub {
+  return {
+    id: e.id,
+    time: isoLocal(e.ts),
+    role: e.role,
+    ...writtenBy(e),
+    kind: e.kind,
+    text: stubText(e.text),
+  };
 }
+
+/** Where a turn starts (a prompt, or a command), as an event stub. */
+const promptStub = (p: Omit<TurnStart, 'seq' | 'command'>): EventStub =>
+  eventStub({ ...p, role: 'user', kind: 'message', text: p.prompt });
 
 export function sessionView(s: SessionRow): SessionView {
   return {
@@ -619,10 +658,7 @@ export function threadResult(db: Database, id: string): ThreadResult {
     agents: card.agents,
     branches: card.branches,
     entries: card.entries.map(entryStub),
-    last_prompt: last && {
-      ...eventStub({ id: last.id, ts: last.ts, role: 'user', kind: 'message', text: last.prompt }),
-      session: last.sessionId,
-    },
+    last_prompt: last && { ...promptStub(last), session: last.sessionId },
   };
 }
 
@@ -759,16 +795,7 @@ function eventResult(db: Database, id: string, offset: number): EventResult {
   }
   const ctx = eventContext(db, event);
   result.session_title = nameOf(ctx.session);
-  result.turn = ctx.turn && {
-    number: ctx.turn.number,
-    prompt: eventStub({
-      id: ctx.turn.start.id,
-      ts: ctx.turn.start.ts,
-      role: 'user',
-      kind: 'message',
-      text: ctx.turn.start.prompt,
-    }),
-  };
+  result.turn = ctx.turn && { number: ctx.turn.number, prompt: promptStub(ctx.turn.start) };
   result.replies_to = ctx.repliesTo && eventStub(ctx.repliesTo);
   result.around = { before: ctx.before.map(eventStub), after: ctx.after.map(eventStub) };
   result.cited_by = ctx.citedBy.map(entryStub);
@@ -794,6 +821,7 @@ export function sessionResult(db: Database, session: SessionRow): SessionResult 
       turn: p.turn,
       id: p.id,
       time: isoLocal(p.ts),
+      ...writtenBy({ role: 'user', kind: 'message', author: p.author, speaker: p.speaker }),
       text: p.prompt,
     })),
     more_prompts: card.morePrompts,

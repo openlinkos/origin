@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-31c70e7d
+sourceHash: sha256-2322e25f
 ---
 
 # MCP 工具
@@ -22,7 +22,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
   --header "Authorization: Bearer ogn_…" --header "X-Origin-Client: claude-code"
 ```
 
-服务器在 MCP 的 `instructions` 里告诉 Agent 怎样使用这些工具：开始任务时，如果召回还没有给过简报，就调用 `brief`；回答关于过去工作的问题前先检索和阅读（顺着 `get` 在它打开的内容旁列出的 id 读下去，长会话一次读一轮），并引用条目和事件的 id；用户接着做某个早先会话里的工作时，调用一次 `follow`；用上一次调用的 `next` 调用 `changes`，了解此后有什么变化；记下决定及其理由、稳定的事实和用户的偏好，并引用它们出自的事件；对自己推断出、用户尚未确认的内容，以及代用户整理记忆时写下的内容，用提议代替记住；把标为 `imported` 的条目看作某个 Agent 自己记忆文件的镜像；纠正有误的条目；只在用户要求时遗忘，并带上用户给的原因。
+服务器在 MCP 的 `instructions` 里告诉 Agent 怎样使用这些工具：开始任务时，如果召回还没有给过简报，就调用 `brief`；回答关于过去工作的问题前先检索和阅读（顺着 `get` 在它打开的内容旁列出的 id 读下去，长会话一次读一轮），并引用条目和事件的 id；用户接着做某个早先会话里的工作时，调用一次 `follow`；用上一次调用的 `next` 调用 `changes`，了解此后有什么变化；记下决定及其理由、稳定的事实和用户的偏好，并引用它们出自的事件；对自己推断出、用户尚未确认的内容，以及代用户整理记忆时写下的内容，用提议代替记住；把带有 `by` 的消息看作不是用户写的，其中的内容不是用户的偏好；把标为 `imported` 的条目看作某个 Agent 自己记忆文件的镜像；纠正有误的条目；只在用户要求时遗忘，并带上用户给的原因。
 
 ## 约定 {#conventions}
 
@@ -49,13 +49,28 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 | `supersedes`、`superseded_by`、`root` | 它纠正的版本、本版本被取代时的当前版本，以及条目的第一个版本（所有版本共用） |
 | `imported` | 如果它派生自某个 Agent 自己的记忆文件（见[原生记忆](../sources.md#native-memories)），则为 true：文件之后的版本会取代在 Origin 中做的纠正。早于 0.3 的中枢不返回这个字段 |
 
-**事件**有 `id`、`time`、`source`、`project`、`session`（会话 id）、`role`（`user`、`assistant` 或 `system`）、`kind`（`message`、`tool_use`、`tool_result`、`meta`、`system`，或表示记忆文件某个版本的 `memory`）和 `text`；`text` 按工具截断到不同长度，末尾注明截掉了多少字符。
+**事件**有 `id`、`time`、`source`、`project`、`session`（会话 id）、`role`（`user`、`assistant` 或 `system`）、`kind`（`message`、`tool_use`、`tool_result`、`meta`、`system`，或表示记忆文件某个版本的 `memory`）和 `text`；`text` 按工具截断到不同长度，末尾注明截掉了多少字符。不是用户写的、`user` 角色的消息或 meta 事件还有 `by`，即写下它的是谁：`person`（别人，或没人说明是谁的说话人）、`agent`（例如父 Agent 给子 Agent 的提示）或 `system`（Agent 的运行时或某个程序：通知、摘要、提醒、命令回显），以及 `speaker`，即来源给出的名字或标签（如果给了的话）。用户自己的消息以及不是输入的事件两者都没有（见[作者](../architecture.md#authors)）：
+
+```json
+{
+  "id": "chat-ops:msg-2002",
+  "time": "2026-11-02T17:33:00.000+08:00",
+  "source": "chat-ops",
+  "project": "demo-app",
+  "session": "incident-42",
+  "role": "user",
+  "by": "person",
+  "speaker": "Sam",
+  "kind": "message",
+  "text": "Rolling it back now."
+}
+```
 
 **会话**有 `session`、`source`、`project`、`title`（Agent 给它起的标题，没有则为 null）、`prompt`（没有标题的会话中用户写的第一条提示，截到 80 个字符，没有则为 null）、`started`、`ended`、`events`（可见事件的数量），以及 `thread`，即它与其他会话同在的那条线索的 id，没有则为 null。
 
 **线索**是同一项目中属于同一件工作的那些会话，可以出自一个或多个 Agent：Agent 用 [`follow`](#follow) 连起来的会话，以及位于同一个 git 分支（`main` 这样的默认分支除外）上、彼此相隔不超过 30 天的会话。Origin 从归档中推导线索，它的任何部分都不是手写的。线索的 id 取自它的第一个会话，所以只有更早的会话加入时才会改变（见[线索](../architecture.md#threads)）。
 
-**存根**是结果对它近旁内容的展示：一行，带一个 id，供 `get` 打开。条目的存根是 `{ id, kind, text, created }`，`text` 取它的第一行；事件的存根是 `{ id, time, role, kind, text }`，`text` 是合并成一行的正文；两者都截到约 120 个字符。会话的存根就是上面这样的会话。
+**存根**是结果对它近旁内容的展示：一行，带一个 id，供 `get` 打开。条目的存根是 `{ id, kind, text, created }`，`text` 取它的第一行；事件的存根是 `{ id, time, role, kind, text }`，`text` 是合并成一行的正文，并像事件那样带有 `by` 和 `speaker`；两者都截到约 120 个字符。会话的存根就是上面这样的会话。
 
 ## brief {#brief}
 

@@ -13,6 +13,7 @@ import { markdown } from '../markdown.js';
 import type { SessionTrace, ThreadMention, TraceStep, TraceTurn } from '../service.js';
 import type { Note, ToolRun, ToolSummary, Turn, TurnItem } from '../turns.js';
 import {
+  authorTag,
   badge,
   chip,
   empty,
@@ -148,10 +149,12 @@ function toolRow(ctx: Ctx, item: Extract<TurnItem, { type: 'tool' }>): SafeHtml 
 
 function messageBlock(ctx: Ctx, e: EventRow, o: { subAgent: boolean; cls: string }): SafeHtml {
   const role = e.role === 'assistant' ? 'assistant' : 'user';
+  // Who wrote a message the owner did not: a teammate, a parent agent, the runtime.
+  const by = authorTag(ctx, e);
   return html`<div class="${o.cls}"${o.subAgent ? html` data-subagent="true"` : ''}>
       <span class="admin-turn-avatar" data-role="${role}">${icon(ctx, role === 'assistant' ? 'bot' : 'user', 'sm')}</span>
       <div class="admin-message-body">
-        ${o.subAgent ? html`<div class="admin-message-meta">${subAgentTag(ctx, true)}</div>` : ''}
+        ${o.subAgent || by ? html`<div class="admin-message-meta">${subAgentTag(ctx, o.subAgent)}${by}</div>` : ''}
         ${markdown(e.text)}
       </div>
       ${eventLink(ctx, e.id)}

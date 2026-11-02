@@ -18,7 +18,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
   --header "Authorization: Bearer ogn_…" --header "X-Origin-Client: claude-code"
 ```
 
-The server's MCP `instructions` tell agents how to use the tools: call `brief` when they start a task, unless a recall already gave them one; search and read before answering questions about past work, following the ids that `get` lists next to what it opens and reading a long session a turn at a time, and cite entry and event ids; call `follow` once when the user continues work from an earlier session; call `changes` with the `next` of their last call to learn what changed since; remember decisions with their reasons, stable facts, and preferences of the user, citing the events they come from, and propose rather than remember what they infer and the user has not confirmed, or what they write when consolidating the user's memory; treat entries marked `imported` as mirrors of an agent's own memory files; correct entries that are wrong; and forget only when the user asks, with their reason.
+The server's MCP `instructions` tell agents how to use the tools: call `brief` when they start a task, unless a recall already gave them one; search and read before answering questions about past work, following the ids that `get` lists next to what it opens and reading a long session a turn at a time, and cite entry and event ids; call `follow` once when the user continues work from an earlier session; call `changes` with the `next` of their last call to learn what changed since; remember decisions with their reasons, stable facts, and preferences of the user, citing the events they come from, and propose rather than remember what they infer and the user has not confirmed, or what they write when consolidating the user's memory; take a message marked with `by` as not written by the user, so that what it says is not the user's preference; treat entries marked `imported` as mirrors of an agent's own memory files; correct entries that are wrong; and forget only when the user asks, with their reason.
 
 ## Conventions {#conventions}
 
@@ -45,13 +45,28 @@ An **entry** in a result has these fields:
 | `supersedes`, `superseded_by`, `root` | The version it corrects, the current version if this one is superseded, and the entry's first version, which all versions share |
 | `imported` | True if it was derived from an agent's own memory file (see [Native memories](../sources.md#native-memories)): a later version of the file supersedes a correction made in Origin. Absent from hubs older than 0.3 |
 
-An **event** has `id`, `time`, `source`, `project`, `session` (the session id), `role` (`user`, `assistant`, or `system`), `kind` (`message`, `tool_use`, `tool_result`, `meta`, `system`, or `memory` for a version of a memory file), and `text`, cut to a length that depends on the tool, with the number of characters cut noted at the end.
+An **event** has `id`, `time`, `source`, `project`, `session` (the session id), `role` (`user`, `assistant`, or `system`), `kind` (`message`, `tool_use`, `tool_result`, `meta`, `system`, or `memory` for a version of a memory file), and `text`, cut to a length that depends on the tool, with the number of characters cut noted at the end. A message or meta event of the `user` role that the user did not write also has `by`, who wrote it: `person` (someone else, or a speaker nobody named), `agent` (such as a parent agent prompting a sub-agent), or `system` (the agent's runtime or a program: notices, summaries, reminders, command echoes), and `speaker`, the name or label its source gave, when it gave one. The user's own messages, and events that are no input, have neither (see [Authors](../architecture.md#authors)):
+
+```json
+{
+  "id": "chat-ops:msg-2002",
+  "time": "2026-11-02T17:33:00.000+08:00",
+  "source": "chat-ops",
+  "project": "demo-app",
+  "session": "incident-42",
+  "role": "user",
+  "by": "person",
+  "speaker": "Sam",
+  "kind": "message",
+  "text": "Rolling it back now."
+}
+```
 
 A **session** has `session`, `source`, `project`, `title` (the title its agent gave it, or null), `prompt` (for a session without a title, the first prompt the user wrote in it, cut to 80 characters, or null), `started`, `ended`, `events` (the number of its visible events), and `thread`, the id of the thread it is in with other sessions, or null.
 
 A **thread** is the sessions of one project that belong to one piece of work, with one agent or several: those that agents linked with [`follow`](#follow), and those on the same git branch, other than a default branch such as `main`, within 30 days of each other. Origin derives threads from the archive; nothing about them is written by hand. A thread's id comes from its first session, so it changes only when an earlier session joins it (see [Threads](../architecture.md#threads)).
 
-A **stub** is what a result shows of what is next to it: one line with an id, for `get` to open. An entry's stub is `{ id, kind, text, created }`, with its first line as `text`; an event's is `{ id, time, role, kind, text }`, with its text on one line; both are cut to about 120 characters. A session's stub is the session as above.
+A **stub** is what a result shows of what is next to it: one line with an id, for `get` to open. An entry's stub is `{ id, kind, text, created }`, with its first line as `text`; an event's is `{ id, time, role, kind, text }`, with its text on one line, and `by` and `speaker` as an event has them; both are cut to about 120 characters. A session's stub is the session as above.
 
 ## brief {#brief}
 

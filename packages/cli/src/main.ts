@@ -638,6 +638,22 @@ interface ShownEvent {
   kind: string;
   text: string;
   cwd?: string | null;
+  /**
+   * Who wrote an input (see authors.ts in core): an event's own; from a hub's answer, only the
+   * author of one the user did not write (`by`).
+   */
+  author?: string | null;
+  speaker?: string | null;
+  authorSignal?: string | null;
+}
+
+/**
+ * ` (Sam, person)`, ` (agent)`: who wrote an input the user did not, after its role and kind;
+ * nothing for the user's own input and for other events.
+ */
+function writtenBy(e: Pick<ShownEvent, 'author' | 'speaker'>): string {
+  if (!e.author || e.author === 'owner') return '';
+  return ` (${e.speaker ? `${e.speaker}, ` : ''}${e.author})`;
 }
 
 /** An entry as the CLI lists it. */
@@ -671,6 +687,8 @@ const fromEventView = (v: EventView): ShownEvent => ({
   role: v.role,
   kind: v.kind,
   text: v.text,
+  author: v.by ?? null,
+  speaker: v.speaker ?? null,
 });
 
 const fromEntryView = (v: EntryView): ShownEntry => ({
@@ -700,7 +718,7 @@ function printSessionEvents(sessionId: string, events: ShownEvent[]): number {
     `Session ${sessionId}  source ${first?.source}  project ${first?.project ?? '—'}${cwd}\n`,
   );
   for (const e of events) {
-    const tag = e.kind === 'message' ? e.role : `${e.role}/${e.kind}`;
+    const tag = `${e.kind === 'message' ? e.role : `${e.role}/${e.kind}`}${writtenBy(e)}`;
     console.log(`[${fmtDateTime(e.ts)}] ${tag.padEnd(20)} ${oneLine(e.text, 160)}`);
     console.log(`    ↳ ${e.id}`);
   }
@@ -840,7 +858,7 @@ async function cmdSearch(ctx: Ctx, args: string[]): Promise<number> {
   }
   for (const h of hits) {
     console.log(
-      `[${fmtDateTime(h.ts)}] ${h.source} ${h.project ?? '—'} ${h.role}/${h.kind}\n    ${oneLine(h.snippet, 200)}\n    ↳ ${h.id}`,
+      `[${fmtDateTime(h.ts)}] ${h.source} ${h.project ?? '—'} ${h.role}/${h.kind}${writtenBy(h)}\n    ${oneLine(h.snippet, 200)}\n    ↳ ${h.id}`,
     );
   }
   console.log(
@@ -876,6 +894,12 @@ function printEvent(e: ShownEventDetail, loc: ShownLocator | null, raw: string |
   console.log(`Source   ${e.source}  session ${e.sessionId}  version ${e.agentVersion ?? '—'}`);
   console.log(`Project  ${e.project ?? '—'}  cwd ${e.cwd ?? '—'}  branch ${e.gitBranch ?? '—'}`);
   console.log(`Role     ${e.role}/${e.kind}${e.meta ? `  meta ${JSON.stringify(e.meta)}` : ''}`);
+  if (e.author) {
+    // Who wrote an input, and, on this store, the field that says so.
+    const speaker = e.speaker ? `, ${e.speaker}` : '';
+    const signal = e.authorSignal ? `  (by ${e.authorSignal})` : '';
+    console.log(`Author   ${e.author}${speaker}${signal}`);
+  }
   console.log('\nText:\n');
   console.log(e.text);
   if (loc) {
@@ -892,7 +916,10 @@ type ShownEntryDetail = ShownEntry &
   Pick<Entry, 'author' | 'validFrom' | 'validTo' | 'supersededBy' | 'concurrent'>;
 
 /** A source of an entry, as `origin show` prints it. */
-type ShownSource = Pick<ShownEvent, 'ts' | 'source' | 'project' | 'role' | 'kind' | 'text'> & {
+type ShownSource = Pick<
+  ShownEvent,
+  'ts' | 'source' | 'project' | 'role' | 'kind' | 'text' | 'author' | 'speaker'
+> & {
   eventId: string;
   quote: string | null;
 };
@@ -921,7 +948,9 @@ function printEntry(e: ShownEntryDetail, history: string[], sources: ShownSource
   }
   console.log(`\n${e.text}\n\nSources:`);
   for (const s of sources) {
-    console.log(`  [${fmtDateTime(s.ts)}] ${s.source} ${s.project ?? '—'} ${s.role}/${s.kind}`);
+    console.log(
+      `  [${fmtDateTime(s.ts)}] ${s.source} ${s.project ?? '—'} ${s.role}/${s.kind}${writtenBy(s)}`,
+    );
     console.log(`      ${oneLine(s.quote ? `“${s.quote}”` : s.text, 200)}`);
     console.log(`      ↳ ${s.eventId}`);
   }
@@ -1002,8 +1031,10 @@ function printSession(s: SessionResult): void {
   if (s.prompts.length > 0) {
     console.log('\nTurns:');
     for (const p of s.prompts) {
+      // A turn that starts at a command: its echo is the runtime's.
+      const by = writtenBy({ author: p.by, speaker: p.speaker }).trim();
       console.log(
-        `  ${String(p.turn).padStart(3)}. [${fmtDateTime(Date.parse(p.time))}] ${oneLine(p.text, 120)}`,
+        `  ${String(p.turn).padStart(3)}. [${fmtDateTime(Date.parse(p.time))}] ${by ? `${by} ` : ''}${oneLine(p.text, 120)}`,
       );
       console.log(`       ↳ ${p.id}`);
     }

@@ -185,6 +185,7 @@ describe('admin UI on the hub', () => {
         kind: 'message',
         text: 'Is the deploy stuck?',
         title: 'Deploy incident',
+        author: 'owner',
       },
       {
         id: 'm2',
@@ -193,6 +194,16 @@ describe('admin UI on the hub', () => {
         role: 'assistant',
         kind: 'message',
         text: 'It waits on a migration lock.',
+      },
+      {
+        id: 'm3',
+        session: 'incident-7',
+        time: at + 2000,
+        role: 'user',
+        kind: 'message',
+        text: 'I will release the lock.',
+        author: 'person',
+        speaker: 'Sam',
       },
     ];
     fs.writeFileSync(
@@ -225,6 +236,13 @@ describe('admin UI on the hub', () => {
     const session = await b.get('/admin/session?source=chat-ops&id=incident-7');
     expect(session.text).toContain('Deploy incident');
     expect(session.text).toContain('It waits on a migration lock.');
+    // Sam's message is shown as his, labelled; the owner's prompt carries no label.
+    const label =
+      'class="ol-badge ol-badge-square" title="Not written by you: who wrote it, as its source records it">';
+    expect(session.text).toContain(`${label}Sam</span>`);
+    expect(session.text.split(label)).toHaveLength(2);
+    const event = await b.get(`/admin/event?id=${encodeURIComponent('chat-ops:m3')}`);
+    expect(event.text).toContain('Sam');
     // In the overview's chart, its bars and swatch are neutral too.
     const overview = await b.get('/admin/');
     expect(overview.text).toMatch(/class="ol-chart-bar admin-neutral"/);

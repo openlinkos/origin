@@ -213,6 +213,141 @@ describe('origin MCP server', () => {
   });
 });
 
+describe('who wrote a message', () => {
+  /** A session with the user's prompt, a teammate's message, a sub-agent's prompt, and a notice. */
+  beforeEach(() => {
+    const lines = [
+      {
+        id: 'w1',
+        session: 'w',
+        ts: 10_000,
+        role: 'user',
+        text: 'Ship the retry fix today.',
+        author: 'owner',
+      },
+      {
+        id: 'w2',
+        session: 'w',
+        ts: 11_000,
+        role: 'user',
+        text: 'Wait for QA first.',
+        author: 'person',
+        speaker: 'Sam',
+      },
+      {
+        id: 'w3',
+        session: 'w',
+        ts: 12_000,
+        role: 'user',
+        text: 'Check the retry tests.',
+        author: 'agent',
+        speaker: 'reviewer',
+      },
+      {
+        id: 'w4',
+        session: 'w',
+        ts: 13_000,
+        role: 'user',
+        kind: 'meta',
+        text: 'Reminder: QA signs off.',
+      },
+      { id: 'w5', session: 'w', ts: 14_000, role: 'assistant', text: 'Waiting for QA.' },
+      {
+        id: 'w6',
+        session: 'w',
+        ts: 15_000,
+        role: 'user',
+        text: '<command-name>/review</command-name>',
+      },
+      {
+        id: 'w7',
+        session: 'w',
+        ts: 16_000,
+        role: 'assistant',
+        kind: 'tool_use',
+        text: 'Review {}',
+      },
+    ];
+    fs.writeFileSync(
+      path.join(src, 'w.jsonl'),
+      lines.map((l) => `${JSON.stringify(l)}\n`).join(''),
+    );
+  });
+
+  it("marks a message the user did not write with `by` and its speaker, and leaves the user's as it was", async () => {
+    const page = await call('timeline', { session: 'w', include_tools: true });
+    expect(
+      page.json.events.map((e: Record<string, unknown>) => [e.id, e.by ?? null, e.speaker ?? null]),
+    ).toEqual([
+      ['fake:w1', null, null],
+      ['fake:w2', 'person', 'Sam'],
+      ['fake:w3', 'agent', 'reviewer'],
+      ['fake:w4', 'system', null],
+      ['fake:w5', null, null],
+      ['fake:w6', 'system', null],
+      ['fake:w7', null, null],
+    ]);
+    // The user's own message has exactly the fields it always had.
+    expect(Object.keys(page.json.events[0]).sort()).toEqual(
+      ['id', 'time', 'source', 'project', 'session', 'role', 'kind', 'text'].sort(),
+    );
+    const hit = (await call('search', { query: 'QA first' })).json.events[0];
+    expect(hit).toMatchObject({ id: 'fake:w2', by: 'person', speaker: 'Sam' });
+    const event = (await call('get', { id: 'fake:w3' })).json;
+    expect(event).toMatchObject({ by: 'agent', speaker: 'reviewer' });
+    expect(event.around.before.map((e: Record<string, unknown>) => [e.id, e.by ?? null])).toEqual([
+      ['fake:w1', null],
+      ['fake:w2', 'person'],
+    ]);
+    // A session's turns: the user's prompt, and a command the agent acted on, whose echo Claude
+    // Code writes.
+    const card = (await call('get', { id: 'w' })).json;
+    expect(card.prompt).toBe('Ship the retry fix today.');
+    expect(card.prompts.map((p: Record<string, unknown>) => [p.text, p.by ?? null])).toEqual([
+      ['Ship the retry fix today.', null],
+      ['/review', 'system'],
+    ]);
+    // From the start of the store: these lines are older than the feed's last 24 hours.
+    const start = Buffer.from(JSON.stringify({ e: 0, c: 0 })).toString('base64url');
+    const feed = (await call('changes', { after: start })).json;
+    expect(
+      feed.events
+        .filter((e: { session: string }) => e.session === 'w')
+        .map((e: Record<string, unknown>) => e.by ?? null),
+    ).toEqual([null, 'person', 'agent', null, 'system']);
+    expect(client.getInstructions()).toContain(
+      'A message marked with `by` (`person`, `agent`, or `system`, with its `speaker` when known) was not written by the user',
+    );
+  });
+
+  it('refuses a preference that rests only on what others wrote', async () => {
+    const r = await call('remember', {
+      kind: 'cognition',
+      text: 'Waits for QA before shipping.',
+      confidence: 0.8,
+      sources: [{ event_id: 'fake:w2' }],
+    });
+    expect(r).toMatchObject({ isError: true });
+    expect(r.text).toBe(
+      "A preference can only come from the user's own words: fake:w2 (by person, Sam) is not the user's. Cite what the user wrote, or save this as memory or knowledge.",
+    );
+    const ok = await call('remember', {
+      kind: 'knowledge',
+      text: 'QA signs off before a release ships.',
+      confidence: 0.8,
+      sources: [{ event_id: 'fake:w2' }],
+    });
+    expect(ok.json.entry).toMatchObject({ kind: 'knowledge' });
+    const proposed = await call('propose', {
+      kind: 'cognition',
+      text: 'Waits for QA.',
+      confidence: 0.5,
+      sources: [{ quote: 'Wait for QA first' }],
+    });
+    expect(proposed).toMatchObject({ isError: true });
+  });
+});
+
 describe('reading along references', () => {
   const s1 = () => path.join(src, 's1.jsonl');
   beforeEach(() => {

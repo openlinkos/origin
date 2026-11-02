@@ -244,6 +244,15 @@ describe('your own sources on a device', () => {
       ['chat:o3', 'person', null],
       ['chat:o4', 'system', null],
     ]);
+    // The CLI says who wrote what the user did not.
+    const timeline = (await run(['timeline', '--session', 'ops'])).out.split('\n');
+    expect(timeline.find((l) => l.includes('Ship it.'))).toMatch(/\] user +Ship it\.$/);
+    expect(timeline.find((l) => l.includes('Wait for QA.'))).toContain('user (Dana, person)');
+    expect(timeline.find((l) => l.includes('Who is on call?'))).toContain('user (person)');
+    expect(timeline.find((l) => l.includes('joined'))).toContain('user/meta (system)');
+    const shown = (await run(['show', 'chat:o2'])).out;
+    expect(shown).toContain('Author   person, Dana  (by author)');
+    expect((await run(['show', 'chat:o3'])).out).toContain('Author   person  (by default)');
     // A store of version 7 whose source's directory is gone since: its mirror is all there is.
     downgradeToV7(dbPath(home));
     fs.rmSync(path.join(home, 'sources', 'chat'), { recursive: true });

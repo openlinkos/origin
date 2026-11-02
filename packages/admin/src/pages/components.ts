@@ -289,30 +289,59 @@ const FEED_ICON: Record<FeedRole, IconName> = {
   system: 'info',
 };
 
-/** Who or what an event is: the user, the agent (its source), a tool call or result, … */
-export function eventLabel(ctx: Ctx, e: Pick<EventRow, 'role' | 'kind' | 'source'>): string {
+type Labelled = Pick<EventRow, 'role' | 'kind' | 'source'> &
+  Partial<Pick<EventRow, 'author' | 'speaker'>>;
+
+/**
+ * Who wrote a user message that the owner did not (see authors.ts in core): the speaker its source
+ * named, or else another person, an agent, or the system; null for the owner's messages and for
+ * every other event.
+ */
+export function writtenBy(ctx: Ctx, e: Labelled): string | null {
+  if (e.role !== 'user' || e.kind !== 'message' || !e.author || e.author === 'owner') return null;
+  return e.speaker ?? ctx.t(`author.${e.author}`);
+}
+
+/** A small label with who wrote a message the owner did not, or nothing (see writtenBy). */
+export function authorTag(ctx: Ctx, e: Labelled): HtmlValue {
+  const name = writtenBy(ctx, e);
+  return name === null
+    ? ''
+    : html`<span class="ol-badge ol-badge-square" title="${ctx.t('author.help')}">${name}</span>`;
+}
+
+/**
+ * Who or what an event is: the user, someone else who wrote a message (see writtenBy), the agent
+ * (its source), a tool call or result, …
+ */
+export function eventLabel(ctx: Ctx, e: Labelled): string {
   const t = ctx.t;
   if (e.kind === 'tool_use') return t('event.toolUse');
   if (e.kind === 'tool_result') return t('event.toolResult');
   if (e.kind === 'meta') return t('event.meta');
   if (e.kind === 'memory') return t('event.memory');
   if (e.kind === 'system' || e.role === 'system') return t('event.system');
-  return e.role === 'user' ? t('event.user') : e.source;
+  return e.role === 'user' ? (writtenBy(ctx, e) ?? t('event.user')) : e.source;
 }
 
-/** The kind of an event as a badge, for detail views. */
-export function eventTag(ctx: Ctx, e: Pick<EventRow, 'role' | 'kind' | 'source'>): SafeHtml {
+/** The kind of an event as a badge, for detail views: the user's own messages stand out. */
+export function eventTag(ctx: Ctx, e: Labelled): SafeHtml {
   const role = feedRole(e);
   return badge(
     eventLabel(ctx, e),
-    role === 'user' ? 'accent' : role === 'assistant' ? 'success' : 'neutral',
+    role === 'user' && writtenBy(ctx, e) === null
+      ? 'accent'
+      : role === 'assistant'
+        ? 'success'
+        : 'neutral',
   );
 }
 
 /** One event in a feed: who, when, its id, and its text (escaped, pre-wrapped). */
 export function feedItem(
   ctx: Ctx,
-  e: Pick<EventRow, 'id' | 'role' | 'kind' | 'source' | 'ts'>,
+  e: Pick<EventRow, 'id' | 'role' | 'kind' | 'source' | 'ts'> &
+    Partial<Pick<EventRow, 'author' | 'speaker'>>,
   o: { body: HtmlValue; meta?: HtmlValue; extra?: HtmlValue; link?: boolean },
 ): SafeHtml {
   const role = feedRole(e);
