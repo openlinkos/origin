@@ -218,6 +218,10 @@ function itemCell(ctx: Ctx, i: RecallItemView): SafeHtml {
     return html`<a class="admin-cell-title" href="${href('entry', { id: e.id })}">${entrySummary(e.text)}</a>
       <span class="admin-cell-sub">${kindTag(ctx, e.kind)} <span class="ol-mono">${e.id}</span>${e.status === 'superseded' ? html` ${badge(t('status.superseded'), 'neutral')}` : ''}</span>`;
   }
+  if (i.thread) {
+    return html`<a class="admin-cell-title" href="${href('thread', { id: i.thread.id })}">${sessionName(ctx, i.thread.root, 120)}</a>
+      <span class="admin-cell-sub">${t('thread.title')} <span class="ol-mono">${i.thread.id}</span> ${t('thread.count', { n: fmtNumber(i.thread.sessions, ctx.lang) })}</span>`;
+  }
   const s = i.session;
   if (!s) return html`<span class="ol-mono">${i.ref}</span>`;
   return html`<a class="admin-cell-title" href="${sessionHref(s)}">${sessionName(ctx, s, 120)}</a>

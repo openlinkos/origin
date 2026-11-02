@@ -4,17 +4,26 @@
  * to a row per call, and the agent's last reply as Markdown. Command echoes and injected context are
  * small notes, and each item links to its event's page for provenance.
  */
-import { type EventRow, entrySummary } from '@openlinkos/origin-core';
+import { type EventRow, entrySummary, type ThreadCard } from '@openlinkos/origin-core';
 import type { Ctx } from '../context.js';
-import { fmtNumber, fmtSpan, fmtSpanShort, time } from '../context.js';
+import { clip, fmtNumber, fmtSpan, fmtSpanShort, time } from '../context.js';
 import { type HtmlValue, href, html, type SafeHtml } from '../html.js';
 import { type IconName, icon } from '../icons.js';
 import { markdown } from '../markdown.js';
-import type { SessionTrace, TraceStep, TraceTurn } from '../service.js';
+import type { SessionTrace, ThreadMention, TraceStep, TraceTurn } from '../service.js';
 import type { Note, ToolRun, ToolSummary, Turn, TurnItem } from '../turns.js';
-import { badge, chip, eventLink, linkButton, sessionHref, sessionName } from './components.js';
+import {
+  badge,
+  chip,
+  empty,
+  entryTable,
+  eventLink,
+  linkButton,
+  sessionHref,
+  sessionName,
+} from './components.js';
 import { renderPage } from './layout.js';
-import { agentTag, facts, linkChips } from './workbench.js';
+import { agentTag, box, facts, linkChips, whenShort } from './workbench.js';
 
 /** A prompt longer than this shows its start, and the rest on request. */
 const PROMPT_SHOWN = 1200;
@@ -274,7 +283,9 @@ function recallCard(ctx: Ctx, r: SessionTrace['recalls'][number]): SafeHtml {
               ? html`<a href="${href('entry', { id: i.entry.id })}">${entrySummary(i.entry.text)}</a>`
               : i.session
                 ? html`<a href="${sessionHref(i.session)}">${sessionName(ctx, i.session, 120)}</a>`
-                : i.ref
+                : i.thread
+                  ? threadLink(ctx, i.thread)
+                  : i.ref
         }</span>
         ${i.score === null ? '' : html`<span class="admin-faint admin-num">${i.score.toFixed(2)}</span>`}
         ${used.has(i.ref) ? html`<span class="admin-good">${t('recall.usedYes')}</span>` : ''}
@@ -323,6 +334,11 @@ function turnDetail(ctx: Ctx, o: SessionTrace, open: boolean): SafeHtml {
   </section>`;
 }
 
+/** A link to a thread's page, named by its first session. */
+export function threadLink(ctx: Ctx, m: ThreadMention, max = 80): SafeHtml {
+  return html`<a href="${href('thread', { id: m.id })}">${icon(ctx, 'route', 'sm')}${sessionName(ctx, m.root, max)}</a>`;
+}
+
 /**
  * A session as a trace: its facts, an outline of its turns on the left (the one shown opens into
  * its steps, placed in time), and the turn shown on the right.
@@ -357,6 +373,12 @@ export function sessionPage(ctx: Ctx, o: SessionTrace & { open: boolean }): void
             value: t('trace.recallTotals', { n: n(o.totals.recalls), used: n(o.totals.used) }),
           }
         : null,
+      o.thread
+        ? {
+            label: t('thread.in'),
+            value: html`${threadLink(ctx, o.thread, 60)} <span class="admin-faint">${t('thread.withOthers', { n: n(o.thread.sessions - 1) })}</span>`,
+          }
+        : null,
     ])}
     <div class="ol-layout-list-detail admin-trace">
       <nav class="ol-sheet admin-trace-outline" id="turns" popover aria-label="${t('trace.outline')}">
@@ -372,5 +394,69 @@ export function sessionPage(ctx: Ctx, o: SessionTrace & { open: boolean }): void
       </nav>
       ${turnDetail(ctx, o, o.open)}
     </div>`,
+  });
+}
+
+/**
+ * A thread: its facts (project, time, agents, branches), its sessions, oldest first, the entries
+ * written from them, and its last prompt, each linked to its own page.
+ */
+export function threadPage(ctx: Ctx, c: ThreadCard): void {
+  const t = ctx.t;
+  const n = (v: number) => fmtNumber(v, ctx.lang);
+  const sessions = box({
+    title: html`${t('thread.sessions')}<span class="ol-count">${n(c.count)}</span>`,
+    aside: t('thread.help'),
+    flush: true,
+    body: html`<div class="ol-table-wrap"><table class="ol-table ol-table-compact ol-table-stack">
+      <thead><tr><th>${t('sessions.titleColumn')}</th><th>${t('facet.agent')}</th><th class="ol-num">${t('overview.events')}</th><th class="ol-num">${t('sessions.lastActive')}</th></tr></thead>
+      <tbody>${c.sessions.map(
+        (s) => html`<tr>
+        <td class="admin-wide"><a class="admin-cell-title" href="${sessionHref(s)}">${sessionName(ctx, s, 120)}</a><span class="admin-cell-sub">${time(s.startedAt)}</span></td>
+        <td>${agentTag(s.source)}</td>
+        <td class="ol-num" data-label="${t('overview.events')}">${n(s.eventCount)}</td>
+        <td class="ol-num">${whenShort(ctx, s.endedAt)}</td>
+      </tr>`,
+      )}</tbody></table></div>${
+        c.count > c.sessions.length
+          ? html`<p class="admin-handed-note">${t('thread.more', { n: n(c.count - c.sessions.length) })}</p>`
+          : ''
+      }`,
+  });
+  const entries = box({
+    title: html`${t('thread.entries')}<span class="ol-count">${n(c.entries.length)}</span>`,
+    flush: c.entries.length > 0,
+    body:
+      c.entries.length > 0
+        ? entryTable(ctx, c.entries)
+        : empty(ctx, { icon: 'book-open', title: t('thread.noEntries') }),
+  });
+  const last = c.lastPrompt
+    ? box({
+        title: t('thread.lastPrompt'),
+        aside: html`<a href="${href('event', { id: c.lastPrompt.id })}">${time(c.lastPrompt.ts)}</a>`,
+        body: html`<p class="admin-prompt-line">${clip(c.lastPrompt.prompt, 600)}</p>`,
+      })
+    : '';
+  renderPage(ctx, 200, {
+    title: c.title ?? t('thread.title'),
+    nav: 'sessions',
+    crumbs: [{ label: t('nav.sessions'), href: '/admin/sessions' }],
+    heading: sessionName(ctx, c.root, 160),
+    badges: badge(t('thread.title'), 'neutral', { square: true }),
+    body: html`${facts(ctx, [
+      { icon: 'route', value: html`<span class="ol-mono">${c.id}</span>` },
+      c.project ? { icon: 'folder', value: c.project } : null,
+      { icon: 'clock', value: html`${time(c.startedAt)} – ${time(c.endedAt)}` },
+      { label: t('thread.sessions'), value: t('thread.count', { n: n(c.count) }) },
+      { label: t('thread.agents'), value: html`${c.agents.map((a) => agentTag(a))}` },
+      c.branches.length > 0
+        ? {
+            label: t('thread.branches'),
+            value: html`${c.branches.map((b) => html`<span class="ol-mono">${b}</span> `)}`,
+          }
+        : null,
+    ])}
+    <div class="ol-stack">${last}${sessions}${entries}</div>`,
   });
 }

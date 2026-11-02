@@ -125,7 +125,7 @@ export function sessionsPage(ctx: Ctx, b: SessionBoard & { filter: SessionBoardF
       <thead><tr><th>${t('sessions.titleColumn')}</th><th>${t('facet.agent')}</th><th>${t('filter.project')}</th><th class="ol-num">${t('sessions.turns')}</th><th class="ol-num">${t('overview.events')}</th><th class="ol-num">${t('sessions.duration')}</th><th class="ol-num">${t('nav.recalls')}</th><th class="ol-num">${t('sessions.lastActive')}</th></tr></thead>
       <tbody>${b.rows.map(
         (s) => html`<tr>
-        <td class="admin-wide"><a class="admin-cell-title" href="${sessionHref(s)}">${sessionName(ctx, s, 120)}</a></td>
+        <td class="admin-wide"><a class="admin-cell-title" href="${sessionHref(s)}">${sessionName(ctx, s, 120)}</a>${s.thread ? html`<span class="admin-cell-sub"><a class="ol-mono" href="${href('thread', { id: s.thread })}" title="${t('thread.title')}">${icon(ctx, 'route', 'sm')}${s.thread}</a></span>` : ''}</td>
         <td>${agentTag(s.source)}</td>
         <td data-label="${t('filter.project')}">${s.project ?? html`<span class="admin-faint">—</span>`}</td>
         <td class="ol-num" data-label="${t('sessions.turns')}">${n(s.turns)}</td>

@@ -60,7 +60,7 @@ import { here } from './pages/layout.js';
 import { connectPage, devicePage, devicesPage, overviewPage } from './pages/overview.js';
 import { recallPage, recallsPage } from './pages/recalls.js';
 import { auditPage, signinsPage, tombstonePage, tombstonesPage } from './pages/records.js';
-import { sessionPage } from './pages/session.js';
+import { sessionPage, threadPage } from './pages/session.js';
 import { newTokenPage, revokeTokenPage, tokenCreatedPage, tokensPage } from './pages/tokens.js';
 import { queryAll } from './pages/workbench.js';
 import { CheckQueue, type LimiterOptions, LOGIN_LIMITS, LoginLimiter } from './ratelimit.js';
@@ -520,6 +520,7 @@ const PAGES: Route[] = [
     });
     sessionPage(ctx, { ...r, open: flag(query(ctx, 'tools')) });
   }),
+  page('GET', '/thread', 'session', (ctx) => threadPage(ctx, ctx.service.thread(query(ctx, 'id')))),
   page('GET', '/event', 'session', (ctx) => eventPage(ctx, ctx.service.event(query(ctx, 'id')))),
   page('GET', '/event-raw', 'session', (ctx) =>
     eventRawPage(ctx, ctx.service.eventRaw(query(ctx, 'id'))),

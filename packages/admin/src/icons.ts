@@ -51,6 +51,7 @@ export const ICON_NAMES = [
   'plug',
   'plus',
   'refresh-cw',
+  'route',
   'scroll-text',
   'search',
   'server',

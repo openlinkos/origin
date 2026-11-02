@@ -8,6 +8,7 @@ import {
   correct,
   type Database,
   type DeviceFile,
+  describeThread,
   deviceFiles,
   ENTRY_KINDS,
   type Entry,
@@ -43,6 +44,7 @@ import {
   listRecalls,
   listSessionEvents,
   listSessions,
+  listThreadSessions,
   listTokens,
   listTombstones,
   OriginError,
@@ -77,9 +79,11 @@ import {
   stats,
   storeName,
   storeUsage,
+  type ThreadCard,
   type TokenInfo,
   type TombstoneSummary,
   type TurnStart,
+  threadSummary,
   tombstoneCount,
   usedRefs,
 } from '@openlinkos/origin-core';
@@ -262,8 +266,18 @@ export interface TraceStep {
   took: number;
 }
 
+/** A session's thread, as its page names it: the thread's first session, and how many it has. */
+export interface ThreadMention {
+  id: string;
+  /** Its root, the session that names it. */
+  root: SessionRow;
+  sessions: number;
+}
+
 export interface SessionTrace {
   session: SessionRow;
+  /** The thread it is in with other sessions, or null. */
+  thread: ThreadMention | null;
   /** The turns listed, around the one shown. */
   outline: TraceTurn[];
   /** The turns just before and after the outline, when it does not list them all. */
@@ -479,6 +493,8 @@ export interface RecallItemView extends RecallItemRecord {
   /** The entry, current or not, unless it was forgotten or is not on this store. */
   entry: Entry | null;
   session: SessionRow | null;
+  /** A thread item's thread, as it is now. */
+  thread: ThreadMention | null;
   /** Why the item cannot be shown, if it cannot: forgotten here, or unknown to this store. */
   gone: 'forgotten' | 'missing' | null;
 }
@@ -1091,6 +1107,7 @@ export class AdminService {
     const turnRecalls = recallsIn(number);
     return {
       session,
+      thread: session.thread ? this.threadMention(session.thread) : null,
       outline: window,
       earlier: at0 > 0 ? (listed[at0 - 1]?.number ?? null) : null,
       later:
@@ -1114,6 +1131,24 @@ export class AdminService {
         withFailures: outlineAll.filter((t) => t.failed > 0).length,
       },
     };
+  }
+
+  /** A thread by its id, as a mention: its first session and how many sessions it has. */
+  private threadMention(id: string): ThreadMention | null {
+    const summary = threadSummary(this.db, id);
+    const root = listThreadSessions(this.db, id, { limit: 1 })[0];
+    return summary && root ? { id, root, sessions: summary.sessions } : null;
+  }
+
+  /**
+   * A thread: its sessions, their agents and branches, the entries written from it, and its last
+   * prompt (see describeThread in core).
+   */
+  thread(id: unknown): ThreadCard {
+    const threadId = checkId(id, 'thread id');
+    const card = describeThread(this.db, threadId);
+    if (!card) throw new HttpError(404, `Unknown thread ${threadId}.`);
+    return card;
   }
 
   /** The counts the sidebar shows next to its pages. */
@@ -1693,16 +1728,20 @@ export class AdminService {
       items: r.items.map((item) => {
         let entry: Entry | null = null;
         let session: SessionRow | null = null;
+        let thread: ThreadMention | null = null;
         let gone: RecallItemView['gone'] = null;
         if (item.kind === 'entry') {
           entry = getEntry(this.db, item.ref);
           if (!entry) gone = isEntryForgotten(this.db, item.ref) ? 'forgotten' : 'missing';
+        } else if (item.kind === 'thread') {
+          thread = this.threadMention(item.ref);
+          if (!thread) gone = 'missing';
         } else {
           const at = item.ref.indexOf(':');
           session = getSession(this.db, item.ref.slice(0, at), item.ref.slice(at + 1));
           if (!session) gone = 'missing';
         }
-        return { ...item, used: used.has(item.ref), entry, session, gone };
+        return { ...item, used: used.has(item.ref), entry, session, thread, gone };
       }),
       sessionRow: view.session
         ? getSession(this.db, view.session.source, view.session.sessionId)

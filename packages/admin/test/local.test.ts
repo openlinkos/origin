@@ -17,6 +17,7 @@ import {
   remember,
   type SourceAdapter,
   syncSource,
+  threadIdOf,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -861,5 +862,120 @@ describe('origin ui: writes', () => {
     for (const r of LOCAL_ROUTES) {
       expect(r.path).not.toMatch(/delete|edit|update|unforget|purge|password|key|sql|file|token/i);
     }
+  });
+});
+
+describe('origin ui: threads', () => {
+  it("shows a thread's page, and links to it from its sessions and the sessions list", async () => {
+    // Two sessions of another agent on one work branch: a thread.
+    const branch = path.join(tmp, 'branch');
+    fs.mkdirSync(branch);
+    const at = (id: string, session: string, ts: number, text: string) =>
+      `${JSON.stringify({ id, session, ts, text })}\n`;
+    fs.writeFileSync(
+      path.join(branch, 'w1.jsonl'),
+      at('w1a', 'w1', Date.UTC(2026, 9, 21, 9), 'Start the thread page') +
+        at('w1b', 'w1', Date.UTC(2026, 9, 21, 10), 'Started it.'),
+    );
+    fs.writeFileSync(
+      path.join(branch, 'w2.jsonl'),
+      at('w2a', 'w2', Date.UTC(2026, 9, 23, 9), 'Finish the thread page'),
+    );
+    await syncSource(
+      { db, home: tmp },
+      {
+        id: 'agent',
+        displayName: 'Agent',
+        version: () => null,
+        async discover() {
+          return ['w1.jsonl', 'w2.jsonl'].map((f) => ({
+            absPath: path.join(branch, f),
+            relPath: f,
+          }));
+        },
+        parseLine(line) {
+          const o = JSON.parse(line) as { id: string; session: string; ts: number; text: string };
+          return {
+            events: [
+              {
+                id: o.id,
+                sessionId: o.session,
+                ts: o.ts,
+                role: 'user',
+                kind: 'message',
+                text: o.text,
+                project: 'demo',
+                gitBranch: 'feat-thread-page',
+              },
+            ],
+          };
+        },
+      },
+    );
+    const written = remember(db, {
+      kind: 'memory',
+      text: 'The thread page lists its sessions.',
+      confidence: 0.9,
+      author: 'user@laptop',
+      sources: [{ eventId: 'agent:w2a' }],
+    });
+    const thread = threadIdOf('agent', 'w1');
+
+    const local = await serveLocal();
+    const b = await local.signedIn();
+    const page = await b.get(`/admin/thread?id=${thread}`);
+    expect(page.status).toBe(200);
+    expect(pageProblems(page.text)).toEqual([]);
+    expect(page.text).toContain(thread);
+    expect(page.text).toContain('Start the thread page');
+    expect(page.text).toContain('Finish the thread page');
+    expect(page.text).toContain('feat-thread-page');
+    expect(page.text).toContain(`href="/admin/entry?id=${written.id}"`);
+    expect(page.text).toContain('href="/admin/session?source=agent&amp;id=w2"');
+
+    const session = await b.get('/admin/session?source=agent&id=w2');
+    expect(session.status).toBe(200);
+    expect(pageProblems(session.text)).toEqual([]);
+    expect(session.text).toContain('In thread');
+    expect(session.text).toContain(`href="/admin/thread?id=${thread}"`);
+    expect(session.text).toContain('with 1 other session');
+    // A session in no thread says nothing about one.
+    const alone = await b.get(`/admin/session?source=fake&id=${SESSION}`);
+    expect(alone.text).not.toContain('In thread');
+
+    const list = await b.get('/admin/sessions?range=all');
+    expect(pageProblems(list.text)).toEqual([]);
+    expect(list.text).toContain(`href="/admin/thread?id=${thread}"`);
+    expect((await b.get('/admin/thread?id=thr_000000000000')).status).toBe(404);
+
+    // A recall that handed the thread over links to it.
+    const recall = recordRecall(db, {
+      occasion: 'start',
+      source: 'agent',
+      sessionId: 'w2',
+      cwd: null,
+      root: null,
+      project: 'demo',
+      prompt: null,
+      at: Date.UTC(2026, 9, 23, 9),
+      budget: 800,
+      tokens: 60,
+      items: [
+        {
+          rank: 1,
+          layer: 'sessions',
+          kind: 'thread',
+          ref: thread,
+          score: null,
+          line: '',
+          tokens: 20,
+        },
+      ],
+    } satisfies RecallPlan);
+    const handed = await b.get(`/admin/recall?id=${recall}`);
+    expect(handed.status).toBe(200);
+    expect(pageProblems(handed.text)).toEqual([]);
+    expect(handed.text).toContain(`href="/admin/thread?id=${thread}"`);
+    expect(handed.text).toContain(`- ${thread} (2 sessions: agent; 2026-10-21 – 2026-10-23)`);
   });
 });
