@@ -54,10 +54,21 @@ async function call(name: string, args: Record<string, unknown>) {
 }
 
 describe('origin MCP server', () => {
-  it('exposes the eight tools', async () => {
+  it('exposes the ten tools', async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ['brief', 'correct', 'forget', 'get', 'remember', 'search', 'sources', 'timeline'].sort(),
+      [
+        'brief',
+        'changes',
+        'correct',
+        'follow',
+        'forget',
+        'get',
+        'remember',
+        'search',
+        'sources',
+        'timeline',
+      ].sort(),
     );
   });
 
@@ -114,6 +125,7 @@ describe('origin MCP server', () => {
       started: expect.any(String),
       ended: expect.any(String),
       events: 3,
+      thread: null,
     });
   });
 
@@ -390,5 +402,173 @@ describe('reading along references', () => {
       isError: true,
       text: 'Unknown entry or event rcl_000000000000.',
     });
+  });
+});
+
+/** A line of the fake agent's log, with any of its fields. */
+const fakeLine = (fields: Record<string, unknown>) =>
+  `${JSON.stringify({ role: 'user', ...fields })}\n`;
+
+describe('threads and changes', () => {
+  const HOUR = 3_600_000;
+
+  it('follows a session, and the result in the log joins the two into a thread', async () => {
+    await call('search', {});
+    const r = await call('follow', {
+      id: 's1',
+      note: 'goes on with the SQLite store',
+      cwd: '/home/dana/code/demo',
+    });
+    expect(r.isError).toBe(false);
+    expect(r.json).toEqual({
+      link: expect.stringMatching(/^lnk_[0-9a-f]{12}$/),
+      follows: 'fake:s1',
+      thread: null,
+      note: 'goes on with the SQLite store',
+    });
+    // The agent's log records the tool result; ingestion reads the link from it.
+    fs.writeFileSync(
+      path.join(src, 's2.jsonl'),
+      fakeLine({ id: 'f1', session: 's2', ts: 4000, text: 'Carry on with the store.' }) +
+        fakeLine({ id: 'f2', session: 's2', ts: 4001, kind: 'tool_result', text: r.text }),
+    );
+    const t = await call('timeline', { since: '1970-01-01' });
+    const thread = t.json.sessions[0].thread;
+    expect(thread).toMatch(/^thr_[0-9a-f]{12}$/);
+    expect(t.json.sessions.map((s: { thread: string }) => s.thread)).toEqual([thread, thread]);
+
+    const card = (await call('get', { id: thread })).json;
+    expect(card).toMatchObject({
+      thread,
+      project: 'demo',
+      title: 'Store everything in SQLite so it stays local.',
+      more_sessions: 0,
+      agents: ['fake'],
+      branches: [],
+      entries: [],
+      last_prompt: { id: 'fake:f1', text: 'Carry on with the store.', session: 's2' },
+    });
+    expect(card.sessions.map((s: { session: string }) => s.session)).toEqual(['s1', 's2']);
+    expect((await call('get', { id: 's2' })).json.thread).toEqual({ id: thread, sessions: 2 });
+    // Following the thread names its root.
+    const again = await call('follow', { id: thread, cwd: '/home/dana/code/demo' });
+    expect(again.json).toMatchObject({ follows: 'fake:s1', thread, note: null });
+  });
+
+  it('refuses to follow what is no session of this project', async () => {
+    await call('search', {});
+    const other = await call('follow', { id: 's1', cwd: '/home/dana/code/other' });
+    expect(other).toMatchObject({ isError: true });
+    expect(other.text).toContain('s1 is a session of project demo, not of project other');
+    expect(await call('follow', { id: 's9', cwd: '/home/dana/code/demo' })).toMatchObject({
+      isError: true,
+      text: 'Unknown session or thread s9.',
+    });
+    expect(await call('follow', { id: 'thr_000000000000', cwd: '/x/demo' })).toMatchObject({
+      isError: true,
+      text: 'Unknown session or thread thr_000000000000.',
+    });
+    expect((await call('follow', { id: 'fake:e1', cwd: '/x/demo' })).text).toContain(
+      'fake:e1 is an event',
+    );
+    // A hub cannot tell where the agent works.
+    expect((await call('follow', { id: 's1' })).text).toContain('Pass `cwd`');
+    expect((await call('get', { id: 'thr_000000000000' })).text).toBe(
+      'Unknown entry or event thr_000000000000.',
+    );
+  });
+
+  it('lists what changed since a cursor, a page at a time', async () => {
+    const now = Date.now();
+    fs.writeFileSync(
+      path.join(src, 'n.jsonl'),
+      fakeLine({ id: 'n1', session: 'sn', ts: now - HOUR, text: 'Recent work.' }) +
+        fakeLine({ id: 'n2', session: 'sn', ts: now - HOUR + 1, kind: 'tool_use', text: 'ls' }),
+    );
+    const first = await call('changes', {});
+    expect(first.json.events.map((e: { id: string }) => e.id)).toEqual(['fake:n1']);
+    expect(first.json.events[0]).toEqual({
+      id: 'fake:n1',
+      time: expect.any(String),
+      role: 'user',
+      kind: 'message',
+      text: 'Recent work.',
+      session: 'sn',
+    });
+    expect(first.json.sessions).toMatchObject([{ session: 'sn', new: true, thread: null }]);
+    expect(first.json.more).toBe(false);
+
+    fs.appendFileSync(
+      path.join(src, 'n.jsonl'),
+      fakeLine({ id: 'n3', session: 'sn', ts: now, text: 'Next step.' }) +
+        fakeLine({ id: 'n4', session: 'sn', ts: now + 1, role: 'assistant', text: 'Done.' }),
+    );
+    const saved = await call('remember', {
+      kind: 'memory',
+      text: 'The next step is done.',
+      confidence: 0.8,
+      sources: [{ event_id: 'fake:n4' }],
+    });
+    const page = await call('changes', { after: first.json.next, limit: 1 });
+    expect(page.json.events.map((e: { id: string }) => e.id)).toEqual(['fake:n3']);
+    expect(page.json.sessions).toMatchObject([{ session: 'sn', new: false }]);
+    expect(page.json.entries).toEqual([
+      {
+        id: saved.json.entry.id,
+        kind: 'memory',
+        text: 'The next step is done.',
+        created: expect.any(String),
+        supersedes: null,
+      },
+    ]);
+    expect(page.json.more).toBe(true);
+    const rest = await call('changes', { after: page.json.next, include_tools: true });
+    expect(rest.json.events.map((e: { id: string }) => e.id)).toEqual(['fake:n4']);
+    expect(rest.json.more).toBe(false);
+    const gone = await call('forget', { id: 'fake:n3', reason: 'test' });
+    const later = await call('changes', { after: rest.json.next });
+    expect(later.json.forgets).toEqual([
+      { id: gone.json.tombstone, target: 'fake:n3', at: expect.any(String) },
+    ]);
+    expect(later.json.events).toEqual([]);
+    // The forgotten event is gone from a range read again; filters keep to what they name.
+    const again = await call('changes', { session: 'sn', after: first.json.next });
+    expect(again.json.events.map((e: { id: string }) => e.id)).toEqual(['fake:n4']);
+    expect((await call('changes', { project: 'other' })).json.events).toEqual([]);
+    expect(await call('changes', { after: 'not a cursor' })).toMatchObject({ isError: true });
+    expect((await call('changes', { session: 'nope' })).text).toBe('Unknown session nope.');
+  });
+
+  it('hands over a thread on one line in a brief, and records it as a thread', async () => {
+    const now = Date.now();
+    fs.writeFileSync(
+      path.join(src, 'b.jsonl'),
+      [
+        { id: 'b1', session: 'sa', ts: now - 3 * HOUR, text: 'Start the parser.' },
+        { id: 'b2', session: 'sa', ts: now - 3 * HOUR + 1, role: 'assistant', text: 'Started.' },
+        { id: 'b3', session: 'sb', ts: now - HOUR, text: 'Finish the parser tests.' },
+        { id: 'b4', session: 'sb', ts: now - HOUR + 1, role: 'assistant', text: 'Finished.' },
+      ]
+        .map((l) => fakeLine({ ...l, branch: 'feat-parser' }))
+        .join(''),
+    );
+    const r = await call('brief', { cwd: '/home/dana/code/demo' });
+    const thread = (await call('timeline', {})).json.sessions.find(
+      (s: { session: string }) => s.session === 'sb',
+    ).thread;
+    expect(thread).toMatch(/^thr_/);
+    expect(r.json.text).toContain(`- ${thread} (2 sessions: fake; `);
+    expect(r.json.text).toContain('): Start the parser.; last prompt: Finish the parser tests.');
+    expect(r.json.text).toContain('a session or thread for its turns or sessions');
+    // One line for the thread, not one per session.
+    expect(r.json.text).not.toContain(' sa: ');
+    expect(r.json.text).not.toContain(' sb: ');
+    const items = getRecall(db, r.json.recall)?.items ?? [];
+    expect(items).toContainEqual(
+      expect.objectContaining({ layer: 'sessions', kind: 'thread', ref: thread }),
+    );
+    expect((await call('get', { id: r.json.recall })).json.items).toContainEqual(
+      expect.objectContaining({ kind: 'thread', id: thread }),
+    );
   });
 });

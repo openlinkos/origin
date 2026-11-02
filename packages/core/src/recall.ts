@@ -6,7 +6,8 @@ import { transaction } from './db.js';
 import { CURRENT_VERSION, type EntryKind } from './entries.js';
 import { storeName } from './identity.js';
 import { findNewest, searchEvents } from './search.js';
-import { getEvent, sessionPrompts, VISIBLE_EVENT } from './store.js';
+import { getEvent, listThreadSessions, sessionPrompts, VISIBLE_EVENT } from './store.js';
+import { threadLastPrompt, threadOf, threadSummary } from './threads.js';
 import type { EventRow } from './types.js';
 
 /**
@@ -18,7 +19,8 @@ import type { EventRow } from './types.js';
  *   Memory and knowledge of another project are never handed over; cognition (the user's
  *   preferences, methods, goals, and boundaries) can be, when a prompt matches it.
  * - At the start of a session, a brief: cognition (this project's, then that of no project), this
- *   project's latest memory and knowledge, and its latest sessions with any agent.
+ *   project's latest memory and knowledge, and its latest sessions with any agent, a thread of
+ *   several sessions on one line.
  * - With a prompt: the entries whose first line it matches, scored with BM25 over words weighed by
  *   how rarely the user says them, above a threshold, leaving out what the session was handed
  *   since its last brief.
@@ -68,11 +70,14 @@ export interface RecallInput {
   now?: number;
 }
 
+/** What a recall item is: an entry, a session, or a thread of sessions. */
+export type RecallItemKind = 'entry' | 'session' | 'thread';
+
 export interface RecallItem {
   rank: number;
   layer: RecallLayer;
-  kind: 'entry' | 'session';
-  /** An entry id, or `<source>:<session id>`. */
+  kind: RecallItemKind;
+  /** An entry id, `<source>:<session id>`, or a thread id. */
   ref: string;
   /** The prompt's BM25 score for the entry (prompt items only). */
   score: number | null;
@@ -440,7 +445,7 @@ function minute(ts: number): string {
 
 interface Draft {
   layer: RecallLayer;
-  kind: 'entry' | 'session';
+  kind: RecallItemKind;
   ref: string;
   score: number | null;
   line: string;
@@ -456,10 +461,43 @@ function entryLine(c: Candidate, layer: RecallLayer, plan: RecallPlan): string {
   return `- ${c.id}${tags.length > 0 ? ` (${tags.join(', ')})` : ''} ${entrySummary(c.text)}`;
 }
 
+/** A session's line in a brief: its agent, when it ended, its id, its name, and its last prompt. */
+function sessionLine(
+  source: string,
+  sessionId: string,
+  at: number,
+  name: string,
+  last: string | null,
+): string {
+  return `- ${source} ${minute(at)} ${sessionId}: ${cutTokens(name, SUMMARY_TOKENS)}${lastPromptTail(name, last)}`;
+}
+
+function lastPromptTail(name: string, last: string | null): string {
+  return last && last !== name && [...last].length >= 6
+    ? `; last prompt: ${cutTokens(last, SUMMARY_TOKENS / 2)}`
+    : '';
+}
+
+/**
+ * A thread's line in a brief: its id, how many sessions of which agents, from when to when, its
+ * name (its root's), and its last prompt up to `until`; null for a thread gone or without a name.
+ */
+function threadLine(db: Database, id: string, until?: number): string | null {
+  const summary = threadSummary(db, id);
+  const root = listThreadSessions(db, id, { limit: 1 })[0];
+  const name = root ? (root.title ?? root.prompt) : null;
+  if (!summary || !name || summary.startedAt === null || summary.endedAt === null) return null;
+  const first = day(summary.startedAt);
+  const last = day(until === undefined ? summary.endedAt : Math.min(until, summary.endedAt));
+  const span = first === last ? first : `${first} – ${last}`;
+  const prompt = threadLastPrompt(db, id, { until })?.prompt ?? null;
+  return `- ${id} (${summary.sessions} sessions: ${summary.agents.join(', ')}; ${span}): ${cutTokens(name, SUMMARY_TOKENS)}${lastPromptTail(name, prompt)}`;
+}
+
 /**
  * The latest sessions of the project, other than this one, with their names and last prompts:
  * those whose working directory is at or below its root, or of the same name when the session
- * has no directory.
+ * has no directory. A session in a thread with others stands for its thread, on one line.
  */
 function recentSessions(db: Database, plan: RecallPlan): Draft[] {
   if (!plan.project && !plan.root) return [];
@@ -478,23 +516,29 @@ function recentSessions(db: Database, plan: RecallPlan): Draft[] {
     ended_at: number;
   }>;
   const drafts: Draft[] = [];
+  const threads = new Set<string>();
   for (const r of rows) {
     if (drafts.length >= LAYER_MAX.sessions) break;
     if (!inProject(plan, r.cwd, r.project)) continue;
+    const thread = threadOf(db, r.source, r.session_id);
+    if (thread) {
+      if (threads.has(thread)) continue;
+      threads.add(thread);
+      const line = threadLine(db, thread);
+      if (line) {
+        drafts.push({ layer: 'sessions', kind: 'thread', ref: thread, score: null, line });
+        continue;
+      }
+    }
     const prompts = sessionPrompts(db, r.source, r.session_id);
     const name = r.title ?? prompts[0]?.prompt ?? null;
     if (!name) continue;
-    const last = prompts.at(-1)?.prompt ?? null;
-    const tail =
-      last && last !== name && [...last].length >= 6
-        ? `; last prompt: ${cutTokens(last, SUMMARY_TOKENS / 2)}`
-        : '';
     drafts.push({
       layer: 'sessions',
       kind: 'session',
       ref: `${r.source}:${r.session_id}`,
       score: null,
-      line: `- ${r.source} ${minute(r.ended_at)} ${r.session_id}: ${cutTokens(name, SUMMARY_TOKENS)}${tail}`,
+      line: sessionLine(r.source, r.session_id, r.ended_at, name, prompts.at(-1)?.prompt ?? null),
     });
   }
   return drafts;
@@ -543,7 +587,7 @@ function header(plan: Pick<RecallPlan, 'occasion' | 'project'>, id: string): str
     plan.occasion === 'prompt'
       ? 'entries from the user’s cross-agent memory that match this prompt'
       : `a brief from the user’s cross-agent memory${scope}`;
-  return `Origin recall ${id}: ${what}, one line each. Origin's \`get\` opens any id here: an entry for its text and sources, a session for its turns and what was written from it. Entries can be outdated; the user's words in this session come first.`;
+  return `Origin recall ${id}: ${what}, one line each. Origin's \`get\` opens any id here: an entry for its text and sources, a session or thread for its turns or sessions and what was written there. Entries can be outdated; the user's words in this session come first.`;
 }
 
 /**
@@ -696,6 +740,13 @@ export function rebuildRecall(
       lines.set(item.ref, entryLine(c, item.layer, plan));
       continue;
     }
+    if (item.kind === 'thread') {
+      // A thread as it is now, with its last prompt as it was at the recall.
+      const line = threadLine(db, item.ref, recall.at);
+      if (line) lines.set(item.ref, line);
+      else missing.push(item.ref);
+      continue;
+    }
     const at = item.ref.indexOf(':');
     const source = item.ref.slice(0, at);
     const id = item.ref.slice(at + 1);
@@ -708,15 +759,7 @@ export function rebuildRecall(
       missing.push(item.ref);
       continue;
     }
-    const last = prompts.at(-1)?.prompt ?? null;
-    const tail =
-      last && last !== name && [...last].length >= 6
-        ? `; last prompt: ${cutTokens(last, SUMMARY_TOKENS / 2)}`
-        : '';
-    lines.set(
-      item.ref,
-      `- ${source} ${minute(r.at)} ${id}: ${cutTokens(name, SUMMARY_TOKENS)}${tail}`,
-    );
+    lines.set(item.ref, sessionLine(source, id, r.at, name, prompts.at(-1)?.prompt ?? null));
   }
   const shown = recall.items.filter((i) => lines.has(i.ref));
   if (shown.length === 0) return { text: '', lines, missing };
@@ -834,7 +877,7 @@ export function ownRecalls(
 export interface RecallItemRecord {
   rank: number;
   layer: RecallLayer;
-  kind: 'entry' | 'session';
+  kind: RecallItemKind;
   ref: string;
   score: number | null;
   tokens: number;
@@ -971,7 +1014,8 @@ export function recallSession(
 
 /**
  * The refs of a recall's items that its session went on to use, as the archive shows so far: an
- * entry id, or a session id, in a later tool call or reply of the agent in that session.
+ * entry id, a session id, or a thread id, in a later tool call or reply of the agent in that
+ * session.
  */
 export function usedRefs(
   db: Database,

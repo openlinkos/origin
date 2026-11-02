@@ -27,10 +27,11 @@ Origin puts **you** at the center instead of the tool:
 
 ## Features
 
-- **MCP server** (`origin mcp`) with eight tools: `brief`, `search`, `timeline`, `get`, `sources`, `remember`, `correct`, `forget`. It syncs automatically, so agents always see the latest sessions.
+- **MCP server** (`origin mcp`) with ten tools: `brief`, `search`, `timeline`, `changes`, `get`, `sources`, `follow`, `remember`, `correct`, `forget`. It syncs automatically, so agents always see the latest sessions.
 - **Entries** in three kinds: `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries). Each carries its sources, a confidence, and a version history.
 - **Native memory import.** The memory files that Claude Code, ZCode, and Grok Build keep for themselves are imported as entries, each citing the version of its file: when the agent changes a memory, the entry follows, and when it deletes one, the entry ends.
 - **Recall.** When a session starts, and with each prompt, agents are handed what matters where they work: your preferences, the project's latest decisions and facts, its latest sessions with any agent, and the entries the prompt is about, one line each, chosen without a model. Claude Code and Codex get it through their hooks and other agents with the `brief` tool; `origin agents connect` sets this up. Every recall is recorded, so you can see what an agent was handed and whether it used it.
+- **Threads and a change feed.** The sessions of one piece of work, with one agent or several, are grouped into a thread, by the agents' `follow` calls and by git branch; `changes` tells an agent what reached your memory since it last looked.
 - **Relevance-ranked full-text search** across sessions and entries, including CJK substring search (SQLite FTS5 trigram).
 - **Incremental, idempotent ingestion.** Only new bytes are read, rewritten files are kept as a new generation, compressed logs (zstd) are read transparently, and concurrent syncs are safe.
 - **A CLI** to browse the timeline, inspect any entry or event down to its original line and any session with its turns and the entries written from it, correct entries, and forget and restore.
@@ -82,7 +83,7 @@ For Codex, Cursor, ZCode, and Grok Build, see [Connect your agents](docs/guide/c
 The full documentation lives in [`docs/`](docs/) and is published at [origin.openlinkos.com](https://origin.openlinkos.com):
 
 - [Getting started](docs/guide/getting-started.md): install, archive your sessions, ask your first question
-- [Concepts](docs/guide/concepts.md): sessions, entries, versions, validity, imported memories, and forgetting
+- [Concepts](docs/guide/concepts.md): sessions, threads, entries, versions, validity, imported memories, and forgetting
 - [Connect your agents](docs/guide/connect-agents.md): Claude Code, Codex, Cursor, ZCode, Grok Build, and the MCP tools they get
 - [Personal hub](docs/guide/hub.md): one memory across your machines and cloud agents, self-hosted
 - [Admin UI](docs/guide/admin.md): manage your hub in a browser: enable it, sign in, put it behind TLS, or keep it private
@@ -90,7 +91,7 @@ The full documentation lives in [`docs/`](docs/) and is published at [origin.ope
 - [Upgrading](docs/guide/upgrading.md): versions, image tags, store formats, and how to upgrade a device and a hub
 - [Troubleshooting](docs/guide/troubleshooting.md): common problems and their fixes
 - [CLI reference](docs/guide/cli.md): every command, with examples and environment variables
-- [MCP tools](docs/guide/mcp.md): the eight tools agents use, their parameters, and what they return
+- [MCP tools](docs/guide/mcp.md): the ten tools agents use, their parameters, and what they return
 - [Architecture](docs/architecture.md): data model, invariants, ingestion, entries, the MCP server, and the hub
 - [Session sources](docs/sources.md): the on-disk formats of each agent, and of their memories
 - [Changelog](CHANGELOG.md): what changed in each release

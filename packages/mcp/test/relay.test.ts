@@ -58,7 +58,7 @@ const call = async (name: string, args: Record<string, unknown>) =>
 describe('origin mcp on a relay', () => {
   it('answers every read from the hub, once the new log lines have reached it', async () => {
     await connect();
-    expect((await (agent as Client).listTools()).tools).toHaveLength(8);
+    expect((await (agent as Client).listTools()).tools).toHaveLength(10);
     // Written to the agent's log a moment ago: only the hub can find it, once it has been sent.
     fs.writeFileSync(
       path.join(logs, 'now.jsonl'),
@@ -219,5 +219,28 @@ describe('origin mcp on a relay', () => {
     expect(syncs).toBe(2);
     await relay.stop();
     expect(syncs).toBe(3);
+  });
+});
+
+describe('threads and changes on a relay', () => {
+  it("hands follow and changes to the hub, with the relay's work tree as the directory", async () => {
+    const work = path.join(logs, 'demo');
+    fs.mkdirSync(work);
+    await connect({ cwd: work });
+    // Sent with the first call, as reads send new lines at most every interval.
+    fs.writeFileSync(
+      path.join(logs, 'now.jsonl'),
+      line('n1', 'sn', Date.now(), 'user', 'Recent on the relay.'),
+    );
+    const r = await call('follow', { id: 's1', note: 'on the relay' });
+    expect(r.isError).toBe(false);
+    expect(r.json).toMatchObject({ follows: 'fake:s1', thread: null, note: 'on the relay' });
+    expect(r.json.origin).toBeUndefined();
+    const elsewhere = await call('follow', { id: 's1', cwd: path.join(logs, 'other') });
+    expect(elsewhere.text).toContain('not of project other');
+
+    const changes = await call('changes', {});
+    expect(changes.json.events.map((e: { id: string }) => e.id)).toEqual(['fake:n1']);
+    expect(changes.json.next).toEqual(expect.any(String));
   });
 });

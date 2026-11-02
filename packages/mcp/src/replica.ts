@@ -3,6 +3,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   type Database,
+  decodeCursor,
+  encodeCursor,
   entryHistory,
   getEntry,
   isEntryForgotten,
@@ -12,7 +14,11 @@ import {
 import { createHubLink, type HubAnswer } from './hub-link.js';
 import {
   briefIn,
+  type ChangesResult,
+  changesIn,
   correctIn,
+  followIn,
+  followScope,
   forgetIn,
   type GetResult,
   getById,
@@ -26,7 +32,14 @@ import {
   type TimelineResult,
   timelineOf,
 } from './local.js';
-import { type LocalFacts, mergeGet, mergeSearch, mergeSources, mergeTimeline } from './merge.js';
+import {
+  type LocalFacts,
+  mergeChanges,
+  mergeGet,
+  mergeSearch,
+  mergeSources,
+  mergeTimeline,
+} from './merge.js';
 import { agentName, run } from './server.js';
 import {
   CLOSE_TIMEOUT_MS,
@@ -278,6 +291,45 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
             ),
         ),
       ),
+    changes: (args) =>
+      run(async () => {
+        // A device's cursor is both stores': `{ l, h }`, this store's and the hub's own.
+        const { local, hub: hubCursor } = splitCursor(args.after);
+        return read<ChangesResult>(
+          'changes',
+          { ...args, after: hubCursor },
+          () => changesIn(db, { ...args, after: local }),
+          (mine, theirs, hub) => {
+            const fromHub = theirs as ChangesResult | null;
+            const next = encodeCursor({
+              l: mine ? decodeCursor(mine.next) : local ? decodeCursor(local) : null,
+              // The hub's part stays where it was when the hub was not consulted.
+              h: fromHub?.next ?? hubCursor ?? null,
+            });
+            return answer({ ...mergeChanges(mine, fromHub, facts), next }, hub);
+          },
+        );
+      }),
+    follow: (args) =>
+      run(async () => {
+        await ingest();
+        const here = opts.cwd ?? process.cwd();
+        const mine = followIn(db, args, here);
+        if (mine) return toolResult(mine);
+        if (isForgotten(db, args.id)) return toolError(`${args.id} has been forgotten.`);
+        // A session or thread this device does not hold: the hub checks it against its store, for
+        // the work tree this agent runs in (it cannot see this disk).
+        const scope = followScope(args, here);
+        await upTo(sync(), Date.now() + hubTimeout);
+        const hub = await askHub('follow', { ...args, cwd: scope.root ?? scope.cwd }, writeTimeout);
+        if (!hub.ok) {
+          return toolError(
+            `${args.id} is not in this device's store, and ${hub.reason}. Try again when the hub is reachable.`,
+          );
+        }
+        if ('error' in hub) return toolError(hub.error);
+        return toolResult(hub.value);
+      }),
     get: (args) =>
       run(async () => {
         if (isForgotten(db, args.id)) return toolError(`${args.id} has been forgotten.`);
@@ -358,6 +410,22 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
       await upTo(last, Date.now() + (opts.closeTimeoutMs ?? CLOSE_TIMEOUT_MS));
     },
     close: hub.close,
+  };
+}
+
+/**
+ * A device's `changes` cursor, split into this store's and the hub's: a cursor of both,
+ * `{ l, h }`, or a plain cursor of this store (from a server that had no hub), or none.
+ */
+function splitCursor(after: string | undefined): { local?: string; hub?: string } {
+  if (!after) return {};
+  const value = decodeCursor(after) as Record<string, unknown> | null;
+  if (!value || typeof value !== 'object' || !('l' in value || 'h' in value)) {
+    return { local: after };
+  }
+  return {
+    local: value.l && typeof value.l === 'object' ? encodeCursor(value.l) : undefined,
+    hub: typeof value.h === 'string' ? value.h : undefined,
   };
 }
 

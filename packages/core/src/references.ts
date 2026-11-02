@@ -16,15 +16,13 @@ import {
   isEventForgotten,
   listThreadSessions,
   type RawEventRecord,
-  type SessionPrompt,
-  sessionPrompts,
   sessionSources,
   sessionTurnStarts,
   type TurnStart,
   toEventRow,
   VISIBLE_EVENT,
 } from './store.js';
-import { isThreadId, threadSummary } from './threads.js';
+import { isThreadId, type ThreadPrompt, threadLastPrompt, threadSummary } from './threads.js';
 import type { EventKind, EventRow, SessionRow } from './types.js';
 
 /**
@@ -278,11 +276,8 @@ export interface ThreadCard {
   /** The current entries written from its sessions, newest first, at most NEIGHBOUR_MAX. */
   entries: Entry[];
   /** The latest prompt of its most recent session that has one, with that session. */
-  lastPrompt: (SessionPrompt & { source: string; sessionId: string }) | null;
+  lastPrompt: ThreadPrompt | null;
 }
-
-/** How many of a thread's latest sessions are looked at for its last prompt. */
-const LAST_PROMPT_SESSIONS = 5;
 
 /**
  * A thread and what is next to it: its sessions, the agents and branches they were of, the entries
@@ -311,31 +306,66 @@ export function describeThread(db: Database, id: string): ThreadCard | null {
   };
 }
 
-/** The latest prompt of a thread: of its most recent session that has one (see describeThread). */
-export function threadLastPrompt(
-  db: Database,
-  id: string,
-  opts: { until?: number } = {},
-): ThreadCard['lastPrompt'] {
-  const latest = db
-    .prepare(
-      `SELECT s.source, s.session_id FROM session_thread t
-         JOIN session s ON s.source = t.source AND s.session_id = t.session_id
-        WHERE t.thread_id = ? AND s.event_count > 0 AND s.started_at <= ?
-        ORDER BY s.ended_at DESC, s.source, s.session_id LIMIT ?`,
-    )
-    .all(id, opts.until ?? Number.MAX_SAFE_INTEGER, LAST_PROMPT_SESSIONS) as unknown as Array<{
-    source: string;
-    session_id: string;
-  }>;
-  for (const s of latest) {
-    const prompts = sessionPrompts(db, s.source, s.session_id);
-    const last = (
-      opts.until === undefined ? prompts : prompts.filter((p) => p.ts <= (opts.until as number))
-    ).at(-1);
-    if (last) return { ...last, source: s.source, sessionId: s.session_id };
+/** The project an agent works in, as recall scopes it (see recallScope). */
+export interface FollowScope {
+  project: string | null;
+  /** The git work tree it works in, when known. */
+  root: string | null;
+  cwd: string | null;
+}
+
+/** What `follow` links a session to: the session it continues, and that session's thread. */
+export interface FollowTarget {
+  /** The target session, or a thread's root. */
+  session: SessionRow;
+  /** The thread the target is in, or null. */
+  thread: string | null;
+}
+
+const normPath = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+
+/**
+ * Whether a session is of the project an agent works in: of the same name, as the archive names
+ * projects (sessions of other devices have other directories), or with a directory in its work tree.
+ */
+function inScope(s: SessionRow, scope: FollowScope): boolean {
+  if (s.project !== null && scope.project !== null) {
+    if (s.project.toLowerCase() === scope.project.toLowerCase()) return true;
   }
-  return null;
+  if (s.cwd === null) return false;
+  const dir = normPath(s.cwd);
+  if (scope.root) {
+    const root = normPath(scope.root);
+    if (dir === root || dir.startsWith(`${root}/`)) return true;
+  }
+  return scope.cwd !== null && dir === normPath(scope.cwd);
+}
+
+/**
+ * What `follow` would link the calling session to (see docs/architecture.md#threads): a session, by
+ * its id or as `<source>:<session id>`, or a thread (`thr_…`), named by its root, the session that
+ * started first. Null for an id this store does not know, so that a device can ask its hub. Throws
+ * an OriginError for an id of another kind, or for a session or thread of another project than the
+ * agent's: a thread is the work of one project.
+ */
+export function followTarget(db: Database, id: string, scope: FollowScope): FollowTarget | null {
+  const opened = resolveId(db, id);
+  if (!opened) return null;
+  const what: Record<string, string> = { entry: 'an entry', recall: 'a recall', event: 'an event' };
+  if (opened.kind !== 'session' && opened.kind !== 'thread') {
+    throw new OriginError(
+      `${id} is ${what[opened.kind]}: \`follow\` takes the id of a session or of a thread (thr_…).`,
+    );
+  }
+  const members = opened.kind === 'thread' ? listThreadSessions(db, opened.id) : [opened.session];
+  const root = members[0] as SessionRow;
+  if (!members.some((s) => inScope(s, scope))) {
+    const where = scope.project ? `project ${scope.project}` : 'the directory you work in';
+    throw new OriginError(
+      `${id} is a ${opened.kind} of project ${root.project ?? '(none)'}, not of ${where}: \`follow\` links the sessions of one project.`,
+    );
+  }
+  return { session: root, thread: opened.kind === 'thread' ? opened.id : root.thread };
 }
 
 /** The session just before or after one in its project, by when they started, or null. */

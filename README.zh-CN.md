@@ -27,10 +27,11 @@ Origin 以**人**而不是工具为中心：
 
 ## 功能
 
-- **MCP server**（`origin mcp`），八个工具：`brief`、`search`、`timeline`、`get`、`sources`、`remember`、`correct`、`forget`。它会自动同步，Agent 看到的总是最新会话。
+- **MCP server**（`origin mcp`），十个工具：`brief`、`search`、`timeline`、`changes`、`get`、`sources`、`follow`、`remember`、`correct`、`forget`。它会自动同步，Agent 看到的总是最新会话。
 - **条目**分三类：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。每条都带来源、置信度和版本历史。
 - **导入原生记忆**：Claude Code、ZCode 和 Grok Build 为自己保存的记忆文件会被导入为条目，每条都引用它所来自的文件版本：Agent 修改一条记忆，条目随之更新；删除一条记忆，条目随之结束。
 - **召回**：会话开始时和每个提示时，Agent 会拿到它工作之处有用的内容：你的偏好、项目最新的决定和事实、这个项目最近与任意 Agent 的会话，以及提示所涉及的条目，每项一行，挑选时不调用模型。Claude Code 和 Codex 通过 hook 获得，其他 Agent 通过 `brief` 工具获得；`origin agents connect` 会把这些设置好。每一次召回都有记录，所以你能看到 Agent 拿到了什么、有没有用上。
+- **线索与变更流**：属于同一件工作的会话，无论出自一个还是多个 Agent，都会按 Agent 的 `follow` 调用和 git 分支归入一条线索；`changes` 告诉 Agent 自它上次查看以来有什么进入了你的记忆。
 - **按相关度排序的全文检索**：覆盖会话和条目，支持中文子串检索（SQLite FTS5 trigram）。
 - **增量、幂等的采集**：只读新增字节；源文件被改写时作为新代次保存；透明读取 zstd 压缩的记录；多个进程同时同步也安全。
 - **CLI**：浏览时间线，查看任意条目或事件直到原文行、任意会话及其各轮和从中写下的条目，纠正条目，以及遗忘和恢复。
@@ -82,7 +83,7 @@ Codex、Cursor、ZCode、Grok Build 的接入方式见[接入 Agent](https://ori
 完整文档在 [`docs/`](docs/) 目录中，并发布在 [origin.openlinkos.com](https://origin.openlinkos.com/zh/)：
 
 - [快速开始](https://origin.openlinkos.com/zh/guide/getting-started)：安装、归档会话、提出第一个问题
-- [核心概念](https://origin.openlinkos.com/zh/guide/concepts)：会话、条目、版本、有效期、导入的记忆与遗忘
+- [核心概念](https://origin.openlinkos.com/zh/guide/concepts)：会话、线索、条目、版本、有效期、导入的记忆与遗忘
 - [接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)：Claude Code、Codex、Cursor、ZCode、Grok Build，以及它们可用的 MCP 工具
 - [个人中枢](https://origin.openlinkos.com/zh/guide/hub)：自托管，让你所有的机器和云端 Agent 共享一份记忆
 - [管理界面](https://origin.openlinkos.com/zh/guide/admin)：在浏览器中管理中枢：启用、登录、放在 TLS 之后，或保持私有访问
@@ -90,7 +91,7 @@ Codex、Cursor、ZCode、Grok Build 的接入方式见[接入 Agent](https://ori
 - [升级](https://origin.openlinkos.com/zh/guide/upgrading)：版本、镜像标签、存储格式，以及如何升级设备和中枢
 - [常见问题](https://origin.openlinkos.com/zh/guide/troubleshooting)：常见问题及其解决方法
 - [命令参考](https://origin.openlinkos.com/zh/guide/cli)：全部命令，附示例与环境变量
-- [MCP 工具](https://origin.openlinkos.com/zh/guide/mcp)：Agent 使用的八个工具、参数与返回内容
+- [MCP 工具](https://origin.openlinkos.com/zh/guide/mcp)：Agent 使用的十个工具、参数与返回内容
 - [架构](https://origin.openlinkos.com/zh/architecture)：数据模型、不变量、采集、条目、MCP server 与中枢
 - [会话来源](https://origin.openlinkos.com/zh/sources)：各 Agent 的本地会话格式，以及它们的记忆
 - [更新日志](https://origin.openlinkos.com/zh/changelog)：每个版本改了什么

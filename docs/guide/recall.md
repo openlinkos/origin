@@ -6,13 +6,13 @@ Claude Code and Codex get recall through their hooks. Other agents ask for it th
 
 ## What an agent is handed
 
-- **When a session starts**, a brief: your preferences and boundaries for this project and those that hold everywhere, this project's latest decisions and facts, and its latest sessions with any agent in the last 30 days.
+- **When a session starts**, a brief: your preferences and boundaries for this project and those that hold everywhere, this project's latest decisions and facts, and its latest sessions with any agent in the last 30 days, where the sessions of one piece of work, a [thread](./concepts.md#threads), take one line together.
 - **With each prompt**, the entries whose first line shares rare enough words with it, at most five, leaving out what the session was already handed.
 
 Each item is one line, an id and the start of the entry, so a brief stays under about 800 tokens and a prompt's matches under 400. The agent asks Origin's `get` for the rest: an entry's text and sources, or a session's turns and the entries written from it, each with the ids of what is next to it (see [MCP tools](./mcp.md#get)). For example, at the start of a session:
 
 ```text
-Origin recall rcl_3f9a0c1d2e4b: a brief from the user's cross-agent memory (project acme), one line each. Origin's `get` opens any id here: an entry for its text and sources, a session for its turns and what was written from it. Entries can be outdated; the user's words in this session come first.
+Origin recall rcl_3f9a0c1d2e4b: a brief from the user's cross-agent memory (project acme), one line each. Origin's `get` opens any id here: an entry for its text and sources, a session or thread for its turns or sessions and what was written there. Entries can be outdated; the user's words in this session come first.
 
 The user's preferences and boundaries:
 - ent_5f0c2a9e41b7 Run the full test suite before pushing; never skip CI on both platforms
@@ -21,7 +21,8 @@ Project acme:
 - ent_8e21b4c0d9f3 (2026-10-20) The API keeps v1 routes until every client has moved to v2
 
 Latest sessions in acme, any agent (source, time, session id):
-- codex 2026-10-27 18:02 0199a1b2-7c3d-4e5f-8a6b-9c0d1e2f3a4b: Migrate the billing client to v2; last prompt: run the integration tests again
+- thr_9d2a6c4e1b07 (3 sessions: claude-code, codex; 2026-10-24 – 2026-10-27): Migrate the billing client to v2; last prompt: run the integration tests again
+- claude-code 2026-10-26 11:40 5e8f0a1b-2c3d-4e5f-9a6b-7c8d9e0f1a2b: Fix the flaky upload test
 ```
 
 ## Set up the hooks

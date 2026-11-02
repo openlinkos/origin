@@ -145,6 +145,10 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       const scope = recallScope(args.cwd?.trim() || opts.cwd || process.cwd());
       return forward('brief')({ ...args, cwd: scope.root ?? scope.cwd });
     },
+    follow: (args: ToolArgs<'follow'>) => {
+      const scope = recallScope(args.cwd?.trim() || opts.cwd || process.cwd());
+      return forward('follow')({ ...args, cwd: scope.root ?? scope.cwd });
+    },
   } as unknown as ToolHandlers;
   registerOriginTools(mcp, handlers);
 

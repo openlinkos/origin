@@ -7,6 +7,7 @@ import {
   correct,
   type Database,
   exportEntry,
+  forget,
   getEntry,
   getEvent,
   getRecall,
@@ -143,7 +144,7 @@ describe('origin mcp on a connected device', () => {
 
   it('merges search results from both stores, once each, labelled', async () => {
     await connect();
-    expect((await agent.listTools()).tools).toHaveLength(8);
+    expect((await agent.listTools()).tools).toHaveLength(10);
     const r = await call('search', { query: 'Keep' });
     expect(r.note).toBeNull();
     const events = byId<{ id: string; origin: string }>(r.json.events);
@@ -607,5 +608,92 @@ describe('refreshGate', () => {
     expect(runs).toBe(2);
     await gate(); // within the interval: no run
     expect(runs).toBe(2);
+  });
+});
+
+describe('changes and follow on a connected device', () => {
+  const fakeLine = (fields: Record<string, unknown>) =>
+    `${JSON.stringify({ role: 'user', ...fields })}\n`;
+
+  it("merges both stores' changes, labelled, under a cursor of both", async () => {
+    await connect();
+    const first = await call('changes', {});
+    expect(first.json.events).toEqual([]);
+    const cursor = JSON.parse(Buffer.from(first.json.next, 'base64url').toString('utf8'));
+    expect(cursor).toEqual({ l: { e: expect.any(Number), c: 0 }, h: expect.any(String) });
+
+    const now = Date.now();
+    const shared = fakeLine({ id: 'x1', session: 'sx', ts: now - 2000, text: 'Shared work.' });
+    const deviceOnly = tmp('origin-src-');
+    fs.writeFileSync(path.join(deviceOnly, 'x.jsonl'), shared);
+    fs.writeFileSync(
+      path.join(deviceOnly, 'y.jsonl'),
+      fakeLine({ id: 'y1', session: 'sy', ts: now - 1000, text: 'Only here.' }),
+    );
+    await syncSource({ db, home }, fakeAdapter(deviceOnly));
+    const hubOnly = tmp('origin-other-');
+    fs.writeFileSync(path.join(hubOnly, 'x.jsonl'), shared);
+    fs.writeFileSync(
+      path.join(hubOnly, 'z.jsonl'),
+      fakeLine({ id: 'z1', session: 'sz', ts: now - 500, text: 'Only on the hub.' }) +
+        fakeLine({ id: 'z2', session: 'sz', ts: now - 400, text: 'Forgotten here.' }),
+    );
+    await syncSource({ db: hub.db, home: hub.home }, fakeAdapter(hubOnly));
+    // The device forgot what the hub still shows: it stays out of the device's answer.
+    fs.writeFileSync(
+      path.join(deviceOnly, 'z.jsonl'),
+      fakeLine({ id: 'z2', session: 'sz', ts: 1, text: 'Forgotten here.' }),
+    );
+    await syncSource({ db, home }, fakeAdapter(deviceOnly));
+    forget(db, 'fake:z2', { reason: 'not on this device' });
+
+    const page = await call('changes', { after: first.json.next });
+    expect(page.note).toBeNull();
+    expect(page.json.events.map((e: { id: string; origin: string }) => [e.id, e.origin])).toEqual([
+      ['fake:x1', 'local'],
+      ['fake:y1', 'local'],
+      ['fake:z1', 'hub'],
+    ]);
+    expect(
+      page.json.sessions.map((s: { session: string; origin: string }) => [s.session, s.origin]),
+    ).toEqual([
+      ['sx', 'local'],
+      ['sy', 'local'],
+      ['sz', 'hub'],
+    ]);
+    expect(page.json.forgets.map((f: { target: string }) => f.target)).toEqual(['fake:z2']);
+    expect(page.json.more).toBe(false);
+    const done = await call('changes', { after: page.json.next });
+    expect(done.json).toMatchObject({ events: [], forgets: [], more: false });
+
+    // The hub out of reach: the device's own changes, and the hub's part of the cursor unchanged.
+    hub.delayMs = 3000;
+    const alone = await call('changes', { after: page.json.next });
+    expect(alone.note).toContain('the Origin hub was not consulted');
+    const kept = JSON.parse(Buffer.from(alone.json.next, 'base64url').toString('utf8'));
+    expect(kept.h).toBe(JSON.parse(Buffer.from(page.json.next, 'base64url').toString('utf8')).h);
+    hub.delayMs = 0;
+    expect(await call('changes', { after: 'garbage!' })).toMatchObject({ isError: true });
+  });
+
+  it('follows a session only the hub has, which the hub checks', async () => {
+    const work = path.join(tmp('origin-work-'), 'demo');
+    fs.mkdirSync(work);
+    await connect({ cwd: work });
+    const local = await call('follow', { id: 's1' });
+    expect(local.json).toMatchObject({ follows: 'fake:s1', thread: null });
+    const fromHub = await call('follow', { id: 'sh', note: 'from the other device' });
+    expect(fromHub.isError).toBe(false);
+    expect(fromHub.json).toMatchObject({
+      link: expect.stringMatching(/^lnk_/),
+      follows: 'fake:sh',
+      note: 'from the other device',
+    });
+    expect((await call('follow', { id: 'nowhere' })).text).toBe(
+      'Unknown session or thread nowhere.',
+    );
+    expect(
+      (await call('follow', { id: 'sh', cwd: path.join(work, '..', 'other') })).text,
+    ).toContain('not of project other');
   });
 });

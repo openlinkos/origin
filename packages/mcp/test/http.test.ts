@@ -25,10 +25,21 @@ afterEach(async () => {
 });
 
 describe('handleMcpHttp (stateless Streamable HTTP)', () => {
-  it('serves the eight tools', async () => {
+  it('serves the ten tools', async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ['brief', 'correct', 'forget', 'get', 'remember', 'search', 'sources', 'timeline'].sort(),
+      [
+        'brief',
+        'changes',
+        'correct',
+        'follow',
+        'forget',
+        'get',
+        'remember',
+        'search',
+        'sources',
+        'timeline',
+      ].sort(),
     );
   });
 

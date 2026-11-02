@@ -1,4 +1,5 @@
 import {
+  type ChangesResult,
   type EntryResult,
   type EntryStub,
   type EntryView,
@@ -9,6 +10,7 @@ import {
   isEntryResult,
   isRecallResult,
   isSessionResult,
+  isThreadResult,
   type RecallResult,
   type SearchResult,
   type SessionEvents,
@@ -16,6 +18,7 @@ import {
   type SessionView,
   type SourceOfEntry,
   type SourceView,
+  type ThreadResult,
   type TimelineResult,
   type VersionView,
 } from './local.js';
@@ -222,6 +225,15 @@ function hubSession(r: SessionResult, facts: LocalFacts): SessionResult {
   };
 }
 
+/** The hub's thread card, without the entries and the prompt this device has forgotten. */
+function hubThread(r: ThreadResult, facts: LocalFacts): ThreadResult {
+  return {
+    ...r,
+    entries: r.entries.filter((e) => shownHere(e.id, facts)),
+    last_prompt: r.last_prompt && !facts.forgotten(r.last_prompt.id) ? r.last_prompt : null,
+  };
+}
+
 /** The hub's recall, without the items this device has forgotten, in its items and its text. */
 function hubRecall(r: RecallResult, facts: LocalFacts): RecallResult {
   const hidden = r.items
@@ -244,7 +256,7 @@ function hubRecall(r: RecallResult, facts: LocalFacts): RecallResult {
 }
 
 /**
- * `get` on a device. An event, a session, or a recall is one store's answer, with that store's
+ * `get` on a device. An event, a session, a thread, or a recall is one store's answer, with that store's
  * neighbours, never a mix of both: the device's own when it has the id, the hub's otherwise, less
  * what the device has forgotten. An entry is the device's answer completed by the hub's (other
  * versions of the entry, written on the hub or on other devices, and their sources); its related
@@ -258,6 +270,7 @@ export function mergeGet(
   if (local && !isEntryResult(local)) return { ...local, origin: 'local' };
   if (!local && hub && !isEntryResult(hub)) {
     if (isSessionResult(hub)) return { ...hubSession(hub, facts), origin: 'hub' };
+    if (isThreadResult(hub)) return { ...hubThread(hub, facts), origin: 'hub' };
     if (isRecallResult(hub)) return { ...hubRecall(hub, facts), origin: 'hub' };
     return facts.forgotten(hub.id) ? null : { ...hubEvent(hub, facts), origin: 'hub' };
   }
@@ -279,6 +292,39 @@ export function mergeGet(
     sources,
     ...(related === undefined ? {} : { related }),
     origin: mine ? 'local' : 'hub',
+  };
+}
+
+/**
+ * `changes` on a device: this device's feed and its hub's, merged by id and labelled, without what
+ * the device has forgotten (a session whose events here are all gone goes with them), with `next`
+ * the cursor of both, which the caller encodes. `more` is true when either side had more.
+ */
+export function mergeChanges(
+  local: ChangesResult | null,
+  hub: ChangesResult | null,
+  facts: LocalFacts,
+): Omit<ChangesResult, 'next'> {
+  const events = union(local?.events ?? [], hub?.events ?? [], (e) => e.id)
+    .filter((e) => !facts.forgotten(e.id))
+    .map((e) => labelled(e, facts, e.id))
+    .sort((a, b) => Date.parse(a.time) - Date.parse(b.time) || (a.id < b.id ? -1 : 1));
+  const active = new Set(events.map((e) => `${e.id.slice(0, e.id.indexOf(':'))}\n${e.session}`));
+  const sessionKey = (s: SessionView) => `${s.source}\n${s.session}`;
+  const mine = new Set((local?.sessions ?? []).map(sessionKey));
+  const sessions = union(local?.sessions ?? [], hub?.sessions ?? [], sessionKey)
+    .filter((s) => active.has(sessionKey(s)))
+    .map((s) => ({ ...s, origin: (mine.has(sessionKey(s)) ? 'local' : 'hub') as Found }));
+  const entries = union(local?.entries ?? [], hub?.entries ?? [], (e) => e.id)
+    .filter((e) => shownHere(e.id, facts))
+    .map((e) => labelled(e, facts, e.id));
+  const forgets = union(local?.forgets ?? [], hub?.forgets ?? [], (f) => f.id);
+  return {
+    sessions,
+    events,
+    entries,
+    forgets,
+    more: Boolean(local?.more) || Boolean(hub?.more),
   };
 }
 

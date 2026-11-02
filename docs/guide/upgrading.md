@@ -53,7 +53,7 @@ docker logs origin-hub     # shows the upgrade of the store, if any
 
 Keep the same `/data` volume and the same environment (admin UI, bucket, client IP header). A hub installed with npm upgrades like a device; restart `origin serve` afterwards.
 
-**Upgrade the hub before its devices.** A newer device may send what an older hub cannot read yet, such as the memory streams added in 0.3: the hub keeps them, and reads them once it is upgraded, but meanwhile corrections of what it has not read wait for it. A hub of 0.3 refuses the recalls added in 0.4, and a device keeps them until the hub is upgraded. A hub of a newer version serves devices of an older one without trouble.
+**Upgrade the hub before its devices.** A newer device may send what an older hub cannot read yet, such as the memory streams added in 0.3: the hub keeps them, and reads them once it is upgraded, but meanwhile corrections of what it has not read wait for it. A hub of 0.3 refuses the recalls added in 0.4, and a device keeps them until the hub is upgraded; a hub of 0.4 refuses, the same way, the recalls that list a thread, added since. A hub of a newer version serves devices of an older one without trouble.
 
 ## Your store
 

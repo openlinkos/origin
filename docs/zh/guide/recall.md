@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-cec0b2a9
+sourceHash: sha256-e2873002
 ---
 
 # 召回
@@ -10,13 +10,13 @@ Claude Code 和 Codex 通过它们的 hook 获得召回。其他 Agent 通过 Or
 
 ## Agent 会拿到什么 {#what-an-agent-is-handed}
 
-- **会话开始时**，一份简报：你在这个项目中的偏好与边界和在哪里都成立的偏好与边界，这个项目最新的决定和事实，以及这个项目最近 30 天内与任意 Agent 的最近几个会话。
+- **会话开始时**，一份简报：你在这个项目中的偏好与边界和在哪里都成立的偏好与边界，这个项目最新的决定和事实，以及这个项目最近 30 天内与任意 Agent 的最近几个会话，其中属于同一件工作的会话，即一条[线索](./concepts.md#threads)，合占一行。
 - **每个提示**，第一行与提示有足够罕见的共同词的条目，最多五条，本会话已经拿到的不再给。
 
 每一项一行，是 id 和条目的开头，所以一份简报不超过约 800 个 token，一个提示的匹配不超过 400 个。Agent 用 Origin 的 `get` 获取其余内容：条目的正文和来源，或会话的各轮和从中写下的条目，每样都带着它近旁内容的 id（见 [MCP 工具](./mcp.md#get)）。例如，会话开始时：
 
 ```text
-Origin recall rcl_3f9a0c1d2e4b: a brief from the user's cross-agent memory (project acme), one line each. Origin's `get` opens any id here: an entry for its text and sources, a session for its turns and what was written from it. Entries can be outdated; the user's words in this session come first.
+Origin recall rcl_3f9a0c1d2e4b: a brief from the user's cross-agent memory (project acme), one line each. Origin's `get` opens any id here: an entry for its text and sources, a session or thread for its turns or sessions and what was written there. Entries can be outdated; the user's words in this session come first.
 
 The user's preferences and boundaries:
 - ent_5f0c2a9e41b7 Run the full test suite before pushing; never skip CI on both platforms
@@ -25,7 +25,8 @@ Project acme:
 - ent_8e21b4c0d9f3 (2026-10-20) The API keeps v1 routes until every client has moved to v2
 
 Latest sessions in acme, any agent (source, time, session id):
-- codex 2026-10-27 18:02 0199a1b2-7c3d-4e5f-8a6b-9c0d1e2f3a4b: Migrate the billing client to v2; last prompt: run the integration tests again
+- thr_9d2a6c4e1b07 (3 sessions: claude-code, codex; 2026-10-24 – 2026-10-27): Migrate the billing client to v2; last prompt: run the integration tests again
+- claude-code 2026-10-26 11:40 5e8f0a1b-2c3d-4e5f-9a6b-7c8d9e0f1a2b: Fix the flaky upload test
 ```
 
 ## 设置 hook {#set-up-the-hooks}

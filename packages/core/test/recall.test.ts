@@ -556,7 +556,14 @@ describe('replicating recalls', () => {
     } finally {
       hub.close();
     }
+    // An item can be a thread of sessions (version 5).
+    const thread = {
+      ...sent,
+      items: [{ ...sent.items[0], kind: 'thread', ref: 'thr_0123456789ab' }],
+    };
+    expect(parseReplicaRecall(thread).items[0]).toMatchObject({ kind: 'thread' });
     for (const bad of [
+      { ...sent, items: [{ ...sent.items[0], kind: 'project' }] },
       { ...sent, id: 'rcl_nothex000000' },
       { ...sent, occasion: 'later' },
       { ...sent, promptHash: 'abc' },

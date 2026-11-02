@@ -1,8 +1,8 @@
 /**
- * Origin MCP (see docs/architecture.md): the eight tools (brief · search · timeline · get · sources
- * · remember · correct · forget) served over stdio, over stateless HTTP for a hub, over stdio on a
- * device connected to a hub, from its own store merged with the hub's answers, or over stdio on a
- * relay, forwarded to its hub.
+ * Origin MCP (see docs/architecture.md): the ten tools (brief · search · timeline · changes · get ·
+ * sources · follow · remember · correct · forget) served over stdio, over stateless HTTP for a hub,
+ * over stdio on a device connected to a hub, from its own store merged with the hub's answers, or
+ * over stdio on a relay, forwarded to its hub.
  */
 
 export { handleMcpHttp, type McpHttpOptions } from './http.js';
@@ -15,16 +15,19 @@ export {
   type HubLinkOptions,
 } from './hub-link.js';
 export {
+  type ChangesResult,
   type EntryResult,
   type EntryStub,
   type EntryView,
   type EventResult,
   type EventStub,
   type EventView,
+  type FollowResult,
   type GetResult,
   isEntryResult,
   isRecallResult,
   isSessionResult,
+  isThreadResult,
   type PromptStub,
   type RecallItemView,
   type RecallResult,
@@ -37,7 +40,9 @@ export {
   type SourceOfEntry,
   type SourceView,
   sessionResult,
+  type ThreadResult,
   type TimelineResult,
+  threadResult,
   type VersionView,
 } from './local.js';
 export {

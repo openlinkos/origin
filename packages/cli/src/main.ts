@@ -11,6 +11,7 @@ import {
   type Database,
   dbPath,
   defaultStoreName,
+  describeThread,
   ENTRY_KINDS,
   type Entry,
   type EntryKind,
@@ -49,6 +50,7 @@ import {
   openDatabase,
   originHome,
   parseTime,
+  type RecallItemKind,
   type RecallRecord,
   rawLocator,
   readRawLine,
@@ -1133,8 +1135,16 @@ function showRecall(ctx: Ctx, id: string): number {
   return 0;
 }
 
-/** What a recall item is now: an entry's summary (or what became of it), a session's name. */
-function recallItemText(ctx: Ctx, kind: 'entry' | 'session', ref: string): string {
+/**
+ * What a recall item is now: an entry's summary (or what became of it), a session's name, or a
+ * thread's, with its sessions.
+ */
+function recallItemText(ctx: Ctx, kind: RecallItemKind, ref: string): string {
+  if (kind === 'thread') {
+    const card = describeThread(ctx.db, ref);
+    if (!card) return '(no longer a thread here)';
+    return `${oneLine(card.title ?? '(untitled)', 80)} (${count(card.count, 'session')})`;
+  }
   if (kind === 'session') {
     const at = ref.indexOf(':');
     const s = getSession(ctx.db, ref.slice(0, at), ref.slice(at + 1));

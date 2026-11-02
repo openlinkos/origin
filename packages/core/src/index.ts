@@ -216,6 +216,7 @@ export {
   type RecallFilter,
   type RecallInput,
   type RecallItem,
+  type RecallItemKind,
   type RecallItemRecord,
   type RecallLayer,
   type RecallOccasion,
@@ -245,7 +246,10 @@ export {
   describeThread,
   type EventContext,
   eventContext,
+  type FollowScope,
+  type FollowTarget,
   findSession,
+  followTarget,
   NEIGHBOUR_MAX,
   type Opened,
   readSession,
@@ -255,7 +259,6 @@ export {
   STUB_CHARS,
   stubText,
   type ThreadCard,
-  threadLastPrompt,
   turnAt,
 } from './references.js';
 export {
@@ -340,8 +343,10 @@ export {
   rebuildThreads,
   refreshThreads,
   THREAD_ID_RE,
+  type ThreadPrompt,
   type ThreadSummary,
   threadIdOf,
+  threadLastPrompt,
   threadOf,
   threadSummary,
 } from './threads.js';

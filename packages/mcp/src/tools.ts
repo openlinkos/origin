@@ -7,7 +7,8 @@ import { z } from 'zod';
 export const INSTRUCTIONS = `Origin is the user's local, cross-agent memory: an append-only archive of their sessions with AI coding agents, plus durable entries — memory (what happened), knowledge (stable facts), and cognition (the user's preferences, methods, goals, and boundaries).
 
 - When you start a task, call \`brief\` with your working directory, unless a note headed \`Origin recall\` already gave you one: it lists the user's preferences, the project's latest decisions and facts, and its latest sessions, one line each. Use \`get\` on the ids that matter.
-- To answer questions about past work, decisions, or reasons, use \`search\` and \`timeline\`, then \`get\` or \`sources\` to read the original text. \`get\` opens any id Origin gives you (an entry, an event, a session, or a recall) and lists what is next to it, one line each with its id: follow the ids that matter rather than reading everything. Read a long session a turn at a time with \`timeline\` (\`session\`, \`turn\`, \`after\`). Cite entry and event ids.
+- To answer questions about past work, decisions, or reasons, use \`search\` and \`timeline\`, then \`get\` or \`sources\` to read the original text. \`get\` opens any id Origin gives you (an entry, an event, a session, a thread, or a recall) and lists what is next to it, one line each with its id: follow the ids that matter rather than reading everything. Read a long session a turn at a time with \`timeline\` (\`session\`, \`turn\`, \`after\`). Cite entry and event ids.
+- When the user continues work from an earlier session that the brief, a timeline, or a search showed you, call \`follow\` once with its id (or its thread's), so that the sessions form one thread. To learn what changed since you last looked, call \`changes\` with the \`next\` of your last call.
 - When you learn something that will matter in future sessions — a decision and its reason, a stable fact, a preference of the user — save it with \`remember\`, citing the events it comes from: event ids from search/timeline, or an exact quote from this conversation.
 - Entries marked \`imported\` mirror an agent's own memory files (such as Claude Code's memory directory); a later version of the file supersedes a correction made here. Entries whose validity has ended are left out of search unless you ask for one by id.
 - If an entry is wrong or outdated, use \`correct\`. Use \`forget\` only when the user explicitly asks, and pass their reason: it hides the entry or event from every query on every store and is kept as a record; only the user can restore it, from the Origin CLI or admin UI.
@@ -37,7 +38,7 @@ interface ToolSpec {
 
 const readOnly = { readOnlyHint: true, openWorldHint: false } as const;
 
-/** The eight tools, defined once and shared by the local servers and the forwarding proxy. */
+/** The ten tools, defined once and shared by the local servers and the forwarding proxy. */
 export const TOOL_SPECS = {
   brief: {
     title: 'Brief',
@@ -96,12 +97,34 @@ export const TOOL_SPECS = {
     },
     annotations: readOnly,
   },
+  changes: {
+    title: 'Changes',
+    description:
+      'What reached the store since a cursor, oldest first: the sessions active in that time (with their threads), their events, the entries written, and what was forgotten (by id only), with `next` to read on and `more` when there is more. Without `after`, the last 24 hours. Pass the `next` of your last call to learn what changed since you looked.',
+    inputSchema: {
+      after: z
+        .string()
+        .optional()
+        .describe('The `next` of your last call; without it, the last 24 hours'),
+      project: z.string().optional(),
+      thread: z.string().optional().describe('A thread id (thr_…): only its sessions'),
+      session: z.string().optional().describe('A session id: only that session'),
+      include_tools: z
+        .boolean()
+        .default(false)
+        .describe('Also list tool calls and results, not only messages'),
+      limit: z.number().int().min(1).max(200).default(50),
+    },
+    annotations: readOnly,
+  },
   get: {
     title: 'Get by id',
     description:
-      'Open any id Origin hands you, with what is next to it, one line each by id: an entry (sources, version history, related entries), an event (its text, session, turn, the events around it, and the entries citing it), a session (its turns, the entries written from it, its recalls, and the sessions before and after it), or a recall (what it handed over).',
+      'Open any id Origin hands you, with what is next to it, one line each by id: an entry (sources, version history, related entries), an event (its text, session, turn, the events around it, and the entries citing it), a session (its turns, its thread, the entries written from it, its recalls, and the sessions before and after it), a thread (its sessions, agents, branches, the entries written from it, and its last prompt), or a recall (what it handed over).',
     inputSchema: {
-      id: z.string().describe('Entry (ent_…), event (source:…), session, or recall (rcl_…) id'),
+      id: z
+        .string()
+        .describe('Entry (ent_…), event (source:…), session, thread (thr_…), or recall (rcl_…) id'),
       source: z
         .string()
         .optional()
@@ -121,6 +144,22 @@ export const TOOL_SPECS = {
       'Expand an entry or event to the original log lines it comes from, with file paths and line numbers.',
     inputSchema: { id: z.string().describe('Entry id (ent_…) or event id (source:…)') },
     annotations: readOnly,
+  },
+  follow: {
+    title: 'Follow a session',
+    description:
+      'Declare that your session continues an earlier session or thread of the project you work in, so that they form one thread. Call it once, when the user takes up work from a session that `brief`, `timeline`, or `search` showed you. It saves nothing else: the link is read from this call’s result in your session’s log.',
+    inputSchema: {
+      id: z
+        .string()
+        .describe('The session (its id, or source:id) or thread (thr_…) your session continues'),
+      note: z.string().trim().max(200).optional().describe('A few words on how the work continues'),
+      cwd: z
+        .string()
+        .optional()
+        .describe("Your working directory (default: the directory Origin's server runs in)"),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
   remember: {
     title: 'Remember',

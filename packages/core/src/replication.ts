@@ -373,7 +373,7 @@ export function parseReplicaRecall(value: unknown): RecallRecord {
     const what = `item ${i + 1} of ${id}`;
     if (!isRecord(item) || item.rank !== i + 1) invalid(what);
     if (!RECALL_LAYERS.includes(item.layer as string)) invalid(what);
-    if (item.kind !== 'entry' && item.kind !== 'session') invalid(what);
+    if (item.kind !== 'entry' && item.kind !== 'session' && item.kind !== 'thread') invalid(what);
     const score = item.score ?? null;
     if (score !== null && (typeof score !== 'number' || !Number.isFinite(score))) invalid(what);
     return {

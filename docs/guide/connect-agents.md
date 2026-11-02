@@ -74,8 +74,10 @@ Grok merges the MCP servers in `~/.claude.json` by default, so the Claude Code r
 | `brief` | What matters where the agent works: your preferences, the project's decisions and facts, and its latest sessions ([Recall](./recall.md)) |
 | `search` | Full-text search over entries and session events, best match first; without a query, lists recent entries |
 | `timeline` | Sessions in a time range, or the messages of one session, a turn or a page at a time |
-| `get` | Any id Origin hands over, with what is next to it: an entry with its sources and history, an event with its text and neighbours, a session with its turns and the entries written from it, or a recall with what it handed over |
+| `changes` | What reached the store since the agent last looked: sessions, events, entries, and forgets, a page at a time |
+| `get` | Any id Origin hands over, with what is next to it: an entry with its sources and history, an event with its text and neighbours, a session with its turns and the entries written from it, a thread with its sessions, or a recall with what it handed over |
 | `sources` | The original log lines behind an entry or event |
+| `follow` | Join the agent's session to the earlier session or thread it continues, so that the work reads as one [thread](./concepts.md#threads) |
 | `remember` | Save an entry (`memory`, `knowledge`, or `cognition`) that cites its sources |
 | `correct` | Replace an entry with a corrected version |
 | `forget` | Hide an entry or event on every store, with your reason; agents only use it when you ask, and only you can restore it |

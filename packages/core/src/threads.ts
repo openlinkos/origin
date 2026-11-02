@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
+import { type SessionPrompt, sessionPrompts } from './store.js';
 
 /**
  * Threads (see docs/architecture.md#threads): the sessions of one piece of work, as the person sees
@@ -433,4 +434,37 @@ export function threadSummary(db: Database, id: string): ThreadSummary | null {
     agents: [...agents].sort(),
     branches: [...branches].sort(),
   };
+}
+
+/** A thread's latest prompt, with the session it is in. */
+export type ThreadPrompt = SessionPrompt & { source: string; sessionId: string };
+
+/** How many of a thread's latest sessions are looked at for its last prompt. */
+const LAST_PROMPT_SESSIONS = 5;
+
+/** The latest prompt of a thread: of its most recent session that has one . */
+export function threadLastPrompt(
+  db: Database,
+  id: string,
+  opts: { until?: number } = {},
+): ThreadPrompt | null {
+  const latest = db
+    .prepare(
+      `SELECT s.source, s.session_id FROM session_thread t
+         JOIN session s ON s.source = t.source AND s.session_id = t.session_id
+        WHERE t.thread_id = ? AND s.event_count > 0 AND s.started_at <= ?
+        ORDER BY s.ended_at DESC, s.source, s.session_id LIMIT ?`,
+    )
+    .all(id, opts.until ?? Number.MAX_SAFE_INTEGER, LAST_PROMPT_SESSIONS) as unknown as Array<{
+    source: string;
+    session_id: string;
+  }>;
+  for (const s of latest) {
+    const prompts = sessionPrompts(db, s.source, s.session_id);
+    const last = (
+      opts.until === undefined ? prompts : prompts.filter((p) => p.ts <= (opts.until as number))
+    ).at(-1);
+    if (last) return { ...last, source: s.source, sessionId: s.session_id };
+  }
+  return null;
 }

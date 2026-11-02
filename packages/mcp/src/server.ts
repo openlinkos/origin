@@ -4,7 +4,9 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { Database } from '@openlinkos/origin-core';
 import {
   briefIn,
+  changesIn,
   correctIn,
+  followHere,
   forgetIn,
   getById,
   rememberIn,
@@ -108,6 +110,16 @@ function localHandlers(
       run(async () => {
         await refresh();
         return toolResult(timelineOf(db, args));
+      }),
+    changes: (args) =>
+      run(async () => {
+        await refresh();
+        return toolResult(changesIn(db, args));
+      }),
+    follow: (args) =>
+      run(async () => {
+        await refresh();
+        return toolResult(followHere(db, args, here));
       }),
     get: (args) => run(() => toolResult(getById(db, args))),
     sources: (args) => run(() => toolResult(sourcesOf(db, home, args.id))),
