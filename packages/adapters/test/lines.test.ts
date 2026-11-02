@@ -93,7 +93,22 @@ describe('parseEventLine', () => {
     expect(ts('2026-11-02T09:30:00.250Z')).toBe(T + 250);
     expect(ts(T)).toBe(T);
     expect(ts(T + 0.4)).toBe(T);
-    for (const time of ['2026-11-02T09:30:00', '2026-11-02', 'yesterday', '', null, true, 1e20]) {
+    expect(ts('2028-02-29T09:30Z')).toBe(Date.parse('2028-02-29T09:30:00Z'));
+    for (const time of [
+      '2026-11-02T09:30:00',
+      '2026-11-02',
+      '2026-02-29T09:30:00Z',
+      '2026-04-31T09:30:00Z',
+      '2026-13-01T09:30:00Z',
+      '2026-11-02T24:00:00Z',
+      '2026-11-02T09:60:00Z',
+      '2026-11-02T09:30:00+08:60',
+      'yesterday',
+      '',
+      null,
+      true,
+      1e20,
+    ]) {
       expect(() => parseEventLine(line({ time })), String(time)).toThrow(/"time"/);
     }
   });

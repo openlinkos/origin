@@ -75,8 +75,10 @@ const ID_MAX = 200;
 const VERSION_MAX = 100;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it finds
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/;
-/** ISO 8601 date and time with an offset (`Z` or `±hh:mm`), to the second or a fraction of it. */
-const ISO_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?([Zz]|[+-]\d{2}:?\d{2})$/;
+/** ISO 8601 date and time with an offset (`Z` or `±hh:mm`), to the minute, the second, or a fraction. */
+const ISO_TIME_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:[Zz]|[+-](\d{2}):?(\d{2}))$/;
+const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 /** The latest time a Date can hold, in epoch ms. */
 const TIME_MAX = 8.64e15;
 const ROLES: readonly Role[] = ['user', 'assistant', 'system'];
@@ -219,11 +221,42 @@ function timeField(v: unknown): number {
   if (typeof v !== 'string') {
     return fail('"time" must be ISO 8601 with an offset, or epoch milliseconds');
   }
-  const ms = ISO_TIME_RE.test(v) ? Date.parse(v) : Number.NaN;
+  const ms = isoTime(v);
   if (!Number.isFinite(ms)) {
     return fail('"time" must be ISO 8601 with an offset, such as 2026-11-02T09:30:00Z');
   }
   return ms;
+}
+
+/**
+ * The epoch milliseconds of an ISO 8601 time with an offset, or NaN unless it names a real moment:
+ * Date.parse alone rolls a day past the end of its month over into the next, and takes 24:00.
+ */
+function isoTime(v: string): number {
+  const m = ISO_TIME_RE.exec(v);
+  if (!m) return Number.NaN;
+  const n = (i: number) => (m[i] === undefined ? 0 : Number(m[i]));
+  const [year, month, day, hour, minute, second, offsetHours, offsetMinutes] = [
+    n(1),
+    n(2),
+    n(3),
+    n(4),
+    n(5),
+    n(6),
+    n(7),
+    n(8),
+  ];
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const days = month === 2 && leap ? 29 : (MONTH_DAYS[month - 1] ?? 0);
+  const valid =
+    day >= 1 &&
+    day <= days &&
+    hour <= 23 &&
+    minute <= 59 &&
+    second <= 59 &&
+    offsetHours <= 23 &&
+    offsetMinutes <= 59;
+  return valid ? Date.parse(v) : Number.NaN;
 }
 
 /**
