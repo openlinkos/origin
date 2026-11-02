@@ -7,9 +7,9 @@ import { z } from 'zod';
 export const INSTRUCTIONS = `Origin is the user's local, cross-agent memory: an append-only archive of their sessions with AI coding agents, plus durable entries — memory (what happened), knowledge (stable facts), and cognition (the user's preferences, methods, goals, and boundaries).
 
 - When you start a task, call \`brief\` with your working directory, unless a note headed \`Origin recall\` already gave you one: it lists the user's preferences, the project's latest decisions and facts, and its latest sessions, one line each. Use \`get\` on the ids that matter.
-- To answer questions about past work, decisions, or reasons, use \`search\` and \`timeline\`, then \`get\` or \`sources\` to read the original text. \`get\` opens any id Origin gives you (an entry, an event, a session, a thread, or a recall) and lists what is next to it, one line each with its id: follow the ids that matter rather than reading everything. Read a long session a turn at a time with \`timeline\` (\`session\`, \`turn\`, \`after\`). Cite entry and event ids.
+- To answer questions about past work, decisions, or reasons, use \`search\` and \`timeline\`, then \`get\` or \`sources\` to read the original text. \`get\` opens any id Origin gives you (an entry, an event, a session, a thread, a recall, or a proposal) and lists what is next to it, one line each with its id: follow the ids that matter rather than reading everything. Read a long session a turn at a time with \`timeline\` (\`session\`, \`turn\`, \`after\`). Cite entry and event ids.
 - When the user continues work from an earlier session that the brief, a timeline, or a search showed you, call \`follow\` once with its id (or its thread's), so that the sessions form one thread. To learn what changed since you last looked, call \`changes\` with the \`next\` of your last call.
-- When you learn something that will matter in future sessions — a decision and its reason, a stable fact, a preference of the user — save it with \`remember\`, citing the events it comes from: event ids from search/timeline, or an exact quote from this conversation.
+- When you learn something that will matter in future sessions — a decision and its reason, a stable fact, a preference of the user — save it, citing the events it comes from: event ids from search/timeline, or an exact quote from this conversation. \`remember\` what the user said or decided; \`propose\` what you infer and they have not confirmed, and whatever you write when consolidating their memory on their behalf. A proposal waits for the user: only they accept or reject it, in the Origin admin UI or CLI.
 - Entries marked \`imported\` mirror an agent's own memory files (such as Claude Code's memory directory); a later version of the file supersedes a correction made here. Entries whose validity has ended are left out of search unless you ask for one by id.
 - If an entry is wrong or outdated, use \`correct\`. Use \`forget\` only when the user explicitly asks, and pass their reason: it hides the entry or event from every query on every store and is kept as a record; only the user can restore it, from the Origin CLI or admin UI.
 - Time arguments accept relative values (30m, 24h, 7d, 2w) or dates (YYYY-MM-DD).`;
@@ -38,7 +38,7 @@ interface ToolSpec {
 
 const readOnly = { readOnlyHint: true, openWorldHint: false } as const;
 
-/** The ten tools, defined once and shared by the local servers and the forwarding proxy. */
+/** The eleven tools, defined once and shared by the local servers and the forwarding proxy. */
 export const TOOL_SPECS = {
   brief: {
     title: 'Brief',
@@ -100,7 +100,7 @@ export const TOOL_SPECS = {
   changes: {
     title: 'Changes',
     description:
-      'What reached the store since a cursor, oldest first: the sessions active in that time (with their threads), their events, the entries written, and what was forgotten (by id only), with `next` to read on and `more` when there is more. Without `after`, the last 24 hours. Pass the `next` of your last call to learn what changed since you looked.',
+      'What reached the store since a cursor, oldest first: the sessions active in that time (with their threads), their events, the entries written, the entries proposed, and what was forgotten (by id only), with `next` to read on and `more` when there is more. Without `after`, the last 24 hours. Pass the `next` of your last call to learn what changed since you looked.',
     inputSchema: {
       after: z
         .string()
@@ -120,11 +120,13 @@ export const TOOL_SPECS = {
   get: {
     title: 'Get by id',
     description:
-      'Open any id Origin hands you, with what is next to it, one line each by id: an entry (sources, version history, related entries), an event (its text, session, turn, the events around it, and the entries citing it), a session (its turns, its thread, the entries written from it, its recalls, and the sessions before and after it), a thread (its sessions, agents, branches, the entries written from it, and its last prompt), or a recall (what it handed over).',
+      'Open any id Origin hands you, with what is next to it, one line each by id: an entry (sources, version history, related entries), an event (its text, session, turn, the events around it, and the entries citing it), a session (its turns, its thread, the entries written from it, its recalls, and the sessions before and after it), a thread (its sessions, agents, branches, the entries written from it, and its last prompt), a recall (what it handed over), or a proposal (its fields, status, sources, session, and the entry it became once accepted).',
     inputSchema: {
       id: z
         .string()
-        .describe('Entry (ent_…), event (source:…), session, thread (thr_…), or recall (rcl_…) id'),
+        .describe(
+          'Entry (ent_…), event (source:…), session, thread (thr_…), recall (rcl_…), or proposal (prp_…) id',
+        ),
       source: z
         .string()
         .optional()
@@ -173,6 +175,27 @@ export const TOOL_SPECS = {
       project: z.string().optional().describe('Project the entry belongs to, if any'),
       valid_from: time,
       valid_to: time,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  propose: {
+    title: 'Propose an entry',
+    description:
+      'Propose a durable entry for the user to review, instead of saving it: for what you infer and the user has not confirmed, and for everything you write when consolidating their memory. The same fields as `remember`, checked the same way, plus a short `note` on why. It saves nothing else: the proposal is read from this call’s result in your session’s log, and only the user accepts or rejects it, in the Origin admin UI or CLI.',
+    inputSchema: {
+      kind: z.enum(ENTRY_KINDS),
+      text: z.string().min(1).describe('One self-contained statement'),
+      sources: z.array(sourceInput).min(1),
+      confidence: z.number().min(0).max(1).describe('How sure you are, 0–1'),
+      project: z.string().optional().describe('Project the entry belongs to, if any'),
+      valid_from: time,
+      valid_to: time,
+      note: z
+        .string()
+        .trim()
+        .max(200)
+        .optional()
+        .describe('Why you propose rather than remember, in a few words'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },

@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 describe('handleMcpHttp (stateless Streamable HTTP)', () => {
-  it('serves the ten tools', async () => {
+  it('serves the eleven tools', async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
@@ -35,6 +35,7 @@ describe('handleMcpHttp (stateless Streamable HTTP)', () => {
         'follow',
         'forget',
         'get',
+        'propose',
         'remember',
         'search',
         'sources',

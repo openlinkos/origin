@@ -144,7 +144,7 @@ describe('origin mcp on a connected device', () => {
 
   it('merges search results from both stores, once each, labelled', async () => {
     await connect();
-    expect((await agent.listTools()).tools).toHaveLength(10);
+    expect((await agent.listTools()).tools).toHaveLength(11);
     const r = await call('search', { query: 'Keep' });
     expect(r.note).toBeNull();
     const events = byId<{ id: string; origin: string }>(r.json.events);
@@ -695,5 +695,87 @@ describe('changes and follow on a connected device', () => {
     expect(
       (await call('follow', { id: 'sh', cwd: path.join(work, '..', 'other') })).text,
     ).toContain('not of project other');
+  });
+});
+
+describe('proposals on a connected device', () => {
+  /** What `propose` returned, as an agent's log on `store` records it. */
+  async function logResult(store: { db: Database; home: string }, id: string, text: string) {
+    const dir = tmp('origin-proposed-');
+    fs.writeFileSync(
+      path.join(dir, `${id}.jsonl`),
+      `${JSON.stringify({ id, session: `s-${id}`, ts: Date.now(), role: 'user', kind: 'tool_result', text })}\n`,
+    );
+    await syncSource(store, fakeAdapter(dir));
+  }
+
+  it("checks a proposal against the device's store, and opens and lists those of either store", async () => {
+    await connect();
+    const mine = await call('propose', {
+      kind: 'knowledge',
+      text: 'The device store is local and fast.',
+      confidence: 0.6,
+      sources: [{ event_id: 'fake:d1' }],
+    });
+    expect(mine.isError).toBe(false);
+    // The result stays as `propose` writes it: ingestion reads it from the agent's log.
+    expect(mine.json).not.toHaveProperty('origin');
+    // As `remember`, it cites what this device holds.
+    const elsewhere = await call('propose', {
+      kind: 'knowledge',
+      text: 'Commit messages are short.',
+      confidence: 0.6,
+      sources: [{ event_id: 'fake:h1' }],
+    });
+    expect(elsewhere.text).toBe('Unknown event fake:h1.');
+
+    await logResult({ db, home }, 'mine', mine.text);
+    // Another device proposed on the hub, citing the session both stores have.
+    const theirs = JSON.stringify(
+      {
+        proposal: 'prp_0000000000f1',
+        kind: 'cognition',
+        text: 'Wants one token per device.',
+        confidence: 0.5,
+        project: null,
+        valid_from: null,
+        valid_to: null,
+        note: null,
+        sources: [{ event_id: 'fake:e1', quote: null }],
+      },
+      null,
+      2,
+    );
+    await logResult(hub, 'theirs', theirs);
+
+    expect((await call('get', { id: mine.json.proposal })).json).toMatchObject({
+      status: 'pending',
+      event: 'fake:mine',
+      origin: 'local',
+    });
+    expect((await call('get', { id: 'prp_0000000000f1' })).json).toMatchObject({
+      status: 'pending',
+      event: 'fake:theirs',
+      sources: [expect.objectContaining({ id: 'fake:e1' })],
+      origin: 'hub',
+    });
+    const feed = await call('changes', { include_tools: true });
+    expect(
+      new Map(feed.json.proposals.map((p: { id: string; origin: string }) => [p.id, p.origin])),
+    ).toEqual(
+      new Map([
+        [mine.json.proposal, 'local'],
+        ['prp_0000000000f1', 'hub'],
+      ]),
+    );
+
+    // What this device has forgotten is never shown: a proposal citing it is hidden here.
+    forget(db, 'fake:e1', { reason: 'test' });
+    expect((await call('get', { id: 'prp_0000000000f1' })).text).toBe(
+      'prp_0000000000f1 has been forgotten.',
+    );
+    forget(db, 'fake:mine', { reason: 'Rejected.' });
+    const after = await call('changes', { include_tools: true });
+    expect(after.json.proposals.map((p: { id: string }) => p.id)).toEqual(['prp_0000000000f1']);
   });
 });

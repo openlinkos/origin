@@ -74,7 +74,7 @@ export interface RelayServer {
   close(): Promise<void>;
 }
 
-const WRITES: ReadonlySet<ToolName> = new Set(['remember', 'correct', 'forget']);
+const WRITES: ReadonlySet<ToolName> = new Set(['remember', 'propose', 'correct', 'forget']);
 
 /**
  * The stdio MCP server of a relay (see docs/architecture.md#relays). A relay keeps no memory of its

@@ -3,7 +3,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { type Database, getRecall, openDatabase, syncSource } from '@openlinkos/origin-core';
+import {
+  acceptProposal,
+  type Database,
+  getRecall,
+  openDatabase,
+  rejectProposal,
+  syncSource,
+} from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fakeAdapter, line } from '../../core/test/helpers.js';
 import { createOriginServer } from '../src/index.js';
@@ -54,7 +61,7 @@ async function call(name: string, args: Record<string, unknown>) {
 }
 
 describe('origin MCP server', () => {
-  it('exposes the ten tools', async () => {
+  it('exposes the eleven tools', async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
@@ -64,6 +71,7 @@ describe('origin MCP server', () => {
         'follow',
         'forget',
         'get',
+        'propose',
         'remember',
         'search',
         'sources',
@@ -569,6 +577,179 @@ describe('threads and changes', () => {
     );
     expect((await call('get', { id: r.json.recall })).json.items).toContainEqual(
       expect.objectContaining({ kind: 'thread', id: thread }),
+    );
+  });
+});
+
+describe('proposals', () => {
+  /** Propose, and record the result in the agent's log, as Claude Code would. */
+  async function proposeAndLog(args: Record<string, unknown>, ts = 5000, n = 1) {
+    const r = await call('propose', args);
+    expect(r.isError).toBe(false);
+    fs.appendFileSync(
+      path.join(src, 'p.jsonl'),
+      fakeLine({ id: `q${n}`, session: 'sp', ts: ts - 1, text: 'Consolidate the day.' }) +
+        fakeLine({ id: `p${n}`, session: 'sp', ts, kind: 'tool_result', text: r.text }),
+    );
+    await call('search', {}); // reads the log
+    return r;
+  }
+
+  it('proposes an entry, writes nothing, and the result in the log becomes a proposal', async () => {
+    await call('search', {});
+    const r = await proposeAndLog({
+      kind: 'knowledge',
+      text: 'All data stays local, in SQLite.',
+      confidence: 0.7,
+      project: 'demo',
+      sources: [{ quote: 'so it stays local' }, { event_id: 'fake:e2' }],
+      note: 'Inferred from the first prompt.',
+    });
+    const id = r.json.proposal;
+    expect(r.json).toEqual({
+      proposal: expect.stringMatching(/^prp_[0-9a-f]{12}$/),
+      kind: 'knowledge',
+      text: 'All data stays local, in SQLite.',
+      confidence: 0.7,
+      project: 'demo',
+      valid_from: null,
+      valid_to: null,
+      note: 'Inferred from the first prompt.',
+      sources: [
+        { event_id: 'fake:e1', quote: 'so it stays local' },
+        { event_id: 'fake:e2', quote: null },
+      ],
+    });
+    // Nothing durable was written; ingestion reads the proposal from the log.
+    expect(db.prepare('SELECT COUNT(*) AS n FROM entry').get()).toEqual({ n: 0 });
+
+    const card = await call('get', { id });
+    expect(card.json).toEqual({
+      id,
+      status: 'pending',
+      kind: 'knowledge',
+      text: 'All data stays local, in SQLite.',
+      confidence: 0.7,
+      project: 'demo',
+      valid_from: null,
+      valid_to: null,
+      note: 'Inferred from the first prompt.',
+      time: expect.any(String),
+      agent: 'fake',
+      session: expect.objectContaining({ session: 'sp', source: 'fake' }),
+      event: 'fake:p1',
+      sources: [
+        expect.objectContaining({ id: 'fake:e1', quote: 'so it stays local', session: 's1' }),
+        expect.objectContaining({ id: 'fake:e2', quote: null, session: 's1' }),
+      ],
+      missing_sources: 0,
+      accepted_as: null,
+    });
+    // The card is no result of `propose`: opening it in a session proposes nothing again.
+    expect(card.text).not.toContain('"proposal"');
+
+    // Not knowledge yet: search and the brief hand over no proposal.
+    expect((await call('search', { query: 'stays local, in SQLite' })).json.entries).toEqual([]);
+    expect((await call('brief', { cwd: '/home/dana/code/demo' })).json.text).not.toContain(
+      'All data stays local',
+    );
+    // The change feed lists it, so a runtime notices it.
+    const changes = await call('changes', { after: undefined });
+    expect(changes.json.proposals).toEqual([]); // older than 24 hours
+    const recent = Date.now();
+    await proposeAndLog(
+      {
+        kind: 'cognition',
+        text: 'Likes small steps.',
+        confidence: 0.5,
+        sources: [{ event_id: 'fake:e1' }],
+      },
+      recent,
+      2,
+    );
+    const feed = await call('changes', {});
+    expect(feed.json.proposals).toEqual([
+      {
+        id: expect.stringMatching(/^prp_/),
+        kind: 'cognition',
+        text: 'Likes small steps.',
+        status: 'pending',
+        time: expect.any(String),
+        session: 'sp',
+        event: 'fake:p2',
+        project: 'demo',
+      },
+    ]);
+  });
+
+  it('leaves accepting to the user, and shows the entry a proposal became', async () => {
+    await call('search', {});
+    const r = await proposeAndLog({
+      kind: 'memory',
+      text: 'Chose SQLite to keep data local.',
+      confidence: 0.8,
+      sources: [{ event_id: 'fake:e1' }],
+    });
+    await call('search', {});
+    // An agent cannot accept it by citing its event.
+    const cite = await call('remember', {
+      kind: 'memory',
+      text: 'Chose SQLite.',
+      confidence: 1,
+      sources: [{ event_id: 'fake:p1' }],
+    });
+    expect(cite).toMatchObject({ isError: true });
+    expect(cite.text).toContain(`holds proposal ${r.json.proposal}`);
+    const entry = acceptProposal(db, r.json.proposal, 'user@laptop');
+    expect((await call('get', { id: r.json.proposal })).json).toMatchObject({
+      status: 'accepted',
+      accepted_as: { id: entry.id, kind: 'memory', text: 'Chose SQLite to keep data local.' },
+    });
+    // The entry's sources show it was proposed.
+    const opened = await call('get', { id: entry.id });
+    expect(opened.json.sources.map((s: { id: string }) => s.id)).toEqual(['fake:e1', 'fake:p1']);
+  });
+
+  it('checks a proposal as remember checks an entry', async () => {
+    await call('search', {});
+    const refused = async (args: Record<string, unknown>) => {
+      const r = await call('propose', {
+        kind: 'knowledge',
+        text: 'Something.',
+        confidence: 0.5,
+        sources: [{ event_id: 'fake:e1' }],
+        ...args,
+      });
+      expect(r.isError).toBe(true);
+      return r.text;
+    };
+    expect(await refused({ sources: [{ event_id: 'fake:nope' }] })).toBe(
+      'Unknown event fake:nope.',
+    );
+    expect(await refused({ sources: [{ event_id: 'fake:e1', quote: 'never said' }] })).toContain(
+      'Quote not found',
+    );
+    expect(await refused({ text: 'x'.repeat(4000) })).toContain('more than the 3800');
+    expect(await refused({ note: 'n'.repeat(201) })).toMatch(/200|note/i);
+    await call('forget', { id: 'fake:e1', reason: 'test' });
+    expect(await refused({})).toContain('has been forgotten');
+  });
+
+  it('opens no proposal that was rejected or that it does not know', async () => {
+    await call('search', {});
+    const r = await proposeAndLog({
+      kind: 'knowledge',
+      text: 'SQLite is the store.',
+      confidence: 0.6,
+      sources: [{ event_id: 'fake:e2' }],
+    });
+    await call('search', {});
+    const reject = rejectProposal(db, r.json.proposal, { reason: 'Already known.' });
+    expect((await call('get', { id: r.json.proposal })).text).toBe(
+      `Proposal ${r.json.proposal} was rejected (${reject.tombstoneId}); restoring that forget makes it pending again.`,
+    );
+    expect((await call('get', { id: 'prp_000000000000' })).text).toBe(
+      'Unknown proposal prp_000000000000.',
     );
   });
 });

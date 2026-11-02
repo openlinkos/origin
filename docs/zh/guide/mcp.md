@@ -1,10 +1,10 @@
 ---
-sourceHash: sha256-4c770069
+sourceHash: sha256-89694094
 ---
 
 # MCP 工具
 
-Origin 通过 [Model Context Protocol](https://modelcontextprotocol.io) 提供十个工具：`brief` 把 Agent 工作之处有用的内容交给它，五个用来读取归档和条目，`follow` 把 Agent 的会话接到它所接续的工作上，三个用来写条目和遗忘。本页是给把 Origin 接入 Agent、或在它之上开发的人看的参考；只想接入 Agent，请看[接入 Agent](./connect-agents.md)。
+Origin 通过 [Model Context Protocol](https://modelcontextprotocol.io) 提供十一个工具：`brief` 把 Agent 工作之处有用的内容交给它，五个用来读取归档和条目，`follow` 把 Agent 的会话接到它所接续的工作上，`propose` 把一个条目交给用户审阅，三个用来写条目和遗忘。本页是给把 Origin 接入 Agent、或在它之上开发的人看的参考；只想接入 Agent，请看[接入 Agent](./connect-agents.md)。
 
 ## 接入方式 {#reaching-origin}
 
@@ -22,13 +22,13 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
   --header "Authorization: Bearer ogn_…" --header "X-Origin-Client: claude-code"
 ```
 
-服务器在 MCP 的 `instructions` 里告诉 Agent 怎样使用这些工具：开始任务时，如果召回还没有给过简报，就调用 `brief`；回答关于过去工作的问题前先检索和阅读（顺着 `get` 在它打开的内容旁列出的 id 读下去，长会话一次读一轮），并引用条目和事件的 id；用户接着做某个早先会话里的工作时，调用一次 `follow`；用上一次调用的 `next` 调用 `changes`，了解此后有什么变化；记下决定及其理由、稳定的事实和用户的偏好，并引用它们出自的事件；把标为 `imported` 的条目看作某个 Agent 自己记忆文件的镜像；纠正有误的条目；只在用户要求时遗忘，并带上用户给的原因。
+服务器在 MCP 的 `instructions` 里告诉 Agent 怎样使用这些工具：开始任务时，如果召回还没有给过简报，就调用 `brief`；回答关于过去工作的问题前先检索和阅读（顺着 `get` 在它打开的内容旁列出的 id 读下去，长会话一次读一轮），并引用条目和事件的 id；用户接着做某个早先会话里的工作时，调用一次 `follow`；用上一次调用的 `next` 调用 `changes`，了解此后有什么变化；记下决定及其理由、稳定的事实和用户的偏好，并引用它们出自的事件；对自己推断出、用户尚未确认的内容，以及代用户整理记忆时写下的内容，用提议代替记住；把标为 `imported` 的条目看作某个 Agent 自己记忆文件的镜像；纠正有误的条目；只在用户要求时遗忘，并带上用户给的原因。
 
 ## 约定 {#conventions}
 
 - **结果**是一个 JSON 文本项。结果中的时间是 ISO 8601 格式，用服务器所在时区的本地时间，带毫秒和时区偏移，例如 `2026-10-20T09:12:30.000+08:00`。
 - **时间参数**（`since`、`until`、`valid_from`、`valid_to`）接受相对值 `30m`、`24h`、`7d`、`2w`（从现在往前算），或绝对的日期、时间：`2026-10-20` 或 ISO 8601。
-- **id。** 条目 id 是 `ent_` 加 12 到 32 个十六进制字符。事件 id 是 `<来源>:<来源中的 id>`，例如 `claude-code:7d0c4a1e-…`；来源是 `claude-code`、`codex`、`cursor`、`zcode` 或 `grok` 之一。会话用它的 Agent 自己给的 id（例如一个 UUID），也可以像召回记录它那样写成 `<来源>:<会话 id>`。线索 id 是 `thr_` 加 12 个十六进制字符，召回 id 也一样，前缀为 `rcl_`。[`get`](#get) 可以打开其中任意一种。
+- **id。** 条目 id 是 `ent_` 加 12 到 32 个十六进制字符。事件 id 是 `<来源>:<来源中的 id>`，例如 `claude-code:7d0c4a1e-…`；来源是 `claude-code`、`codex`、`cursor`、`zcode` 或 `grok` 之一。会话用它的 Agent 自己给的 id（例如一个 UUID），也可以像召回记录它那样写成 `<来源>:<会话 id>`。线索 id 是 `thr_` 加 12 个十六进制字符，召回 id 和提议 id 也一样，前缀分别为 `rcl_` 和 `prp_`。[`get`](#get) 可以打开其中任意一种。
 - **错误**以工具错误（`isError`）返回，附可读的说明，从不作为协议错误返回：无效的输入、未知的 id（`Unknown entry or event <id>.`）和已遗忘的 id（`<id> has been forgotten.`）。
 - **在连接了中枢的设备上**，结果中的每个条目、事件、会话和来源都带有 `origin`：本设备有的为 `local`，只有中枢有的为 `hub`；结果中列出的存根（见下文）不带，因为它们来自给出回答的那个库。同一条目的多个版本只列出当前版本。如果中枢在 2 秒内（`ORIGIN_HUB_TIMEOUT_MS`）没有回答，结果只包含本设备的答案，后面再跟一个文本项：`Note: the Origin hub was not consulted (<reason>); these results come from this device only.`
 - **在中继上**，每个结果都是中枢返回的原样，不带 `origin` 标注。连不上中枢时，每个工具都会失败，并说明中继只能通过它的中枢作答。
@@ -243,12 +243,13 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 | `include_tools` | 布尔值 | `false` | 不只列出消息，也列出工具调用和结果、注入的上下文和系统事件 |
 | `limit` | 整数，1 到 200 | 50 | 事件最多这么多个，条目和遗忘合计也最多这么多个 |
 
-它返回 `{ sessions, events, entries, forgets, next, more }`：
+它返回 `{ sessions, events, entries, forgets, proposals, next, more }`：
 
 - `events`：按到达库中的次序排列的可见事件，以存根给出，带有它的 `session`；
 - `sessions`：这些事件所属的会话，与 `timeline` 列出的样子相同，带有它的 `thread`，以及 `new`：会话在这一范围内开始时为 true（它的事件没有一个早于这一范围）；
 - `entries`：这一范围内写下或收到、现在仍是当前版本的条目，以存根给出，带有它所取代的版本 `supersedes`；
 - `forgets`：这一范围内的遗忘，即 `{ id, target, at }`，带有被遗忘内容的 id，但从不带它的文本或原因，这样 Agent 就不再引用它；恢复也会列出，它的目标是那次遗忘的 id；
+- `proposals`：这一范围内提出的条目（见 [propose](#propose)），待审的或已接受的，以存根 `{ id, kind, text, status, time, session, event, project }` 给出，不论 `include_tools` 如何设置，这样 Agent 或常驻程序就能注意到它们；含有超过 `limit` 条提议的一页止于它列出的最后一条；
 - `next`：下一次作为 `after` 传入的游标；`more`：内容多于一页时为 true，此时用 `next` 接着读。
 
 游标是不透明的；原样传回给出它的那个 server。格式错误的游标会报错。不给 `after` 时，`next` 是当前的游标：更早的内容请用 `search` 和 `timeline`。在连接了中枢的设备上，游标同时含有设备的和中枢的：两边的答案合并并加上标签；没有询问中枢时，属于中枢的那部分保持不动。
@@ -295,6 +296,18 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
   "forgets": [
     { "id": "tmb_6c1d0e9a2b3f", "target": "claude-code:7d0c4a1e-0000-4000-8000-000000000002", "at": "2026-10-22T17:35:00.000+08:00" }
   ],
+  "proposals": [
+    {
+      "id": "prp_1b7e4c0a9d23",
+      "kind": "knowledge",
+      "text": "Releases are tagged only after both CI jobs pass.",
+      "status": "pending",
+      "time": "2026-10-22T17:39:02.410+08:00",
+      "session": "2f1e8c47-0000-4000-8000-000000000003",
+      "event": "claude-code:7d0c4a1e-0000-4000-8000-000000000040#0",
+      "project": "demo-app"
+    }
+  ],
   "next": "eyJlIjo0MTI3LCJjIjo4OX0",
   "more": false
 }
@@ -302,11 +315,11 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 
 ## get {#get}
 
-Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话、线索或召回（见[沿引用阅读](../architecture.md#reading-along-references)）。近旁的一切都以存根给出，一行，带着 id，这样 Agent 就能一跳一跳地打开接下来要紧的内容，而不必读完整个会话。
+Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话、线索、召回或提议（见[沿引用阅读](../architecture.md#reading-along-references)）。近旁的一切都以存根给出，一行，带着 id，这样 Agent 就能一跳一跳地打开接下来要紧的内容，而不必读完整个会话。
 
 | 参数 | 类型 | 含义 |
 |---|---|---|
-| `id` | 字符串 | 条目 id（`ent_…`）、事件 id（`<来源>:…`）、会话 id（单独的 id，或 `<来源>:<会话 id>`）、线索 id（`thr_…`）或召回 id（`rcl_…`） |
+| `id` | 字符串 | 条目 id（`ent_…`）、事件 id（`<来源>:…`）、会话 id（单独的 id，或 `<来源>:<会话 id>`）、线索 id（`thr_…`）、召回 id（`rcl_…`）或提议 id（`prp_…`） |
 | `source` | 来源 id | 两个来源的会话共用同一个会话 id 时：指明是哪一个。不给时，这样的 id 会报错，并列出这些来源 |
 | `offset` | 整数，0 或更大 | 对事件：正文从哪里开始，以 UTF-16 码元计（默认 0），用来分页读取很长的正文 |
 
@@ -315,8 +328,9 @@ Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话�
 - **会话**：一张卡片，带有会话的各字段、它的 `cwd`，以及 `turns`（轮数）；`prompts`，它前 20 轮的起点，每个为 `{ turn, id, time, text }`，以及 `more_prompts`，即这些之后还有多少轮；`thread`，即 `{ id, sessions }`，它所在的线索及其会话数，没有则为 null；`entries`，以存根列出最多 10 个从中写下的当前条目（引用了它的事件的条目），从新到旧；`recalls`，最多 10 次它拿到的召回，从新到旧，每次为 `{ id, occasion, time, items }`，`items` 是它交出的内容中仍然可见的数量；以及 `before` 和 `after`，同一项目中按开始时间紧挨在它前后的会话，不限 Agent，没有则为 null。要读某一轮，用 [`timeline`](#timeline)。
 - **线索**：`{ thread, project, title, started, ended, sessions, more_sessions, agents, branches, entries, last_prompt }`：它的 id，它的项目和名称（取自它的第一个会话），开始和结束的时间，它的前 20 个会话 `sessions`（从旧到新）以及之后还有多少个，它的会话所属的 `agents` 和所在的工作分支 `branches`，`entries`，以存根列出最多 10 个从其中任一会话写下的当前条目（从新到旧），以及 `last_prompt`，即有提示的会话中最近那一个的最新提示的存根，带有它的 `session`，没有则为 null。
 - **召回**：`{ id, time, occasion, agent, session, device, project, directory, budget, tokens, items, text }`：它在何时、为哪个 Agent、哪个会话和哪台设备、在哪里而做，它的预算和用掉的 token，它的各项，每项为 `{ rank, layer, kind, id, score, used }`（`kind` 为 `entry`、`session` 或 `thread`，会话还有 `source`；`used` 表示会话后来是否用到了这一项，会话还不知道时为 null），以及 `text`，即 Agent 拿到的内容，按库现在的样子重建。此后被遗忘的内容在两者中都会略去。
+- **提议**：`{ id, status, kind, text, confidence, project, valid_from, valid_to, note, time, agent, session, event, sources, missing_sources, accepted_as }`：它提议的内容；`status`，`pending` 或 `accepted`；它在何时、由哪个 `agent`、在哪个 `session`（按 `timeline` 列出的样子）中提出，以及读出它的 `event`；`sources`，它引用的事件，以存根给出，带有各自的 `quote` 和 `session`，`missing_sources` 是其中本库尚未持有的数目；`accepted_as`，它成为的条目（当前版本）的存根，或 null。被拒绝的提议会返回错误（``Proposal <id> was rejected (tmb_…); restoring that forget makes it pending again.``），引用了被遗忘事件的提议也一样（`Proposal <id> has been forgotten.`）。
 
-当前条目就是列表中会显示的条目：没有被取代、没有被遗忘、也没有到期。被遗忘的内容从不出现在存根中，也不被计数。在连接了中枢的设备上，事件、会话、线索或召回来自其中一个库，带的是那个库的存根：设备有这个 id 时用设备的，否则用中枢的，并去掉设备已遗忘的内容。
+当前条目就是列表中会显示的条目：没有被取代、没有被遗忘、也没有到期。被遗忘的内容从不出现在存根中，也不被计数。在连接了中枢的设备上，事件、会话、线索、召回或提议来自其中一个库，带的是那个库的存根：设备有这个 id 时用设备的，否则用中枢的，并去掉设备已遗忘的内容。
 
 ```json
 { "id": "ent_3f9a1c2b7d4e" }
@@ -553,7 +567,7 @@ Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话�
 | `project` | 字符串 | 所属项目，如果有 |
 | `valid_from`、`valid_to` | 时间 | 它成立的时间范围，如果已知 |
 
-带 `event_id` 的来源必须指向一个可见的事件，给了 `quote` 的话，引文必须出现在其中（忽略空白和大小写）。只带 `quote` 的来源，引用包含它的最近一条可见消息，找不到时再找工具结果；从不匹配工具调用，因为 Agent 自己的 `remember` 调用里就含有这段引文。要引用对话中刚写下的内容，直接引用原文即可：服务器在保存前会先读入新的日志行。返回 `{ entry }`，即新条目，作者为 `<agent>@<设备>`，其中 agent 是 MCP 客户端的名称。
+带 `event_id` 的来源必须指向一个可见的事件，给了 `quote` 的话，引文必须出现在其中（忽略空白和大小写）。只带 `quote` 的来源，引用包含它的最近一条可见消息，找不到时再找 `propose` 结果以外的工具结果；从不匹配工具调用，因为 Agent 自己的 `remember` 调用里就含有这段引文。提议的事件不能被引用：只有用户可以接受提议，接受时写下它的条目。要引用对话中刚写下的内容，直接引用原文即可：服务器在保存前会先读入新的日志行。返回 `{ entry }`，即新条目，作者为 `<agent>@<设备>`，其中 agent 是 MCP 客户端的名称。
 
 ```json
 {
@@ -565,6 +579,46 @@ Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话�
 ```
 
 可能的错误包括 `No event contains the quote "…". Search for the event and cite its id instead.`、`Quote not found in event <id>: "…"` 和 `Event <id> has been forgotten and cannot be cited.`
+
+## propose {#propose}
+
+提议一个条目交给用户审阅，而不是直接保存它：用于 Agent 推断出、用户尚未确认的内容，以及 Agent 代用户整理记忆时写下的一切。只有用户可以接受或拒绝提议，用 `origin accept` 和 `origin reject`，或在管理界面中；Agent 没有做这两件事的工具（见[提议](../architecture.md#proposals)）。
+
+| 参数 | 类型 | 含义 |
+|---|---|---|
+| `kind`、`text`、`sources`、`confidence`、`project`、`valid_from`、`valid_to` | 与 [`remember`](#remember) 相同 | 它提议的条目 |
+| `note` | 字符串，最多 200 个字符 | 用几个词说明 Agent 为什么提议而不是记住 |
+
+它像 `remember` 那样检查：每个来源都必须解析为一个可见的事件，每段引文都必须能找到；在连接了中枢的设备上检查设备自己的库，通过中继时则在中枢上检查。它不写入任何内容：它把提议完整地返回，即 `{ proposal, kind, text, confidence, project, valid_from, valid_to, note, sources }`，带有新的 id（`prp_` 加 12 个随机十六进制字符），每个来源都是它解析得到的 `{ event_id, quote }`。Agent 的记录会记下这个结果，Origin 就在那里读出这条提议，每个归档了这份记录的库都是如此，就像它读出 `follow` 的链接那样。Agent 的记录只保留工具结果的 4,000 个字符，所以结果会超过 3,800 个字符的提议会被拒绝：请缩短它的正文或引文，或者只用 id 引用事件。
+
+```json
+{
+  "kind": "knowledge",
+  "text": "Releases are tagged only after both CI jobs pass.",
+  "confidence": 0.7,
+  "project": "demo-app",
+  "sources": [{ "event_id": "claude-code:7d0c4a1e-0000-4000-8000-000000000031", "quote": "once CI is green" }],
+  "note": "Inferred from how the last two releases went."
+}
+```
+
+```json
+{
+  "proposal": "prp_1b7e4c0a9d23",
+  "kind": "knowledge",
+  "text": "Releases are tagged only after both CI jobs pass.",
+  "confidence": 0.7,
+  "project": "demo-app",
+  "valid_from": null,
+  "valid_to": null,
+  "note": "Inferred from how the last two releases went.",
+  "sources": [
+    { "event_id": "claude-code:7d0c4a1e-0000-4000-8000-000000000031", "quote": "once CI is green" }
+  ]
+}
+```
+
+接受这条提议，会以 `user@<设备>` 的身份写下它的条目，引用它所引用的内容以及提议自己的事件；拒绝它，则以用户给的原因遗忘那个事件。在此之前它还不是知识：`search`、`brief` 和召回从不把它交出，而 `get` 可以打开它，`changes` 会列出它。它的错误与 `remember` 相同，另有 `This proposal would take <n> characters, more than the 3800 an agent's log keeps of a tool result: …`。
 
 ## correct {#correct}
 
@@ -612,7 +666,7 @@ Agent 能找到并引用刚刚说过的话，因为 `origin mcp` 会边运行边
 
 - 启动时，它在后台读入所有来源；在连接了中枢的设备上，还会与中枢同步。
 - `brief`、`search`、`timeline`、`changes` 和 `follow` 先读入新的日志行，最多每 10 秒一次。在连接了中枢的设备上，`get` 和 `sources` 也会这样做，并且每次读取还会与中枢同步，最多每 10 秒一次，等待中枢的时间不超过中枢超时。
-- `remember` 和 `correct` 总是先读入新行；在连接了中枢的设备上，之后会立即与中枢同步。
+- `remember`、`propose` 和 `correct` 总是先读入新行；在连接了中枢的设备上，`remember` 和 `correct` 之后会立即与中枢同步，`propose` 不写入任何内容，无需同步。
 - Claude Code 和 Codex 的采集 hook（由 `origin agents connect` 设置）会在每一轮结束时读入会话新增的行，在连接了中枢的设备上还会把它们推送给中枢（见[接入 Agent](./connect-agents.md#connect-them-all-at-once)）。
 - 在后台，作为其他 Agent 以及 hook 漏掉的内容的后备，它每 60 秒查看一次有没有新的日志行（`ORIGIN_WATCH_INTERVAL_MS`；设为 `0` 则关闭），只有日志文件有变化时才读入和同步。
 - Agent 退出时，它再读入并同步一次，最多 5 秒。

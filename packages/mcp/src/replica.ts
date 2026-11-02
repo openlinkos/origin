@@ -24,6 +24,7 @@ import {
   getById,
   isForgotten,
   isKnown,
+  proposeIn,
   rememberIn,
   type SearchResult,
   type SourceView,
@@ -118,7 +119,7 @@ export interface ReplicaServer {
 
 /**
  * The stdio MCP server of a device connected to a hub (see docs/architecture.md#mcp-server). It
- * serves the eight tools from the device's own store, as without a hub, and completes read tools
+ * serves the eleven tools from the device's own store, as without a hub, and completes read tools
  * with the hub's answers: both are asked at once, the results are merged and labelled `local` or
  * `hub`, and a hub that does not answer in time is left out with a note. Writes land in the local
  * store and are then synced up; `correct` and `forget` of something only the hub has are done on
@@ -360,6 +361,12 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
         const result = rememberIn(db, args, `${agentName(mcp)}@${opts.device}`);
         await afterWrite();
         return toolResult({ ...result, entry: { ...result.entry, origin: 'local' } });
+      }),
+    // Checked against this device's store, as `remember` is; nothing is written, so nothing syncs.
+    propose: (args) =>
+      run(async () => {
+        await ingest(true); // the cited lines may have just been written
+        return toolResult(proposeIn(db, args));
       }),
     correct: (args) =>
       run(async () => {

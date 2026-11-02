@@ -1,6 +1,6 @@
 # MCP tools
 
-Origin serves ten tools over the [Model Context Protocol](https://modelcontextprotocol.io): `brief`, which hands an agent what matters where it works, five to read the archive and the entries, `follow`, which joins the agent's session to the work it continues, and three to write entries and forget. This page is the reference for anyone who registers Origin with an agent or builds on it; to simply connect an agent, see [Connect your agents](./connect-agents.md).
+Origin serves eleven tools over the [Model Context Protocol](https://modelcontextprotocol.io): `brief`, which hands an agent what matters where it works, five to read the archive and the entries, `follow`, which joins the agent's session to the work it continues, `propose`, which hands the user an entry to review, and three to write entries and forget. This page is the reference for anyone who registers Origin with an agent or builds on it; to simply connect an agent, see [Connect your agents](./connect-agents.md).
 
 ## Reaching Origin {#reaching-origin}
 
@@ -18,13 +18,13 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
   --header "Authorization: Bearer ogn_…" --header "X-Origin-Client: claude-code"
 ```
 
-The server's MCP `instructions` tell agents how to use the tools: call `brief` when they start a task, unless a recall already gave them one; search and read before answering questions about past work, following the ids that `get` lists next to what it opens and reading a long session a turn at a time, and cite entry and event ids; call `follow` once when the user continues work from an earlier session; call `changes` with the `next` of their last call to learn what changed since; remember decisions with their reasons, stable facts, and preferences of the user, citing the events they come from; treat entries marked `imported` as mirrors of an agent's own memory files; correct entries that are wrong; and forget only when the user asks, with their reason.
+The server's MCP `instructions` tell agents how to use the tools: call `brief` when they start a task, unless a recall already gave them one; search and read before answering questions about past work, following the ids that `get` lists next to what it opens and reading a long session a turn at a time, and cite entry and event ids; call `follow` once when the user continues work from an earlier session; call `changes` with the `next` of their last call to learn what changed since; remember decisions with their reasons, stable facts, and preferences of the user, citing the events they come from, and propose rather than remember what they infer and the user has not confirmed, or what they write when consolidating the user's memory; treat entries marked `imported` as mirrors of an agent's own memory files; correct entries that are wrong; and forget only when the user asks, with their reason.
 
 ## Conventions {#conventions}
 
 - **Results** are one JSON text item. Times in results are ISO 8601 in the server's local time zone, with milliseconds and offset, such as `2026-10-20T09:12:30.000+08:00`.
 - **Time arguments** (`since`, `until`, `valid_from`, `valid_to`) take a relative value, `30m`, `24h`, `7d`, or `2w`, counted back from now, or an absolute date or time, `2026-10-20` or ISO 8601.
-- **Ids.** Entries are `ent_` and 12 to 32 hex characters. Events are `<source>:<id in the source>`, such as `claude-code:7d0c4a1e-…`; a source is `claude-code`, `codex`, `cursor`, `zcode`, or `grok`. Sessions go by their agent's own id, such as a UUID, or by `<source>:<session id>`, as recalls record them. Threads are `thr_` and 12 hex characters, and so are recalls, with `rcl_`. [`get`](#get) opens any of them.
+- **Ids.** Entries are `ent_` and 12 to 32 hex characters. Events are `<source>:<id in the source>`, such as `claude-code:7d0c4a1e-…`; a source is `claude-code`, `codex`, `cursor`, `zcode`, or `grok`. Sessions go by their agent's own id, such as a UUID, or by `<source>:<session id>`, as recalls record them. Threads are `thr_` and 12 hex characters, and so are recalls, with `rcl_`, and proposals, with `prp_`. [`get`](#get) opens any of them.
 - **Errors** come back as tool errors (`isError`) with a readable message, never as protocol errors: invalid input, unknown ids (`Unknown entry or event <id>.`), and forgotten ids (`<id> has been forgotten.`).
 - **On a device connected to a hub**, every entry, event, session, and source in a result carries `origin`: `local` if this device has it, `hub` if only the hub does; the stubs a result lists (see below) do not, as they come from the store that answered. Of the versions of one entry, only the current one is listed. If the hub does not answer within 2 seconds (`ORIGIN_HUB_TIMEOUT_MS`), the result holds this device's answer alone, followed by a second text item: `Note: the Origin hub was not consulted (<reason>); these results come from this device only.`
 - **On a relay**, every result is the hub's, as the hub returns it, without `origin` labels. When the hub cannot be reached, every tool fails with a message saying that the relay answers only through its hub.
@@ -239,12 +239,13 @@ What reached the store since a cursor, oldest first: for an agent that comes bac
 | `include_tools` | boolean | `false` | Also list tool calls and results, injected context, and system events, not only messages |
 | `limit` | integer, 1 to 200 | 50 | At most this many events, and this many entries and forgets |
 
-It returns `{ sessions, events, entries, forgets, next, more }`:
+It returns `{ sessions, events, entries, forgets, proposals, next, more }`:
 
 - `events`: visible events in the order they reached the store, as stubs with their `session`;
 - `sessions`: the sessions of those events, as `timeline` lists them, with their `thread`, and `new`, true if the session started in the range (none of its events came before);
 - `entries`: entries written or received in the range that are current, as stubs with the version they `supersedes`;
 - `forgets`: forgets in the range, `{ id, target, at }`, with the id of what was forgotten but never its text or the reason, so that the agent stops citing it; a restore is listed too, with the forget's id as its target;
+- `proposals`: entries proposed in the range (see [propose](#propose)), pending or accepted, as stubs `{ id, kind, text, status, time, session, event, project }`, whatever `include_tools` says, so that an agent or a runtime notices them; a page with more than `limit` of them ends at the last one it lists;
 - `next`: the cursor to pass as `after` next time; `more`: true when there was more than a page, so read on with `next`.
 
 The cursor is opaque; pass it back as it is, to the server that gave it. A malformed one is an error. Without `after`, `next` is the cursor as of now: what came before is for `search` and `timeline`. On a device connected to a hub, the cursor holds the device's and the hub's: both answers are merged and labelled, and when the hub is not consulted, its part stays where it was.
@@ -291,6 +292,18 @@ The cursor is opaque; pass it back as it is, to the server that gave it. A malfo
   "forgets": [
     { "id": "tmb_6c1d0e9a2b3f", "target": "claude-code:7d0c4a1e-0000-4000-8000-000000000002", "at": "2026-10-22T17:35:00.000+08:00" }
   ],
+  "proposals": [
+    {
+      "id": "prp_1b7e4c0a9d23",
+      "kind": "knowledge",
+      "text": "Releases are tagged only after both CI jobs pass.",
+      "status": "pending",
+      "time": "2026-10-22T17:39:02.410+08:00",
+      "session": "2f1e8c47-0000-4000-8000-000000000003",
+      "event": "claude-code:7d0c4a1e-0000-4000-8000-000000000040#0",
+      "project": "demo-app"
+    }
+  ],
   "next": "eyJlIjo0MTI3LCJjIjo4OX0",
   "more": false
 }
@@ -298,11 +311,11 @@ The cursor is opaque; pass it back as it is, to the server that gave it. A malfo
 
 ## get {#get}
 
-Any id Origin hands over, with what is next to it: an entry, an event, a session, a thread, or a recall (see [Reading along references](../architecture.md#reading-along-references)). Everything next to it comes as a stub, one line with its id, so that an agent opens what matters next, one hop at a time, rather than reading whole sessions.
+Any id Origin hands over, with what is next to it: an entry, an event, a session, a thread, a recall, or a proposal (see [Reading along references](../architecture.md#reading-along-references)). Everything next to it comes as a stub, one line with its id, so that an agent opens what matters next, one hop at a time, rather than reading whole sessions.
 
 | Parameter | Type | Meaning |
 |---|---|---|
-| `id` | string | An entry id (`ent_…`), an event id (`<source>:…`), a session id (alone, or as `<source>:<session id>`), a thread id (`thr_…`), or a recall id (`rcl_…`) |
+| `id` | string | An entry id (`ent_…`), an event id (`<source>:…`), a session id (alone, or as `<source>:<session id>`), a thread id (`thr_…`), a recall id (`rcl_…`), or a proposal id (`prp_…`) |
 | `source` | source id | For a session id that sessions of two sources share: which one. Without it, such an id is an error that names the sources |
 | `offset` | integer, 0 or more | For an event: where its text starts, in UTF-16 code units (0 by default), to read a long one in pages |
 
@@ -311,8 +324,9 @@ Any id Origin hands over, with what is next to it: an entry, an event, a session
 - **A session**: a card with the fields of a session, its `cwd`, and `turns`, its number of turns; `prompts`, where its first 20 turns start, each `{ turn, id, time, text }`, and `more_prompts`, how many turns follow those; `thread`, `{ id, sessions }`, the thread it is in and how many sessions that has, or null; `entries`, up to 10 current entries written from it (that cite its events), newest first, as stubs; `recalls`, up to 10 recalls it was handed, newest first, each `{ id, occasion, time, items }`, where `items` counts what it handed over that is still visible; and `before` and `after`, the sessions just before and after it in its project, of any agent, by when they started, or null. Read a turn with [`timeline`](#timeline).
 - **A thread**: `{ thread, project, title, started, ended, sessions, more_sessions, agents, branches, entries, last_prompt }`: its id, its project and name (its first session's), when it started and ended, its first 20 `sessions`, oldest first, and how many follow those, the `agents` of its sessions and the work `branches` they were on, `entries`, up to 10 current entries written from any of its sessions, newest first, as stubs, and `last_prompt`, the stub of the latest prompt of its most recent session that has one, with its `session`, or null.
 - **A recall**: `{ id, time, occasion, agent, session, device, project, directory, budget, tokens, items, text }`: when, for which agent, session, and device, and where it was made, its budget and the tokens it used, its items, each `{ rank, layer, kind, id, score, used }` (`kind` is `entry`, `session`, or `thread`, and a session's has its `source`; `used` says whether the session went on to use the item, and is null while the session is not known), and `text`, what the agent was handed, rebuilt from the store as it is now. What was forgotten since is left out of both.
+- **A proposal**: `{ id, status, kind, text, confidence, project, valid_from, valid_to, note, time, agent, session, event, sources, missing_sources, accepted_as }`: what it proposes; `status`, `pending` or `accepted`; when it was proposed, by which `agent`, in which `session` (as `timeline` lists it), and the `event` it was read from; `sources`, the events it cites, as stubs with their `quote` and `session`, and `missing_sources`, how many of them this store does not have yet; and `accepted_as`, the stub of the entry it became (its current version), or null. A rejected proposal is an error (``Proposal <id> was rejected (tmb_…); restoring that forget makes it pending again.``), and so is one that cites a forgotten event (`Proposal <id> has been forgotten.`).
 
-Current entries are those that listings show: not superseded, forgotten, or ended. What was forgotten is never among the stubs, nor counted. On a device connected to a hub, an event, a session, a thread, or a recall comes from one store, with that store's stubs: the device's when it has the id, otherwise the hub's, without what the device has forgotten.
+Current entries are those that listings show: not superseded, forgotten, or ended. What was forgotten is never among the stubs, nor counted. On a device connected to a hub, an event, a session, a thread, a recall, or a proposal comes from one store, with that store's stubs: the device's when it has the id, otherwise the hub's, without what the device has forgotten.
 
 ```json
 { "id": "ent_3f9a1c2b7d4e" }
@@ -549,7 +563,7 @@ Save a new entry. Every entry cites at least one event, so that it can be traced
 | `project` | string | The project it belongs to, if any |
 | `valid_from`, `valid_to` | time | When it holds, if known |
 
-A source with an `event_id` must name a visible event, and its `quote`, if given, must occur in it, ignoring whitespace and case. A source with only a `quote` cites the most recent visible message that contains it, or failing that, a tool result; tool calls are never matched, since the agent's own `remember` call contains the quote. To cite a line just written in the conversation, quote it: the server ingests new lines before it saves. It returns `{ entry }`, the new entry, with author `<agent>@<device>`, the agent being the MCP client's name.
+A source with an `event_id` must name a visible event, and its `quote`, if given, must occur in it, ignoring whitespace and case. A source with only a `quote` cites the most recent visible message that contains it, or failing that, a tool result other than the result of `propose`; tool calls are never matched, since the agent's own `remember` call contains the quote. The event of a proposal cannot be cited: only the user accepts a proposal, which writes its entry. To cite a line just written in the conversation, quote it: the server ingests new lines before it saves. It returns `{ entry }`, the new entry, with author `<agent>@<device>`, the agent being the MCP client's name.
 
 ```json
 {
@@ -561,6 +575,46 @@ A source with an `event_id` must name a visible event, and its `quote`, if given
 ```
 
 Errors include `No event contains the quote "…". Search for the event and cite its id instead.`, `Quote not found in event <id>: "…"`, and `Event <id> has been forgotten and cannot be cited.`
+
+## propose {#propose}
+
+Propose an entry for the user to review, rather than saving it: for what the agent infers and the user has not confirmed, and for everything it writes when it consolidates the user's memory on their behalf. Only the user accepts or rejects a proposal, with `origin accept` and `origin reject` or in the admin UI; agents have no tool for either (see [Proposals](../architecture.md#proposals)).
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `kind`, `text`, `sources`, `confidence`, `project`, `valid_from`, `valid_to` | as for [`remember`](#remember) | The entry it proposes |
+| `note` | string, at most 200 characters | Why the agent proposes rather than remembers, in a few words |
+
+It is checked as `remember` is: every source must resolve to a visible event, and every quote must be found, in the device's own store on a connected device, and on the hub through a relay. It writes nothing: it returns the proposal whole, `{ proposal, kind, text, confidence, project, valid_from, valid_to, note, sources }`, with a new id (`prp_` and 12 random hex characters) and each source as the `{ event_id, quote }` it resolved to. The agent's log records that result, and Origin reads the proposal from it there, on every store that archives the log, as it reads the links of `follow`. An agent's log keeps 4,000 characters of a tool result, so a proposal whose result would be longer than 3,800 is refused: shorten its text or its quotes, or cite events by id alone.
+
+```json
+{
+  "kind": "knowledge",
+  "text": "Releases are tagged only after both CI jobs pass.",
+  "confidence": 0.7,
+  "project": "demo-app",
+  "sources": [{ "event_id": "claude-code:7d0c4a1e-0000-4000-8000-000000000031", "quote": "once CI is green" }],
+  "note": "Inferred from how the last two releases went."
+}
+```
+
+```json
+{
+  "proposal": "prp_1b7e4c0a9d23",
+  "kind": "knowledge",
+  "text": "Releases are tagged only after both CI jobs pass.",
+  "confidence": 0.7,
+  "project": "demo-app",
+  "valid_from": null,
+  "valid_to": null,
+  "note": "Inferred from how the last two releases went.",
+  "sources": [
+    { "event_id": "claude-code:7d0c4a1e-0000-4000-8000-000000000031", "quote": "once CI is green" }
+  ]
+}
+```
+
+Accepting the proposal writes its entry, as `user@<device>`, citing what it cites and the proposal's own event; rejecting it forgets that event, with the user's reason. Until then it is not knowledge: `search`, `brief`, and recall never hand it over, while `get` opens it and `changes` lists it. Its errors are those of `remember`, and `This proposal would take <n> characters, more than the 3800 an agent's log keeps of a tool result: …`.
 
 ## correct {#correct}
 
@@ -608,7 +662,7 @@ Agents can find and cite what was said a moment ago, because `origin mcp` reads 
 
 - When it starts, it ingests every source in the background, and on a connected device syncs with the hub.
 - `brief`, `search`, `timeline`, `changes`, and `follow` first ingest new lines, at most every 10 seconds. On a connected device, `get` and `sources` do too, and every read also syncs with the hub, at most every 10 seconds, waiting for it no longer than the hub timeout.
-- `remember` and `correct` always ingest first, and on a connected device sync with the hub right after.
+- `remember`, `propose`, and `correct` always ingest first, and on a connected device `remember` and `correct` sync with the hub right after; `propose` writes nothing to sync.
 - Claude Code's and Codex's ingest hooks, which `origin agents connect` sets up, ingest a session's new lines as each turn ends, and on a connected device push them to the hub (see [Connect your agents](./connect-agents.md#connect-them-all-at-once)).
 - In the background, as the fallback for other agents and for what a hook missed, it looks for new log lines every 60 seconds (`ORIGIN_WATCH_INTERVAL_MS`; `0` turns this off), and ingests and syncs only if a log file changed.
 - When the agent exits, it ingests and syncs once more, for at most 5 seconds.

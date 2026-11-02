@@ -1,6 +1,6 @@
 /**
- * Origin MCP (see docs/architecture.md): the ten tools (brief · search · timeline · changes · get ·
- * sources · follow · remember · correct · forget) served over stdio, over stateless HTTP for a hub,
+ * Origin MCP (see docs/architecture.md): the eleven tools (brief · search · timeline · changes · get ·
+ * sources · follow · remember · propose · correct · forget) served over stdio, over stateless HTTP for a hub,
  * over stdio on a device connected to a hub, from its own store merged with the hub's answers, or
  * over stdio on a relay, forwarded to its hub.
  */
@@ -25,10 +25,14 @@ export {
   type FollowResult,
   type GetResult,
   isEntryResult,
+  isProposalResult,
   isRecallResult,
   isSessionResult,
   isThreadResult,
   type PromptStub,
+  type ProposalResult,
+  type ProposalStub,
+  proposalResult,
   type RecallItemView,
   type RecallResult,
   type RecallStub,

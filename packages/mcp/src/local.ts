@@ -3,6 +3,7 @@ import {
   changesSince,
   correct,
   type Database,
+  describeProposal,
   describeSession,
   describeThread,
   type Entry,
@@ -23,13 +24,19 @@ import {
   isEntryId,
   isEventForgotten,
   isoLocal,
+  isProposalId,
   listEntries,
   listSessions,
   NEIGHBOUR_MAX,
   OriginError,
+  type Proposal,
+  type ProposalJson,
   parseFeedCursor,
   parseTime,
   planRecall,
+  prepareProposal,
+  proposalError,
+  proposalJson,
   type RecallItemRecord,
   rawLocator,
   readRawLine,
@@ -53,7 +60,7 @@ import {
 import type { ToolArgs } from './tools.js';
 
 /**
- * The ten tools against one store, returning plain JSON values (see docs/architecture.md#mcp-server).
+ * The eleven tools against one store, returning plain JSON values (see docs/architecture.md#mcp-server).
  * Caller errors (bad input, unknown or forgotten ids) are thrown as OriginError. The servers wrap
  * these: the local ones as they are, a connected device's merged with its hub's answers.
  */
@@ -293,7 +300,58 @@ export interface RecallResult {
   origin?: Found;
 }
 
-export type GetResult = EntryResult | EventResult | SessionResult | ThreadResult | RecallResult;
+/**
+ * A proposal, as a card: what it proposes, where it stands, the events it cites, the session that
+ * made it, and the entry it became once accepted (see proposalResult). Its id is under `id`, never
+ * under `proposal`: only the result of `propose` holds `"proposal": "prp_…"`, which ingestion reads.
+ */
+export interface ProposalResult {
+  id: string;
+  status: 'pending' | 'accepted';
+  kind: string;
+  text: string;
+  confidence: number;
+  /** The project it names, or null; it belongs to its session's project then. */
+  project: string | null;
+  valid_from: string | null;
+  valid_to: string | null;
+  note: string | null;
+  /** When it was proposed, and by which agent. */
+  time: string;
+  agent: string;
+  /** The session that made it, and the tool result it was read from. */
+  session: SessionView | null;
+  event: string;
+  /** The events it cites, with their quotes and sessions. */
+  sources: Array<EventStub & { quote: string | null; session: string }>;
+  /** How many of the events it cites this store does not have (yet). */
+  missing_sources: number;
+  /** The entry it became, once accepted: its current version. */
+  accepted_as: EntryStub | null;
+  origin?: Found;
+}
+
+/** A proposal in one line, as `changes` lists it: `get` opens it. */
+export interface ProposalStub {
+  id: string;
+  kind: string;
+  text: string;
+  status: 'pending' | 'accepted';
+  time: string;
+  /** The session that made it, and the tool result it was read from. */
+  session: string;
+  event: string;
+  /** The project it belongs to: the one it names, or its session's. */
+  project: string | null;
+}
+
+export type GetResult =
+  | EntryResult
+  | EventResult
+  | SessionResult
+  | ThreadResult
+  | RecallResult
+  | ProposalResult;
 
 export function isEntryResult(r: GetResult): r is EntryResult {
   return 'entry' in r;
@@ -311,8 +369,18 @@ export function isRecallResult(r: GetResult): r is RecallResult {
   return 'occasion' in r && 'items' in r;
 }
 
+export function isProposalResult(r: GetResult): r is ProposalResult {
+  return 'accepted_as' in r;
+}
+
 export function isEventResult(r: GetResult): r is EventResult {
-  return !isEntryResult(r) && !isSessionResult(r) && !isThreadResult(r) && !isRecallResult(r);
+  return (
+    !isEntryResult(r) &&
+    !isSessionResult(r) &&
+    !isThreadResult(r) &&
+    !isRecallResult(r) &&
+    !isProposalResult(r)
+  );
 }
 
 /** What changed since a cursor (see changesIn). */
@@ -323,6 +391,8 @@ export interface ChangesResult {
   entries: Array<EntryStub & { supersedes: string | null; origin?: Found }>;
   /** Forgets and restores, by id: what a forget hid is never shown. */
   forgets: Array<{ id: string; target: string; at: string }>;
+  /** The entries proposed in the range, pending or accepted (absent from older hubs). */
+  proposals?: Array<ProposalStub & { origin?: Found }>;
   /** The cursor to pass as `after` to read on. */
   next: string;
   more: boolean;
@@ -433,6 +503,7 @@ export function isKnown(db: Database, id: string): boolean {
 }
 
 function missing(db: Database, id: string): never {
+  if (isProposalId(id)) throw proposalError(db, id);
   throw new OriginError(
     isForgotten(db, id) ? `${id} has been forgotten.` : `Unknown entry or event ${id}.`,
   );
@@ -521,6 +592,8 @@ export function getById(
       return entryResult(db, opened.id);
     case 'recall':
       return recallResult(db, opened.id);
+    case 'proposal':
+      return proposalResult(db, opened.id);
     case 'event':
       return eventResult(db, opened.id, args.offset ?? 0);
     case 'session':
@@ -579,6 +652,7 @@ export function changesIn(db: Database, args: ToolArgs<'changes'>): ChangesResul
     events: feed.events.map((e) => ({ ...eventStub(e), session: e.sessionId })),
     entries: feed.entries.map((e) => ({ ...entryStub(e), supersedes: e.supersedes })),
     forgets: feed.forgets.map((f) => ({ id: f.id, target: f.target, at: isoLocal(f.at) })),
+    proposals: feed.proposals.map(proposalStub),
     next: encodeFeedCursor(feed.next),
     more: feed.more,
   };
@@ -813,6 +887,69 @@ export function rememberIn(db: Database, args: ToolArgs<'remember'>, author: str
     sources: args.sources.map((s) => ({ eventId: s.event_id, quote: s.quote })),
   });
   return { entry: entryView(entry) };
+}
+
+/**
+ * `propose`: check a proposal as `remember` checks an entry, and hand it back whole, for the
+ * agent's log; ingestion derives the proposal from that result, on every store (see
+ * docs/architecture.md#proposals). Nothing is written here.
+ */
+export function proposeIn(db: Database, args: ToolArgs<'propose'>): ProposalJson {
+  return proposalJson(
+    prepareProposal(db, {
+      kind: args.kind,
+      text: args.text,
+      confidence: args.confidence,
+      project: args.project ?? null,
+      validFrom: optionalTime(args.valid_from) ?? null,
+      validTo: optionalTime(args.valid_to) ?? null,
+      note: args.note ?? null,
+      sources: args.sources.map((s) => ({ eventId: s.event_id, quote: s.quote })),
+    }),
+  );
+}
+
+/** A proposal in one line (see ProposalStub). */
+export function proposalStub(p: Proposal): ProposalStub {
+  return {
+    id: p.id,
+    kind: p.kind,
+    text: stubText(firstLine(p.text)),
+    status: p.status,
+    time: isoLocal(p.at),
+    session: p.sessionId,
+    event: p.eventId,
+    project: p.project ?? p.sessionProject,
+  };
+}
+
+/** A proposal's card: its fields, status, sources, session, and the entry it became. */
+export function proposalResult(db: Database, id: string): ProposalResult {
+  const card = describeProposal(db, id);
+  if (!card) throw proposalError(db, id);
+  const p = card.proposal;
+  return {
+    id: p.id,
+    status: p.status,
+    kind: p.kind,
+    text: p.text,
+    confidence: p.confidence,
+    project: p.project,
+    valid_from: p.validFrom === null ? null : isoLocal(p.validFrom),
+    valid_to: p.validTo === null ? null : isoLocal(p.validTo),
+    note: p.note,
+    time: isoLocal(p.at),
+    agent: p.source,
+    session: card.session && sessionView(card.session),
+    event: p.eventId,
+    sources: card.sources.map((s) => ({
+      ...eventStub(s.event),
+      quote: s.quote,
+      session: s.event.sessionId,
+    })),
+    missing_sources: card.missing,
+    accepted_as: card.entry && entryStub(card.entry),
+  };
 }
 
 export function correctIn(db: Database, args: ToolArgs<'correct'>, author: string) {

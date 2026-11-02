@@ -8,9 +8,11 @@ import {
   type Found,
   type GetResult,
   isEntryResult,
+  isProposalResult,
   isRecallResult,
   isSessionResult,
   isThreadResult,
+  type ProposalResult,
   type RecallResult,
   type SearchResult,
   type SessionEvents,
@@ -256,6 +258,18 @@ function hubRecall(r: RecallResult, facts: LocalFacts): RecallResult {
 }
 
 /**
+ * The hub's proposal, unless this device has forgotten its event or an event it cites (it is hidden
+ * here then), without the entry it became if the device has forgotten that.
+ */
+function hubProposal(r: ProposalResult, facts: LocalFacts): ProposalResult | null {
+  if (facts.forgotten(r.event) || r.sources.some((s) => facts.forgotten(s.id))) return null;
+  return {
+    ...r,
+    accepted_as: r.accepted_as && shownHere(r.accepted_as.id, facts) ? r.accepted_as : null,
+  };
+}
+
+/**
  * `get` on a device. An event, a session, a thread, or a recall is one store's answer, with that store's
  * neighbours, never a mix of both: the device's own when it has the id, the hub's otherwise, less
  * what the device has forgotten. An entry is the device's answer completed by the hub's (other
@@ -272,6 +286,10 @@ export function mergeGet(
     if (isSessionResult(hub)) return { ...hubSession(hub, facts), origin: 'hub' };
     if (isThreadResult(hub)) return { ...hubThread(hub, facts), origin: 'hub' };
     if (isRecallResult(hub)) return { ...hubRecall(hub, facts), origin: 'hub' };
+    if (isProposalResult(hub)) {
+      const shown = hubProposal(hub, facts);
+      return shown && { ...shown, origin: 'hub' };
+    }
     return facts.forgotten(hub.id) ? null : { ...hubEvent(hub, facts), origin: 'hub' };
   }
   const mine = local && isEntryResult(local) ? local : null;
@@ -319,11 +337,16 @@ export function mergeChanges(
     .filter((e) => shownHere(e.id, facts))
     .map((e) => labelled(e, facts, e.id));
   const forgets = union(local?.forgets ?? [], hub?.forgets ?? [], (f) => f.id);
+  // A proposal whose event, or an event it cites, this device has forgotten is hidden here.
+  const proposals = union(local?.proposals ?? [], hub?.proposals ?? [], (p) => p.id)
+    .filter((p) => !facts.forgotten(p.event))
+    .map((p) => labelled(p, facts, p.event));
   return {
     sessions,
     events,
     entries,
     forgets,
+    proposals,
     more: Boolean(local?.more) || Boolean(hub?.more),
   };
 }

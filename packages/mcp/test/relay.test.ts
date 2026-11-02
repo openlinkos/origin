@@ -58,7 +58,7 @@ const call = async (name: string, args: Record<string, unknown>) =>
 describe('origin mcp on a relay', () => {
   it('answers every read from the hub, once the new log lines have reached it', async () => {
     await connect();
-    expect((await (agent as Client).listTools()).tools).toHaveLength(10);
+    expect((await (agent as Client).listTools()).tools).toHaveLength(11);
     // Written to the agent's log a moment ago: only the hub can find it, once it has been sent.
     fs.writeFileSync(
       path.join(logs, 'now.jsonl'),
@@ -242,5 +242,36 @@ describe('threads and changes on a relay', () => {
     const changes = await call('changes', {});
     expect(changes.json.events.map((e: { id: string }) => e.id)).toEqual(['fake:n1']);
     expect(changes.json.next).toEqual(expect.any(String));
+  });
+});
+
+describe('proposals on a relay', () => {
+  it('proposes on the hub after sending what it cites, and opens what the hub derived', async () => {
+    await connect();
+    await call('search', { query: 'warm up' });
+    fs.writeFileSync(
+      path.join(logs, 'now.jsonl'),
+      line('n1', 'sn', 9000, 'user', 'Ship the relay on Friday.'),
+    );
+    const r = await call('propose', {
+      kind: 'memory',
+      text: 'The relay ships on Friday.',
+      confidence: 0.6,
+      sources: [{ quote: 'relay on Friday' }],
+    });
+    expect(r.isError).toBe(false);
+    expect(syncs).toBe(2); // a write sends first
+    expect(r.json.sources).toEqual([{ event_id: 'fake:n1', quote: 'relay on Friday' }]);
+    // The agent's log records the result; the relay sends it, and the hub derives the proposal.
+    fs.appendFileSync(
+      path.join(logs, 'now.jsonl'),
+      line('n2', 'sn', 9001, 'user', r.text, 'tool_result'),
+    );
+    await relay?.refresh(true);
+    expect((await call('get', { id: r.json.proposal })).json).toMatchObject({
+      id: r.json.proposal,
+      status: 'pending',
+      event: 'fake:n2',
+    });
   });
 });

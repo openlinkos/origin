@@ -27,7 +27,7 @@ Origin 以**人**而不是工具为中心：
 
 ## 功能
 
-- **MCP server**（`origin mcp`），十个工具：`brief`、`search`、`timeline`、`changes`、`get`、`sources`、`follow`、`remember`、`correct`、`forget`。它会自动同步，Agent 看到的总是最新会话。
+- **MCP server**（`origin mcp`），十一个工具：`brief`、`search`、`timeline`、`changes`、`get`、`sources`、`follow`、`remember`、`propose`、`correct`、`forget`。它会自动同步，Agent 看到的总是最新会话。
 - **条目**分三类：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。每条都带来源、置信度和版本历史。
 - **导入原生记忆**：Claude Code、ZCode 和 Grok Build 为自己保存的记忆文件会被导入为条目，每条都引用它所来自的文件版本：Agent 修改一条记忆，条目随之更新；删除一条记忆，条目随之结束。
 - **召回**：会话开始时和每个提示时，Agent 会拿到它工作之处有用的内容：你的偏好、项目最新的决定和事实、这个项目最近与任意 Agent 的会话，以及提示所涉及的条目，每项一行，挑选时不调用模型。Claude Code 和 Codex 通过 hook 获得，其他 Agent 通过 `brief` 工具获得；`origin agents connect` 会把这些设置好。每一次召回都有记录，所以你能看到 Agent 拿到了什么、有没有用上。
@@ -91,7 +91,7 @@ Codex、Cursor、ZCode、Grok Build 的接入方式见[接入 Agent](https://ori
 - [升级](https://origin.openlinkos.com/zh/guide/upgrading)：版本、镜像标签、存储格式，以及如何升级设备和中枢
 - [常见问题](https://origin.openlinkos.com/zh/guide/troubleshooting)：常见问题及其解决方法
 - [命令参考](https://origin.openlinkos.com/zh/guide/cli)：全部命令，附示例与环境变量
-- [MCP 工具](https://origin.openlinkos.com/zh/guide/mcp)：Agent 使用的十个工具、参数与返回内容
+- [MCP 工具](https://origin.openlinkos.com/zh/guide/mcp)：Agent 使用的十一个工具、参数与返回内容
 - [架构](https://origin.openlinkos.com/zh/architecture)：数据模型、不变量、采集、条目、MCP server 与中枢
 - [会话来源](https://origin.openlinkos.com/zh/sources)：各 Agent 的本地会话格式，以及它们的记忆
 - [更新日志](https://origin.openlinkos.com/zh/changelog)：每个版本改了什么

@@ -9,6 +9,7 @@ import {
   followHere,
   forgetIn,
   getById,
+  proposeIn,
   rememberIn,
   searchStore,
   sourcesOf,
@@ -127,6 +128,11 @@ function localHandlers(
       run(async () => {
         await refresh(true); // the cited lines may have just been written
         return toolResult(rememberIn(db, args, author()));
+      }),
+    propose: (args) =>
+      run(async () => {
+        await refresh(true); // the cited lines may have just been written
+        return toolResult(proposeIn(db, args));
       }),
     correct: (args) =>
       run(async () => {
