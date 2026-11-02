@@ -127,7 +127,7 @@ import {
   printProposal,
   showProposal,
 } from './proposals.js';
-import { sourceAdapters } from './sources.js';
+import { sourceAdapters, storeAdapters } from './sources.js';
 import { isHookCall, main as syncHook } from './sync-hook.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
 import { onEnter, openInBrowser, startLocalUi, UI_PORT, writeSignInFile } from './ui.js';
@@ -233,7 +233,7 @@ export async function main(argv: string[]): Promise<number> {
   // Opening the store upgrades an older one. A migration may parse mirrored lines again, with the
   // adapters, and read their sealed frames, which a hub may keep in a bucket.
   const db = openDatabase(dbPath(home), {
-    adapters: sourceAdapters(home),
+    adapters: storeAdapters(home),
     beforeMigrate: (db) =>
       void setUpFrames(db, home, {
         command: 'other',

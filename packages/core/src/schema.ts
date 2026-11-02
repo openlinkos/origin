@@ -82,6 +82,10 @@ CREATE TABLE IF NOT EXISTS raw_file (
   UNIQUE (source, path, generation)
 );
 
+-- The mirror a raw file has, without case, as file systems may compare names: a hub refuses a new
+-- file of a device whose mirror another file already has (see appendRemote).
+CREATE INDEX IF NOT EXISTS raw_file_mirror ON raw_file (lower(mirror));
+
 CREATE TABLE IF NOT EXISTS raw_chunk (
   raw_file_id  INTEGER NOT NULL REFERENCES raw_file(id),
   first_line   INTEGER NOT NULL,

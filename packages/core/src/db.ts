@@ -45,10 +45,12 @@ function registerFunctions(db: Database): void {
 
 export interface OpenOptions {
   /**
-   * The source adapters, for a migration that parses mirrored lines again (see migrations.ts).
-   * Opening a store that needs one without them fails at that migration.
+   * The source adapters, for a migration that parses mirrored lines again (see migrations.ts): a
+   * list, or a function that finds the adapter of a source by its id, such as one that reads a
+   * person's own sources whatever their names. Opening a store that needs one without them fails
+   * at that migration.
    */
-  adapters?: SourceAdapter[];
+  adapters?: SourceAdapter[] | ((source: string) => SourceAdapter | null);
   /**
    * Called before the first migration this process runs, if any: set up what migrations read,
    * such as the frame store of a hub that keeps its sealed frames in a bucket.

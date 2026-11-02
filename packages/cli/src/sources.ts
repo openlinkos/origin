@@ -36,9 +36,12 @@ export function sourceAdapters(home: string, warn?: (message: string) => void): 
   return [...allAdapters(), ...own.adapters];
 }
 
-/** One of the store's adapters by its id, or null. */
-export function sourceAdapter(home: string, id: string): SourceAdapter | null {
-  return sourceAdapters(home).find((a) => a.id === id) ?? null;
+/**
+ * The adapters of the store at `home` by source id, as a migration asks for them: the store's own,
+ * and a lines adapter for any other name that can name a source, such as those a hub's devices push.
+ */
+export function storeAdapters(home: string): (source: string) => SourceAdapter | null {
+  return hubAdapters(sourceAdapters(home), home);
 }
 
 /**

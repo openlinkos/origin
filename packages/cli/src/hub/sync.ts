@@ -443,9 +443,16 @@ export function hubClient(opts: HubSyncOptions): Call {
   const request = hubRequest(opts);
   return async (method, path, body, okStatuses = []) => {
     const { status, text } = await request(method, path, body);
-    if (!(status >= 200 && status < 300) && !okStatuses.includes(status)) {
+    const ok = status >= 200 && status < 300;
+    if (!ok && !okStatuses.includes(status)) {
       throw new Error(`Hub request ${method} ${path} failed (${status}): ${errorMessage(text)}`);
     }
-    return JSON.parse(text);
+    if (ok) return JSON.parse(text);
+    try {
+      return JSON.parse(text);
+    } catch {
+      // Not the hub's answer, such as a proxy's page for a body it found too large.
+      return { error: `${status} ${text.replace(/\s+/g, ' ').trim().slice(0, 200)}`.trim() };
+    }
   };
 }

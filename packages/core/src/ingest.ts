@@ -657,8 +657,7 @@ export interface RemoteLines {
   path: string;
   /** Path relative to the adapter root, `/`-separated, naming its mirror. */
   relPath: string;
-  /** Complete lines, each ending with `
-`. */
+  /** Complete lines, each ending with a line break. */
   data: Buffer;
 }
 

@@ -20,7 +20,7 @@ import {
   recordRecall,
 } from '@openlinkos/origin-core';
 import { setUpFrames } from './hub/bucket.js';
-import { sourceAdapters } from './sources.js';
+import { storeAdapters } from './sources.js';
 
 /**
  * `origin recall`: what Origin hands an agent unasked (see docs/architecture.md#recall). An agent's
@@ -83,7 +83,7 @@ export function hookOutput(eventName: string, text: string): string {
 
 function openStore(home: string): Database {
   const db = openDatabase(dbPath(home), {
-    adapters: sourceAdapters(home),
+    adapters: storeAdapters(home),
     log: (m) => console.error(m),
   });
   setUpFrames(db, home, { command: 'other', env: process.env });

@@ -154,7 +154,7 @@ A file of event lines is UTF-8 JSONL: one JSON object per line, one event each, 
 | `session` | yes | The session the event belongs to: 1 to 200 characters, no control characters |
 | `time` | yes | When it happened: ISO 8601 with an offset, such as `2026-11-02T09:30:00Z` or `2026-11-02T17:30:00+08:00`, or epoch milliseconds as a number |
 | `role` | yes | `user`, `assistant`, or `system` |
-| `kind` | yes | `message`, `tool_use`, `tool_result`, `meta`, or `system`. `memory` is refused: it is kept for the memory files agents keep for themselves |
+| `kind` | yes | `message`, `tool_use`, `tool_result`, `meta`, or `system`. `memory` is refused: it is reserved for the memory files agents keep for themselves |
 | `text` | yes | The event's text, a string, kept as written |
 | `project` | no | The project, by name, as briefs and filters name projects; without one, the last segment of `cwd` |
 | `cwd` | no | The working directory, by which recall tells two checkouts with the same name apart |
@@ -168,7 +168,7 @@ A file of event lines is UTF-8 JSONL: one JSON object per line, one event each, 
 
 - Each line is one event, with the line's `id` under the source's name (`<source>:<id>`), its `session`, its `time`, and the fields above. Lines are read as they are; nothing is truncated or cut into blocks.
 - **Validation.** A line that is not a JSON object, lacks a required field, or has a field of the wrong type is a parse error, as is a `time` without an offset, a `kind` of `memory`, and a `title_by` other than `user` or `agent`: it is counted and yields nothing, it stays in the raw mirror, and the lines around it are read as usual. An optional field that is `null` or an empty string counts as absent. Fields Origin does not know are left in the raw mirror.
-- **Ids.** A line whose event id the store already has adds nothing, so a line sent twice is ingested once. Give every event of a source its own `id`, whichever session it belongs to.
+- **Ids.** A line whose event id the store already has adds nothing, so a line sent twice is ingested once. Give every event of a source its own `id`, whichever session it belongs to. A source is one across stores: on a hub, the sources of one name on several devices, and the lines appended to it there, share one space of ids.
 - **Sessions and titles.** A session's events are those with its `session`, from any file of the source. Its title is that of its latest line with a `title`, except that a title not given by the person never replaces one that was, as for Claude Code.
 
 ### On a device
@@ -184,7 +184,7 @@ Each directory under `~/.origin/sources/` (or `$ORIGIN_HOME/sources/`) is a sour
     └── inbox.jsonl
 ```
 
-- **Names.** 2 to 32 lowercase letters, digits, and hyphens, starting with a letter, other than the ids of the built-in sources above and `origin`, `hub`, `local`, `all`, and `devices`. A directory with another name is ignored, with a warning when Origin syncs. The directory may be a link to one elsewhere.
+- **Names.** 2 to 32 lowercase letters, digits, and hyphens, starting with a letter, other than the ids of the built-in sources above and `origin`, `hub`, `local`, `all`, and `devices`. A directory with another name is ignored, with a warning when Origin syncs. The directory may be a link to one elsewhere; links below it, to files or directories, are not followed.
 - **Files.** Every `.jsonl` file below the directory, at any depth, oldest first; hidden files and directories (`.name`) are left out. Only complete lines are read, so a writer appends a whole line, ending with a line break, at a time. A file rewritten rather than appended to is mirrored again from its start as a new generation, as an agent's log would be, and its lines whose ids the source already has add nothing.
 - **Version.** The first line of a `VERSION` file in the directory, if there is one, is recorded as the agent version of the events read after it.
 - **Mirrors.** As for agents, under `raw/<name>/` with the files' paths in the directory. A device connected to a hub pushes them, and the hub keeps them as `raw/devices/<device>/<name>/…`; a relay sends the files' lines to the hub instead.

@@ -204,8 +204,8 @@ export interface MigrateOptions {
   home: string;
   /** The database file, for messages. */
   file?: string;
-  /** Adapters, for migrations that parse mirrored lines again. */
-  adapters?: SourceAdapter[];
+  /** Adapters, for migrations that parse mirrored lines again: a list, or a lookup by source id. */
+  adapters?: SourceAdapter[] | ((source: string) => SourceAdapter | null);
   /**
    * Called once before the first migration this process runs, if any: set up what migrations
    * read, such as the frame store of a hub that keeps its sealed frames in a bucket. The store is
@@ -323,12 +323,14 @@ export function migrate(db: Database, opts: MigrateOptions): void {
     });
   } else if (found < latest || !stamped) {
     opts.beforeMigrate?.(db);
-    const byId = new Map((opts.adapters ?? []).map((a) => [a.id, a]));
+    const list = opts.adapters;
+    const byId = new Map((Array.isArray(list) ? list : []).map((a) => [a.id, a]));
+    const find = typeof list === 'function' ? list : (source: string) => byId.get(source) ?? null;
     const ctx: MigrationContext = {
       db,
       home: opts.home,
       adapter(source) {
-        const adapter = byId.get(source);
+        const adapter = find(source);
         if (!adapter) {
           throw new OriginError(
             `This step re-reads the store's ${source} mirrors, which needs the ${source} adapter: open the store with the origin command.`,

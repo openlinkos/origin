@@ -20,7 +20,7 @@ import { setUpFrames } from './hub/bucket.js';
 import { type HubConfig, readHubConfig } from './hub/config.js';
 import { relayFileWithHub } from './hub/relay.js';
 import { pushFile } from './hub/sync.js';
-import { sourceAdapters } from './sources.js';
+import { storeAdapters } from './sources.js';
 
 /**
  * `origin sync --hook <agent>`: live ingestion (see docs/architecture.md#live-ingestion). An
@@ -88,7 +88,7 @@ function locatedFiles(adapter: SourceAdapter, paths: string[]): SourceFile[] {
 
 function openStore(home: string): Database {
   const db = openDatabase(dbPath(home), {
-    adapters: sourceAdapters(home),
+    adapters: storeAdapters(home),
     log: (m) => console.error(m),
   });
   setUpFrames(db, home, { command: 'other', env: process.env });
@@ -184,10 +184,13 @@ async function runHook(agent: string, io: HookIO): Promise<number> {
     const store = db;
     await toHub(async (doFetch) => {
       for (const file of changed) {
-        await pushFile(
+        const r = await pushFile(
           { db: store, home, hub, fetch: doFetch },
           { source: adapter.id, path: file.absPath },
         );
+        for (const f of r.refused) {
+          console.error(`origin sync: not sent: ${f.path}: the hub refused it: ${f.reason}`);
+        }
       }
     });
     return 0;

@@ -235,6 +235,15 @@ describe('a store of 0.1.0', () => {
     const db = openDatabase(file, { migrations: needsFake, adapters: [adapter] });
     expect(userVersion(db)).toBe(2);
     db.close();
+    // Or a lookup by id, which finds the adapter of any source the store may hold.
+    legacyStore(path.join(tmp, 'other.db')).close();
+    const asked: string[] = [];
+    const lookup = (source: string) => {
+      asked.push(source);
+      return source === 'fake' ? adapter : null;
+    };
+    openDatabase(path.join(tmp, 'other.db'), { migrations: needsFake, adapters: lookup }).close();
+    expect(asked).toEqual(['fake']);
   });
 });
 

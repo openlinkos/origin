@@ -81,7 +81,7 @@ curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=2026/11
 
 ## Choose ids and sessions
 
-- **An id names one event, for good.** Give every event of a source its own `id`, and the same one each time you write it: the writer's own id, such as a chat message's, serves best. A line whose `id` the source already has adds nothing, so writing a line again, when you are not sure it was written, is safe.
+- **An id names one event, for good.** Give every event of a source its own `id`, and the same one each time you write it: the writer's own id, such as a chat message's, serves best. A line whose `id` the source already has adds nothing, so writing a line again, when you are not sure it was written, is safe. Sources of one name on several of your devices are one source on your hub, so their ids must not collide either.
 - **Lines are never changed.** Like Origin's whole archive, a source is append-only: an event, once read, keeps its text. To say something else, write a new event with a new id.
 - **A session is one conversation.** A chat thread, an incident, a run of a job, a day of notes: whatever you would want to open as a whole. Its events are shown in time order, whichever file holds them.
 - **Ids Origin gives its own objects** start with `ent_`, `thr_`, `rcl_`, or `prp_`; do not start a session id with them, since `get` would read it as one of those.

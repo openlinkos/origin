@@ -29,7 +29,7 @@ import { createHubServer, MAX_LINES_BODY } from '../src/hub/server.js';
 import { syncWithHub } from '../src/hub/sync.js';
 import { main } from '../src/main.js';
 import { main as recall } from '../src/recall.js';
-import { hubAdapters, sourceAdapter, sourceAdapters } from '../src/sources.js';
+import { hubAdapters, sourceAdapters, storeAdapters } from '../src/sources.js';
 
 /** Synthetic event lines: a person's notes pipeline and a chat bot, never real logs. */
 const HOUR = 3_600_000;
@@ -209,7 +209,7 @@ describe('your own sources on a device', () => {
 
   it('ingests one file through its adapter, as a hook would', async () => {
     const file = writeSource('notes', 'inbox.jsonl', notesLines().slice(0, 1));
-    const adapter = sourceAdapter(home, 'notes');
+    const adapter = storeAdapters(home)('notes');
     expect(adapter?.locate?.(file)).toEqual({ absPath: file, relPath: 'inbox.jsonl' });
     const db = openDatabase(dbPath(home));
     try {
@@ -474,6 +474,22 @@ describe('your own sources on a hub', () => {
           { source: 'notes', path: path.join(dir, 'a.jsonl'), reason: 'Unknown source: notes' },
         ],
         recallsPushed: 0,
+      });
+      // A proxy in front of the hub that refuses a body with a page of its own, the same.
+      const proxy: typeof fetch = async (input, init) =>
+        String(input).endsWith('/v1/ingest')
+          ? new Response('<html>\n<h1>413 Request Entity Too Large</h1>\n</html>', { status: 413 })
+          : fetch(input, init);
+      expect(
+        await syncWithHub({ db: deviceDb, home: deviceHome, hub, fetch: proxy }),
+      ).toMatchObject({
+        files: 0,
+        refused: [
+          {
+            source: 'notes',
+            reason: '413 <html> <h1>413 Request Entity Too Large</h1> </html>',
+          },
+        ],
       });
       // Once the hub knows it, the next sync sends it.
       expect(await syncWithHub({ db: deviceDb, home: deviceHome, hub })).toMatchObject({
