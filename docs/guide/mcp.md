@@ -47,7 +47,7 @@ An **entry** in a result has these fields:
 
 An **event** has `id`, `time`, `source`, `project`, `session` (the session id), `role` (`user`, `assistant`, or `system`), `kind` (`message`, `tool_use`, `tool_result`, `meta`, `system`, or `memory` for a version of a memory file), and `text`, cut to a length that depends on the tool, with the number of characters cut noted at the end.
 
-A **session** has `session`, `source`, `project`, `title` (the title its agent gave it, or null), `prompt` (for a session without a title, its first prompt, cut to 80 characters), `started`, `ended`, `events` (the number of its visible events), and `thread`, the id of the thread it is in with other sessions, or null.
+A **session** has `session`, `source`, `project`, `title` (the title its agent gave it, or null), `prompt` (for a session without a title, the first prompt the user wrote in it, cut to 80 characters, or null), `started`, `ended`, `events` (the number of its visible events), and `thread`, the id of the thread it is in with other sessions, or null.
 
 A **thread** is the sessions of one project that belong to one piece of work, with one agent or several: those that agents linked with [`follow`](#follow), and those on the same git branch, other than a default branch such as `main`, within 30 days of each other. Origin derives threads from the archive; nothing about them is written by hand. A thread's id comes from its first session, so it changes only when an earlier session joins it (see [Threads](../architecture.md#threads)).
 
@@ -55,7 +55,7 @@ A **stub** is what a result shows of what is next to it: one line with an id, fo
 
 ## brief {#brief}
 
-What the user's memory holds for where the agent works, one line per item: a brief of the user's preferences and boundaries, the project's latest decisions and facts, and its latest sessions with any agent, and with `about`, the entries that match it. It is what an agent's hooks are handed (see [Recall](./recall.md)), for agents whose hooks cannot hand anything over, and it is recorded the same way, as a recall.
+What the user's memory holds for where the agent works, one line per item: a brief of the user's preferences and boundaries, the project's latest decisions and facts, and its latest conversations of the user's with any agent, and with `about`, the entries that match it. It is what an agent's hooks are handed (see [Recall](./recall.md)), for agents whose hooks cannot hand anything over, and it is recorded the same way, as a recall.
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
@@ -147,7 +147,7 @@ Sessions in a time range, newest first; or, with `session`, the events of one se
 | `source` | source id | any | Sessions of this source only; with `session`, the source of that session |
 | `project` | string | any | Sessions of this project only |
 | `session` | string | none | A session id: list its events instead |
-| `turn` | integer, 0 or more | none | With `session`: only the events of this turn. A turn starts at a prompt, 1 at the first; 0 is what came before the first prompt |
+| `turn` | integer, 0 or more | none | With `session`: only the events of this turn. A turn starts at a prompt the user wrote, or a command the agent acted on, 1 at the first; 0 is what came before the first prompt |
 | `after` | event id | none | With `session`: only the events after this one, the last of the page before |
 | `include_tools` | boolean | `false` | With `session`: also list tool calls and results, injected context, and system events, not only messages |
 | `limit` | integer, 1 to 500 | 50 | At most this many sessions, or events |

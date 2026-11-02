@@ -223,9 +223,9 @@ export interface SessionRow {
   /** The title the agent, or the user through the agent, gave the session; null if none. */
   title: string | null;
   /**
-   * For a session without a title, the first prompt the user typed in it, cut short (see
-   * promptTitle in store.ts): a provisional name, not a title. Null for a session with a title, or
-   * without such a prompt.
+   * For a session without a title, the first prompt its owner wrote in it, cut short (see
+   * isOwnerPrompt in authors.ts, promptTitle in prompt.ts): a provisional name, not a title. Null for
+   * a session with a title, or without such a prompt (a sub-agent's, say).
    */
   prompt: string | null;
   startedAt: number | null;

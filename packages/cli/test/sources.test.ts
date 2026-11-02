@@ -57,7 +57,10 @@ function eventLine(fields: Record<string, unknown>): string {
   });
 }
 
-/** Two sessions on one work branch, a turn each, and a note that is not an event. */
+/**
+ * Two sessions on one work branch, a turn each, and a note that is not an event. The person's own
+ * pipeline writes their prompts, and says so.
+ */
 function notesLines(): string[] {
   return [
     eventLine({
@@ -67,6 +70,7 @@ function notesLines(): string[] {
       text: 'Add exponential backoff to the upload client',
       title: 'Upload retries',
       title_by: 'user',
+      author: 'owner',
     }),
     eventLine({
       id: 'a2',
@@ -81,6 +85,7 @@ function notesLines(): string[] {
       session: 'retry-2',
       time: T0 + 2 * HOUR,
       text: 'Make the retry count configurable',
+      author: 'owner',
     }),
     eventLine({
       id: 'b2',
@@ -497,8 +502,8 @@ describe('your own sources on a hub', () => {
         listEvents(hubDb, { source: 'notes' }).map((e) => [e.id, e.author, e.authorSignal]);
       const before = authors();
       expect(before.filter((a) => a[1] !== null)).toEqual([
-        ['notes:a1', 'person', 'default'],
-        ['notes:b1', 'person', 'default'],
+        ['notes:a1', 'owner', 'author'],
+        ['notes:b1', 'owner', 'author'],
       ]);
       hubDb.close();
       downgradeToV7(path.join(hubHome, 'origin.db'));

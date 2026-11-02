@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
-import { type SessionPrompt, sessionPrompts } from './store.js';
+import { isOwnerConversation, type SessionPrompt, sessionPrompts } from './store.js';
 
 /**
  * Threads (see docs/architecture.md#threads): the sessions of one piece of work, as the person sees
@@ -13,9 +13,10 @@ import { type SessionPrompt, sessionPrompts } from './store.js';
  *   carries a link (`"link": "lnk_…"`) and the session it continues (`"follows": "<source>:<id>"`).
  *   Ingestion derives a row of session_follow from each such event, the same on every store that
  *   parses the line. A link counts while its event is visible (invariant 2).
- * - R2, branch. Sessions of the same project on the same git branch, other than a default branch
- *   (DEFAULT_BRANCHES), whose times are at most BRANCH_GAP_MS apart (from the end of one to the
- *   start of the next).
+ * - R2, branch. The owner's conversations (see isOwnerConversation in store.ts) of the same project
+ *   on the same git branch, other than a default branch (DEFAULT_BRANCHES), whose times are at most
+ *   BRANCH_GAP_MS apart (from the end of one to the start of the next). A sub-agent's session or a
+ *   headless run on the branch is no piece of the owner's work by itself, and joins none this way.
  *
  * Only sessions with visible events take part. A group of one session is no thread. A thread's id
  * is derived from its root, the member that started first (ties by source, then session id), so
@@ -127,6 +128,23 @@ const NODE_COLUMNS = 'source, session_id, project, git_branch, started_at, ended
 const VISIBLE_SESSION = 'event_count > 0 AND started_at IS NOT NULL';
 
 const keyOf = (source: string, sessionId: string) => `${source}\n${sessionId}`;
+
+/**
+ * Whether a session takes part in R2, its branch's runs: the owner's conversation (see
+ * isOwnerConversation), looked up once per session.
+ */
+function branchMember(db: Database): (n: Node) => boolean {
+  const known = new Map<string, boolean>();
+  return (n) => {
+    const k = keyOf(n.source, n.session_id);
+    let owner = known.get(k);
+    if (owner === undefined) {
+      owner = isOwnerConversation(db, n.source, n.session_id);
+      known.set(k, owner);
+    }
+    return owner;
+  };
+}
 
 /** Union-find over session keys. */
 class Groups {
@@ -268,6 +286,7 @@ export function refreshThreads(
   const nodes = new Map<string, Node>();
   const groups = new Groups();
   const runs = new Map<string, Map<string, string[]>>(); // by project and branch: each key's run
+  const member = branchMember(db);
   const load = (source: string, sessionId: string): Node | null => {
     const k = keyOf(source, sessionId);
     const known = nodes.get(k);
@@ -283,21 +302,23 @@ export function refreshThreads(
     if (!node) continue; // no visible events: in no thread
     const k = keyOf(source, sessionId);
     groups.find(k);
-    if (node.project !== null && isWorkBranch(node.git_branch)) {
+    if (node.project !== null && isWorkBranch(node.git_branch) && member(node)) {
       const branchKey = `${node.project}\n${node.git_branch}`;
       let byKey = runs.get(branchKey);
       if (!byKey) {
         byKey = new Map();
-        const all = q.branch.all(node.project, node.git_branch) as unknown as Node[];
-        for (const run of branchRuns(all)) for (const member of run) byKey.set(member, run);
+        const all = (q.branch.all(node.project, node.git_branch) as unknown as Node[]).filter(
+          member,
+        );
+        for (const run of branchRuns(all)) for (const key of run) byKey.set(key, run);
         runs.set(branchKey, byKey);
       }
-      for (const member of byKey.get(k) ?? []) {
-        if (member === k) continue;
-        const at = member.indexOf('\n');
-        const other = load(member.slice(0, at), member.slice(at + 1));
+      for (const key of byKey.get(k) ?? []) {
+        if (key === k) continue;
+        const at = key.indexOf('\n');
+        const other = load(key.slice(0, at), key.slice(at + 1));
         if (!other) continue;
-        groups.union(k, member);
+        groups.union(k, key);
         visit(other.source, other.session_id);
       }
     }
@@ -317,9 +338,10 @@ export function refreshThreads(
 /**
  * Derive every follow link from the events, and every thread from the sessions and the links, from
  * scratch: what refreshThreads keeps up to date as it goes. Must run inside a write transaction (see
- * rebuildThreads).
+ * rebuildThreads). `anySession` lets R2 join every session on a branch, as migration 5 did before
+ * the store knew who wrote what (version 8 derives the threads again by the rule).
  */
-export function deriveThreads(db: Database): void {
+export function deriveThreads(db: Database, opts: { anySession?: boolean } = {}): void {
   db.exec('DELETE FROM session_follow');
   // Through the search index: only tool results that contain a link id are read.
   const candidates = db
@@ -339,8 +361,9 @@ export function deriveThreads(db: Database): void {
   }
   const groups = new Groups();
   const byBranch = new Map<string, Node[]>();
+  const member = opts.anySession ? () => true : branchMember(db);
   for (const n of nodes.values()) {
-    if (n.project === null || !isWorkBranch(n.git_branch)) continue;
+    if (n.project === null || !isWorkBranch(n.git_branch) || !member(n)) continue;
     const k = `${n.project}\n${n.git_branch}`;
     const list = byBranch.get(k);
     if (list) list.push(n);

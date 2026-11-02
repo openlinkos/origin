@@ -101,13 +101,13 @@ Origin records who wrote each message: you, someone else, an agent, or a program
 {"id":"msg-2002","session":"incident-42","time":"2026-11-02T09:33:00Z","role":"user","kind":"message","text":"Rolling it back now.","author":"person","speaker":"Sam"}
 ```
 
-A recording with no speaker information says nothing, and its lines are a person's. The rules, and how each agent's logs say who wrote a message, are in [Authors](../architecture.md#authors).
+A recording with no speaker information says nothing, and its lines are a person's. Your own messages count for more than others': only they name a session without a title, start its turns, make it one of your conversations, which briefs list and branches join into threads, and are the words recall weighs. The rules, and how each agent's logs say who wrote a message, are in [Authors](../architecture.md#authors).
 
 ## Titles, projects, and threads
 
-- **Titles.** A line with a `title` names its session, and the latest wins. Add `"title_by": "user"` to a title the person gave: a later title without it does not replace it, as a session you renamed in Claude Code keeps its name. Without a title, a session is named by its first user message, as for any agent.
-- **Projects.** `project` names the project, as Origin names projects elsewhere: the last segment of a working directory, such as `demo-app`. With `cwd`, the working directory itself, briefs tell two checkouts with the same name apart. An agent that starts in a project is handed the project's latest sessions of any source, yours included.
-- **Threads.** Sessions of a project on the same `branch`, other than a default branch such as `main`, within 30 days of each other, form a [thread](./concepts.md#threads) with each other and with the agents' sessions on that branch. An agent can also join its session to one of yours with `follow`.
+- **Titles.** A line with a `title` names its session, and the latest wins. Add `"title_by": "user"` to a title the person gave: a later title without it does not replace it, as a session you renamed in Claude Code keeps its name. Without a title, a session is named by the first message you wrote in it (`"author": "owner"`), as for any agent.
+- **Projects.** `project` names the project, as Origin names projects elsewhere: the last segment of a working directory, such as `demo-app`. With `cwd`, the working directory itself, briefs tell two checkouts with the same name apart. An agent that starts in a project is handed the project's latest conversations of yours, of any source: a session of your source is one once it holds a message of yours.
+- **Threads.** Your conversations of a project on the same `branch`, other than a default branch such as `main`, within 30 days of each other, form a [thread](./concepts.md#threads) with each other and with your sessions with agents on that branch. An agent can also join its session to one of yours with `follow`.
 
 ## What you see
 

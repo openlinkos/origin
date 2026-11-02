@@ -170,11 +170,12 @@ describe('a session by turns', () => {
     db.prepare = prepare;
     expect(page.turns.map((t) => t.number)).toEqual(Array.from({ length: 20 }, (_, i) => i + 11));
     expect(page.turns.reduce((n, t) => n + t.events, 0)).toBe(80);
-    // The session, its prompts through their index, whether something precedes the first, and the range.
+    // The session's name and its prompts through their index, then whether something precedes the
+    // first, and the range.
     expect(statements.some((s) => s.includes('INDEXED BY event_user_message'))).toBe(true);
     expect(
       statements.filter((s) => /FROM event e\b/.test(s) && !s.includes('INDEXED BY')),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
   });
 
   it('stops a page before a turn that would pass the budget, and shows a long turn in parts', async () => {

@@ -1,14 +1,21 @@
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { AUTHOR_SQL, isOwnerPrompt } from './authors.js';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { CURRENT_VERSION, type EntryKind } from './entries.js';
 import { storeName } from './identity.js';
 import { findNewest, searchEvents } from './search.js';
-import { getEvent, listThreadSessions, sessionPrompts, VISIBLE_EVENT } from './store.js';
+import {
+  getEvent,
+  isOwnerConversation,
+  listThreadSessions,
+  sessionPrompts,
+  VISIBLE_EVENT,
+} from './store.js';
 import { threadLastPrompt, threadOf, threadSummary } from './threads.js';
-import type { EventRow } from './types.js';
+import type { Author, EventRow } from './types.js';
 
 /**
  * Recall (see docs/architecture.md#recall): what Origin hands an agent without being asked, and the
@@ -309,22 +316,29 @@ export function matchTerms(
 }
 
 /**
- * The user's own words, the background of TermWeights: their latest prompts in the archive, each
- * cut short (long ones are mostly pasted text, and segmenting them is what a recall spends most on).
+ * The user's own words, the background of TermWeights: their latest prompts in the archive (see
+ * isOwnerPrompt), each cut short (long ones are mostly pasted text, and segmenting them is what a
+ * recall spends most on). What agents, programs, and other people wrote does not count: it does not
+ * tell what the user says all the time.
  */
 const BACKGROUND_PROMPTS = 1_000;
 const BACKGROUND_CHARS = 1_000;
 
-function latestPrompts(db: Database): string[] {
-  return (
-    db
-      .prepare(
-        `SELECT e.text FROM event e INDEXED BY event_user_message
-         WHERE e.role = 'user' AND e.kind = 'message' AND ${VISIBLE_EVENT}
-         ORDER BY e.ts DESC LIMIT ?`,
-      )
-      .all(BACKGROUND_PROMPTS) as unknown as Array<{ text: string }>
-  ).map((r) => r.text.slice(0, BACKGROUND_CHARS));
+export function latestPrompts(db: Database): string[] {
+  const rows = db
+    .prepare(
+      `SELECT e.text, (${AUTHOR_SQL}) AS author FROM event e INDEXED BY event_user_message
+       WHERE e.role = 'user' AND e.kind = 'message' AND ${VISIBLE_EVENT}
+       ORDER BY e.ts DESC, e.seq DESC`,
+    )
+    .iterate() as Iterable<{ text: string; author: Author }>;
+  const out: string[] = [];
+  for (const r of rows) {
+    if (!isOwnerPrompt({ ...r, role: 'user', kind: 'message' })) continue;
+    out.push(r.text.slice(0, BACKGROUND_CHARS));
+    if (out.length >= BACKGROUND_PROMPTS) break;
+  }
+  return out;
 }
 
 /** A current entry recall may hand over. */
@@ -495,9 +509,11 @@ function threadLine(db: Database, id: string, until?: number): string | null {
 }
 
 /**
- * The latest sessions of the project, other than this one, with their names and last prompts:
- * those whose working directory is at or below its root, or of the same name when the session
- * has no directory. A session in a thread with others stands for its thread, on one line.
+ * The latest of the owner's conversations in the project (see isOwnerConversation), other than this
+ * session, with their names and last prompts: those whose working directory is at or below its
+ * root, or of the same name when the session has no directory. A sub-agent's session, a headless
+ * run, or a session of other people's words alone is no conversation of the owner's, and is left
+ * out. A session in a thread with others stands for its thread, on one line.
  */
 function recentSessions(db: Database, plan: RecallPlan): Draft[] {
   if (!plan.project && !plan.root) return [];
@@ -520,6 +536,7 @@ function recentSessions(db: Database, plan: RecallPlan): Draft[] {
   for (const r of rows) {
     if (drafts.length >= LAYER_MAX.sessions) break;
     if (!inProject(plan, r.cwd, r.project)) continue;
+    if (!isOwnerConversation(db, r.source, r.session_id)) continue;
     const thread = threadOf(db, r.source, r.session_id);
     if (thread) {
       if (threads.has(thread)) continue;

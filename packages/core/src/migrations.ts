@@ -104,7 +104,9 @@ export const MIGRATIONS: Migration[] = [
       // A CHECK constraint cannot be changed in place: the table is made again, rows and all. A
       // store of 0.3 has no recall tables yet; the schema creates them after the migrations.
       if (hasTable(db, 'recall_item')) db.exec(RECALL_ITEM_V5);
-      deriveThreads(db);
+      // By the rules as they were: who wrote what is known from version 8 on, which derives the
+      // threads again.
+      deriveThreads(db, { anySession: true });
     },
   },
   {

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-4ec76b45
+sourceHash: sha256-b4fc534b
 ---
 
 # MCP 工具
@@ -51,7 +51,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 
 **事件**有 `id`、`time`、`source`、`project`、`session`（会话 id）、`role`（`user`、`assistant` 或 `system`）、`kind`（`message`、`tool_use`、`tool_result`、`meta`、`system`，或表示记忆文件某个版本的 `memory`）和 `text`；`text` 按工具截断到不同长度，末尾注明截掉了多少字符。
 
-**会话**有 `session`、`source`、`project`、`title`（Agent 给它起的标题，没有则为 null）、`prompt`（没有标题的会话的第一条提示，截到 80 个字符）、`started`、`ended`、`events`（可见事件的数量），以及 `thread`，即它与其他会话同在的那条线索的 id，没有则为 null。
+**会话**有 `session`、`source`、`project`、`title`（Agent 给它起的标题，没有则为 null）、`prompt`（没有标题的会话中用户写的第一条提示，截到 80 个字符，没有则为 null）、`started`、`ended`、`events`（可见事件的数量），以及 `thread`，即它与其他会话同在的那条线索的 id，没有则为 null。
 
 **线索**是同一项目中属于同一件工作的那些会话，可以出自一个或多个 Agent：Agent 用 [`follow`](#follow) 连起来的会话，以及位于同一个 git 分支（`main` 这样的默认分支除外）上、彼此相隔不超过 30 天的会话。Origin 从归档中推导线索，它的任何部分都不是手写的。线索的 id 取自它的第一个会话，所以只有更早的会话加入时才会改变（见[线索](../architecture.md#threads)）。
 
@@ -59,7 +59,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 
 ## brief {#brief}
 
-用户的记忆中与 Agent 工作之处有关的内容，每项一行：一份简报，包括用户的偏好与边界、项目最新的决定和事实、这个项目最近与任意 Agent 的会话；加上 `about` 时，还有与它匹配的条目。它就是 Agent 的 hook 会拿到的内容（见[召回](./recall.md)），供 hook 无法交出内容的 Agent 使用，也以同样的方式记录为一次召回。
+用户的记忆中与 Agent 工作之处有关的内容，每项一行：一份简报，包括用户的偏好与边界、项目最新的决定和事实、这个项目里用户最近与任意 Agent 的对话；加上 `about` 时，还有与它匹配的条目。它就是 Agent 的 hook 会拿到的内容（见[召回](./recall.md)），供 hook 无法交出内容的 Agent 使用，也以同样的方式记录为一次召回。
 
 | 参数 | 类型 | 默认值 | 含义 |
 |---|---|---|---|
@@ -151,7 +151,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 | `source` | 来源 id | 任意 | 只要这个来源的会话；与 `session` 一起使用时，指那个会话的来源 |
 | `project` | 字符串 | 任意 | 只要这个项目的会话 |
 | `session` | 字符串 | 无 | 会话 id：改为列出它的事件 |
-| `turn` | 整数，0 或更大 | 无 | 与 `session` 一起使用时：只列出这一轮的事件。一轮从一条提示开始，第一条为 1；0 是第一条提示之前的内容 |
+| `turn` | 整数，0 或更大 | 无 | 与 `session` 一起使用时：只列出这一轮的事件。一轮从用户写的一条提示、或 Agent 据以工作的一条命令开始，第一条为 1；0 是第一条提示之前的内容 |
 | `after` | 事件 id | 无 | 与 `session` 一起使用时：只列出这个事件之后的事件，即上一页的最后一个之后 |
 | `include_tools` | 布尔值 | `false` | 与 `session` 一起使用时：除了消息，也列出工具调用和结果、注入的上下文和系统事件 |
 | `limit` | 整数，1 到 500 | 50 | 最多返回这么多会话或事件 |

@@ -6,7 +6,7 @@ Claude Code and Codex get recall through their hooks. Other agents ask for it th
 
 ## What an agent is handed
 
-- **When a session starts**, a brief: your preferences and boundaries for this project and those that hold everywhere, this project's latest decisions and facts, and its latest sessions with any agent in the last 30 days, where the sessions of one piece of work, a [thread](./concepts.md#threads), take one line together.
+- **When a session starts**, a brief: your preferences and boundaries for this project and those that hold everywhere, this project's latest decisions and facts, and its latest conversations of yours with any agent in the last 30 days, where the sessions of one piece of work, a [thread](./concepts.md#threads), take one line together. A sub-agent's session, a headless run, or a session of other people's words alone is none of your conversations, and is left out.
 - **With each prompt**, the entries whose first line shares rare enough words with it, at most five, leaving out what the session was already handed.
 
 Each item is one line, an id and the start of the entry, so a brief stays under about 800 tokens and a prompt's matches under 400. The agent asks Origin's `get` for the rest: an entry's text and sources, or a session's turns and the entries written from it, each with the ids of what is next to it (see [MCP tools](./mcp.md#get)). For example, at the start of a session:
@@ -98,7 +98,7 @@ The admin UI shows the same on its Recalls page, and marks each recall in its tu
 - **The project** is the git work tree you are in, or the directory itself outside one. Memory and knowledge of other projects are never handed over. Two checkouts with the same name are told apart by their directories.
 - **Your preferences** of other projects are not in a brief, since a memory written in one project rarely says whether it holds elsewhere, but a prompt that matches one brings it. An entry with no project is in every brief, so give an entry no project when it holds everywhere.
 - **An agent's own memories** of the project, imported from its memory files, are not handed back to it: it loads them itself. Other agents get them.
-- **Matching** looks for the words of your prompt in the first line of each entry, weighing each word by how rarely you use it in your own prompts, so the words you use all the time count for little. It finds entries that use your words, not ones that say the same thing differently.
+- **Matching** looks for the words of your prompt in the first line of each entry, weighing each word by how rarely you use it in your own prompts, those you wrote yourself rather than an agent, a program, or someone else, so the words you use all the time count for little. It finds entries that use your words, not ones that say the same thing differently.
 
 The rules are described in [Architecture](../architecture.md#recall).
 

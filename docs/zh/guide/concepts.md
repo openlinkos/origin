@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-9e6b073c
+sourceHash: sha256-4ddae353
 ---
 
 # 核心概念
@@ -20,7 +20,7 @@ sourceHash: sha256-9e6b073c
 一件工作常常要用好几个会话：你第二天接着做，Agent 压缩上下文之后接着做，或者换一个 Agent 接着做。Origin 不调用模型，按两条规则把这样的会话归入一条**线索**：
 
 - **跟随链接。** 你接着做某个早先会话里的工作时，Agent 用那个会话的 id 调用 `follow`，Origin 在每台归档这份记录的机器上，从 Agent 自己的记录中读出这条链接（见 [MCP 工具](./mcp.md#follow)）。
-- **分支。** 同一项目中位于同一个 git 分支（`main`、`master` 这样的默认分支除外）上、彼此相隔不超过 30 天的会话。在 Origin 读取的 Agent 中，Claude Code 会记录分支，你自己的来源也可以给出分支。
+- **分支。** 同一项目中位于同一个 git 分支（`main`、`master` 这样的默认分支除外）上、彼此相隔不超过 30 天的你的对话；分支上子 Agent 的会话或无界面运行不会以这种方式加入线索。在 Origin 读取的 Agent 中，Claude Code 会记录分支，你自己的来源也可以给出分支。
 
 线索有一个 id（`thr_…`），以及它第一个会话的名称和项目。Agent 在简报中看到线索，几个会话组成的线索只占一行；在 `timeline` 中也能看到；用 `get` 打开时，会列出线索的会话、Agent、分支，以及从中写下的条目；你可以用 `origin timeline` 和 `origin show thr_…` 查看它们。线索的任何部分都不是手写的：遗忘一条链接的事件，或一个会话的全部事件，这个会话就会离开它的线索。确切的规则见架构中的[线索](../architecture.md#threads)。
 

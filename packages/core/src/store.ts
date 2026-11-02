@@ -1,5 +1,11 @@
 import path from 'node:path';
-import { AUTHOR_SIGNAL_SQL, AUTHOR_SQL, SPEAKER_SQL } from './authors.js';
+import {
+  AUTHOR_SIGNAL_SQL,
+  AUTHOR_SQL,
+  isOwnerPrompt,
+  OWNER_PROMPT_SQL,
+  SPEAKER_SQL,
+} from './authors.js';
 import type { Database } from './db.js';
 import { readMirrorLine } from './mirror.js';
 import { parseRawPath, rawDir } from './paths.js';
@@ -184,22 +190,16 @@ export function listSessions(
 }
 
 /**
- * The first prompt of a session (see promptTitle), from its visible user messages in time order:
- * computed when sessions are read, so that forgetting the event it came from drops it too
+ * The first prompt of a session's owner (see isOwnerPrompt), from its visible user messages in time
+ * order: computed when sessions are read, so that forgetting the event it came from drops it too
  * (invariant 2).
  */
 function promptFinder(db: Database): (source: string, sessionId: string) => string | null {
   let stmt: ReturnType<Database['prepare']> | null = null;
   return (source, sessionId) => {
-    stmt ??= db.prepare(
-      `SELECT e.text FROM event e
-        WHERE e.source = ? AND e.session_id = ? AND e.role = 'user' AND e.kind = 'message'
-          AND ${VISIBLE_EVENT}
-        ORDER BY e.ts, e.seq`,
-    );
-    for (const row of stmt.iterate(source, sessionId) as Iterable<{ text: string }>) {
-      const prompt = promptTitle(row.text);
-      if (prompt !== null) return prompt;
+    stmt ??= db.prepare(USER_MESSAGES);
+    for (const r of stmt.iterate(source, sessionId) as Iterable<UserMessage>) {
+      if (isOwnerPrompt(asInput(r))) return promptTitle(r.text);
     }
     return null;
   };
@@ -216,44 +216,73 @@ export interface SessionPrompt extends EventPosition {
   id: string;
   /** The prompt, cut short as a provisional name is (see promptTitle). */
   prompt: string;
+  /** Who wrote it (see authors.ts): the owner, for a prompt; the system, as a rule, for a command. */
+  author: Author;
+  speaker: string | null;
 }
 
 /**
- * The prompts of a session, in time order: its visible user messages that are prompts the user
- * typed (see promptTitle), except those of sub-agents, whose threads Claude Code marks `sidechain`
- * in an event's meta. Read through the index of user messages (event_user_message), so that the
- * turns of a long session are found without reading its other events.
+ * The prompts of a session, in time order: its visible prompts of the owner (see isOwnerPrompt),
+ * which a sub-agent's, an agent's, a program's, or another person's message never is. Read through
+ * the index of user messages (event_user_message), so that the turns of a long session are found
+ * without reading its other events.
  */
 export function sessionPrompts(db: Database, source: string, sessionId: string): SessionPrompt[] {
   const out: SessionPrompt[] = [];
   for (const r of userMessages(db, source, sessionId)) {
-    const prompt = promptTitle(r.text);
-    if (prompt !== null) out.push({ id: r.id, seq: r.seq, ts: r.ts, prompt });
+    if (!isOwnerPrompt(asInput(r))) continue;
+    out.push({ ...positionOf(r), prompt: promptTitle(r.text) as string });
   }
   return out;
 }
 
-/** A session's visible user messages, sub-agents' excepted, through event_user_message. */
-function userMessages(
-  db: Database,
-  source: string,
-  sessionId: string,
-): Array<{ id: string; seq: number; ts: number; text: string }> {
-  return db
-    .prepare(
-      `SELECT e.id, e.seq, e.ts, e.text FROM event e INDEXED BY event_user_message
-        WHERE e.source = ? AND e.session_id = ? AND e.role = 'user' AND e.kind = 'message'
-          AND (e.meta IS NULL OR json_extract(e.meta, '$.sidechain') IS NOT 1)
-          AND ${VISIBLE_EVENT}
-        ORDER BY e.ts, e.seq`,
-    )
-    .all(source, sessionId) as unknown as Array<{
-    id: string;
-    seq: number;
-    ts: number;
-    text: string;
-  }>;
+/** A user message of a session, with its effective author (see authors.ts). */
+interface UserMessage {
+  id: string;
+  seq: number;
+  ts: number;
+  text: string;
+  author: Author;
+  speaker: string | null;
 }
+
+/** A session's visible user messages, in time order, through event_user_message. */
+const USER_MESSAGES = `SELECT e.id, e.seq, e.ts, e.text, (${AUTHOR_SQL}) AS author,
+    (${SPEAKER_SQL}) AS speaker
+  FROM event e INDEXED BY event_user_message
+  WHERE e.source = ? AND e.session_id = ? AND e.role = 'user' AND e.kind = 'message'
+    AND ${VISIBLE_EVENT}
+  ORDER BY e.ts, e.seq`;
+
+function userMessages(db: Database, source: string, sessionId: string): UserMessage[] {
+  return db.prepare(USER_MESSAGES).all(source, sessionId) as unknown as UserMessage[];
+}
+
+const asInput = (r: UserMessage) => ({ ...r, role: 'user', kind: 'message' });
+
+const positionOf = (r: UserMessage) => ({
+  id: r.id,
+  seq: r.seq,
+  ts: r.ts,
+  author: r.author,
+  speaker: r.speaker,
+});
+
+/**
+ * Whether a session is the owner's conversation: whether it has a visible prompt of the owner (see
+ * isOwnerPrompt). A child session or a headless run never is; nor is one of other people's words
+ * alone. Briefs list only the owner's conversations, and only they join threads by their branch.
+ */
+export function isOwnerConversation(db: Database, source: string, sessionId: string): boolean {
+  return db.prepare(OWNER_CONVERSATION).get(source, sessionId) !== undefined;
+}
+
+const OWNER_CONVERSATION = `SELECT 1 FROM event e INDEXED BY event_user_message
+  WHERE e.source = ? AND e.session_id = ? AND e.role = 'user' AND e.kind = 'message'
+    AND NOT EXISTS (SELECT 1 FROM session_kind k
+      WHERE k.source = e.source AND k.session_id = e.session_id)
+    AND ${VISIBLE_EVENT} AND ${OWNER_PROMPT_SQL}
+  LIMIT 1`;
 
 /** At most this many characters of a command and its arguments name a turn. */
 const COMMAND_MAX = 200;
@@ -280,11 +309,12 @@ export interface TurnStart extends SessionPrompt {
 
 /**
  * Where a session's turns start, in time order: at each of its prompts (see sessionPrompts), and at
- * each command it echoes (see commandLine) that the agent acted on, with a message or a tool call of
- * its own (not a sub-agent's), before the next prompt or command. A command the agent did not act
- * on, such as `/clear` or `/model`, starts no turn. Prompts come from the index of user messages;
- * each command costs one look into the `(source, session_id, ts)` index, up to the agent's first
- * event after it. A prompt is cut to `chars` characters (PROMPT_TITLE_MAX by default).
+ * each command it echoes (see commandLine), unless a sub-agent's (its author is the agent), that the
+ * agent acted on, with a message or a tool call of its own (not a sub-agent's), before the next
+ * prompt or command. A command the agent did not act on, such as `/clear` or `/model`, starts no
+ * turn. Prompts come from the index of user messages; each command costs one look into the
+ * `(source, session_id, ts)` index, up to the agent's first event after it. A prompt is cut to
+ * `chars` characters (PROMPT_TITLE_MAX by default).
  */
 export function sessionTurnStarts(
   db: Database,
@@ -294,14 +324,13 @@ export function sessionTurnStarts(
 ): TurnStart[] {
   const candidates: TurnStart[] = [];
   for (const r of userMessages(db, source, sessionId)) {
-    const prompt = promptTitle(r.text, opts.chars);
-    if (prompt !== null) {
-      candidates.push({ id: r.id, seq: r.seq, ts: r.ts, prompt, command: false });
+    if (isOwnerPrompt(asInput(r))) {
+      const prompt = promptTitle(r.text, opts.chars) as string;
+      candidates.push({ ...positionOf(r), prompt, command: false });
       continue;
     }
-    const command = commandLine(r.text);
-    if (command !== null)
-      candidates.push({ id: r.id, seq: r.seq, ts: r.ts, prompt: command, command: true });
+    const command = r.author === 'agent' ? null : commandLine(r.text);
+    if (command !== null) candidates.push({ ...positionOf(r), prompt: command, command: true });
   }
   if (!candidates.some((c) => c.command)) return candidates;
   const agent = `e.source = ? AND e.session_id = ? AND e.ts >= ? AND (e.ts > ? OR e.seq > ?)

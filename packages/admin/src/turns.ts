@@ -1,11 +1,17 @@
 /**
- * A session's events grouped into turns, for its page. A turn starts at a prompt the user typed (a
- * prompt of `sessionPrompts` in core, which applies the rule of provisional names) and holds every
+ * A session's events grouped into turns, for its page. A turn starts where core says one does (see
+ * sessionTurnStarts: at a prompt of the owner's, or a command the agent acted on) and holds every
  * event until the next one. In a turn, tool calls are paired with their results, command echoes and
- * injected context become notes, and the last reply of the agent is told apart from the work that
- * led to it. Pure functions over the events of one page.
+ * injected context become notes, a message someone other than the owner wrote is shown as a
+ * message, and the last reply of the agent is told apart from the work that led to it. Pure
+ * functions over the events of one page.
  */
-import type { EventRow, SessionPrompt, TurnStart } from '@openlinkos/origin-core';
+import {
+  type EventRow,
+  promptTitle,
+  type SessionPrompt,
+  type TurnStart,
+} from '@openlinkos/origin-core';
 
 /** A command echo, its output, a notice, injected context, or a system event: shown small. */
 export interface Note {
@@ -79,6 +85,21 @@ const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? 
 /** Whether an event belongs to a sub-agent's thread (Claude Code's sidechains). */
 export function isSubAgent(e: EventRow): boolean {
   return meta(e).sidechain === true;
+}
+
+/**
+ * Whether a user message reads as a prompt that someone other than the owner wrote: another
+ * person, an agent, or a program (see authors.ts in core). It starts no turn, and is shown as a
+ * message of its own, with who wrote it, rather than as a note.
+ */
+export function saidByOther(e: EventRow): boolean {
+  return (
+    e.role === 'user' &&
+    e.kind === 'message' &&
+    e.author !== null &&
+    e.author !== 'owner' &&
+    promptTitle(e.text) !== null
+  );
 }
 
 /** Terminal colours in command output. */
@@ -416,7 +437,7 @@ export function groupTurns(
           subAgent,
         });
       }
-    } else if (e.kind === 'message' && (e.role === 'assistant' || subAgent)) {
+    } else if (e.kind === 'message' && (e.role === 'assistant' || subAgent || saidByOther(e))) {
       items.push({ type: 'message', event: e, subAgent });
     } else {
       items.push({ type: 'note', event: e, note: noteOf(e), subAgent });

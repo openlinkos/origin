@@ -233,6 +233,23 @@ describe('turns', () => {
     expect(turn?.tools).toMatchObject({ calls: 2, ok: 2, messages: 1 });
   });
 
+  it('show a message someone else wrote as a message, not a note, and never as the reply', () => {
+    const p = user('Ship it once QA agrees.');
+    const teammate = user('QA agrees.', { author: 'person', speaker: 'Sam' });
+    const summary = user('This session is being continued from a previous conversation.', {
+      author: 'system',
+    });
+    const notice = user('<task-notification>build done</task-notification>', { author: 'system' });
+    const r = reply('Shipped.');
+    const [turn] = groupTurns([p, teammate, summary, notice, r], [{ id: p.id }], 1);
+    expect(turn?.work.map((i) => [i.type, i.type === 'note' ? i.note.kind : i.event.id])).toEqual([
+      ['message', teammate.id],
+      ['message', summary.id],
+      ['note', 'context'],
+    ]);
+    expect(turn?.reply?.id).toBe(r.id);
+  });
+
   it('last from their first event to their last', () => {
     const p = user('Go.', { ts: 1_000 });
     const r = reply('Done.', { ts: 61_500 });
