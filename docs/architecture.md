@@ -241,6 +241,7 @@ A store records the version of its format in the database header, `PRAGMA user_v
 - **A new store** gets the current schema and the latest version in one transaction.
 - **An older store** runs each migration it lacks, in order, each in a write transaction (`BEGIN IMMEDIATE`) of its own that also records its version. The version is read again once the lock is held, so when several processes open the store at once (the CLI, one MCP server per agent), one of them runs each migration while the others wait, up to 5 minutes, and then find it done. A migration that fails is rolled back with its version, and the error names it; what the migrations before it did stays, and the next open runs it again.
 - **A store of a newer Origin** is refused before anything in it changes, with a message that says to upgrade.
+- **Only to run a command.** The CLI opens a store only once a command's arguments are valid: printing its usage, or refusing arguments it does not take, leaves a store as it is.
 
 After the migrations, the schema's idempotent statements run, on every open, so that a new table, index, view, or trigger that existing data needs nothing from appears without a migration.
 

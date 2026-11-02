@@ -15,6 +15,7 @@ import {
   storeName,
 } from '@openlinkos/origin-core';
 import { type ProposalResult, proposalResult } from '@openlinkos/origin-mcp';
+import { ARGS } from './args.js';
 import { count, oneLine, table } from './format.js';
 import { fmtDateTime } from './time.js';
 
@@ -54,14 +55,7 @@ const projectOf = (p: Proposal) => p.project ?? p.sessionProject ?? '—';
 /** `origin proposals`: what agents proposed, newest first; the rejected by id and reason only. */
 export function cmdProposals(ctx: ProposalsCtx, args: string[]): number {
   const { out, err } = io(ctx);
-  const { values } = parseArgs({
-    args,
-    options: {
-      project: { type: 'string' },
-      status: { type: 'string', default: 'pending' },
-      limit: { type: 'string' },
-    },
-  });
+  const { values } = parseArgs({ args, options: ARGS.proposals.options });
   const status = values.status as StatusFilter;
   if (!STATUSES.includes(status)) {
     err(`Unknown status "${values.status}"; expected ${STATUSES.join(', ')}.`);
@@ -197,7 +191,7 @@ export async function cmdAccept(ctx: ProposalsCtx, args: string[]): Promise<numb
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { yes: { type: 'boolean', default: false } },
+    options: ARGS.accept.options,
   });
   const id = positionals[0];
   if (!id) {
@@ -234,7 +228,7 @@ export async function cmdReject(ctx: ProposalsCtx, args: string[]): Promise<numb
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { reason: { type: 'string' }, yes: { type: 'boolean', default: false } },
+    options: ARGS.reject.options,
   });
   const id = positionals[0];
   const reason = values.reason?.trim();

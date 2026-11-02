@@ -12,6 +12,7 @@ import {
   storeName,
 } from '@openlinkos/origin-core';
 import type { GetResult } from '@openlinkos/origin-mcp';
+import { ARGS } from './args.js';
 import { count, oneLine, table } from './format.js';
 import type { HubConfig } from './hub/config.js';
 import { askHub } from './hub/remote.js';
@@ -58,7 +59,7 @@ export async function cmdForget(ctx: ForgettingCtx, args: string[]): Promise<num
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { reason: { type: 'string' }, yes: { type: 'boolean', default: false } },
+    options: ARGS.forget.options,
   });
   const id = positionals[0];
   const reason = reasonOf(values);
@@ -128,7 +129,7 @@ async function forgetOnHub(
 /** Forgets and restores of this store, newest first: ids, reasons, and counts, never the text. */
 export function cmdForgotten(ctx: ForgettingCtx, args: string[]): number {
   const { out } = io(ctx);
-  const { values } = parseArgs({ args, options: { limit: { type: 'string' } } });
+  const { values } = parseArgs({ args, options: ARGS.forgotten.options });
   if (isRelay(ctx.db)) {
     throw new OriginError(
       "This store is a relay and keeps no forgets of its own; see the Forgotten page of the hub's admin UI.",
@@ -170,7 +171,7 @@ export async function cmdRestore(ctx: ForgettingCtx, args: string[]): Promise<nu
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { reason: { type: 'string' }, yes: { type: 'boolean', default: false } },
+    options: ARGS.restore.options,
   });
   const id = positionals[0];
   const reason = reasonOf(values);

@@ -72,7 +72,6 @@ import {
   stats,
   storeName,
   syncSource,
-  UPLOAD_CONCURRENCY,
   uploadFrames,
   usedRefs,
 } from '@openlinkos/origin-core';
@@ -101,10 +100,11 @@ import {
   WATCH_INTERVAL_MS,
 } from '@openlinkos/origin-mcp';
 import { cmdAgents } from './agents.js';
+import { ARGS, checkArgs, isStoreCommand } from './args.js';
 import { cmdDistill } from './distill.js';
 import { cmdForget, cmdForgotten, cmdRestore, type ForgettingCtx } from './forgetting.js';
 import { count, oneLine, table } from './format.js';
-import { BUCKET_OPTIONS, bucketFlags, setUpFrames } from './hub/bucket.js';
+import { bucketFlags, setUpFrames } from './hub/bucket.js';
 import {
   type HubConfig,
   normalizeHubUrl,
@@ -130,7 +130,7 @@ import {
 import { sourceAdapters, storeAdapters } from './sources.js';
 import { isHookCall, main as syncHook } from './sync-hook.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
-import { onEnter, openInBrowser, startLocalUi, UI_PORT, writeSignInFile } from './ui.js';
+import { onEnter, openInBrowser, startLocalUi, writeSignInFile } from './ui.js';
 
 const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 
@@ -229,6 +229,22 @@ export async function main(argv: string[]): Promise<number> {
   if (command === 'agents') return cmdAgents(rest);
   // An agent's hook (bin.ts loads it on its own): it opens the store itself, and never fails.
   if (command === 'sync' && isHookCall(rest)) return syncHook(argv);
+  // Every other command opens the store, which upgrades an older one: check its arguments first, so
+  // that asking for help, or a mistyped command or option, never changes a store.
+  if (!isStoreCommand(command)) {
+    console.error(`Unknown command: ${command}\n`);
+    console.log(USAGE);
+    return 2;
+  }
+  const check = checkArgs(command, rest);
+  if (check.kind === 'help') {
+    console.log(USAGE);
+    return 0;
+  }
+  if (check.kind === 'error') {
+    console.error(check.message);
+    return 2;
+  }
   const home = originHome();
   // Opening the store upgrades an older one. A migration may parse mirrored lines again, with the
   // adapters, and read their sealed frames, which a hub may keep in a bucket.
@@ -303,10 +319,6 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdRaw(ctx, rest);
       case 'push':
         return await cmdSync(ctx, rest);
-      default:
-        console.error(`Unknown command: ${command}\n`);
-        console.log(USAGE);
-        return 2;
     }
   } catch (err) {
     if (err instanceof OriginError) {
@@ -364,14 +376,7 @@ async function syncAfterChange(ctx: Ctx): Promise<void> {
 }
 
 async function cmdSync(ctx: Ctx, args: string[]): Promise<number> {
-  const { values } = parseArgs({
-    args,
-    options: {
-      source: { type: 'string' },
-      verbose: { type: 'boolean', default: false },
-      local: { type: 'boolean', default: false },
-    },
-  });
+  const { values } = parseArgs({ args, options: ARGS.sync.options });
   const all = sourceAdapters(ctx.home, warn);
   const adapters = values.source ? all.filter((a) => a.id === values.source) : all;
   if (adapters.length === 0) {
@@ -720,18 +725,7 @@ function printSessions(sessions: ShownSession[]): number {
 }
 
 async function cmdTimeline(ctx: Ctx, args: string[]): Promise<number> {
-  const { values } = parseArgs({
-    args,
-    options: {
-      since: { type: 'string' },
-      until: { type: 'string' },
-      source: { type: 'string' },
-      project: { type: 'string' },
-      session: { type: 'string' },
-      limit: { type: 'string' },
-      all: { type: 'boolean', default: false },
-    },
-  });
+  const { values } = parseArgs({ args, options: ARGS.timeline.options });
   const limit = values.limit ? Number(values.limit) : undefined;
   if (isRelay(ctx.db)) {
     const r = (await askHub(relayHub(ctx), 'timeline', {
@@ -789,15 +783,7 @@ async function cmdSearch(ctx: Ctx, args: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: {
-      since: { type: 'string' },
-      until: { type: 'string' },
-      source: { type: 'string' },
-      project: { type: 'string' },
-      limit: { type: 'string' },
-      all: { type: 'boolean', default: false },
-      recent: { type: 'boolean', default: false },
-    },
+    options: ARGS.search.options,
   });
   const query = positionals.join(' ').trim();
   if (!query) {
@@ -936,7 +922,7 @@ async function cmdShow(ctx: Ctx, args: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { source: { type: 'string' } },
+    options: ARGS.show.options,
   });
   const id = positionals[0];
   if (!id) {
@@ -1173,16 +1159,7 @@ const OCCASIONS: Record<RecallRecord['occasion'], string> = {
 };
 
 function cmdRecalls(ctx: Ctx, args: string[]): number {
-  const { values } = parseArgs({
-    args,
-    options: {
-      since: { type: 'string' },
-      agent: { type: 'string' },
-      session: { type: 'string' },
-      all: { type: 'boolean', default: false },
-      limit: { type: 'string' },
-    },
-  });
+  const { values } = parseArgs({ args, options: ARGS.recalls.options });
   const recalls = listRecalls(ctx.db, {
     since: parseTime(values.since),
     source: values.agent,
@@ -1281,15 +1258,7 @@ function parseKind(value: string | undefined): EntryKind | undefined {
 }
 
 async function cmdEntries(ctx: Ctx, args: string[]): Promise<number> {
-  const { values } = parseArgs({
-    args,
-    options: {
-      kind: { type: 'string' },
-      project: { type: 'string' },
-      history: { type: 'boolean', default: false },
-      limit: { type: 'string' },
-    },
-  });
+  const { values } = parseArgs({ args, options: ARGS.entries.options });
   const limit = values.limit ? Number(values.limit) : 50;
   let entries: ShownEntry[];
   if (isRelay(ctx.db)) {
@@ -1326,7 +1295,7 @@ async function cmdCorrect(ctx: Ctx, args: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { kind: { type: 'string' }, confidence: { type: 'string' } },
+    options: ARGS.correct.options,
   });
   const [id, ...words] = positionals;
   const text = words.join(' ').trim();
@@ -1386,7 +1355,7 @@ function cmdProjects(ctx: Ctx): number {
 }
 
 async function cmdBackup(ctx: Ctx, args: string[]): Promise<number> {
-  const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
+  const { positionals } = parseArgs({ args, allowPositionals: true, options: ARGS.backup.options });
   const target = positionals[0];
   if (!target || positionals.length > 1) {
     console.error('Usage: origin backup <dir>');
@@ -1485,13 +1454,7 @@ async function cmdMcp(ctx: Ctx): Promise<number> {
  * then serves until Ctrl+C. Enter, in a terminal, issues a new link.
  */
 async function cmdUi(ctx: Ctx, args: string[]): Promise<number> {
-  const { values } = parseArgs({
-    args,
-    options: {
-      port: { type: 'string', default: String(UI_PORT) },
-      'no-open': { type: 'boolean', default: false },
-    },
-  });
+  const { values } = parseArgs({ args, options: ARGS.ui.options });
   const port = Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new OriginError(`Invalid port: ${values.port}`);
@@ -1623,17 +1586,7 @@ function adminOptions(values: {
 }
 
 async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
-  const { values } = parseArgs({
-    args,
-    options: {
-      host: { type: 'string', default: '127.0.0.1' },
-      port: { type: 'string', default: '7077' },
-      admin: { type: 'boolean' },
-      'admin-listen': { type: 'string' },
-      'public-url': { type: 'string' },
-      ...BUCKET_OPTIONS,
-    },
-  });
+  const { values } = parseArgs({ args, options: ARGS.serve.options });
   assertComplete(ctx.db, 'serve as a hub');
   const port = Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
@@ -1738,10 +1691,7 @@ Setting a password replaces the old one and signs out every admin session.`;
 async function cmdAdmin(ctx: Ctx, args: string[]): Promise<number> {
   const [area, ...rest] = args;
   if (area === 'password') {
-    const { values } = parseArgs({
-      args: rest,
-      options: { generate: { type: 'boolean', default: false } },
-    });
+    const { values } = parseArgs({ args: rest, options: ARGS.admin.sub.password.options });
     if (process.env.ORIGIN_ADMIN_PASSWORD) {
       console.error(
         'Note: ORIGIN_ADMIN_PASSWORD is set. On a hub started with it, that variable is the admin password and takes precedence over the one set here.',
@@ -1760,10 +1710,7 @@ async function cmdAdmin(ctx: Ctx, args: string[]): Promise<number> {
     return 0;
   }
   if (area === 'sessions') {
-    const { values } = parseArgs({
-      args: rest,
-      options: { 'revoke-all': { type: 'boolean', default: false } },
-    });
+    const { values } = parseArgs({ args: rest, options: ARGS.admin.sub.sessions.options });
     if (values['revoke-all']) {
       const n = endAdminSessions(ctx.db);
       auditCli(ctx, 'sessions.revoke', 'all', { count: n });
@@ -1789,7 +1736,7 @@ async function cmdAdmin(ctx: Ctx, args: string[]): Promise<number> {
     return 0;
   }
   if (area === 'audit') {
-    const { values } = parseArgs({ args: rest, options: { limit: { type: 'string' } } });
+    const { values } = parseArgs({ args: rest, options: ARGS.admin.sub.audit.options });
     const limit = values.limit === undefined ? 50 : Number(values.limit);
     if (!Number.isInteger(limit) || limit < 1 || limit > 10_000) {
       throw new OriginError(`Invalid limit: ${values.limit}`);
@@ -1836,14 +1783,7 @@ async function cmdRaw(ctx: Ctx, args: string[]): Promise<number> {
     );
     return 2;
   }
-  const { values } = parseArgs({
-    args: rest,
-    options: {
-      remove: { type: 'boolean', default: false },
-      concurrency: { type: 'string', default: String(UPLOAD_CONCURRENCY) },
-      ...BUCKET_OPTIONS,
-    },
-  });
+  const { values } = parseArgs({ args: rest, options: ARGS.raw.sub.upload.options });
   const concurrency = Number(values.concurrency);
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 64) {
     throw new OriginError(
@@ -1909,11 +1849,7 @@ async function cmdHub(ctx: Ctx, args: string[]): Promise<number> {
     const { values, positionals } = parseArgs({
       args: rest,
       allowPositionals: true,
-      options: {
-        token: { type: 'string' },
-        device: { type: 'string' },
-        relay: { type: 'boolean', default: false },
-      },
+      options: ARGS.hub.sub.connect.options,
     });
     const url = positionals[0];
     if (!url || !values.token) {

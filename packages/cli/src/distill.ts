@@ -21,6 +21,7 @@ import {
   syncFile,
   syncSource,
 } from '@openlinkos/origin-core';
+import { ARGS } from './args.js';
 import { count, oneLine } from './format.js';
 import { fmtDateTime, fmtDuration } from './time.js';
 
@@ -479,19 +480,7 @@ export async function cmdDistill(ctx: DistillCtx, argv: string[]): Promise<numbe
   const env = ctx.env ?? process.env;
   let values: Record<string, string | boolean | undefined>;
   try {
-    ({ values } = parseArgs({
-      args: argv,
-      options: {
-        project: { type: 'string' },
-        thread: { type: 'string' },
-        day: { type: 'string' },
-        since: { type: 'string' },
-        agent: { type: 'string', default: 'claude-code' },
-        max: { type: 'string' },
-        'max-turns': { type: 'string' },
-        'dry-run': { type: 'boolean', default: false },
-      },
-    }));
+    ({ values } = parseArgs({ args: argv, options: ARGS.distill.options }));
   } catch (e) {
     err(`${(e as Error).message}\n${USAGE}`);
     return 2;
