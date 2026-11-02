@@ -1,11 +1,12 @@
 ---
-sourceHash: sha256-332c36bb
+sourceHash: sha256-92cfce45
 ---
 
 # 命令参考
 
 ```text
 origin sync      [--source <id>] [--verbose] [--local] 采集本机 Agent 会话；已接入中枢时再与中枢同步
+origin sync      --hook <agent>                        采集 Agent 的 hook 指明的记录文件（从标准输入读取它的事件）
 origin status                                          各来源统计、条目数与上次采集时间
 origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
 origin timeline  --session <id> [--all]                单个会话的事件（默认不含工具事件）
@@ -21,7 +22,7 @@ origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 
 origin projects                                        已知的项目名
 origin backup    <dir>                                 把数据库和原始镜像备份到 <dir>（增量）
 origin mcp                                             以 stdio 运行 MCP server（接入中枢后补充中枢的回答）
-origin agents    [connect | disconnect] [<agent>...] [--yes]   把 Origin 及其召回 hook 接入本机的 Agent
+origin agents    [connect | disconnect] [<agent>...] [--yes]   把 Origin 及其 hook 接入本机的 Agent
 origin ui        [--port 7079] [--no-open]             在浏览器中浏览和管理本库，只监听 127.0.0.1
 
 origin serve     [--host 127.0.0.1] [--port 7077]      把本库作为个人中枢运行（MCP over HTTP）
@@ -139,6 +140,10 @@ A session of it: origin show <session id>
 
 `origin recall` 显示 Agent 在当前目录（或 `--cwd` 指定的目录）会拿到什么：新会话的简报，或者加上 `--prompt` 时与提示匹配的条目。`--agent` 按该 Agent 会拿到的样子显示，不含它自己加载的记忆。它不做任何记录。`origin agents connect` 会设置好这些 hook（见[接入 Agent](./connect-agents.md#connect-them-all-at-once)）。Claude Code 和 Codex 的 hook 运行 `origin recall --hook claude-code` 或 `--hook codex`，它从标准输入读取 hook 的事件，记录交出的内容，并输出给 Agent。`origin recalls` 按从新到旧列出 Agent 拿到过什么（加 `--all` 还会列出什么都没交出的召回），`origin show rcl_…` 显示一次召回，包括它回应的提示和本会话之后用上的项。见[召回](./recall.md)。
 
+## 从 hook 采集 {#ingesting-from-hooks}
+
+Claude Code 和 Codex 的采集 hook 会在一轮结束、子 Agent 停止，以及 Claude Code 压缩对话之后，在后台运行 `origin sync --hook claude-code` 或 `--hook codex`；`origin agents connect` 会设置好它们（见[接入 Agent](./connect-agents.md#connect-them-all-at-once)）。它从标准输入读取 hook 的事件，采集事件指明的记录文件，在 `SubagentStop` 时还有子 Agent 的记录文件，从这个文件上次采集停下的地方开始；在已接入中枢的设备上，再把这个文件新增的行推送给中枢，最多等待 3 秒；在中继上，则把它们发给中枢。它什么都不输出；无论出了什么问题，它都在标准错误中说明原因并以 0 退出，从不妨碍 Agent。`origin sync` 本身照旧工作：其他 Agent 的会话由它收取，也由 `origin mcp` 每分钟收取一次。见[实时采集](../architecture.md#live-ingestion)。
+
 ## 纠正与遗忘 {#correcting-and-forgetting}
 
 `correct` 会为条目添加一个新版本，旧版本保留为历史。`forget` 需要一个原因，会先列出将隐藏的内容，加 `--yes` 才真正执行：
@@ -186,7 +191,7 @@ The forget is kept as a record with its reason; you can restore it later with or
 | `ORIGIN_HUB_TOKEN` | — | 中枢令牌，覆盖 `origin hub connect` 的配置 |
 | `ORIGIN_DEVICE` | 主机名 | 新库使用的名称：也就是本设备在中枢上的名称，以及它写入的内容所记录的来源库（origin） |
 | `ORIGIN_HUB_TIMEOUT_MS` | `2000` | 已接入中枢的设备上，`origin mcp` 等待中枢多久，超时后不再等待中枢直接作答 |
-| `ORIGIN_WATCH_INTERVAL_MS` | `60000` | Agent 运行期间，`origin mcp` 多久查看一次新的记录行（已接入中枢时一并同步）；设为 `0` 则关闭 |
+| `ORIGIN_WATCH_INTERVAL_MS` | `60000` | Agent 运行期间，`origin mcp` 多久查看一次新的记录行（已接入中枢时一并同步），作为 Agent 的 hook 没有交来的内容的后备；设为 `0` 则关闭 |
 | `ORIGIN_ADMIN` | `off` | 设为 `on` 时在 `/admin` 下提供管理界面（`origin serve --admin`） |
 | `ORIGIN_ADMIN_LISTEN` | — | 改为在这个 `host:port` 上提供管理界面（`--admin-listen`） |
 | `ORIGIN_PUBLIC_URL` | — | 中枢的公开 https URL（`--public-url`） |

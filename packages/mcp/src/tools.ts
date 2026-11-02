@@ -277,7 +277,11 @@ export function refreshGate(
   };
 }
 
-/** How often a server looks for new log lines while it runs (ORIGIN_WATCH_INTERVAL_MS). */
+/**
+ * How often a server looks for new log lines while it runs (ORIGIN_WATCH_INTERVAL_MS): the
+ * fallback for agents whose hooks do not hand each turn over (`origin sync --hook`, see
+ * docs/architecture.md#live-ingestion), and for lines a hook missed.
+ */
 export const WATCH_INTERVAL_MS = 60_000;
 /** How long a server waits for its last sync when the agent disconnects. */
 export const CLOSE_TIMEOUT_MS = 5_000;

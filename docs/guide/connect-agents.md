@@ -12,17 +12,22 @@ Every agent launches the same stdio server, `origin mcp`, which `npm install -g 
 
 ## Connect them all at once
 
-`origin agents` shows the agents installed on this machine and how each is connected. `origin agents connect` registers Origin's MCP server with each of them, and adds the [recall](./recall.md) hooks to Claude Code and Codex. It shows what it would change, and changes it only with `--yes`, backing up each file next to it first; it adds and removes only Origin's own entries, and `origin agents disconnect` removes them again. Name agents to connect only those, such as `origin agents connect codex`. Start a new session of each agent afterwards; Codex runs new hooks only once you trust them, with `/hooks`.
+`origin agents` shows the agents installed on this machine and how each is connected. `origin agents connect` registers Origin's MCP server with each of them, and adds two kinds of hooks to Claude Code and Codex: the [recall](./recall.md) hooks, which hand the agent what matters when a session starts and with each prompt, and the ingest hooks, which hand Origin a session's new lines as each turn ends, in the background, so that other sessions, and your hub, see them right away. It shows what it would change, and changes it only with `--yes`, backing up each file next to it first; it adds and removes only Origin's own entries, and `origin agents disconnect` removes them again. Name agents to connect only those, such as `origin agents connect codex`. On a machine you connected with an earlier version, run it again to add the hooks it lacks.
+
+Start a new session of each agent afterwards. Codex runs a new hook, or one that changed, only once you trust it: open `/hooks` in Codex, review Origin's hooks, and trust them; until then Codex skips them and warns when it starts.
 
 ```console
 $ origin agents connect
 origin agents connect would:
   codex: register the MCP server in /home/dana/.codex/config.toml
   codex: add the recall hooks (SessionStart, UserPromptSubmit) to /home/dana/.codex/hooks.json
+  codex: add the ingest hooks (Stop, SubagentStop) to /home/dana/.codex/hooks.json
   cursor: register the MCP server in /home/dana/.cursor/mcp.json
 
 Run again with --yes to make these changes; each file is backed up next to it first.
 ```
+
+Claude Code gets its ingest hooks at `Stop`, `SubagentStop`, and `PostCompact`, and Codex at `Stop` and `SubagentStop`; [Recall](./recall.md#set-up-the-hooks) shows them as they are written. Cursor, ZCode, and Grok Build get no hooks: their new lines are picked up by `origin mcp` every minute while they run, and by `origin sync`.
 
 The sections below show what it writes for each agent, to do it by hand.
 
@@ -82,7 +87,7 @@ Grok merges the MCP servers in `~/.claude.json` by default, so the Claude Code r
 | `correct` | Replace an entry with a corrected version |
 | `forget` | Hide an entry or event on every store, with your reason; agents only use it when you ask, and only you can restore it |
 
-The server tells agents how to use these tools, so you can simply ask questions in plain language. It syncs new session lines before answering, so an agent can even cite what you said a minute ago. While an agent runs, Origin also picks up new lines every minute in the background, and once more when the agent exits. The tools are specified in [Architecture](../architecture.md#mcp-server). Origin also hands agents what matters where they work: Claude Code through its hooks, at the start of each session and with each prompt, and other agents through `brief`; see [Recall](./recall.md).
+The server tells agents how to use these tools, so you can simply ask questions in plain language. It syncs new session lines before answering, so an agent can even cite what you said a minute ago. Claude Code's and Codex's ingest hooks hand Origin each turn's new lines as the turn ends; as a fallback, and for the other agents, Origin also picks up new lines every minute in the background while an agent runs, and once more when the agent exits. The tools are specified in [Architecture](../architecture.md#mcp-server). Origin also hands agents what matters where they work: Claude Code through its hooks, at the start of each session and with each prompt, and other agents through `brief`; see [Recall](./recall.md).
 
 ## Using a personal hub
 

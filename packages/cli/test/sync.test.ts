@@ -25,6 +25,7 @@ import {
   planRecall,
   recordRecall,
   remember,
+  remoteCursors,
   restore,
   setSetting,
   syncSource,
@@ -33,7 +34,14 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HubConfig } from '../src/hub/config.js';
 import { createHubServer } from '../src/hub/server.js';
-import { lastHubSync, pushedKey, recallsKey, syncFailedKey, syncWithHub } from '../src/hub/sync.js';
+import {
+  lastHubSync,
+  pushedKey,
+  pushFile,
+  recallsKey,
+  syncFailedKey,
+  syncWithHub,
+} from '../src/hub/sync.js';
 
 const fixtures = fileURLToPath(
   new URL('../../adapters/test/fixtures/claude-code/', import.meta.url),
@@ -647,5 +655,71 @@ describe('concurrent pushes', () => {
     await sync(racing);
     expect(raced).toBe(5);
     expect(listEvents(hubDb, { sessionId: session, limit: 10_000 })).toHaveLength(6000);
+  });
+});
+
+describe('pushing one file', () => {
+  it("pushes one file's new lines, from where the hub stands, also to a hub that lists every file", async () => {
+    // The fixture's session is ingested here; a second session too.
+    const projects = path.join(tmp, 'two');
+    fs.cpSync(fixtures, projects, { recursive: true });
+    const second = path.join(
+      projects,
+      'D--demo-project',
+      '55555555-5555-4555-8555-555555555555.jsonl',
+    );
+    fs.writeFileSync(
+      second,
+      `${JSON.stringify({
+        type: 'user',
+        uuid: '55555555-0000-4000-8000-000000000001',
+        sessionId: '55555555-5555-4555-8555-555555555555',
+        timestamp: '2026-10-20T01:00:00Z',
+        cwd: '/home/dev/demo',
+        message: { role: 'user', content: 'the second session' },
+      })}\n`,
+    );
+    const adapter = createClaudeCodeAdapter({ projectsDir: projects });
+    await syncSource({ db: deviceDb, home: deviceHome }, adapter);
+    const first = path.join(
+      projects,
+      'D--demo-project',
+      '0f1e2d3c-4b5a-4697-8877-665544332211.jsonl',
+    );
+
+    const asked: string[] = [];
+    const watching: typeof fetch = (input, init) => {
+      asked.push(String(input).replace(hub.url, ''));
+      return fetch(input, init);
+    };
+    const opts = { db: deviceDb, home: deviceHome, hub, fetch: watching };
+    expect(await pushFile(opts, { source: 'claude-code', path: first })).toMatchObject({
+      files: 1,
+      eventsAdded: 6,
+    });
+    expect(asked[0]).toBe(
+      `/v1/cursors?device=laptop&source=claude-code&path=${encodeURIComponent(first)}`,
+    );
+    expect(remoteCursors(hubDb, 'laptop').map((c) => c.path)).toEqual([first]);
+    // Again: the hub has it all.
+    expect(await pushFile(opts, { source: 'claude-code', path: first })).toMatchObject({
+      files: 0,
+    });
+
+    // A hub from before the filter lists every file: the push still goes from the file's cursor.
+    const old: typeof fetch = (input, init) =>
+      fetch(String(input).replace(/&source=[^&]*&path=[^&]*$/, ''), init);
+    expect(
+      await pushFile({ ...opts, fetch: old }, { source: 'claude-code', path: second }),
+    ).toMatchObject({ files: 1, eventsAdded: 1 });
+    expect(
+      await pushFile({ ...opts, fetch: old }, { source: 'claude-code', path: first }),
+    ).toMatchObject({
+      files: 0,
+    });
+    // A full sync then has nothing left to send of these two, only the mirror of the fixture
+    // itself, which this device ingested before the test.
+    expect(await sync()).toMatchObject({ files: 1, eventsAdded: 0 });
+    expect(remoteCursors(hubDb, 'laptop')).toHaveLength(3);
   });
 });

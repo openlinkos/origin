@@ -2,14 +2,18 @@ import {
   type RelayAnswer,
   type RelayHub,
   type RelayResult,
+  relayFile,
   relaySource,
   type SourceAdapter,
 } from '@openlinkos/origin-core';
 import {
   errorMessage,
+  type HubCursor,
+  type HubRequest,
   type HubSyncOptions,
   type HubSyncResult,
   hubClient,
+  hubCursors,
   hubRequest,
   pullTombstones,
   pushChanges,
@@ -41,26 +45,29 @@ export async function relayWithHub(opts: RelaySyncOptions): Promise<RelaySyncRes
   return recordHubSync(opts.db, opts.hub, () => relay(opts));
 }
 
-async function relay(opts: RelaySyncOptions): Promise<RelaySyncResult> {
-  const call = hubClient(opts);
-  const request = hubRequest(opts);
-  const result: RelaySyncResult = {
-    files: 0,
-    bytes: 0,
-    eventsAdded: 0,
-    entriesPushed: 0,
-    tombstonesPushed: 0,
-    waiting: null,
-    tombstonesApplied: 0,
-    // A relay keeps no recalls: its agents' hooks hand nothing over, and the hub records briefs.
-    recallsPushed: 0,
-    sources: [],
-    failed: [],
-  };
-  const { cursors } = (await call(
-    'GET',
-    `/v1/cursors?device=${encodeURIComponent(opts.hub.device)}`,
-  )) as { cursors: Array<{ source: string; path: string; generation: number; bytes: number }> };
+/**
+ * Send the hub the new complete lines of one agent log, straight from it, as a relay's sync sends
+ * each (see relayWithHub). An agent's hook calls it right after a turn (see
+ * docs/architecture.md#live-ingestion); it asks the hub where it stands with that file alone, and
+ * leaves replicating entries and tombstones to the next sync.
+ */
+export async function relayFileWithHub(
+  opts: HubSyncOptions & { adapter: SourceAdapter },
+  absPath: string,
+): Promise<RelayResult> {
+  const located = opts.adapter.locate?.(absPath) ?? null;
+  const cursors = located
+    ? await hubCursors(hubClient(opts), opts.hub.device, {
+        source: opts.adapter.id,
+        path: located.absPath,
+      })
+    : [];
+  const hub = relayHub(opts, hubRequest(opts), cursors);
+  return relayFile({ db: opts.db, log: opts.log }, opts.adapter, hub, absPath);
+}
+
+/** The hub as a relay reaches it: where it stood, by `cursors`, and its `/v1/ingest`. */
+function relayHub(opts: HubSyncOptions, request: HubRequest, cursors: HubCursor[]): RelayHub {
   const held = new Map<string, Map<number, number>>();
   for (const c of cursors) {
     const key = `${c.source}\n${c.path}`;
@@ -68,7 +75,7 @@ async function relay(opts: RelaySyncOptions): Promise<RelaySyncResult> {
     generations.set(c.generation, c.bytes);
     held.set(key, generations);
   }
-  const hub: RelayHub = {
+  return {
     holds: (source, path) => held.get(`${source}\n${path}`) ?? new Map(),
     async send(chunk): Promise<RelayAnswer> {
       // Offsets are in the file's content, uncompressed; the request is gzip-encoded on the way.
@@ -118,6 +125,24 @@ async function relay(opts: RelaySyncOptions): Promise<RelaySyncResult> {
       throw new Error(`Hub request POST /v1/ingest failed (${status}): ${errorMessage(text)}`);
     },
   };
+}
+
+async function relay(opts: RelaySyncOptions): Promise<RelaySyncResult> {
+  const call = hubClient(opts);
+  const result: RelaySyncResult = {
+    files: 0,
+    bytes: 0,
+    eventsAdded: 0,
+    entriesPushed: 0,
+    tombstonesPushed: 0,
+    waiting: null,
+    tombstonesApplied: 0,
+    // A relay keeps no recalls: its agents' hooks hand nothing over, and the hub records briefs.
+    recallsPushed: 0,
+    sources: [],
+    failed: [],
+  };
+  const hub = relayHub(opts, hubRequest(opts), await hubCursors(call, opts.hub.device));
 
   for (const adapter of opts.adapters) {
     const r = await relaySource({ db: opts.db, log: opts.log }, adapter, hub);

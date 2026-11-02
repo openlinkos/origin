@@ -29,7 +29,9 @@ Latest sessions in acme, any agent (source, time, session id):
 
 `origin agents connect` adds them, with Origin's MCP server, to every agent installed that takes them: it shows what it would change, and changes it with `--yes`, backing up each file first (see [Connect your agents](./connect-agents.md#connect-them-all-at-once)). Start a new session of each agent afterwards; Codex runs new hooks only once you trust them, with `/hooks`.
 
-To add them by hand, put two hooks in `~/.claude/settings.json` for Claude Code, or in `~/.codex/hooks.json` for Codex with `codex` in place of `claude-code`, next to any hooks you already have:
+It adds the ingest hooks too, which hand nothing over: when a turn ends, a sub-agent stops, or Claude Code has compacted the conversation, they run `origin sync --hook` in the background, which reads the session's new lines into your store, and sends them on to your hub, so that briefs, searches, and other sessions' `changes` have them a moment later (see [Live ingestion](../architecture.md#live-ingestion)).
+
+To add them by hand, put these hooks in `~/.claude/settings.json` for Claude Code, next to any hooks you already have. For Codex, put them in `~/.codex/hooks.json`, with `codex` in place of `claude-code` and without `PostCompact`:
 
 ```json
 {
@@ -39,12 +41,21 @@ To add them by hand, put two hooks in `~/.claude/settings.json` for Claude Code,
     ],
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "origin recall --hook claude-code", "timeout": 10 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "origin sync --hook claude-code", "timeout": 60, "async": true }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "origin sync --hook claude-code", "timeout": 60, "async": true }] }
+    ],
+    "PostCompact": [
+      { "hooks": [{ "type": "command", "command": "origin sync --hook claude-code", "timeout": 60, "async": true }] }
     ]
   }
 }
 ```
 
-`/hooks` in either agent lists them. Keep Origin registered as an MCP server too, so that the agent can `get` what it is handed. The hook takes a fraction of a second; if anything goes wrong, it hands nothing over and the agent carries on.
+`/hooks` in either agent lists them. Keep Origin registered as an MCP server too, so that the agent can `get` what it is handed. A recall hook takes a fraction of a second, and the agent waits for it; an ingest hook runs in the background (`"async": true`), so the agent never waits for it. If anything goes wrong, a hook hands nothing over, ingests nothing, and the agent carries on.
 
 ## Other agents
 

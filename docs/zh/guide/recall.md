@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-e2873002
+sourceHash: sha256-698ac755
 ---
 
 # 召回
@@ -33,7 +33,9 @@ Latest sessions in acme, any agent (source, time, session id):
 
 `origin agents connect` 会把它们连同 Origin 的 MCP server 一起，加到每个已安装且支持的 Agent 中：它先显示会改什么，加上 `--yes` 才修改，每个文件改之前都会先备份（见[接入 Agent](./connect-agents.md#connect-them-all-at-once)）。改完之后，为每个 Agent 开始一个新会话；Codex 只有在你用 `/hooks` 信任新的 hook 之后才会运行它们。
 
-要手动添加，就把两个 hook 放进 Claude Code 的 `~/.claude/settings.json`，或者 Codex 的 `~/.codex/hooks.json`（把 `claude-code` 换成 `codex`），与你已有的 hook 并列：
+它也会加上采集 hook，这些 hook 不交出任何内容：在一轮结束、子 Agent 停止，或者 Claude Code 压缩了对话之后，它们在后台运行 `origin sync --hook`，把会话新增的行读进你的库，再发给你的中枢，这样片刻之后，简报、搜索和其他会话的 `changes` 就都有了这些内容（见[实时采集](../architecture.md#live-ingestion)）。
+
+要手动添加，就把这些 hook 放进 Claude Code 的 `~/.claude/settings.json`，与你已有的 hook 并列。对 Codex，则放进 `~/.codex/hooks.json`，把 `claude-code` 换成 `codex`，并去掉 `PostCompact`：
 
 ```json
 {
@@ -43,12 +45,21 @@ Latest sessions in acme, any agent (source, time, session id):
     ],
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "origin recall --hook claude-code", "timeout": 10 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "origin sync --hook claude-code", "timeout": 60, "async": true }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "origin sync --hook claude-code", "timeout": 60, "async": true }] }
+    ],
+    "PostCompact": [
+      { "hooks": [{ "type": "command", "command": "origin sync --hook claude-code", "timeout": 60, "async": true }] }
     ]
   }
 }
 ```
 
-在两个 Agent 中用 `/hooks` 都可以看到它们。同时保留 Origin 的 MCP server 注册，这样 Agent 才能用 `get` 获取拿到的条目。hook 用时不到一秒；出现任何问题时，它不交出任何内容，Agent 照常继续。
+在两个 Agent 中用 `/hooks` 都可以看到它们。同时保留 Origin 的 MCP server 注册，这样 Agent 才能用 `get` 获取拿到的条目。召回 hook 用时不到一秒，Agent 会等它；采集 hook 在后台运行（`"async": true`），Agent 从不等待它。出现任何问题时，hook 不交出任何内容，也不采集任何内容，Agent 照常继续。
 
 ## 其他 Agent {#other-agents}
 

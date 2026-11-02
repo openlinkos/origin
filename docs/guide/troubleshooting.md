@@ -20,15 +20,32 @@ The agent lists no `origin` server, or the server fails to start.
 - Restart the agent after registering Origin or updating it: agents start their MCP servers when a session starts.
 - Run `origin status` in a terminal. If it fails, the server fails the same way, and the message says why.
 
+### A hook does nothing {#a-hook-does-nothing}
+
+`origin agents` shows the hooks as set up, but a session's lines reach Origin, or the hub, only a minute after a turn, or not at all while no `origin mcp` runs.
+
+- **Start a new session.** Agents read their hooks when a session starts.
+- **In Codex, trust the hooks.** Codex skips a new hook, and one that changed, until you trust it: open `/hooks` in Codex, review Origin's hooks, and trust them. It warns when it starts while a hook waits for review.
+- **They run in the background.** The ingest hooks are `async`: the agent does not wait for them and shows nothing they say. `/hooks` lists them; Claude Code shows when a background hook finishes in its verbose mode (`Ctrl+O`). Whatever goes wrong, a hook exits 0 and says why on standard error only.
+- **The transcript lags the hook.** Agents write their transcripts asynchronously, so the last lines of a turn may not be written yet when the hook runs. Origin reads only complete lines; the rest arrives with the next hook, or within a minute through `origin mcp`. This is expected.
+- **The same directories as `origin sync`.** A hook ingests only a transcript under the directory Origin reads for that agent: `~/.claude/projects` (or `CLAUDE_CONFIG_DIR`, `ORIGIN_CLAUDE_PROJECTS`) for Claude Code, and `sessions/` or `archived_sessions/` of `~/.codex` (or `CODEX_HOME`) for Codex. It runs with the agent's environment, so give the agent the same variables, `ORIGIN_HOME` included.
+- **Run it by hand** with an event like the agent's, and read what it says on standard error. It prints nothing when all is well, and `origin timeline --session <id>` then shows the session's latest messages:
+
+```sh
+echo '{"hook_event_name":"Stop","transcript_path":"/home/dana/.claude/projects/-home-dana-code-acme/5e8f0a1b-2c3d-4e5f-9a6b-7c8d9e0f1a2b.jsonl"}' | origin sync --hook claude-code
+```
+
+On a device connected to a hub, a hook waits at most 3 seconds for the hub and then says `not sent to the hub yet`; the next sync sends what it did not.
+
 ### Results lack what was just said {#results-lack-what-was-just-said}
 
 An agent does not find the last few messages of a session.
 
-`origin mcp` reads new log lines before `search` and `timeline`, at most every 10 seconds, always before `remember` and `correct`, every minute in the background, and once more when the agent exits (see [Freshness](./mcp.md#freshness)). So a search usually sees what was said a few seconds ago. What it does not see:
+Claude Code's and Codex's ingest hooks read a session's new lines as each turn ends (see [A hook does nothing](#a-hook-does-nothing)). `origin mcp` also reads new log lines before `search` and `timeline`, at most every 10 seconds, always before `remember` and `correct`, every minute in the background, and once more when the agent exits (see [Freshness](./mcp.md#freshness)). So a search usually sees what was said a few seconds ago. What it does not see:
 
 - Sessions of agents that do not use Origin, until an agent that does runs, or until `origin sync`. Schedule `origin sync` on a machine where such agents run alone.
-- Another device's sessions, until that device syncs with the hub.
-- Anything at all if the background look is off: `ORIGIN_WATCH_INTERVAL_MS=0`.
+- Another device's sessions, until that device's hooks or sync send them to the hub.
+- For agents without ingest hooks, anything at all if the background look is off: `ORIGIN_WATCH_INTERVAL_MS=0`.
 
 ## Upgrading {#upgrading}
 

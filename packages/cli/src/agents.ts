@@ -7,20 +7,47 @@ import { table } from './format.js';
 
 /**
  * `origin agents`: connect the agents installed on this machine to Origin (see
- * docs/guide/connect-agents.md). It registers Origin's MCP server with each, and adds the recall
- * hooks to those whose hooks can hand context over (see docs/architecture.md#recall). It shows what
- * it would change first, and changes it only with `--yes`, backing up each file it writes; it only
- * ever adds or removes Origin's own entries.
+ * docs/guide/connect-agents.md). It registers Origin's MCP server with each, and adds Origin's
+ * hooks to those whose hooks Origin uses: the recall hooks, which hand context over (see
+ * docs/architecture.md#recall), and the ingest hooks, which ingest a session's new lines as each
+ * turn ends (see docs/architecture.md#live-ingestion). It shows what it would change first, and
+ * changes it only with `--yes`, backing up each file it writes; it only ever adds or removes
+ * Origin's own entries, which it recognises by their command.
  */
 
-/** The hook command each agent runs (see recall.ts). */
-const hookCommand = (agent: string) => `origin recall --hook ${agent}`;
-/** How a hook of ours is recognised, whatever an agent did to its spacing. */
-const OUR_HOOK = /\borigin\s+recall\s+--hook\b/;
-/** The hook events recall answers. */
-const HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit'] as const;
-/** Seconds an agent waits for the hook. */
-const HOOK_TIMEOUT = 10;
+/** One kind of Origin's hooks: the command each agent runs, and how it is set up. */
+interface HookKind {
+  /** What the hooks do, for the preview: `recall` or `ingest`. */
+  name: 'recall' | 'ingest';
+  command(agent: string): string;
+  /** How a hook of this kind is recognised, whatever an agent did to its spacing. */
+  ours: RegExp;
+  /** Seconds an agent gives the hook. */
+  timeout: number;
+  /** Run in the background, so that the agent never waits for it. */
+  async: boolean;
+}
+
+/** `origin recall --hook`: the agent waits for its answer, a brief or a prompt's matches. */
+const RECALL_HOOKS: HookKind = {
+  name: 'recall',
+  command: (agent) => `origin recall --hook ${agent}`,
+  ours: /\borigin\s+recall\s+--hook\b/,
+  timeout: 10,
+  async: false,
+};
+
+/** `origin sync --hook`: hands Origin the transcript a turn wrote; nothing for the agent to wait for. */
+const INGEST_HOOKS: HookKind = {
+  name: 'ingest',
+  command: (agent) => `origin sync --hook ${agent}`,
+  ours: /\borigin\s+sync\s+--hook\b/,
+  timeout: 60,
+  async: true,
+};
+
+/** The events recall answers, the same for Claude Code and Codex. */
+const RECALL_EVENTS = ['SessionStart', 'UserPromptSubmit'];
 
 export interface AgentEnv {
   home: string;
@@ -74,6 +101,11 @@ export interface AgentState {
   mcp: 'registered' | 'via-claude-code' | 'missing';
   /** Recall: through hooks (set up or not), or by asking with `brief`. */
   recall: 'hooks' | 'no-hooks' | 'brief';
+  /**
+   * New session lines: through hooks after each turn (set up or not), or picked up by looking,
+   * as `origin mcp` does every minute and `origin sync` does.
+   */
+  ingest: 'hooks' | 'no-hooks' | 'watch';
 }
 
 type Json = Record<string, unknown>;
@@ -108,41 +140,47 @@ function child(o: Json, key: string): Json {
 
 interface HookGroup {
   matcher?: string;
-  hooks?: Array<{ type?: string; command?: string; timeout?: number }>;
+  hooks?: Array<{ type?: string; command?: string; timeout?: number; async?: boolean }>;
 }
 
 const groupsOf = (hooks: Json, event: string): HookGroup[] =>
   Array.isArray(hooks[event]) ? (hooks[event] as HookGroup[]) : [];
 
-const isOurs = (g: HookGroup) => (g.hooks ?? []).some((h) => OUR_HOOK.test(h.command ?? ''));
+const isOurs = (kind: HookKind) => (g: HookGroup) =>
+  (g.hooks ?? []).some((h) => kind.ours.test(h.command ?? ''));
 
-/** Whether a settings file has our hook on every recall event. */
-function hasHooks(file: string): boolean {
+/** On how many of `events` a settings file has a hook of this kind: all, some, or none. */
+function hookState(file: string, kind: HookKind, events: string[]): 'all' | 'some' | 'none' {
   const hooks = readJson(file).hooks as Json | undefined;
-  return !!hooks && HOOK_EVENTS.every((e) => groupsOf(hooks, e).some(isOurs));
+  const set = hooks ? events.filter((e) => groupsOf(hooks, e).some(isOurs(kind))).length : 0;
+  return set === 0 ? 'none' : set === events.length ? 'all' : 'some';
 }
 
-function addHooks(file: string, agent: string): void {
+/** Add a hook of this kind to every event that lacks one, next to the hooks already there. */
+function addHooks(file: string, agent: string, kind: HookKind, events: string[]): void {
   const settings = readJson(file);
   const hooks = child(settings, 'hooks');
-  for (const event of HOOK_EVENTS) {
+  for (const event of events) {
     const groups = groupsOf(hooks, event);
-    if (groups.some(isOurs)) continue;
-    groups.push({
-      hooks: [{ type: 'command', command: hookCommand(agent), timeout: HOOK_TIMEOUT }],
-    });
+    if (groups.some(isOurs(kind))) continue;
+    const hook = { type: 'command', command: kind.command(agent), timeout: kind.timeout };
+    groups.push({ hooks: [kind.async ? { ...hook, async: true } : hook] });
     hooks[event] = groups;
   }
   writeJson(file, settings);
 }
 
-function removeHooks(file: string): void {
+/** Remove the hooks of this kind, from every event; the agent's other hooks stay as they are. */
+function removeHooks(file: string, kind: HookKind): void {
   const settings = readJson(file);
   const hooks = settings.hooks as Json | undefined;
   if (!hooks) return;
   for (const event of Object.keys(hooks)) {
     const groups = groupsOf(hooks, event)
-      .map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !OUR_HOOK.test(h.command ?? '')) }))
+      .map((g) => ({
+        ...g,
+        hooks: (g.hooks ?? []).filter((h) => !kind.ours.test(h.command ?? '')),
+      }))
       .filter((g) => g.hooks.length > 0);
     if (groups.length > 0) hooks[event] = groups;
     else delete hooks[event];
@@ -207,8 +245,14 @@ interface AgentSpec {
   id: string;
   /** The directory whose presence says the agent is installed. */
   dir: string;
-  /** Recall through hooks, in this settings file, or by asking with `brief`. */
+  /** Recall and ingestion through hooks, in this settings file, or by asking with `brief`. */
   hooks: string | null;
+  /**
+   * The hook events after which a session's transcript may have new lines (see sync-hook.ts). Not
+   * SessionEnd: its budget (1.5 s in Claude Code, 1 s in Codex) is too short to reach a hub, and the
+   * MCP server's last sync, or the next hook, reads a session's last lines.
+   */
+  ingestEvents: string[];
   mcp: {
     has(env: AgentEnv): boolean;
     add(env: AgentEnv): Omit<Change, 'agent'>;
@@ -263,6 +307,7 @@ const AGENTS: AgentSpec[] = [
     id: 'claude-code',
     dir: '.claude',
     hooks: path.join('.claude', 'settings.json'),
+    ingestEvents: ['Stop', 'SubagentStop', 'PostCompact'],
     mcp: {
       has: (env) => !!serversIn(claudeJson(env), ['mcpServers'])?.origin,
       add: (env) => {
@@ -288,18 +333,22 @@ const AGENTS: AgentSpec[] = [
     id: 'codex',
     dir: '.codex',
     hooks: path.join('.codex', 'hooks.json'),
+    ingestEvents: ['Stop', 'SubagentStop'],
     mcp: tomlServer((env) => p(env, '.codex', 'config.toml')),
   },
+  // Cursor, ZCode, and Grok Build get no hooks: their sessions are found by looking.
   {
     id: 'cursor',
     dir: '.cursor',
     hooks: null,
+    ingestEvents: [],
     mcp: jsonServer((env) => p(env, '.cursor', 'mcp.json'), ['mcpServers']),
   },
   {
     id: 'zcode',
     dir: '.zcode',
     hooks: null,
+    ingestEvents: [],
     mcp: jsonServer((env) => p(env, '.zcode', 'cli', 'config.json'), ['mcp', 'servers']),
   },
   {
@@ -307,6 +356,7 @@ const AGENTS: AgentSpec[] = [
     id: 'grok',
     dir: '.grok',
     hooks: null,
+    ingestEvents: [],
     mcp: tomlServer((env) => p(env, '.grok', 'config.toml')),
   },
 ];
@@ -323,6 +373,15 @@ function runAgentCli(env: AgentEnv, command: string, args: string[]): void {
   if (r.status !== 0) throw new Error(`${command} ${args.join(' ')} failed: ${r.output}`);
 }
 
+/** Each kind of hook an agent takes, with the events it goes on. */
+const hookKinds = (a: AgentSpec): Array<[HookKind, string[]]> =>
+  a.hooks
+    ? [
+        [RECALL_HOOKS, RECALL_EVENTS],
+        [INGEST_HOOKS, a.ingestEvents],
+      ]
+    : [];
+
 /** How each agent is connected now. */
 export function agentStates(env: AgentEnv): AgentState[] {
   return AGENTS.map((a) => {
@@ -330,16 +389,22 @@ export function agentStates(env: AgentEnv): AgentState[] {
     const own = a.mcp.has(env);
     const viaClaude =
       a.id === 'grok' && !own && !!serversIn(claudeJson(env), ['mcpServers'])?.origin;
+    const set = (kind: HookKind, events: string[]) =>
+      a.hooks && hookState(p(env, a.hooks), kind, events) === 'all' ? 'hooks' : 'no-hooks';
     return {
       agent: a.id,
       installed,
       mcp: own ? 'registered' : viaClaude ? 'via-claude-code' : 'missing',
-      recall: a.hooks ? (hasHooks(p(env, a.hooks)) ? 'hooks' : 'no-hooks') : 'brief',
+      recall: a.hooks ? set(RECALL_HOOKS, RECALL_EVENTS) : 'brief',
+      ingest: a.hooks ? set(INGEST_HOOKS, a.ingestEvents) : 'watch',
     };
   });
 }
 
-/** What connecting these agents changes; agents that are not installed are left alone. */
+/**
+ * What connecting these agents changes; agents that are not installed are left alone. Hooks an
+ * agent lacks are added, so an agent connected by an earlier version gets the new ones.
+ */
 export function planConnect(env: AgentEnv, agents: string[]): Change[] {
   const states = new Map(agentStates(env).map((s) => [s.agent, s]));
   const changes: Change[] = [];
@@ -347,13 +412,14 @@ export function planConnect(env: AgentEnv, agents: string[]): Change[] {
     const s = states.get(a.id);
     if (!agents.includes(a.id) || !s?.installed) continue;
     if (s.mcp === 'missing') changes.push({ agent: a.id, ...a.mcp.add(env) });
-    if (a.hooks && s.recall === 'no-hooks') {
-      const file = p(env, a.hooks);
+    for (const [kind, events] of hookKinds(a)) {
+      const file = p(env, a.hooks as string);
+      if (hookState(file, kind, events) === 'all') continue;
       changes.push({
         agent: a.id,
-        what: `add the recall hooks (${HOOK_EVENTS.join(', ')}) to ${file}`,
+        what: `add the ${kind.name} hooks (${events.join(', ')}) to ${file}`,
         files: [file],
-        apply: () => addHooks(file, a.id),
+        apply: () => addHooks(file, a.id, kind, events),
         afterwards:
           a.id === 'codex'
             ? 'Codex runs new hooks only once you trust them: open /hooks in Codex.'
@@ -372,17 +438,27 @@ export function planDisconnect(env: AgentEnv, agents: string[]): Change[] {
     const s = states.get(a.id);
     if (!agents.includes(a.id) || !s) continue;
     if (s.mcp === 'registered') changes.push({ agent: a.id, ...a.mcp.remove(env) });
-    if (a.hooks && s.recall === 'hooks') {
-      const file = p(env, a.hooks);
+    for (const [kind] of hookKinds(a)) {
+      const file = p(env, a.hooks as string);
+      // Any of ours goes, on whatever event it was found.
+      if (hookState(file, kind, Object.keys(readHooks(file))) === 'none') continue;
       changes.push({
         agent: a.id,
-        what: `remove the recall hooks from ${file}`,
+        what: `remove the ${kind.name} hooks from ${file}`,
         files: [file],
-        apply: () => removeHooks(file),
+        apply: () => removeHooks(file, kind),
       });
     }
   }
   return changes;
+}
+
+/** The hooks object of a settings file, empty when it has none. */
+function readHooks(file: string): Json {
+  const hooks = readJson(file).hooks;
+  return typeof hooks === 'object' && hooks !== null && !Array.isArray(hooks)
+    ? (hooks as Json)
+    : {};
 }
 
 /** Back up the files a change writes, next to them, then make it. Returns the backups. */
@@ -404,6 +480,11 @@ const RECALL_TEXT: Record<AgentState['recall'], string> = {
   'no-hooks': 'not set up (origin agents connect)',
   brief: 'asks with the brief tool',
 };
+const INGEST_TEXT: Record<AgentState['ingest'], string> = {
+  hooks: 'hooks: as each turn ends',
+  'no-hooks': 'not set up (origin agents connect)',
+  watch: 'every minute while origin mcp runs',
+};
 const MCP_TEXT: Record<AgentState['mcp'], string> = {
   registered: 'registered',
   'via-claude-code': "through Claude Code's registration",
@@ -412,7 +493,7 @@ const MCP_TEXT: Record<AgentState['mcp'], string> = {
 
 const USAGE = `Usage:
   origin agents                                    How each agent on this machine is connected
-  origin agents connect    [<agent>...] [--yes]    Register Origin, and its recall hooks, with the agents
+  origin agents connect    [<agent>...] [--yes]    Register Origin, and its hooks, with the agents
   origin agents disconnect [<agent>...] [--yes]    Remove what connect added
 Agents: ${AGENT_IDS.join(', ')} (all installed ones by default). Changes are shown first, and made with --yes.`;
 
@@ -430,10 +511,10 @@ export function cmdAgents(args: string[], env: AgentEnv = defaultEnv()): number 
   if (action === undefined) {
     const rows = agentStates(env).map((s) =>
       s.installed
-        ? [s.agent, 'yes', MCP_TEXT[s.mcp], RECALL_TEXT[s.recall]]
-        : [s.agent, 'no', '—', '—'],
+        ? [s.agent, 'yes', MCP_TEXT[s.mcp], RECALL_TEXT[s.recall], INGEST_TEXT[s.ingest]]
+        : [s.agent, 'no', '—', '—', '—'],
     );
-    console.log(table(rows, ['Agent', 'Installed', 'MCP server', 'Recall']));
+    console.log(table(rows, ['Agent', 'Installed', 'MCP server', 'Recall', 'New lines']));
     return 0;
   }
   if (action !== 'connect' && action !== 'disconnect') {

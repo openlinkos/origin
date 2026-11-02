@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-ffd73e15
+sourceHash: sha256-2eedab8c
 ---
 
 # 会话来源
@@ -24,6 +24,7 @@ sourceHash: sha256-ffd73e15
 - **格式：** 每行一个 JSON 对象。`type` 是 `user`、`assistant`、`ai-title`、`custom-title`、`agent-name`、`last-prompt`、`summary`、`system`、`mode`、`permission-mode`、`file-history-snapshot`、`attachment` 等之一。消息行带有 `uuid`、`parentUuid`、`timestamp`、`cwd`、`gitBranch`、`sessionId`、`version` 和 `message { role, content }`；`content` 是一个字符串，或由 `text` / `tool_use` / `tool_result` / `thinking` / `image` 块组成的数组。
 - **标题：** `{ type: "ai-title", aiTitle, sessionId }` 是 Claude Code 生成的标题，大约每一轮都会再写一次，并随着对话的进行而改变；最新的一行就是当前的标题。用户给出的名称（`/rename`、`--name`、hook 的 `sessionTitle`、Agent SDK 的 `renameSession()`）是一行 `{ type: "custom-title", customTitle, sessionId }`，同样会被再次写入，并且优先于 AI 生成的标题，即使它后面还有 `ai-title` 行。`{ type: "agent-name", agentName, sessionId }` 是会话在 Claude Code 的 Agent 视图中的名称；它出现在会话自己的记录中，而不只是子 Agent 的记录中，并且重复 AI 生成的标题或自定义标题。`{ type: "last-prompt", lastPrompt, leafUuid, sessionId }` 记录最近的一条提示。2.1 之前的版本写入的则是 `{ type: "summary", summary, leafUuid }` 行。
 - **保留期：** 会话在 `cleanupPeriodDays`（默认 30）天后被删除。`memory/` 目录不受此限。
+- **Hook**（2026 年 11 月核对，[hooks](https://code.claude.com/docs/en/hooks)）：命令 hook 在标准输入上读取一个 JSON 事件，其中有 `session_id`、`transcript_path`（会话的记录文件）、`cwd` 和 `hook_event_name`；`SubagentStop` 还有 `agent_id`、`agent_type` 和 `agent_transcript_path`，即 `subagents/` 下子 Agent 的记录文件。记录文件是异步写入的，所以一轮的 `Stop` hook 运行时，文件里可能还没有这一轮的最后几行。带 `"async": true` 的 hook 在后台运行，Claude Code 不等待它；所有 `SessionEnd` hook 共用 1.5 秒。Origin 的采集 hook 在 `Stop`、`SubagentStop` 和 `PostCompact` 时运行（见[实时采集](architecture.md#live-ingestion)）。
 - **原生记忆：** `<cwd-slug>/memory/`——一个 `MEMORY.md` 索引，外加每条记忆一个带 frontmatter 的 Markdown 文件。范围限定在一台机器上的一个 git 仓库。会被导入，见[原生记忆](#native-memories)。
 
 映射为 Origin 事件的方式见 [architecture.md](architecture.md#claude-code-mapping)。
@@ -36,6 +37,7 @@ sourceHash: sha256-ffd73e15
 - **格式：** 每行一个 `{ timestamp, ordinal, type, payload }` 对象；`ordinal` 在一个 rollout 内唯一。第一行是 `session_meta`（`id`、`cwd`、`originator`、`cli_version`、`model_provider`、`base_instructions`，约 20 KB）。其他类型：`response_item`（对话本身）、`event_msg`（重复 response item 内容的 UI 事件）、`turn_context`、`world_state`、`compacted` 等。
 - **Response item：** `message`（角色为 `user`、`assistant` 或 `developer`；`content` 块为 `input_text` / `output_text` / `input_image`；助手消息可能带有 `phase`）、`reasoning`（摘要加上加密内容）、`function_call`（`name`、JSON 字符串形式的 `arguments`、`call_id`）、`custom_tool_call`（`input`，例如 `apply_patch`）、`local_shell_call`（`action.command`）、`web_search_call`、`function_call_output` / `custom_tool_call_output`（`output` 是字符串或内容块）、`compaction` 等。
 - **注入的上下文：** Codex 会添加用单个标签包裹的 user 角色消息，例如 `<environment_context>…</environment_context>`。
+- **Hook**（2026 年 11 月核对，[hooks](https://developers.openai.com/codex/hooks)）：`~/.codex/hooks.json`，或 `config.toml` 中的 `[hooks]`，事件和字段与 Claude Code 相同：`session_id`（子 Agent 的 hook 得到的是父会话的 id）、`transcript_path`（会话的 rollout，或 null）、`cwd` 和 `hook_event_name`，`SubagentStop` 时还有 `agent_transcript_path`（或 null）。`"async": true` 让 hook 在后台运行；`SessionEnd` hook 只有 1 秒。新的或改动过的 hook，只有在用户用 `/hooks` 信任之后 Codex 才会运行，信任时记录的是 hook 的哈希。Origin 的采集 hook 在 `Stop` 和 `SubagentStop` 时运行。
 
 **Origin 映射：**
 

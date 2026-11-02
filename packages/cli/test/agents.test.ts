@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type AgentEnv,
   agentStates,
@@ -78,23 +78,31 @@ describe('origin agents', () => {
   it("connect each installed agent, once, touching only what is Origin's", () => {
     install();
     const e = env();
-    expect(agentStates(e).map((s) => [s.agent, s.mcp, s.recall])).toEqual([
-      ['claude-code', 'missing', 'no-hooks'],
-      ['codex', 'missing', 'no-hooks'],
-      ['cursor', 'missing', 'brief'],
-      ['zcode', 'missing', 'brief'],
-      ['grok', 'missing', 'brief'],
+    expect(agentStates(e).map((s) => [s.agent, s.mcp, s.recall, s.ingest])).toEqual([
+      ['claude-code', 'missing', 'no-hooks', 'no-hooks'],
+      ['codex', 'missing', 'no-hooks', 'no-hooks'],
+      ['cursor', 'missing', 'brief', 'watch'],
+      ['zcode', 'missing', 'brief', 'watch'],
+      ['grok', 'missing', 'brief', 'watch'],
     ]);
     const changes = planConnect(e, ['claude-code', 'codex', 'cursor', 'zcode', 'grok']);
     // Grok merges Claude Code's servers: registering Claude Code covers it.
     expect(changes.map((c) => c.agent)).toEqual([
       'claude-code',
       'claude-code',
+      'claude-code',
+      'codex',
       'codex',
       'codex',
       'cursor',
       'zcode',
       'grok',
+    ]);
+    expect(changes.filter((c) => c.what.includes('hooks')).map((c) => c.what)).toEqual([
+      `add the recall hooks (SessionStart, UserPromptSubmit) to ${at('.claude', 'settings.json')}`,
+      `add the ingest hooks (Stop, SubagentStop, PostCompact) to ${at('.claude', 'settings.json')}`,
+      `add the recall hooks (SessionStart, UserPromptSubmit) to ${at('.codex', 'hooks.json')}`,
+      `add the ingest hooks (Stop, SubagentStop) to ${at('.codex', 'hooks.json')}`,
     ]);
     for (const c of changes.filter((c) => c.agent !== 'grok')) applyChange(e, c);
 
@@ -103,13 +111,32 @@ describe('origin agents', () => {
     ]);
     const settings = json(at('.claude', 'settings.json'));
     expect(settings.model).toBe('opus');
-    expect(settings.hooks.Stop).toEqual([{ hooks: [{ type: 'command', command: 'say done' }] }]);
+    const ingest = (agent: string) => ({
+      hooks: [
+        { type: 'command', command: `origin sync --hook ${agent}`, timeout: 60, async: true },
+      ],
+    });
+    // Ours go next to the user's own hooks, which stay as they were.
+    expect(settings.hooks.Stop).toEqual([
+      { hooks: [{ type: 'command', command: 'say done' }] },
+      ingest('claude-code'),
+    ]);
+    expect(settings.hooks.SubagentStop).toEqual([ingest('claude-code')]);
+    expect(settings.hooks.PostCompact).toEqual([ingest('claude-code')]);
+    expect(settings.hooks.SessionEnd).toBeUndefined();
     expect(settings.hooks.SessionStart).toEqual([
       { hooks: [{ type: 'command', command: 'origin recall --hook claude-code', timeout: 10 }] },
     ]);
-    expect(json(at('.codex', 'hooks.json')).hooks.UserPromptSubmit[0].hooks[0].command).toBe(
-      'origin recall --hook codex',
-    );
+    const codexHooks = json(at('.codex', 'hooks.json')).hooks;
+    expect(codexHooks.UserPromptSubmit[0].hooks[0].command).toBe('origin recall --hook codex');
+    expect(Object.keys(codexHooks)).toEqual([
+      'SessionStart',
+      'UserPromptSubmit',
+      'Stop',
+      'SubagentStop',
+    ]);
+    expect(codexHooks.Stop).toEqual([ingest('codex')]);
+    expect(codexHooks.SubagentStop).toEqual([ingest('codex')]);
     const toml = fs.readFileSync(at('.codex', 'config.toml'), 'utf8');
     expect(toml).toBe(
       'model = "gpt-5"\n\n[mcp_servers.other]\ncommand = "x"\n\n[mcp_servers.origin]\ncommand = "origin"\nargs = ["mcp"]\n',
@@ -125,14 +152,90 @@ describe('origin agents', () => {
     // Each file it wrote was backed up first.
     expect(fs.existsSync(at('.claude', 'settings.json.origin-backup-20261028-123000'))).toBe(true);
 
-    expect(agentStates(e).map((s) => [s.agent, s.mcp, s.recall])).toEqual([
-      ['claude-code', 'registered', 'hooks'],
-      ['codex', 'registered', 'hooks'],
-      ['cursor', 'registered', 'brief'],
-      ['zcode', 'registered', 'brief'],
-      ['grok', 'via-claude-code', 'brief'],
+    expect(agentStates(e).map((s) => [s.agent, s.mcp, s.recall, s.ingest])).toEqual([
+      ['claude-code', 'registered', 'hooks', 'hooks'],
+      ['codex', 'registered', 'hooks', 'hooks'],
+      ['cursor', 'registered', 'brief', 'watch'],
+      ['zcode', 'registered', 'brief', 'watch'],
+      ['grok', 'via-claude-code', 'brief', 'watch'],
     ]);
     expect(planConnect(e, ['claude-code', 'codex', 'cursor', 'zcode', 'grok'])).toEqual([]);
+  });
+
+  it('adds the ingest hooks to an agent connected before, and only what it lacks', () => {
+    install();
+    const e = env();
+    const recallOnly = {
+      model: 'opus',
+      hooks: {
+        Stop: [{ hooks: [{ type: 'command', command: 'say done' }] }],
+        SessionStart: [
+          {
+            hooks: [{ type: 'command', command: 'origin recall --hook claude-code', timeout: 10 }],
+          },
+        ],
+        UserPromptSubmit: [
+          {
+            hooks: [{ type: 'command', command: 'origin recall --hook claude-code', timeout: 10 }],
+          },
+        ],
+      },
+    };
+    put(at('.claude', 'settings.json'), JSON.stringify(recallOnly, null, 2));
+    expect(agentStates(e)[0]).toMatchObject({ recall: 'hooks', ingest: 'no-hooks' });
+    const changes = planConnect(e, ['claude-code']);
+    expect(changes.map((c) => c.what)).toEqual([
+      'register the MCP server: claude mcp add --scope user origin -- origin mcp',
+      `add the ingest hooks (Stop, SubagentStop, PostCompact) to ${at('.claude', 'settings.json')}`,
+    ]);
+    for (const c of changes) applyChange(e, c);
+    expect(agentStates(e)[0]).toMatchObject({ recall: 'hooks', ingest: 'hooks' });
+
+    // One of ours removed by hand, and one respaced: only the missing one comes back.
+    const settings = json(at('.claude', 'settings.json'));
+    delete settings.hooks.PostCompact;
+    settings.hooks.SubagentStop[0].hooks[0].command = 'origin  sync --hook   claude-code';
+    put(at('.claude', 'settings.json'), JSON.stringify(settings, null, 2));
+    expect(agentStates(e)[0]).toMatchObject({ ingest: 'no-hooks' });
+    for (const c of planConnect(e, ['claude-code'])) applyChange(e, c);
+    const again = json(at('.claude', 'settings.json'));
+    expect(again.hooks.SubagentStop).toHaveLength(1);
+    expect(again.hooks.PostCompact).toHaveLength(1);
+
+    // Disconnecting takes every hook of ours, the respaced one too, and leaves the user's.
+    for (const c of planDisconnect(e, ['claude-code'])) applyChange(e, c);
+    expect(json(at('.claude', 'settings.json'))).toEqual({
+      model: 'opus',
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: 'say done' }] }] },
+    });
+  });
+
+  it('shows how each agent is connected, the hooks that ingest new lines included', () => {
+    install();
+    const e = env();
+    const lines: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      lines.push(args.join(' '));
+    });
+    try {
+      expect(cmdAgents(['connect', 'codex'], e)).toBe(0);
+      expect(lines.join('\n')).toContain(
+        `codex: add the ingest hooks (Stop, SubagentStop) to ${at('.codex', 'hooks.json')}`,
+      );
+      expect(cmdAgents(['connect', 'codex', '--yes'], e)).toBe(0);
+      expect(lines.join('\n')).toContain(
+        'Codex runs new hooks only once you trust them: open /hooks in Codex.',
+      );
+      lines.length = 0;
+      expect(cmdAgents([], e)).toBe(0);
+      const text = lines.join('\n');
+      expect(text).toContain('New lines');
+      expect(text).toMatch(/codex .*hooks: as each turn ends/);
+      expect(text).toMatch(/claude-code .*not set up \(origin agents connect\)/);
+      expect(text).toMatch(/cursor .*every minute while origin mcp runs/);
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it('disconnect them, leaving everything else as it was', () => {

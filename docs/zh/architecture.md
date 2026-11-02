@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-42ef5994
+sourceHash: sha256-8ae0e414
 ---
 
 # 架构
@@ -82,6 +82,7 @@ agent session logs on disk ──scan──▶ Raw (append-only mirror)
                                         │
  agents ◀── MCP (stdio): brief · search · timeline · changes · get · sources · follow · remember · correct · forget
  agents ◀── hooks: origin recall (session start · prompt): a brief, and the entries a prompt matches
+ agents ──▶ hooks: origin sync --hook (turn end · sub-agent · compaction): the transcript to ingest
  people ◀── CLI `origin`: sync · status · timeline · search · show · entries · correct · forget · forgotten · restore · recall · recalls
  people ◀── admin UI (hub, /admin): overview · sessions · recalls · search · entries · remember · correct · forget · restore · tokens
  people ◀── origin ui (device, 127.0.0.1): overview · sessions · recalls · search · entries · remember · correct · forget · restore
@@ -254,7 +255,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 
 ## 采集 {#ingestion}
 
-`origin sync`（以及 MCP server，见下文）会运行每个适配器的 `discover()`。自上次采集以来大小和尾部都没有变化的文件会被跳过，不需要获取写锁。有变化的文件，其新增的行在 `BEGIN IMMEDIATE` 事务中采集，每个事务最多 1 MiB 的行（更长的单行独占一个事务），因此来自不同进程的并发同步会被串行化，绝不会把同样的字节采集两次；即使在导入大量积压数据时，也没有进程会长时间占用写锁：
+`origin sync`（以及 MCP server，见下文）会运行每个适配器的 `discover()`；Agent 的 hook 则只采集它指明的那一个文件（见[实时采集](#live-ingestion)）。自上次采集以来大小和尾部都没有变化的文件会被跳过，不需要获取写锁。有变化的文件，其新增的行在 `BEGIN IMMEDIATE` 事务中采集，每个事务最多 1 MiB 的行（更长的单行独占一个事务），因此来自不同进程的并发同步会被串行化，绝不会把同样的字节采集两次；即使在导入大量积压数据时，也没有进程会长时间占用写锁：
 
 1. **游标。** 每个 `raw_file` 行记录 `bytes_ingested`、`lines_ingested` 和 `tail_hash`（最后采集的 4 KB 的 SHA-256）。游标在写锁之下读取，并且只读取游标之后的字节。
 2. **改写检测。** 如果文件变小了，或者尾部不再匹配，说明它是被改写而不是被追加。Origin 会开启一个新的*代次*，使用全新的镜像，并保持旧镜像完好无损（不变量 3）。
@@ -266,9 +267,20 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 
 **生成的来源。** 有些 Agent 把会话存在数据库里，并且原地修改其中的行：回复流式输出时会改，过了很久也还会改；或者把会话的标题保存在一个每一轮都重写的文件里（Grok Build 的 `summary.json`）。对这样的来源，适配器把它的每一路内容（例如一个会话）标记为 `generated`：Origin 不读文件，而是向适配器要已镜像的最后一行之后的行，每次最多约一个事务的量，一直要到没有为止，然后像文件的行一样镜像和采集它们。适配器在一条记录不会再变时（例如一条消息完成之后）才把它写出，而且只写一次，所以内容只会增长（不变量 3），也不需要检测改写；已镜像的最后一行告诉适配器从哪里接着写，它自己不保存任何状态。写出之后又改变的记录不会再写一次：它被镜像的那一行，就是它的事件所来自的版本（不变量 1）。每一路内容还有一个令牌，可能有新行时就会改变；令牌和游标存在一起，占用文件尾部哈希的位置，令牌没变的内容会被直接跳过，不去问适配器。中枢像接收其他镜像一样接收这些镜像，并用同一个适配器解析。
 
-**多个进程。** CLI 和每个 Agent 会话各一个的 MCP server 可能同时使用同一个库。读操作从不等待写操作（WAL）。写操作最多等待写锁 10 秒（busy timeout）；由于同步只为有变化的文件获取写锁，并且每次只持有一个有上限的事务，所以即使另一个进程正在导入大量积压数据，一次同步或一次 `remember` 最多也只需等待大约一个这样的事务。每次检查点之后，预写日志会被截断到 64 MiB（`journal_size_limit`），所以大量导入不会留下几个 GB 的日志。
+**多个进程。** CLI、每个 Agent 会话各一个的 MCP server，以及 Agent 的 hook，可能同时使用同一个库。读操作从不等待写操作（WAL）。写操作最多等待写锁 10 秒（busy timeout）；由于同步只为有变化的文件获取写锁，并且每次只持有一个有上限的事务，所以即使另一个进程正在导入大量积压数据，一次同步或一次 `remember` 最多也只需等待大约一个这样的事务。每次检查点之后，预写日志会被截断到 64 MiB（`journal_size_limit`），所以大量导入不会留下几个 GB 的日志。
 
 **在中继上**，本地不采集任何内容：每个文件新增的完整行以同样的方式读取（游标、改写检测、解压后的内容、生成的行），然后发送给中枢，由中枢按本节所述采集（见[中继](#relays)）。
+
+### 实时采集 {#live-ingestion}
+
+同步靠查看来发现新的行：`origin sync`，以及 `origin mcp` 在工具调用之前和它的 Agent 运行期间每分钟一次（见 [MCP server](#mcp-server)）。Claude Code 和 Codex 还能告诉 Origin 何时可能有新的行：它们的 hook 会在一轮结束时（`Stop`）、子 Agent 停止时（`SubagentStop`），以及 Claude Code 在压缩之后（`PostCompact`）运行一条命令，并在标准输入上给出一个事件，其中指明了会话的记录文件。`origin agents connect` 会添加这样的 hook，它们在后台（`"async": true`）运行 `origin sync --hook <agent>`，所以 Agent 从不需要等待它们（它添加的 hook 见[召回](#recall)）。这样，会话新增的行在每一轮结束后片刻就进入库，随即进入中枢。
+
+- **一个文件，同样的规则。** hook 读取事件中的 `transcript_path`，遇到 `SubagentStop` 时还读取子 Agent 自己的 `agent_transcript_path`。每个路径都经过其适配器的 `locate`，得到 `discover()` 列出的那个文件，因此无论以哪种方式找到，一个文件都只有一个镜像；然后用 `syncFile` 采集：执行上面的各个步骤，只针对这一个文件，从它的游标开始，使用同样有上限的事务，包括改写检测、封存、标题、原生记忆、线索和会话聚合。只有读到了行，才会用一行 `sync_log` 记录这次运行；封存闲置镜像的尾部留给完整的同步去做。
+- **是信号，而不是交付。** Agent 异步写入它们的记录文件，所以 hook 运行时，这一轮的最后几行可能还没写下。和往常一样只读取完整的行：还没写下的内容由下一个 hook 读取，或者由 MCP server 每分钟一次的查看读取（它仍作为后备），Agent 离开时还有 server 的最后一次同步。
+- **从不妨碍 Agent。** hook 只加载核心、适配器和中枢客户端，以便快速启动。它最多等待 3 秒获取写锁；无论出了什么问题，它都不在标准输出上打印任何内容，在标准错误中说明原因，并以 0 退出。不是 hook 事件的输入、适配器无法定位的路径、不存在的文件，以及它不认识的 Agent，都会被忽略，这时它连库都不打开。并行会话和子 Agent 的 hook 可能同时运行：写锁，以及在写锁之下重新读取的游标，会把它们串行化，所以每一行只采集一次。
+- **到中枢。** 在已接入中枢的设备上，采集到行的 hook 随后会推送这个文件新增的镜像字节，与同步推送每个镜像的方式相同，只是先向中枢查询这一个文件的游标；它等待中枢最多 3 秒。没有发出的内容，以及这期间写下的条目、遗忘记录和召回，留待下一次同步；由于文件已经变化，MCP server 的下一次查看就会同步。在中继上，hook 把这个文件新增的完整行直接发送给中枢，与中继同步时发送每个文件的方式相同（见[中继](#relays)），同样以 3 秒为限。
+- **会话结束时不运行。** `SessionEnd` 不设 hook：Claude Code 给所有 `SessionEnd` hook 共 1.5 秒，Codex 给 1 秒，不够连上中枢；而会话的最后几行，会由 MCP server 的最后一次同步，或者下一个 hook 或同步读取。
+- **其他 Agent。** Cursor、ZCode 和 Grok Build 没有采集 hook：ZCode 和 Cursor 编辑器把会话存在数据库里，Origin 把它们当作生成的来源读取；Grok Build 的会话是目录，其中的标题文件会被原地重写。它们新增的行仍像以前一样靠查看发现（见[待解决的问题](#open-questions)）。
 
 ### Claude Code 映射 {#claude-code-mapping}
 
@@ -407,7 +419,7 @@ Claude Code、ZCode 和 Grok Build 都维护自己的记忆：由 Agent 原地�
 | `forget` | 按上述规则隐藏一个条目或事件，并附上用户给出的原因；仅在用户明确要求时使用。没有用于恢复的工具：只有主人能恢复，方式是 CLI 或管理界面 |
 
 - **新鲜度。** server 在启动时采集所有来源，在 `brief`、`search`、`timeline`、`changes` 和 `follow` 之前也会采集（最多每 10 秒一次；在连接了中枢的设备上，`get` 和 `sources` 之前也会），在 `remember` 和 `correct` 之前则总会采集，因此 Agent 能引用它当前所在对话中的记录行。
-- **Agent 运行期间。** server 还会每 60 秒查看一次有没有新的记录行（`ORIGIN_WATCH_INTERVAL_MS`；设为 0 则关闭），这样 Agent 最后一次调用工具之后写下的内容也能进入库和中枢，而不必等到下一个 Agent 启动。每次查看会把各记录文件的大小和修改时间与上次采集时比较，不读取文件内容，只有发生变化时才采集。查看在后台进行，与其他刷新使用同一套闸门，所以一次只查看一次，也绝不会与另一次同步重叠；工具调用不会等待它，除非本来就需要刷新；耗时较长的采集也会在各个事务之间让工具调用先执行。
+- **Agent 运行期间。** Claude Code 和 Codex 的 hook 会在每一轮结束时把会话新增的行交给 Origin（见[实时采集](#live-ingestion)）。作为后备，为其他 Agent 以及 hook 漏掉的内容，server 还会每 60 秒查看一次有没有新的记录行（`ORIGIN_WATCH_INTERVAL_MS`；设为 0 则关闭），这样 Agent 最后一次调用工具之后写下的内容也能进入库和中枢，而不必等到下一个 Agent 启动。每次查看会把各记录文件的大小和修改时间与上次采集时比较，不读取文件内容，只有发生变化时才采集。查看在后台进行，与其他刷新使用同一套闸门，所以一次只查看一次，也绝不会与另一次同步重叠；工具调用不会等待它，除非本来就需要刷新；耗时较长的采集也会在各个事务之间让工具调用先执行。
 - **Agent 离开时。** 标准输入结束，或者 server 收到 SIGTERM、SIGINT 或 SIGHUP 时，它会再采集一次，已接入中枢时还会与中枢同步，最多等待 5 秒，然后退出。Agent 如果直接杀掉 server，就会跳过这一步；下一次启动时会补上。
 - **在已接入中枢的设备上。** server 仍然根据设备自己的库作答，读取类工具（`search`、`timeline`、`changes`、`get`、`sources`）会同时询问中枢的 `/mcp`。两边的结果会合并、按 id 去重，并标上 `origin: "local"`（本设备有这一项）或 `"hub"`。无论中枢返回什么，设备已经遗忘的内容都不会显示；同一个条目的多个版本中，只列出按[条目](#entries)中的规则确定的当前版本；`get` 会合并两个库中该条目的历史。对于设备没有的 id，`get` 和 `sources` 由中枢作答；对设备没有的会话或线索调用 `follow`，也由中枢按它自己的库、针对设备的工作树来检查。`changes` 的游标同时含有设备的游标和中枢的游标（`{ l, h }`）：两边的变更流按 id 合并并加上标签，去掉设备已遗忘的内容，连同在本设备上事件已全部消失的会话；任何一边还有更多内容时，`more` 为真；中枢没有回应时，游标中属于中枢的部分保持不动。如果中枢在 2 秒内（`ORIGIN_HUB_TIMEOUT_MS`）没有回应，或者无法连接，工具就只根据设备作答，并附加第二段文本，说明这次没有询问中枢。agent 一完成初始化，server 就建立到中枢的连接，这样第一次读取不必把这段时间花在 TLS 握手和 MCP 初始化上。
 - **已接入中枢的设备上的写入**先落到设备的库中，再同步上去。server 在读取类工具之前与中枢同步（最多每 10 秒一次），每次写入后、每次后台查看发现新的记录行后、以及 Agent 离开时也会同步，而且为了等待中枢而推迟回答的时间不会超过超时时限。失败的同步会在下一次后台查看时重试。对于设备没有的条目或事件，`correct` 和 `forget` 会在中枢上执行；连不上中枢时，它们会失败并给出清楚的错误说明。
@@ -455,7 +467,7 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 
 **记录。** 每一次召回（包括什么都没匹配到的）都是 `recall` 中的一行，它的各项在 `recall_item` 中：一个 id（`rcl_…`）、时间、进行召回的库、Agent 及其会话、时机（`start`、`prompt`，或者 `request`，表示 Agent 用 `brief` 请求）、项目和目录、预算和用掉的 token，以及每一项的排名、层、类型（条目、会话或线索）、id、分数和大小。召回不保存任何文本，提示只存哈希，这样遗忘隐藏的内容不会仍从记录中显示出来（不变量 2）：每一项是什么，在显示召回时才从库中读取，已遗忘的显示为已遗忘；管理界面也以同样的方式重建交给 Agent 的文本（`rebuildRecall`），只用仍然可见的内容，之后遗忘的不显示。两张表都是只追加的。设备会把自己所做的召回发送给中枢（见[复制](#replication-raw-mirrors-entries-and-tombstones-up-tombstones-down)），所以中枢保存着每台设备的召回。`origin recalls` 列出召回，`origin show rcl_…` 显示一次召回，包括它回应的提示（会话中具有该哈希的用户消息，归档之后才能找到），以及每一项本会话之后是否用上了：它的 id 是否出现在该会话中 Agent 之后的工具调用或回复里。
 
-**Hook。** Claude Code 和 Codex 发送同样的 hook 事件，也读取同样的回答；`origin agents connect` 把 hook 加到它们的设置中，并把 Origin 的 MCP server 注册到每个已安装的 Agent，事先显示要做的修改，并备份每个文件。`origin recall` 只加载核心和适配器，以便快速启动，而且从不妨碍 Agent：出现任何故障时，它什么都不输出，在标准错误中说明原因，并以 0 退出；它最多等待 3 秒获取库的写锁。它只读取本设备的库，所以其他设备上写下的条目暂时不会被召回；中继不保存条目，不交出任何内容。
+**Hook。** Claude Code 和 Codex 发送同样的 hook 事件，也读取同样的回答；`origin agents connect` 把 hook 加到它们的设置中，并把 Origin 的 MCP server 注册到每个已安装的 Agent，事先显示要做的修改，并备份每个文件。它添加两类 hook，按命令识别，再次运行时会补上 Agent 缺少的 hook，所以由早先版本连接的 Agent 也会得到新的 hook：召回 hook，即 `SessionStart` 和 `UserPromptSubmit` 时的 `origin recall --hook <agent>`，Agent 会等待它（最多 10 秒）；以及采集 hook，即 `Stop` 和 `SubagentStop` 时、在 Claude Code 中还有 `PostCompact` 时的 `origin sync --hook <agent>`，它们在后台运行（见[实时采集](#live-ingestion)）。Codex 只有在用户用 `/hooks` 信任了新的或改动过的 hook 之后才会运行它。`origin agents disconnect` 移除这两类 hook，别的什么都不动。`origin recall` 只加载核心和适配器，以便快速启动，而且从不妨碍 Agent：出现任何故障时，它什么都不输出，在标准错误中说明原因，并以 0 退出；它最多等待 3 秒获取库的写锁。它只读取本设备的库，所以其他设备上写下的条目暂时不会被召回；中继不保存条目，不交出任何内容。
 
 **通过 MCP。** `brief` 交出一份简报，加上 `about` 时还有与它匹配的条目，记录为时机为 `request` 的一次召回。由 Agent 运行的 server 作答：在设备上根据设备的库作答，已接入中枢的设备也不询问中枢，与 hook 一致；中继把它交给中枢，以自己的工作树作为目录，中枢看不到 Agent 的磁盘，所以按原样使用这个目录，并把这次召回记录为为该设备所做。MCP 调用不说明会话，所以这类召回不记录会话；它的会话是日志中有某个工具结果含有这次召回 id 的那个会话，归档之后才能找到。
 
@@ -501,7 +513,7 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 | `GET /healthz` | `{ "ok": true, "version": … }`，无需鉴权 |
 | `POST /mcp` | MCP Streamable HTTP，无状态，JSON 响应；与 stdio server 相同的十个工具 |
 | `GET /v1/device` | `{ device, hub }`：令牌所属的设备（即令牌名）和中枢的名称 |
-| `GET /v1/cursors?device=<name>` | 令牌所属设备的每个文件在中枢上的字节游标 |
+| `GET /v1/cursors?device=<name>` | 令牌所属设备的每个文件在中枢上的字节游标；加上 `&source=<id>&path=<path>` 时，只给出那一个文件每个代次的游标（较早的中枢会忽略这两个参数，列出每个文件，由调用方从中挑出这个文件） |
 | `POST /v1/ingest` | 追加一个块：JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }`，其中 `data` 为 base64，`offset` 按镜像未压缩的内容计算（中继发送的是文件的内容，二者相同）；请求体可以使用 gzip 编码。返回 `200 { bytes, eventsAdded, … }`，偏移量不匹配时返回 `409 { bytes }` |
 | `POST /v1/entries` | `{ device, entries }`，最多 1,000 个条目，每个为 `{ id, kind, text, confidence, author, project, supersedes, validFrom, validTo, createdAt, origin, sources: [{ eventId, quote }] }`，其 `origin` 必须是令牌所属的设备。按顺序保存；返回 `200 { applied, pending }`，其中 `pending` 为 null，或者是第一个所引用事件或所取代版本尚不在中枢上的条目的 `{ id, missing }`（它之后的条目都不会被保存）。同一个 id 下内容不同时返回 `409` |
 | `POST /v1/tombstones` | `{ device, tombstones }`，最多 1,000 条遗忘记录，每条为 `{ id, target, reason, createdAt, origin, author, entries, events }`（`author` 可选），附带它在设备上覆盖的内容，其 `origin` 必须是令牌所属的设备。恢复的目标是一次遗忘的 id，并且不列出任何内容；如果中枢还没有收到它的遗忘，就先保存它，等那次遗忘到达时生效。按[遗忘](#forgetting)中的规则应用；返回 `200 { applied }`，同一个 id 下内容不同时返回 `409` |
@@ -517,7 +529,7 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 设备以两种模式之一使用中枢，在接入时选定。默认情况下，它是一个**完整的库**：像没有中枢时一样保有自己的记忆，并按上文所述与中枢复制。加上 `--relay` 时，它是一个**中继**：除了游标什么也不保存，直接把 Agent 的记录发送给中枢，所有问题都通过中枢回答（见[中继](#relays)）。除非另有说明，本节其余部分说的都是完整的库。
 
 - `origin hub connect <url> --token <token> [--device <name>] [--relay]` 把连接信息保存在 `<ORIGIN_HOME>/hub.json` 中。设备名就是它的库的名称（见[存储](#storage)），而且必须是这台设备的令牌名：这个命令会向中枢询问令牌属于哪台设备（`GET /v1/device`），如果不是这个库，就拒绝接入并说明如何解决。`--device` 可以给一个还没有写入任何条目或遗忘记录的库改名。`origin hub status` 也做同样的检查。每一次与中枢的同步，无论由哪个命令或 Agent 发起，都会在 `setting` 中记下它完成的时间，失败时则记下时间和原因；`origin status` 和 `origin hub status` 显示上一次同步完成的时间，以及此后失败的那一次同步的错误。`ORIGIN_HUB_URL` 和 `ORIGIN_HUB_TOKEN` 会覆盖保存的连接信息。
-- 配置了中枢之后，`origin mcp` 仍然根据设备自己的库提供服务，并合并中枢的回答（见 [MCP server](#mcp-server)）。它在运行中与中枢同步：读取类工具之前最多每 10 秒一次，每次写入后立即同步，记录文件有变化时每分钟同步一次，Agent 离开时再同步一次；等待中枢的时间不会超过超时时限。Agent 的注册无需改动，Agent 也仍然能引用刚刚说过的内容。
+- 配置了中枢之后，`origin mcp` 仍然根据设备自己的库提供服务，并合并中枢的回答（见 [MCP server](#mcp-server)）。它在运行中与中枢同步：读取类工具之前最多每 10 秒一次，每次写入后立即同步，记录文件有变化时每分钟同步一次，Agent 离开时再同步一次；等待中枢的时间不会超过超时时限。Agent 的采集 hook 还会在每一轮结束后立即推送记录文件新增的行（见[实时采集](#live-ingestion)）。Agent 的注册无需改动，Agent 也仍然能引用刚刚说过的内容。
 - 没有本地记录的云端 Agent 直接用 bearer 令牌注册中枢的 `/mcp` URL。
 - CLI 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct` 和 `forget` 之后会与中枢同步，所以改动会到达中枢；如果是遗忘，还会到达其他每台设备。`origin ui` 同样作用于设备自己的库，并在每次写入后在后台与中枢同步。中枢的管理界面会显示所有设备的条目。
 
@@ -527,10 +539,10 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 
 - **选择中继。** `origin hub connect <url> --token <token> --relay` 把库变成中继。只有还没有保存任何内容的库才能成为中继：已有事件、镜像文件、条目或遗忘记录的库会被拒绝，并附上如何新建一个空库的说明，不会删除任何东西。模式保存在库中（`setting`），而不是连接信息中，所以 `ORIGIN_HUB_URL` 和之后的 `origin hub connect` 都不会改变它；中继也会一直是中继：要在那台机器上保有完整的库，请使用新的 `ORIGIN_HOME`。中继不能运行 `origin serve`；没有接入中枢时，它既不发送也不回答任何东西。
 - **保存什么。** 每个来源文件一个游标，保存在 `setting` 中：中枢正在接收的代次、中枢已确认收到的该代次的字节数、这些字节最后 4 KB 的 SHA-256、游标最后变化的时间，对压缩文件还有它是否已全部发送；对生成的来源，用它的令牌代替哈希，并保存中枢已确认收到的最后一行，适配器从这一行接着写。游标保存在 `setting` 而不是 `raw_file` 中，因为一行 `raw_file` 代表 `raw/` 下的一个镜像，备份、封存、存储统计和推送都会读取它；而在 `setting` 中，生成的来源的最后一行与它的游标在同一次写入中改变。除了游标，中继还保存它的名称、模式、复制游标和同步日志：每个来源文件几百字节，外加每个生成的来源的最后一行。
-- **发送。** `origin sync`，以及运行中的 `origin mcp`，先向中枢查询游标（`GET /v1/cursors`），再从中继的游标之后、直接从 Agent 的文件读取每个来源文件：压缩文件读取解压后的内容，生成的来源则读取适配器在已发送的最后一行之后写出的行。完整的行按块发送到 `POST /v1/ingest`，每块最多 1 MiB（或者单独一个更长的行），与设备发送镜像的方式相同，最旧的文件先发送。中枢用同样的适配器镜像并解析它们，所以它的镜像、事件和事件 id，与一台完整的设备推送同样这些文件的镜像时完全相同。只有中枢确认收到一个块之后，游标才会前移。
+- **发送。** `origin sync`，以及运行中的 `origin mcp`，先向中枢查询游标（`GET /v1/cursors`），再从中继的游标之后、直接从 Agent 的文件读取每个来源文件：压缩文件读取解压后的内容，生成的来源则读取适配器在已发送的最后一行之后写出的行。完整的行按块发送到 `POST /v1/ingest`，每块最多 1 MiB（或者单独一个更长的行），与设备发送镜像的方式相同，最旧的文件先发送。中枢用同样的适配器镜像并解析它们，所以它的镜像、事件和事件 id，与一台完整的设备推送同样这些文件的镜像时完全相同。只有中枢确认收到一个块之后，游标才会前移。Agent 的采集 hook 以同样的方式发送它指明的那一个文件，只向中枢查询这个文件的游标，所以会话的行在每一轮结束时就离开中继，而不必等上一分钟（见[实时采集](#live-ingestion)）；条目和遗忘记录由下一次同步复制。
 - **改写。** 变小了的文件，或者已发送的最后 4 KB 不再匹配的文件，说明它被改写了：中继把它作为下一个代次、从偏移量 0 开始发送，中枢保留旧的代次。生成的来源从不检测改写。
 - **中枢的进度。** 当中枢持有的某个文件比中继的游标所说的更多或更少时（途中丢失的回应、中继的另一个进程抢先发送、从备份恢复的中枢、以中枢已知的设备名新建的中继库），只要文件在中枢游标处恰好有一行结束，中继就从中枢的游标继续；生成的来源会向适配器要行，直到到达那个偏移量。否则，它把这个文件作为一个新的代次发送。因偏移量被拒绝的块（`409`）也按同样的方式处理。中枢直接拒绝的文件（`400`、`413`）会被报告并跳过，其他文件照常发送。
-- **离线。** 什么也不发送，游标也不移动：新的行留在 Agent 自己的记录文件里。有些 Agent 会删除旧的记录（Claude Code 在 `cleanupPeriodDays` 之后删除，默认 30 天），而中继不保留副本，所以中继必须定期连上它的中枢。Agent 运行期间，它的 `origin mcp` 每分钟发送一次新的行，Agent 离开时再发送一次；`origin status` 按来源显示还有多少字节尚未发送。
+- **离线。** 什么也不发送，游标也不移动：新的行留在 Agent 自己的记录文件里。有些 Agent 会删除旧的记录（Claude Code 在 `cleanupPeriodDays` 之后删除，默认 30 天），而中继不保留副本，所以中继必须定期连上它的中枢。Agent 运行期间，有 hook 的 Agent 在每一轮结束后由 hook 发送记录文件新增的行，它的 `origin mcp` 也每分钟发送一次新的行，Agent 离开时再发送一次；`origin status` 按来源显示还有多少字节尚未发送。
 - **清理前的警告。** 当仍有完整的行尚未发送的最旧文件，临近它的 Agent 删除它的年龄时，中继会发出警告；年龄按文件的修改时间计算，和 Claude Code 的做法一样。对 Claude Code，是在 `cleanupPeriodDays`（从它配置目录中的 `settings.json` 读取，未设置时为 30 天）之前一周以内，如果它短于两周，则是过了它的一半之后；对保留期限未知的 Agent，是这样的文件已有一周之久，而且中继已有一周没有连上中枢。`origin status` 会显示这个警告，`origin sync` 在没能发送全部内容时也会显示；`origin mcp` 在连不上中枢期间最多每小时检查一次，把警告写入它的日志，并附在工具的错误里，让 Agent 看到。检查在 CLI 中进行；`core` 只给出这样的最旧文件（`relayPending`）。
 - **回答与写入。** 中继没有可以据以作答的事件，也没有事件可以用来核对条目所引用的事件，所以每个工具都是中枢的（见 [MCP server](#mcp-server)）。写入按中枢的规则在中枢上进行：中枢检查每个被引用的事件都在它那里存在且可见（不变量 1），应用遗忘（不变量 2），并把作者记为 `<agent>@<中继名>`，origin 为中枢（见[访问](#access)）。CLI 的查询和管理命令（`search`、`timeline`、`show`、`entries`、`correct`、`forget`）同样询问中枢的 `/mcp`，身份是 `user@<中继名>`；`entries --history`、`projects`、`forgotten` 和 `restore` 在中继上不可用，恢复要在中枢的管理界面中进行。
 - **复制。** 中继自己不写条目或遗忘记录，中枢的遗忘记录在它那里也找不到需要隐藏的东西，所以它不保存任何遗忘记录；它仍然拉取这些记录，让自己的复制游标像设备的一样前移。它的 Agent 的记忆所对应的条目，由中枢从中继发来的行中派生（见[原生记忆](#native-memories)）。
@@ -558,7 +570,7 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 - **低成本的认知。** 如何在没有专门抽取流水线的情况下，构建并维护一个关于这个人的模型？目前由 Agent 在注意到某些东西时自行写入认知条目。这是否足够，仍是一个悬而未决的问题。
 - **与原生记忆互通。** Origin 单向导入 Claude Code、ZCode 和 Grok Build 的记忆（见[原生记忆](#native-memories)）。尚未设计的有：把条目写回 Agent 的记忆文件，以及导入 Codex 的记忆（启用后，它在 `~/.codex/memories/` 下自行合并的摘要）；Cursor 已不再在磁盘上保存记忆。
 - **召回的质量与范围。** 召回匹配的是词，所以会漏掉用别的说法或别的语言表达同一件事的条目，也仍会交出一些与提示只有常见词相同的条目（见[召回](#recall)）。如何根据召回记录和 Agent 之后用上了什么来评判召回的内容，还没有设计；在不拖慢 Agent 处理提示的前提下，从中枢召回其他设备写下的条目，也还没有设计。
-- **变更通知。** `origin mcp` 在 Agent 运行期间每分钟比较一次文件的大小和时间来查看新的记录行，并在 Agent 离开时再同步一次，所以只要设备上的 Agent 使用 Origin，就不需要定时任务。尚待解决的是：不使用 Origin 的 Agent 写下的行，以及 Agent 直接杀掉 server 之后写下的行，要等到下一个 Agent 或 `origin sync`；改为监听文件而不是每分钟查看可以缩短延迟，但文件监听在某些平台上并不可靠。
+- **变更通知。** Claude Code 和 Codex 通过它们的 hook 告诉 Origin 一轮何时结束，所以它们会话的行在写下几秒之后就会到达（见[实时采集](#live-ingestion)）；`origin mcp` 也在 Agent 运行期间每分钟比较一次文件的大小和时间来查看新的记录行，并在 Agent 离开时再同步一次，所以只要设备上的 Agent 使用 Origin，就不需要定时任务。尚待解决的是：没有这类 hook 的 Agent，即 Cursor、ZCode 和 Grok Build，只能靠查看发现，所以在 Agent 运行 `origin mcp` 期间，它们的行最多要等一分钟；完全不使用 Origin 的 Agent 写下的行、没有设置 hook（或者在 Codex 中尚未信任 hook）的 Agent 写下的行，以及 Agent 直接杀掉 server 之后写下的行，要等到下一个 Agent、hook 或 `origin sync`；对这些情况，改为监听文件而不是每分钟查看可以缩短延迟，但文件监听在某些平台上并不可靠。
 - **中继与 Agent 的清理。** 中继不保留尚未发送的内容的副本。如果它的中枢无法连接的时间超过了某个 Agent 保留记录的时间，这些会话就会丢失。中继会在那之前发出警告（见[中继](#relays)），但无法阻止它发生：为面临删除的记录保留副本尚未设计。目前只知道 Claude Code 的保留期限，而且只读取它的用户设置，不读取优先级更高的托管设置；其他 Agent 只在一周没有同步之后才会收到警告。
 - **用过时的版本恢复。** 设备按它持有的条目版本判断规则 3。当另一个库在中枢上纠正了设备的某个条目时，一次恢复可能让设备继续隐藏这个条目，而中枢显示它，直到之后又有遗忘或恢复涉及它。把条目下发给设备，或者把中枢的判断与遗忘覆盖的内容分开发送，可以解决这个问题；两者都尚未设计。
 - **擦除。** 遗忘是隐藏，恢复会把内容带回，所以原始行仍保留在磁盘上、备份中和中枢的存储桶中。显式擦除被遗忘的内容——有它自己的记录和限制（擦除之后无法恢复）——尚未设计。

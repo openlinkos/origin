@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-b754e426
+sourceHash: sha256-68ce84d3
 ---
 
 # 接入 Agent
@@ -16,17 +16,22 @@ sourceHash: sha256-b754e426
 
 ## 一次接好所有 Agent {#connect-them-all-at-once}
 
-`origin agents` 显示这台机器上装了哪些 Agent，以及每个是怎样接入的。`origin agents connect` 把 Origin 的 MCP server 注册到其中每一个，并为 Claude Code 和 Codex 加上[召回](./recall.md)的 hook。它先显示会改什么，加上 `--yes` 才真的修改，每个文件改之前都会在旁边备份；它只添加和删除 Origin 自己的那一项，`origin agents disconnect` 会把它们去掉。写出 Agent 的名字就只处理这些，例如 `origin agents connect codex`。改完之后，为每个 Agent 开始一个新会话；Codex 只有在你用 `/hooks` 信任新的 hook 之后才会运行它们。
+`origin agents` 显示这台机器上装了哪些 Agent，以及每个是怎样接入的。`origin agents connect` 把 Origin 的 MCP server 注册到其中每一个，并为 Claude Code 和 Codex 加上两类 hook：[召回](./recall.md) hook，在会话开始时和每个提示时把有用的内容交给 Agent；以及采集 hook，在每一轮结束时于后台把会话新增的行交给 Origin，让其他会话和你的中枢马上就能看到。它先显示会改什么，加上 `--yes` 才真的修改，每个文件改之前都会在旁边备份；它只添加和删除 Origin 自己的那一项，`origin agents disconnect` 会把它们去掉。写出 Agent 的名字就只处理这些，例如 `origin agents connect codex`。在用早先版本接入过的机器上，再运行一次即可补上缺少的 hook。
+
+改完之后，为每个 Agent 开始一个新会话。Codex 只有在你信任新的或改动过的 hook 之后才会运行它：在 Codex 里打开 `/hooks`，检查 Origin 的 hook 并信任它们；在此之前，Codex 会跳过它们，并在启动时给出提醒。
 
 ```console
 $ origin agents connect
 origin agents connect would:
   codex: register the MCP server in /home/dana/.codex/config.toml
   codex: add the recall hooks (SessionStart, UserPromptSubmit) to /home/dana/.codex/hooks.json
+  codex: add the ingest hooks (Stop, SubagentStop) to /home/dana/.codex/hooks.json
   cursor: register the MCP server in /home/dana/.cursor/mcp.json
 
 Run again with --yes to make these changes; each file is backed up next to it first.
 ```
+
+Claude Code 的采集 hook 设在 `Stop`、`SubagentStop` 和 `PostCompact`，Codex 的设在 `Stop` 和 `SubagentStop`；它们写下的样子见[召回](./recall.md#set-up-the-hooks)。Cursor、ZCode 和 Grok Build 不加 hook：它们运行期间，新增的行由 `origin mcp` 每分钟收取一次，`origin sync` 也会收取。
 
 下面各节说明它为每个 Agent 写入了什么，方便手动设置。
 
@@ -86,7 +91,7 @@ Grok 默认合并 `~/.claude.json` 中的 MCP server，所以完成上面的 Cla
 | `correct` | 用纠正后的版本替换条目 |
 | `forget` | 在每个库中隐藏条目或事件，并附上你的原因；只有你明确要求时 Agent 才会使用，也只有你能恢复 |
 
-server 会告诉 Agent 如何使用这些工具，你只需用自然语言提问。它在回答前会同步新的会话记录，所以 Agent 甚至能引用你一分钟前说的话。Agent 运行期间，Origin 还会在后台每分钟收取一次新的记录行，并在 Agent 退出时再收取一次。工具的完整说明见[架构](../architecture.md#mcp-server)。Origin 还会把 Agent 工作之处有用的内容交给它：Claude Code 通过它的 hook，在每个会话开始时和每个提示时；其他 Agent 通过 `brief`。见[召回](./recall.md)。
+server 会告诉 Agent 如何使用这些工具，你只需用自然语言提问。它在回答前会同步新的会话记录，所以 Agent 甚至能引用你一分钟前说的话。Claude Code 和 Codex 的采集 hook 会在每一轮结束时把这一轮新增的行交给 Origin；作为后备，也为了其他 Agent，Agent 运行期间 Origin 还会在后台每分钟收取一次新的记录行，并在 Agent 退出时再收取一次。工具的完整说明见[架构](../architecture.md#mcp-server)。Origin 还会把 Agent 工作之处有用的内容交给它：Claude Code 通过它的 hook，在每个会话开始时和每个提示时；其他 Agent 通过 `brief`。见[召回](./recall.md)。
 
 ## 使用个人中枢 {#using-a-personal-hub}
 

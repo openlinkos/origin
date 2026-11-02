@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-667e752c
+sourceHash: sha256-466f6804
 ---
 
 # 常见问题
@@ -24,15 +24,32 @@ Agent 的列表里没有 `origin` server，或者 server 启动失败。
 - 注册或更新 Origin 之后，请重启 Agent：Agent 在会话开始时才启动它的 MCP server。
 - 在终端里运行 `origin status`。如果它失败了，server 也会以同样的方式失败，提示会说明原因。
 
+### hook 没有起作用 {#a-hook-does-nothing}
+
+`origin agents` 显示 hook 已经设置好，但会话的行要在一轮结束一分钟后才进入 Origin 或中枢，或者在没有 `origin mcp` 运行时根本不进入。
+
+- **开始一个新会话。** Agent 在会话开始时读取它的 hook。
+- **在 Codex 中信任这些 hook。** 新的 hook，以及改动过的 hook，在你信任之前 Codex 都会跳过：在 Codex 里打开 `/hooks`，检查 Origin 的 hook 并信任它们。还有 hook 等待检查时，Codex 会在启动时提醒。
+- **它们在后台运行。** 采集 hook 是 `async` 的：Agent 不等待它们，也不显示它们输出的任何内容。`/hooks` 会列出它们；Claude Code 在详细模式（`Ctrl+O`）下会显示后台 hook 何时结束。无论出了什么问题，hook 都以 0 退出，只在标准错误中说明原因。
+- **记录文件落后于 hook。** Agent 异步写入它们的记录文件，所以 hook 运行时，这一轮的最后几行可能还没写下。Origin 只读取完整的行；其余部分会随下一个 hook 到达，或者在一分钟内由 `origin mcp` 读取。这是正常的。
+- **与 `origin sync` 读取同样的目录。** hook 只采集 Origin 为这个 Agent 读取的目录下的记录文件：Claude Code 是 `~/.claude/projects`（或 `CLAUDE_CONFIG_DIR`、`ORIGIN_CLAUDE_PROJECTS`），Codex 是 `~/.codex`（或 `CODEX_HOME`）下的 `sessions/` 或 `archived_sessions/`。hook 使用 Agent 的环境运行，所以请给 Agent 同样的环境变量，包括 `ORIGIN_HOME`。
+- **手动运行它**，给它一个和 Agent 发送的一样的事件，再看它在标准错误中说了什么。一切正常时它什么都不输出，之后 `origin timeline --session <id>` 会显示这个会话最新的消息：
+
+```sh
+echo '{"hook_event_name":"Stop","transcript_path":"/home/dana/.claude/projects/-home-dana-code-acme/5e8f0a1b-2c3d-4e5f-9a6b-7c8d9e0f1a2b.jsonl"}' | origin sync --hook claude-code
+```
+
+在已接入中枢的设备上，hook 最多等待中枢 3 秒，之后提示 `not sent to the hub yet`；没有发出的内容会在下一次同步时发送。
+
 ### 结果里缺少刚说过的话 {#results-lack-what-was-just-said}
 
 Agent 找不到一个会话最后几条消息。
 
-`origin mcp` 在 `search` 和 `timeline` 之前读入新的日志行，最多每 10 秒一次；在 `remember` 和 `correct` 之前总会读入；后台每分钟一次；Agent 退出时再读一次（见[时效](./mcp.md#freshness)）。所以检索通常能看到几秒前说的话。看不到的是：
+Claude Code 和 Codex 的采集 hook 会在每一轮结束时读入会话新增的行（见[hook 没有起作用](#a-hook-does-nothing)）。`origin mcp` 也会在 `search` 和 `timeline` 之前读入新的日志行，最多每 10 秒一次；在 `remember` 和 `correct` 之前总会读入；后台每分钟一次；Agent 退出时再读一次（见[时效](./mcp.md#freshness)）。所以检索通常能看到几秒前说的话。看不到的是：
 
 - 不使用 Origin 的 Agent 的会话，要等使用 Origin 的 Agent 运行，或运行 `origin sync`。在只有这类 Agent 运行的机器上，请定时运行 `origin sync`。
-- 其他设备的会话，要等那台设备与中枢同步。
-- 如果后台查看被关闭（`ORIGIN_WATCH_INTERVAL_MS=0`），以上这些都看不到。
+- 其他设备的会话，要等那台设备的 hook 或同步把它们发给中枢。
+- 对没有采集 hook 的 Agent，如果后台查看被关闭（`ORIGIN_WATCH_INTERVAL_MS=0`），什么都看不到。
 
 ## 升级 {#upgrading}
 

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-abf0e8bd
+sourceHash: sha256-4c770069
 ---
 
 # MCP 工具
@@ -613,7 +613,8 @@ Agent 能找到并引用刚刚说过的话，因为 `origin mcp` 会边运行边
 - 启动时，它在后台读入所有来源；在连接了中枢的设备上，还会与中枢同步。
 - `brief`、`search`、`timeline`、`changes` 和 `follow` 先读入新的日志行，最多每 10 秒一次。在连接了中枢的设备上，`get` 和 `sources` 也会这样做，并且每次读取还会与中枢同步，最多每 10 秒一次，等待中枢的时间不超过中枢超时。
 - `remember` 和 `correct` 总是先读入新行；在连接了中枢的设备上，之后会立即与中枢同步。
-- 在后台，它每 60 秒查看一次有没有新的日志行（`ORIGIN_WATCH_INTERVAL_MS`；设为 `0` 则关闭），只有日志文件有变化时才读入和同步。
+- Claude Code 和 Codex 的采集 hook（由 `origin agents connect` 设置）会在每一轮结束时读入会话新增的行，在连接了中枢的设备上还会把它们推送给中枢（见[接入 Agent](./connect-agents.md#connect-them-all-at-once)）。
+- 在后台，作为其他 Agent 以及 hook 漏掉的内容的后备，它每 60 秒查看一次有没有新的日志行（`ORIGIN_WATCH_INTERVAL_MS`；设为 `0` 则关闭），只有日志文件有变化时才读入和同步。
 - Agent 退出时，它再读入并同步一次，最多 5 秒。
 
 中枢的 `/mcp` 按中枢库的现状作答：其中有每台设备已同步的内容，而设备按上面所说的方式同步。不使用 Origin 的 Agent 的会话，要等下一次使用 Origin 的 Agent 运行，或运行 `origin sync`，才会进入库中。

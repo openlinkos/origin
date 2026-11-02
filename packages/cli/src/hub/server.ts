@@ -130,7 +130,16 @@ async function handle(
     case '/v1/cursors': {
       requireMethod(req, 'GET');
       const device = deviceOf(opts, caller.name, url.searchParams.get('device'));
-      sendJson(res, 200, { cursors: remoteCursors(opts.db, device) });
+      // With a source and a path, only the generations of that one file (an agent's hook pushing it).
+      const source = url.searchParams.get('source');
+      const file = url.searchParams.get('path');
+      sendJson(res, 200, {
+        cursors: remoteCursors(
+          opts.db,
+          device,
+          source && file ? { source, path: file } : undefined,
+        ),
+      });
       return;
     }
     case '/v1/ingest': {

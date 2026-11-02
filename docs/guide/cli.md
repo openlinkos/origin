@@ -2,6 +2,7 @@
 
 ```text
 origin sync      [--source <id>] [--verbose] [--local] Ingest local agent sessions, then sync with the hub if connected
+origin sync      --hook <agent>                        Ingest the transcript an agent's hook names (reads its event on stdin)
 origin status                                          Per-source counts, entries, and last sync
 origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
 origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
@@ -17,7 +18,7 @@ origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 
 origin projects                                        Known project names
 origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
 origin mcp                                             Run the MCP server over stdio (adds the hub's answers when connected)
-origin agents    [connect | disconnect] [<agent>...] [--yes]   Register Origin, and its recall hooks, with the agents here
+origin agents    [connect | disconnect] [<agent>...] [--yes]   Register Origin, and its hooks, with the agents here
 origin ui        [--port 7079] [--no-open]             Browse and curate this store in your browser, on 127.0.0.1
 
 origin serve     [--host 127.0.0.1] [--port 7077]      Run this store as a personal hub (MCP over HTTP)
@@ -134,6 +135,10 @@ A session of it: origin show <session id>
 
 `origin recall` shows what an agent would be handed in the current directory, or in `--cwd`: the brief of a new session, or, with `--prompt`, the entries a prompt matches. `--agent` shows it as that agent would get it, without the memories it loads itself. It records nothing. `origin agents connect` sets up the hooks (see [Connect your agents](./connect-agents.md#connect-them-all-at-once)). Claude Code's and Codex's hooks run `origin recall --hook claude-code` or `--hook codex`, which reads the hook's event on standard input, records what it hands over, and prints it for the agent. `origin recalls` lists what agents were handed, newest first (`--all` also lists recalls that handed nothing over), and `origin show rcl_…` shows one, with the prompt it answered and the items the session went on to use. See [Recall](./recall.md).
 
+## Ingesting from hooks
+
+Claude Code's and Codex's ingest hooks run `origin sync --hook claude-code` or `--hook codex` in the background when a turn ends, when a sub-agent stops, and, in Claude Code, after a compaction; `origin agents connect` sets them up (see [Connect your agents](./connect-agents.md#connect-them-all-at-once)). It reads the hook's event on standard input, ingests the transcript the event names, and at `SubagentStop` the sub-agent's too, from where the last ingestion of that file stopped, and on a device connected to a hub pushes the file's new lines to the hub, waiting at most 3 seconds; on a relay, it sends them to the hub. It prints nothing; whatever goes wrong, it says why on standard error and exits 0, so that it never stands in the agent's way. `origin sync` itself works as before: other agents' sessions are picked up by it, and by `origin mcp` every minute. See [Live ingestion](../architecture.md#live-ingestion).
+
 ## Correcting and forgetting
 
 `correct` adds a new version of an entry and keeps the old one as history. `forget` needs a reason, first shows what it will hide, and only acts with `--yes`:
@@ -181,7 +186,7 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 | `ORIGIN_HUB_TOKEN` | — | Hub token; overrides `origin hub connect` |
 | `ORIGIN_DEVICE` | host name | The name a new store takes: this device's name on the hub, and the origin recorded on what it writes |
 | `ORIGIN_HUB_TIMEOUT_MS` | `2000` | How long `origin mcp` on a connected device waits for the hub before answering without it |
-| `ORIGIN_WATCH_INTERVAL_MS` | `60000` | How often `origin mcp` looks for new log lines while an agent runs (and syncs them with the hub when connected); `0` turns it off |
+| `ORIGIN_WATCH_INTERVAL_MS` | `60000` | How often `origin mcp` looks for new log lines while an agent runs (and syncs them with the hub when connected), the fallback for what agents' hooks do not hand over; `0` turns it off |
 | `ORIGIN_ADMIN` | `off` | `on` serves the admin UI at `/admin` (`origin serve --admin`) |
 | `ORIGIN_ADMIN_LISTEN` | — | Serve the admin UI on this `host:port` instead (`--admin-listen`) |
 | `ORIGIN_PUBLIC_URL` | — | The hub's public https URL (`--public-url`) |

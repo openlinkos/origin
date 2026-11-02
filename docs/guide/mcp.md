@@ -609,7 +609,8 @@ Agents can find and cite what was said a moment ago, because `origin mcp` reads 
 - When it starts, it ingests every source in the background, and on a connected device syncs with the hub.
 - `brief`, `search`, `timeline`, `changes`, and `follow` first ingest new lines, at most every 10 seconds. On a connected device, `get` and `sources` do too, and every read also syncs with the hub, at most every 10 seconds, waiting for it no longer than the hub timeout.
 - `remember` and `correct` always ingest first, and on a connected device sync with the hub right after.
-- In the background, it looks for new log lines every 60 seconds (`ORIGIN_WATCH_INTERVAL_MS`; `0` turns this off), and ingests and syncs only if a log file changed.
+- Claude Code's and Codex's ingest hooks, which `origin agents connect` sets up, ingest a session's new lines as each turn ends, and on a connected device push them to the hub (see [Connect your agents](./connect-agents.md#connect-them-all-at-once)).
+- In the background, as the fallback for other agents and for what a hook missed, it looks for new log lines every 60 seconds (`ORIGIN_WATCH_INTERVAL_MS`; `0` turns this off), and ingests and syncs only if a log file changed.
 - When the agent exits, it ingests and syncs once more, for at most 5 seconds.
 
 The hub's `/mcp` reads the hub's store as it is: it has what every device has synced, and devices sync as described above. Sessions of agents that do not use Origin reach the store the next time one that does runs, or with `origin sync`.

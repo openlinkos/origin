@@ -28,7 +28,7 @@ import {
 import { createRelayServer, type SearchResult } from '@openlinkos/origin-mcp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HubConfig } from '../src/hub/config.js';
-import { relayWithHub } from '../src/hub/relay.js';
+import { relayFileWithHub, relayWithHub } from '../src/hub/relay.js';
 import { askHub } from '../src/hub/remote.js';
 import { createHubServer } from '../src/hub/server.js';
 import { lastHubSync, pulledKey, syncWithHub } from '../src/hub/sync.js';
@@ -215,6 +215,38 @@ describe('relay mode', () => {
     expect(await sync()).toMatchObject({ files: 1, eventsAdded: 1 });
     expect(getEvent(main.db, NEW_EVENT)?.text).toBe('Second session.');
     expect(lastHubSync(relayDb, hub)).toMatchObject({ at: expect.any(Number), failure: null });
+  });
+
+  it("sends one log as an agent's hook names it, asking the hub about that file alone", async () => {
+    const other = path.join(
+      projects,
+      'D--demo-project',
+      '66666666-6666-4666-8666-666666666666.jsonl',
+    );
+    fs.writeFileSync(
+      other,
+      userLine(NEW_EVENT.slice('claude-code:'.length), 'elsewhere', '2026-10-19T05:00:00Z'),
+    );
+    const asked: string[] = [];
+    const watching: typeof fetch = (input, init) => {
+      asked.push(String(input).replace(main.url, ''));
+      return fetch(input, init);
+    };
+    const one = (file: string, f: typeof fetch = watching) =>
+      relayFileWithHub({ db: relayDb, home: relayHome, hub, adapter: adapter(), fetch: f }, file);
+    expect(await one(logFile)).toMatchObject({ filesChanged: 1, eventsAdded: 6, failed: [] });
+    expect(asked[0]).toBe(
+      `/v1/cursors?device=laptop&source=claude-code&path=${encodeURIComponent(logFile)}`,
+    );
+    expect(remoteCursors(main.db, 'laptop').map((c) => c.path)).toEqual([logFile]);
+    expect(await one(logFile)).toMatchObject({ filesChanged: 0, bytes: 0 });
+    // A hub from before the filter lists every file: the relay picks its file out.
+    const old: typeof fetch = (input, init) =>
+      fetch(String(input).replace(/&source=[^&]*&path=[^&]*$/, ''), init);
+    expect(await one(other, old)).toMatchObject({ filesChanged: 1, eventsAdded: 1 });
+    expect(await one(logFile, old)).toMatchObject({ filesChanged: 0 });
+    // The relay's sync then has nothing left to send.
+    expect(await sync()).toMatchObject({ files: 0, bytes: 0 });
   });
 
   it('sends a rewritten log as a new generation', async () => {

@@ -115,6 +115,7 @@ import { RetentionWatch, retentionWarning, retentionWarnings } from './hub/reten
 import { type HubAdminOptions, startHub } from './hub/serve.js';
 import { type HubSyncResult, lastHubSync, syncWithHub } from './hub/sync.js';
 import { readNewPassword } from './password.js';
+import { isHookCall, main as syncHook } from './sync-hook.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
 import { onEnter, openInBrowser, startLocalUi, UI_PORT, writeSignInFile } from './ui.js';
 
@@ -124,6 +125,7 @@ const USAGE = `origin — local-first, cross-agent personal memory
 
 Usage:
   origin sync      [--source <id>] [--verbose] [--local] Ingest local agent sessions, then sync with the hub if connected
+  origin sync      --hook <agent>                        Ingest the transcript an agent's hook names (reads its event on stdin)
   origin status                                          Per-source counts, entries, and last sync
   origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
   origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
@@ -139,7 +141,7 @@ Usage:
   origin projects                                        Known project names
   origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
   origin mcp                                             Run the MCP server over stdio (forwards to the hub when connected)
-  origin agents    [connect | disconnect] [<agent>...] [--yes]   Register Origin, and its recall hooks, with the agents here
+  origin agents    [connect | disconnect] [<agent>...] [--yes]   Register Origin, and its hooks, with the agents here
   origin ui        [--port 7079] [--no-open]             Browse and curate this store in your browser, on 127.0.0.1
 
 Personal hub:
@@ -206,6 +208,8 @@ export async function main(argv: string[]): Promise<number> {
   }
   // Agents' own configuration only: the store is not needed.
   if (command === 'agents') return cmdAgents(rest);
+  // An agent's hook (bin.ts loads it on its own): it opens the store itself, and never fails.
+  if (command === 'sync' && isHookCall(rest)) return syncHook(argv);
   const home = originHome();
   // Opening the store upgrades an older one. A migration may parse mirrored lines again, with the
   // adapters, and read their sealed frames, which a hub may keep in a bucket.

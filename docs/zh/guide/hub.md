@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-d66e73fd
+sourceHash: sha256-9dff1463
 ---
 
 # 个人中枢
@@ -83,7 +83,7 @@ origin sync
 
 设备接入后，你已有的 Agent 注册都不用改。`origin mcp` 根据设备的库作答，同时询问中枢，再把两边的回答合并；每条结果都会说明它是在本设备上（`local`）还是在中枢上（`hub`）找到的。如果中枢在 2 秒内（`ORIGIN_HUB_TIMEOUT_MS`）没有回应，Agent 会得到本设备的回答，并附带一条说明：这次没有询问中枢。Agent 保存的内容先落到设备上，并立即同步到中枢；连不上中枢时，则在下一次同步时发送。纠正或遗忘只有中枢才有的内容会在中枢上执行，因此需要能连上中枢。
 
-Agent 运行期间，它的 `origin mcp` 也会在后台同步：记录文件有变化时每分钟一次，Agent 退出时再同步一次，所以设备不需要定时同步。不使用 Origin 的 Agent 的会话，会在下一次有使用 Origin 的 Agent 运行时，或者运行 `origin sync` 时被收取；只有在某台设备上只运行这类 Agent 时，才需要定时运行 `origin sync`（例如用 cron，`*/10 * * * * origin sync`，或 Windows 任务计划程序）。
+Agent 运行期间，Claude Code 和 Codex 的采集 hook 会在每一轮结束时把这一轮新增的行推送给中枢，它的 `origin mcp` 也会在后台同步：记录文件有变化时每分钟一次，Agent 退出时再同步一次，所以设备不需要定时同步。不使用 Origin 的 Agent 的会话，会在下一次有使用 Origin 的 Agent 运行时，或者运行 `origin sync` 时被收取；只有在某台设备上只运行这类 Agent 时，才需要定时运行 `origin sync`（例如用 cron，`*/10 * * * * origin sync`，或 Windows 任务计划程序）。
 
 ## 把设备作为中继运行 {#run-a-device-as-a-relay}
 
@@ -98,7 +98,7 @@ origin status
 ```
 
 - 只有还没有保存任何内容的库才能成为中继。如果这台机器上已经有一个保存了会话或条目的库，Origin 会拒绝，并且不做任何改动；请把 `ORIGIN_HOME` 设为一个新目录，再接入那个库。中继会一直是中继；要在这台机器上重新保有完整的库，请再使用一个新的 `ORIGIN_HOME`。
-- `origin sync` 把每份会话记录新增的完整行发送给中枢，中枢像收到设备自己的副本一样归档并解析它们；`origin status` 按来源显示还有多少文件和字节尚未发送。和其他设备一样，Agent 的 `origin mcp` 在运行中也会发送新的行。
+- `origin sync` 把每份会话记录新增的完整行发送给中枢，中枢像收到设备自己的副本一样归档并解析它们；`origin status` 按来源显示还有多少文件和字节尚未发送。和其他设备一样，Agent 的采集 hook 和 `origin mcp` 在运行中也会发送新的行。
 - Agent 的注册都不用改，但在中继上，`origin mcp` 的每个工具都由中枢作答：它先把刚刚写下的内容发送给中枢，让 Agent 能找到并引用它，再把调用交给中枢。Agent 保存的内容写在中枢上，作者记为 `claude-code@vps`。连不上中枢时，工具会失败，并说明中继离线时无法作答。
 - `origin search`、`timeline`、`show`、`entries`、`correct` 和 `forget` 也会询问中枢，`correct` 记为 `user@vps`。中继无法事先列出 `origin forget` 将隐藏的内容，所以它会说明按规则将隐藏什么，并照常需要 `--yes`。`entries --history`、`projects`、`forgotten` 和 `restore` 在中继上不可用；请使用中枢的[管理界面](./admin.md)。
 - 连不上中枢时，什么也不会发送，新的会话只存在于 Agent 自己的记录文件中。有些 Agent 会删除旧的记录，Claude Code 默认在 30 天后删除（`cleanupPeriodDays`），所以请确保中继定期连上它的中枢；如果上面运行着不使用 Origin 的 Agent，请定时运行 `origin sync`。

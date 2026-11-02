@@ -146,51 +146,109 @@ export async function syncWithHub(opts: HubSyncOptions): Promise<HubSyncResult> 
   });
 }
 
-async function pushMirrors(opts: HubSyncOptions, call: Call, result: HubSyncResult) {
+/** The hub's byte cursor of one generation of one of this device's files. */
+export interface HubCursor {
+  source: string;
+  path: string;
+  generation: number;
+  bytes: number;
+}
+
+/**
+ * The hub's cursors of this device's files, or with `file`, of the generations of that one file.
+ * A hub from before the filter answers with every file's: they are filtered here too.
+ */
+export async function hubCursors(
+  call: Call,
+  device: string,
+  file?: { source: string; path: string },
+): Promise<HubCursor[]> {
+  const query = file
+    ? `&source=${encodeURIComponent(file.source)}&path=${encodeURIComponent(file.path)}`
+    : '';
   const { cursors } = (await call(
     'GET',
-    `/v1/cursors?device=${encodeURIComponent(opts.hub.device)}`,
-  )) as { cursors: Array<{ source: string; path: string; generation: number; bytes: number }> };
-  const remote = new Map(cursors.map((c) => [`${c.source}\n${c.path}\n${c.generation}`, c.bytes]));
+    `/v1/cursors?device=${encodeURIComponent(device)}${query}`,
+  )) as { cursors: HubCursor[] };
+  return file ? cursors.filter((c) => c.source === file.source && c.path === file.path) : cursors;
+}
 
+/** What pushing mirrors sent: files with new bytes, the bytes, and the events the hub parsed. */
+type PushCounts = Pick<HubSyncResult, 'files' | 'bytes' | 'eventsAdded'>;
+
+async function pushMirrors(opts: HubSyncOptions, call: Call, result: HubSyncResult) {
+  const cursors = await hubCursors(call, opts.hub.device);
+  const remote = new Map(cursors.map((c) => [`${c.source}\n${c.path}\n${c.generation}`, c.bytes]));
   for (const file of localRawFiles(opts.db)) {
-    let offset = remote.get(`${file.source}\n${file.path}\n${file.generation}`) ?? 0;
-    if (offset >= file.bytes) continue;
-    result.files++;
-    let conflicts = 0;
-    const agentVersion = recordedAgentVersion(opts.db, file.id);
-    while (offset < file.bytes) {
-      // Offsets are in the mirror's uncompressed content; the hub compresses what it stores.
-      const data = readMirrorLines(opts.db, opts.home, file.id, offset, CHUNK_BYTES);
-      if (data.length === 0) throw new Error(`the mirror of ${file.path} ends before its cursor`);
-      const body = {
-        device: opts.hub.device,
-        source: file.source,
-        path: file.path,
-        relPath: file.relPath,
-        generation: file.generation,
-        offset,
-        mtimeMs: file.updatedAt,
-        agentVersion,
-        data: data.toString('base64'),
-      };
-      const reply = (await call('POST', '/v1/ingest', body, [409])) as {
-        bytes: number;
-        eventsAdded?: number;
-      };
-      if (reply.eventsAdded === undefined) {
-        // Offset mismatch: continue from the hub's cursor. Another process pushing the same file
-        // moves it on; only a hub that answers without moving on, again and again, is an error.
-        if (reply.bytes <= offset && ++conflicts > 3) {
-          throw new Error(`hub keeps rejecting ${file.path}`);
-        }
-        offset = reply.bytes;
-        continue;
+    const offset = remote.get(`${file.source}\n${file.path}\n${file.generation}`) ?? 0;
+    await pushRawFile(opts, call, file, offset, result);
+  }
+}
+
+/**
+ * Push the new bytes of this store's mirror of one source file, every generation of it the hub
+ * lacks bytes of, as a sync pushes each mirror. An agent's hook calls it right after it ingested
+ * the file (see docs/architecture.md#live-ingestion); the entries, tombstones, and recalls written
+ * here wait for the next sync.
+ */
+export async function pushFile(
+  opts: HubSyncOptions,
+  file: { source: string; path: string },
+): Promise<PushCounts> {
+  const call = hubClient(opts);
+  const result: PushCounts = { files: 0, bytes: 0, eventsAdded: 0 };
+  const cursors = await hubCursors(call, opts.hub.device, file);
+  const remote = new Map(cursors.map((c) => [c.generation, c.bytes]));
+  for (const raw of localRawFiles(opts.db, file)) {
+    await pushRawFile(opts, call, raw, remote.get(raw.generation) ?? 0, result);
+  }
+  return result;
+}
+
+/** Push one mirror from `offset`, the hub's cursor, to its end, resuming where the hub stands. */
+async function pushRawFile(
+  opts: HubSyncOptions,
+  call: Call,
+  file: ReturnType<typeof localRawFiles>[number],
+  from: number,
+  result: PushCounts,
+): Promise<void> {
+  let offset = from;
+  if (offset >= file.bytes) return;
+  result.files++;
+  let conflicts = 0;
+  const agentVersion = recordedAgentVersion(opts.db, file.id);
+  while (offset < file.bytes) {
+    // Offsets are in the mirror's uncompressed content; the hub compresses what it stores.
+    const data = readMirrorLines(opts.db, opts.home, file.id, offset, CHUNK_BYTES);
+    if (data.length === 0) throw new Error(`the mirror of ${file.path} ends before its cursor`);
+    const body = {
+      device: opts.hub.device,
+      source: file.source,
+      path: file.path,
+      relPath: file.relPath,
+      generation: file.generation,
+      offset,
+      mtimeMs: file.updatedAt,
+      agentVersion,
+      data: data.toString('base64'),
+    };
+    const reply = (await call('POST', '/v1/ingest', body, [409])) as {
+      bytes: number;
+      eventsAdded?: number;
+    };
+    if (reply.eventsAdded === undefined) {
+      // Offset mismatch: continue from the hub's cursor. Another process pushing the same file
+      // moves it on; only a hub that answers without moving on, again and again, is an error.
+      if (reply.bytes <= offset && ++conflicts > 3) {
+        throw new Error(`hub keeps rejecting ${file.path}`);
       }
-      result.bytes += reply.bytes - offset;
-      result.eventsAdded += reply.eventsAdded;
       offset = reply.bytes;
+      continue;
     }
+    result.bytes += reply.bytes - offset;
+    result.eventsAdded += reply.eventsAdded;
+    offset = reply.bytes;
   }
 }
 
