@@ -136,3 +136,36 @@ Split unrelated changes into separate commits.
 **Codex** keeps memories under `~/.codex/memories/` when they are enabled, as summaries it merges itself; Origin does not read them yet. **Cursor** no longer keeps memories on disk.
 
 To register Origin with each agent, see [Connect your agents](guide/connect-agents.md).
+
+## Your own sources: event lines
+
+The agents above each have an adapter that reads their own logs. Anything else can bring its sessions to Origin in a format of Origin's own, **event lines**, which any script can write: another agent runtime, a chat workspace, a notification stream, a notes pipeline. One adapter reads every such source, as purely and deterministically as the others, and what it reads is treated like every other source's events.
+
+A file of event lines is UTF-8 JSONL: one JSON object per line, one event each, only ever appended to. For example (synthetic):
+
+```json
+{"id":"m-1042","session":"standup-2026-11-02","time":"2026-11-02T09:30:00+08:00","role":"user","kind":"message","text":"Ship the retry fix before the demo.","project":"demo-app","branch":"retry-fix","title":"Standup, Nov 2","title_by":"user"}
+```
+
+| Field | Required | Value |
+|---|---|---|
+| `id` | yes | The event's id, unique within the source: 1 to 200 characters, no control characters. The event's id in Origin is `<source>:<id>` |
+| `session` | yes | The session the event belongs to: 1 to 200 characters, no control characters |
+| `time` | yes | When it happened: ISO 8601 with an offset, such as `2026-11-02T09:30:00Z` or `2026-11-02T17:30:00+08:00`, or epoch milliseconds as a number |
+| `role` | yes | `user`, `assistant`, or `system` |
+| `kind` | yes | `message`, `tool_use`, `tool_result`, `meta`, or `system`. `memory` is refused: it is kept for the memory files agents keep for themselves |
+| `text` | yes | The event's text, a string, kept as written |
+| `project` | no | The project, by name, as briefs and filters name projects; without one, the last segment of `cwd` |
+| `cwd` | no | The working directory, by which recall tells two checkouts with the same name apart |
+| `branch` | no | The git branch, by which sessions of a project join a thread (see [Threads](architecture.md#threads)) |
+| `parent` | no | The `id` of the line this one follows, as `get` shows it |
+| `title` | no | The session's title as of this line; the latest one wins |
+| `title_by` | no | `user` for a title the person gave, which later titles that are not also `user` do not replace; `agent`, the default, for a generated one |
+| `meta` | no | A JSON object, kept as the event's meta. A `callId` pairs a `tool_use` with its `tool_result` on a session's page in the admin UI |
+
+**Origin mapping:**
+
+- Each line is one event, with the line's `id` under the source's name (`<source>:<id>`), its `session`, its `time`, and the fields above. Lines are read as they are; nothing is truncated or cut into blocks.
+- **Validation.** A line that is not a JSON object, lacks a required field, or has a field of the wrong type is a parse error, as is a `time` without an offset, a `kind` of `memory`, and a `title_by` other than `user` or `agent`: it is counted and yields nothing, it stays in the raw mirror, and the lines around it are read as usual. An optional field that is `null` or an empty string counts as absent. Fields Origin does not know are left in the raw mirror.
+- **Ids.** A line whose event id the store already has adds nothing, so a line sent twice is ingested once. Give every event of a source its own `id`, whichever session it belongs to.
+- **Sessions and titles.** A session's events are those with its `session`, from any file of the source. Its title is that of its latest line with a `title`, except that a title not given by the person never replaces one that was, as for Claude Code.

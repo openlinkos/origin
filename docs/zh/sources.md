@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-2eedab8c
+sourceHash: sha256-ed02e29d
 ---
 
 # 会话来源
@@ -140,3 +140,36 @@ Split unrelated changes into separate commits.
 **Codex** 启用记忆后，把记忆保存在 `~/.codex/memories/` 下，形式是它自己合并的摘要；Origin 尚未读取它们。**Cursor** 已不再在磁盘上保存记忆。
 
 如何为每个 Agent 注册 Origin，见[接入 Agent](guide/connect-agents.md)。
+
+## 你自己的来源：事件行 {#your-own-sources-event-lines}
+
+上面每个 Agent 都有一个读取其自身记录的适配器。其他任何东西都可以用 Origin 自己的一种格式把会话带进 Origin，这种格式叫**事件行**，任何脚本都能写：另一个 Agent 运行时、一个聊天工作区、一条通知流、一条笔记流水线。所有这样的来源都由同一个适配器读取，它和其他适配器一样纯粹、确定；它读到的内容和其他来源的事件一样对待。
+
+一个事件行文件是 UTF-8 的 JSONL：每行一个 JSON 对象，每个对象一个事件，只追加、不改写。例如（合成数据）：
+
+```json
+{"id":"m-1042","session":"standup-2026-11-02","time":"2026-11-02T09:30:00+08:00","role":"user","kind":"message","text":"Ship the retry fix before the demo.","project":"demo-app","branch":"retry-fix","title":"Standup, Nov 2","title_by":"user"}
+```
+
+| 字段 | 必需 | 取值 |
+|---|---|---|
+| `id` | 是 | 事件的 id，在该来源内唯一：1 到 200 个字符，不含控制字符。事件在 Origin 中的 id 是 `<source>:<id>` |
+| `session` | 是 | 事件所属的会话：1 到 200 个字符，不含控制字符 |
+| `time` | 是 | 事件发生的时间：带时区偏移的 ISO 8601，例如 `2026-11-02T09:30:00Z` 或 `2026-11-02T17:30:00+08:00`，或者以数字表示的 epoch 毫秒 |
+| `role` | 是 | `user`、`assistant` 或 `system` |
+| `kind` | 是 | `message`、`tool_use`、`tool_result`、`meta` 或 `system`。`memory` 会被拒绝：它留给 Agent 为自己保存的记忆文件 |
+| `text` | 是 | 事件的文本，一个字符串，按原样保存 |
+| `project` | 否 | 项目名，与简报和过滤条件中的项目名一致；没有时取 `cwd` 的最后一段 |
+| `cwd` | 否 | 工作目录，召回据此区分两个同名的检出 |
+| `branch` | 否 | git 分支，同一项目的会话据此加入同一条线索（见[线索](architecture.md#threads)） |
+| `parent` | 否 | 这一行所接续的那一行的 `id`，`get` 会显示它 |
+| `title` | 否 | 截至这一行时会话的标题；以最新的为准 |
+| `title_by` | 否 | `user` 表示由本人给出的标题，之后不是 `user` 的标题不会替换它；默认值 `agent` 表示生成的标题 |
+| `meta` | 否 | 一个 JSON 对象，作为事件的 meta 保存。`callId` 在管理界面的会话页上把 `tool_use` 与它的 `tool_result` 配成一对 |
+
+**Origin 映射：**
+
+- 每一行是一个事件，id 是该行的 `id` 加上来源名（`<source>:<id>`），带有它的 `session`、`time` 和上面的各字段。行按原样读取，不截断，也不拆成块。
+- **校验。** 不是 JSON 对象、缺少必需字段，或某个字段类型不对的行，都是解析错误；没有时区偏移的 `time`、`memory` 类的 `kind`、取值不是 `user` 或 `agent` 的 `title_by` 也是：这一行会被计数，不产生任何内容，仍然留在原始镜像中，它前后的行照常读取。取值为 `null` 或空字符串的可选字段视同没有。Origin 不认识的字段留在原始镜像中。
+- **Id。** 事件 id 已在存储中的行不会新增任何内容，所以同一行发送两次只会采集一次。请让一个来源的每个事件都有自己的 `id`，无论它属于哪个会话。
+- **会话与标题。** 一个会话的事件是该来源任意文件中带有这个 `session` 的事件。它的标题取自带 `title` 的最新一行，但不是由本人给出的标题永远不会替换本人给出的标题，这与 Claude Code 相同。

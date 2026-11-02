@@ -128,7 +128,7 @@ pnpm workspace, TypeScript (strict, ESM, NodeNext), Node.js ≥ 22.16 (for zstd 
 | Package | Path | Responsibility | Depends on |
 |---|---|---|---|
 | `@openlinkos/origin-core` | `packages/core` | Storage, schema and migrations, ingestion (local and remote), relaying, entries, forgetting, tokens, the admin password and sessions, the audit log, queries | — |
-| `@openlinkos/origin-adapters` | `packages/adapters` | One deterministic parser per source | core |
+| `@openlinkos/origin-adapters` | `packages/adapters` | One deterministic parser per agent, and one for event lines, the format of the sources a person brings themselves | core |
 | `@openlinkos/origin-mcp` | `packages/mcp` | MCP tools; servers over stdio and stateless HTTP, the server of a device connected to a hub, which merges the hub's answers into its own, and the server of a relay, which hands every tool call to the hub | core |
 | `@openlinkos/origin-admin` | `packages/admin` | The admin UI, of a hub and of `origin ui`: server-rendered pages, a JSON API, and its static assets | core |
 | `@openlinkos/origin` | `packages/cli` | The `origin` command, including `origin mcp`, `origin serve` (the hub), `origin ui`, `origin distill`, a device's or a relay's sync with its hub, and the hub's S3 client | core, adapters, mcp, admin |
@@ -289,7 +289,7 @@ A sync finds new lines by looking: `origin sync`, and `origin mcp` before tool c
 - Title lines in a session's own log (not its sub-agents') set its title. Each is written many times, and the latest is current: `ai-title` lines, which Claude Code generates as the conversation goes on, and `custom-title` lines, the name the user gave (`/rename`, `--name`), which a later `ai-title` line does not replace; older logs have `summary` lines instead. `agent-name` lines repeat one of these titles and are not read.
 - The project name is the last segment of `cwd`.
 
-The other adapters' mappings are documented next to their formats in [sources.md](sources.md) (Codex: [Codex CLI](sources.md#codex-cli)).
+The other adapters' mappings are documented next to their formats in [sources.md](sources.md) (Codex: [Codex CLI](sources.md#codex-cli); event lines: [Your own sources](sources.md#your-own-sources-event-lines)).
 
 ### Native memories
 

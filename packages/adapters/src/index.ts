@@ -42,6 +42,17 @@ export {
   parseGrokLine,
   parseGrokTitleLine,
 } from './grok.js';
+export {
+  BUILT_IN_SOURCE_IDS,
+  createLinesAdapter,
+  isLinesSourceId,
+  LINES_SOURCE_RE,
+  LINES_SOURCE_RULE,
+  type LinesAdapterOptions,
+  linesSources,
+  parseEventLine,
+  RESERVED_SOURCE_NAMES,
+} from './lines.js';
 export { projectFromCwd } from './util.js';
 export {
   createZCodeAdapter,
@@ -52,7 +63,10 @@ export {
   zcodeHome,
 } from './zcode.js';
 
-/** All implemented adapters (added one at a time, in roadmap order). */
+/**
+ * The built-in adapters, one per agent Origin reads. A person's own sources, read with the lines
+ * adapter, are listed by linesSources.
+ */
 export function allAdapters(): SourceAdapter[] {
   return [
     createClaudeCodeAdapter(),
@@ -63,6 +77,7 @@ export function allAdapters(): SourceAdapter[] {
   ];
 }
 
+/** A built-in adapter by its id. */
 export function adapterById(id: string): SourceAdapter | null {
   return allAdapters().find((a) => a.id === id) ?? null;
 }

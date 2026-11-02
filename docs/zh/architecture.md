@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-497e4531
+sourceHash: sha256-b65c8e57
 ---
 
 # 架构
@@ -132,7 +132,7 @@ pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.16（�
 | 包 | 路径 | 职责 | 依赖 |
 |---|---|---|---|
 | `@openlinkos/origin-core` | `packages/core` | 存储、schema 与迁移、采集（本地与远程）、中继、条目、遗忘、令牌、管理密码与会话、审计日志、查询 | — |
-| `@openlinkos/origin-adapters` | `packages/adapters` | 每个来源一个确定性解析器 | core |
+| `@openlinkos/origin-adapters` | `packages/adapters` | 每个 Agent 一个确定性解析器，另有一个解析事件行，即人自己带来的来源所用的格式 | core |
 | `@openlinkos/origin-mcp` | `packages/mcp` | MCP 工具；基于 stdio 和无状态 HTTP 的 server，已接入中枢的设备上的 server（它把中枢的回答合并进自己的回答），以及中继上的 server（它把每一次工具调用都交给中枢） | core |
 | `@openlinkos/origin-admin` | `packages/admin` | 管理界面，供中枢和 `origin ui` 使用：服务器端渲染的页面、JSON API 及其静态资源 | core |
 | `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢）、`origin ui`、`origin distill`、设备或中继与中枢之间的同步，以及中枢的 S3 客户端 | core, adapters, mcp, admin |
@@ -293,7 +293,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 - 会话自己的记录中（而不是其子 Agent 的记录中）的标题行设置它的标题。每种标题行都会被写入很多次，最新的一行就是当前的标题：`ai-title` 行由 Claude Code 随着对话的进行而生成；`custom-title` 行是用户给出的名称（`/rename`、`--name`），之后的 `ai-title` 行不会替换它；较旧的记录中则是 `summary` 行。`agent-name` 行重复这些标题之一，不会被读取。
 - 项目名取 `cwd` 的最后一段。
 
-其他适配器的映射与各自的格式一起记录在 [sources.md](sources.md) 中（Codex 见 [Codex CLI](sources.md#codex-cli)）。
+其他适配器的映射与各自的格式一起记录在 [sources.md](sources.md) 中（Codex 见 [Codex CLI](sources.md#codex-cli)；事件行见[你自己的来源](sources.md#your-own-sources-event-lines)）。
 
 ### 原生记忆 {#native-memories}
 
