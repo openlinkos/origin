@@ -9,7 +9,9 @@ import {
   listSessions,
   openMemoryDatabase,
   rawLocator,
+  readMirror,
   readRawLine,
+  syncFile,
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -220,6 +222,94 @@ describe('codex adapter', () => {
     const last = listEvents(db, { sessionId: SESSION }).at(-1);
     expect(last).toMatchObject({ kind: 'tool_use', project: 'demo-app', agentVersion: '0.160.0' });
     db.close();
+  });
+
+  it('locates the rollouts discover() lists, compressed ones included, and nothing else', async () => {
+    const other = '0199f0a2-0000-7000-8000-000000000002';
+    const archivedRel = `archived_sessions/rollout-2026-10-19T08-00-00-${other}.jsonl.zst`;
+    fs.mkdirSync(path.join(codexHome, 'archived_sessions'));
+    fs.writeFileSync(
+      path.join(codexHome, archivedRel),
+      zlib.zstdCompressSync(Buffer.from(`${lines[0]!.replaceAll(SESSION, other)}\n`)),
+    );
+    fs.writeFileSync(path.join(codexHome, 'sessions', 'notes.jsonl'), '{}\n');
+    fs.mkdirSync(path.join(codexHome, 'other'));
+    const stray = path.join(codexHome, 'other', `rollout-2026-10-20T09-00-00-${SESSION}.jsonl`);
+    fs.writeFileSync(stray, `${lines[0]}\n`);
+    const adapter = createCodexAdapter({ home: codexHome });
+    const files = await adapter.discover();
+    expect(files.map((f) => [f.relPath, f.compression])).toEqual([
+      [archivedRel, 'zstd'],
+      [REL, undefined],
+    ]);
+    for (const f of files) expect(adapter.locate?.(f.absPath)).toEqual(f);
+    for (const p of [
+      stray,
+      path.join(codexHome, 'sessions', 'notes.jsonl'),
+      path.join(codexHome, 'sessions'),
+      path.join(originHome, REL),
+      codexHome,
+    ]) {
+      expect(adapter.locate?.(p)).toBeNull();
+    }
+  });
+
+  it('ingests one rollout, plain or compressed, as syncSource ingests it', async () => {
+    const other = '0199f0a2-0000-7000-8000-000000000003';
+    const archived = path.join(
+      codexHome,
+      'archived_sessions',
+      `rollout-2026-10-19T08-00-00-${other}.jsonl.zst`,
+    );
+    fs.mkdirSync(path.dirname(archived));
+    fs.writeFileSync(
+      archived,
+      zlib.zstdCompressSync(
+        Buffer.from(`${lines.map((l) => l.replaceAll(SESSION, other)).join('\n')}\n`),
+      ),
+    );
+    const live = path.join(codexHome, REL);
+    const held = (db: ReturnType<typeof openMemoryDatabase>, home: string) => ({
+      files: (
+        db
+          .prepare(
+            `SELECT id, path, generation, mirror, bytes_ingested, lines_ingested, tail_hash
+             FROM raw_file ORDER BY path`,
+          )
+          .all() as Array<{ id: number }>
+      ).map(({ id, ...row }) => ({
+        ...row,
+        content: readMirror(db, home, id, 0, Number.MAX_SAFE_INTEGER).toString('utf8'),
+      })),
+      events: db
+        .prepare(
+          'SELECT id, session_id, ts, role, kind, text, project, cwd, raw_line, agent_version FROM event ORDER BY id',
+        )
+        .all(),
+    });
+
+    const one = openMemoryDatabase();
+    const oneHome = path.join(originHome, 'one');
+    const adapter = createCodexAdapter({ home: codexHome });
+    for (const file of [archived, live]) {
+      expect(await syncFile({ db: one, home: oneHome }, adapter, file)).toMatchObject({
+        filesSeen: 1,
+        filesChanged: 1,
+        parseErrors: 0,
+      });
+      // A compressed rollout is written once: unchanged, it is not read again.
+      expect(await syncFile({ db: one, home: oneHome }, adapter, file)).toMatchObject({
+        filesChanged: 0,
+        linesRead: 0,
+      });
+    }
+    const all = openMemoryDatabase();
+    const allHome = path.join(originHome, 'all');
+    await syncSource({ db: all, home: allHome }, createCodexAdapter({ home: codexHome }));
+    expect(held(one, oneHome)).toEqual(held(all, allHome));
+    expect(listEvents(one, { sessionId: other })).toHaveLength(9);
+    one.close();
+    all.close();
   });
 
   it('detects compression by magic bytes, not by file name', () => {

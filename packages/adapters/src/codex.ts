@@ -11,7 +11,7 @@ import type {
   SourceAdapter,
   SourceFile,
 } from '@openlinkos/origin-core';
-import { projectFromCwd, truncate } from './util.js';
+import { projectFromCwd, relativeUnder, truncate } from './util.js';
 
 /**
  * Codex CLI adapter (format notes: docs/sources.md).
@@ -91,9 +91,19 @@ export function createCodexAdapter(opts: CodexAdapterOptions = {}): SourceAdapte
     version: () => lastVersion,
     async discover(): Promise<SourceFile[]> {
       const out: SourceFile[] = [];
-      for (const dir of ['sessions', 'archived_sessions']) walk(home, path.join(home, dir), out);
+      for (const dir of ROLLOUT_DIRS) walk(home, path.join(home, dir), out);
       out.sort((a, b) => a.relPath.localeCompare(b.relPath));
       return out;
+    },
+    locate(absPath: string): SourceFile | null {
+      // A rollout, as walk() lists them: anywhere under sessions/ or archived_sessions/.
+      const rel = relativeUnder(home, absPath);
+      if (rel === null) return null;
+      const segments = rel.split('/');
+      const name = segments[segments.length - 1] as string;
+      if (segments.length < 2 || !ROLLOUT_DIRS.includes(segments[0] as string)) return null;
+      if (!ROLLOUT_RE.test(name)) return null;
+      return rolloutFile(path.join(home, ...segments), rel, name);
     },
     parseLine(line: string, ctx: ParseContext): ParsedLine | null {
       const obj = JSON.parse(line) as CodexLine;
@@ -119,13 +129,16 @@ function walk(root: string, dir: string, out: SourceFile[]): void {
     const abs = path.join(dir, ent.name);
     if (ent.isDirectory()) walk(root, abs, out);
     else if (ent.isFile() && ROLLOUT_RE.test(ent.name)) {
-      out.push({
-        absPath: abs,
-        relPath: path.relative(root, abs).split(path.sep).join('/'),
-        compression: ent.name.endsWith('.zst') ? 'zstd' : undefined,
-      });
+      out.push(rolloutFile(abs, path.relative(root, abs).split(path.sep).join('/'), ent.name));
     }
   }
+}
+
+/** The directories of CODEX_HOME that hold rollouts. */
+const ROLLOUT_DIRS = ['sessions', 'archived_sessions'];
+
+function rolloutFile(absPath: string, relPath: string, name: string): SourceFile {
+  return { absPath, relPath, compression: name.endsWith('.zst') ? 'zstd' : undefined };
 }
 
 /** Session id from a rollout file name: `rollout-<time>-<uuid>.jsonl[.zst]` → uuid. */

@@ -14,6 +14,7 @@ import {
   readMirror,
   readRawLine,
   STORE_VERSION,
+  syncFile,
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -159,6 +160,101 @@ describe('createClaudeCodeAdapter end-to-end', () => {
       fs.readFileSync(path.join(fixtures, REL), 'utf8').split(/\r?\n/)[4],
     );
     db.close();
+  });
+});
+
+/** What a store holds of its sessions' files: each mirror with its cursor and content, and the events. */
+function holdings(db: Database, home: string) {
+  const files = (
+    db
+      .prepare(
+        `SELECT id, source, path, generation, mirror, bytes_ingested, lines_ingested, tail_hash
+         FROM raw_file ORDER BY path, generation`,
+      )
+      .all() as Array<{ id: number; mirror: string }>
+  )
+    .filter((f) => !f.mirror.replace(/\\/g, '/').startsWith('claude-code/memory/'))
+    .map(({ id, ...row }) => ({
+      ...row,
+      content: readMirror(db, home, id, 0, Number.MAX_SAFE_INTEGER).toString('utf8'),
+    }));
+  const events = db
+    .prepare(
+      `SELECT e.id, e.session_id, e.ts, e.role, e.kind, e.text, e.raw_line, e.agent_version, r.path
+       FROM event e JOIN raw_file r ON r.id = e.raw_file_id WHERE e.kind <> 'memory' ORDER BY e.id`,
+    )
+    .all();
+  return { files, events, sessions: listSessions(db) };
+}
+
+describe('Claude Code, one transcript at a time', () => {
+  let tmp: string;
+  let root: string;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-cc-locate-'));
+    root = path.join(tmp, 'projects');
+    writeTitledSessions(root);
+    fs.mkdirSync(path.join(root, 'D--work-alpha', 'memory'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'D--work-alpha', 'memory', 'note.md'), '# A note\n');
+    fs.writeFileSync(path.join(root, 'D--work-alpha', 'memory', 'stray.jsonl'), '{}\n');
+    const results = path.join(root, 'D--work-alpha', RENAMED, 'tool-results');
+    fs.mkdirSync(results, { recursive: true });
+    fs.writeFileSync(path.join(results, 'out.jsonl'), '{}\n');
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('locates every log discover() lists, sub-agents included, and nothing else', async () => {
+    const adapter = createClaudeCodeAdapter({ projectsDir: root });
+    const logs = (await adapter.discover()).filter((f) => !f.generated);
+    expect(logs.map((f) => f.relPath)).toContain(
+      `D--work-alpha/${RENAMED}/subagents/agent-a1.jsonl`,
+    );
+    for (const f of logs) expect(adapter.locate?.(f.absPath)).toEqual(f);
+    // However the path is spelled, the file is the one discover() lists.
+    const sub = logs.find((f) => f.relPath.endsWith('agent-a1.jsonl'));
+    const spelled = path.join(root, 'D--work-alpha', '.', RENAMED, 'subagents', 'agent-a1.jsonl');
+    expect(adapter.locate?.(spelled)).toEqual(sub);
+    // Pure: a log that is not there yet is located all the same.
+    const next = `D--work-delta/${RENAMED}.jsonl`;
+    expect(adapter.locate?.(path.join(root, next))).toEqual({
+      absPath: path.join(root, next),
+      relPath: next,
+    });
+    for (const p of [
+      path.join(tmp, `${RENAMED}.jsonl`),
+      path.join(root, 'D--work-alpha', 'memory', 'stray.jsonl'),
+      path.join(root, 'D--work-alpha', 'memory', 'note.md'),
+      path.join(root, 'D--work-alpha', RENAMED, 'tool-results', 'out.jsonl'),
+      path.join(root, 'D--work-alpha'),
+      root,
+    ]) {
+      expect(adapter.locate?.(p)).toBeNull();
+    }
+  });
+
+  it('ingests a session and its sub-agent one file at a time, as syncSource ingests them', async () => {
+    const one = { db: openMemoryDatabase(), home: path.join(tmp, 'one') };
+    const all = { db: openMemoryDatabase(), home: path.join(tmp, 'all') };
+    const adapter = () => createClaudeCodeAdapter({ projectsDir: root });
+    const logs = (await adapter().discover()).filter((f) => !f.generated);
+    // The sub-agent's log first, as a SubagentStop hook would, then the rest.
+    const order = [...logs].sort(
+      (a, b) =>
+        Number(b.relPath.includes('/subagents/')) - Number(a.relPath.includes('/subagents/')),
+    );
+    const located = adapter();
+    for (const f of order) {
+      const r = await syncFile(one, located, f.absPath);
+      expect(r).toMatchObject({ filesSeen: 1, filesChanged: 1, parseErrors: 0 });
+      expect(await syncFile(one, located, f.absPath)).toMatchObject({ linesRead: 0 });
+    }
+    await syncSource(all, adapter());
+    expect(holdings(one.db, one.home)).toEqual(holdings(all.db, all.home));
+    expect(titles(one.db)).toEqual(EXPECTED_TITLES);
+    one.db.close();
+    all.db.close();
   });
 });
 

@@ -16,7 +16,7 @@ import {
   readFrontMatterMemory,
   subdirectories,
 } from './memory.js';
-import { projectFromCwd, truncate } from './util.js';
+import { projectFromCwd, relativeUnder, truncate } from './util.js';
 
 /**
  * Claude Code adapter (format notes: docs/sources.md).
@@ -79,6 +79,15 @@ export function createClaudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): So
       out.sort((a, b) => a.relPath.localeCompare(b.relPath));
       return out;
     },
+    locate(absPath: string): SourceFile | null {
+      // A session log, or a sub-agent's, as walk() lists them: a `.jsonl` file anywhere under the
+      // projects directory, but not in a memory/ or tool-results/ directory.
+      const rel = relativeUnder(root, absPath);
+      if (rel === null || !rel.endsWith('.jsonl')) return null;
+      const segments = rel.split('/');
+      if (segments.slice(0, -1).some((s) => SKIPPED_DIRS.has(s))) return null;
+      return { absPath: path.join(root, ...segments), relPath: rel };
+    },
     parseLine(line: string, ctx: ParseContext): ParsedLine | null {
       if (ctx.relPath.startsWith(MEMORY_PREFIX)) {
         return parseMemoryLine(line, ctx, (_file, content) => readFrontMatterMemory(content));
@@ -92,6 +101,12 @@ export function createClaudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): So
   };
 }
 
+/**
+ * memory/ is Claude Code's own memory directory and tool-results/ caches large outputs; neither
+ * holds sessions.
+ */
+const SKIPPED_DIRS = new Set(['memory', 'tool-results']);
+
 function walk(root: string, dir: string, out: SourceFile[]): void {
   let entries: fs.Dirent[];
   try {
@@ -102,8 +117,7 @@ function walk(root: string, dir: string, out: SourceFile[]): void {
   for (const ent of entries) {
     const abs = path.join(dir, ent.name);
     if (ent.isDirectory()) {
-      // memory/ is Claude Code's own memory dir and tool-results/ caches large outputs; neither holds sessions.
-      if (ent.name === 'memory' || ent.name === 'tool-results') continue;
+      if (SKIPPED_DIRS.has(ent.name)) continue;
       walk(root, abs, out);
     } else if (ent.isFile() && ent.name.endsWith('.jsonl')) {
       out.push({ absPath: abs, relPath: path.relative(root, abs).split(path.sep).join('/') });
