@@ -313,6 +313,37 @@ describe('admin UI on the hub', () => {
     );
   });
 
+  it('is offered from the landing page only where it answers', async () => {
+    const landing = await request(`${hub.url}/`);
+    expect(landing.status).toBe(200);
+    expect(landing.text).toMatch(/<a class="ol-btn ol-btn-primary ol-btn-lg" href="\/admin\/">/);
+    expect(pageProblems(landing.text)).toEqual([]);
+    // The link leads to the sign-in page, which says that Origin is open source.
+    const login = await request(`${hub.url}/admin/`);
+    expect(login.headers.location).toBe('/admin/login?next=%2Fadmin%2F');
+    expect((await request(`${hub.url}/admin/login`)).text).toContain(
+      '<span>Origin is open source.</span>',
+    );
+    // On its own listener, the hub's port has no admin UI to offer.
+    const split = await startHub({
+      db: hubDb,
+      home: hubHome,
+      host: '127.0.0.1',
+      port: 0,
+      adapters: [],
+      version: 'test',
+      admin: { listen: { host: '127.0.0.1', port: 0 } },
+    });
+    extra.push(split);
+    const page = await request(`${split.url}/`);
+    expect(page.status).toBe(200);
+    expect(page.text).not.toContain('/admin');
+    // The admin UI's own listener sends its root to the admin UI, as before.
+    const own = await request(`${split.adminUrl?.replace(/\/admin\/$/, '/')}`);
+    expect(own.status).toBe(303);
+    expect(own.headers.location).toBe('/admin/');
+  });
+
   it('refuses to serve the admin UI over plain HTTP beyond loopback', async () => {
     const start = (admin: Parameters<typeof startHub>[0]['admin'], host = '0.0.0.0') =>
       startHub({ db: hubDb, home: hubHome, host, port: 0, adapters: [], version: 'test', admin });

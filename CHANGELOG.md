@@ -2,6 +2,12 @@
 
 All notable changes to Origin are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the store format or a public interface, and its notes say what to do. The five packages (`@openlinkos/origin` and `@openlinkos/origin-core`, `-adapters`, `-mcp`, `-admin`) are released together under one version.
 
+## [Unreleased]
+
+- Opening a hub's address in a browser shows a public landing page instead of a bare JSON error: Origin's mark and name, one sentence on what the hub is, in English or Chinese, a **Sign in** button when the admin UI is served at `/admin`, and "Powered by Origin, open source" with links to the site and the source. It shows nothing from the store. A client that asks for JSON gets `{"service":"origin","docs":"https://origin.openlinkos.com/"}`, `/robots.txt` lets search engines read that page and nothing else, and `ORIGIN_POWERED_BY=off` leaves the credit out for a hub presented under its owner's name. A proxy in front of the hub should forward `/`, `/robots.txt`, and `/assets/*` too.
+- Requests without a valid token are still refused with `401`; the JSON body now also has `docs`, the address of the hub's guide.
+- Every page of the admin UI ends with Origin's version and links to the documentation, the source on GitHub, and the forms to report an issue, and the sign-in pages of a hub and of `origin ui` say under their form that Origin is open source.
+
 ## [0.4.0] - 2026-10-30
 
 Hands your agents what matters without being asked, connects the agents on a machine with one command, and redesigns the admin UI as a workbench that adapts to every window.

@@ -1,6 +1,6 @@
 # Admin UI
 
-A [personal hub](./hub.md) can serve a web interface for you, its owner. From a browser you can see what your devices have pushed, browse and search your sessions, curate entries, review what agents proposed, forget what should not be kept, and manage the hub's tokens. The admin UI is off by default. It is for one person: there are no public pages, no sharing, and no other accounts. You can also open it on your own machine, for the store there, without a hub: see [On your own machine](#on-your-own-machine).
+A [personal hub](./hub.md) can serve a web interface for you, its owner. From a browser you can see what your devices have pushed, browse and search your sessions, curate entries, review what agents proposed, forget what should not be kept, and manage the hub's tokens. The admin UI is off by default. It is for one person: there are no public pages, no sharing, and no other accounts. The hub's own [landing page](./hub.md#the-landing-page) at `/` is public but shows nothing from your store; when the admin UI is at `/admin`, its **Sign in** button leads here. You can also open it on your own machine, for the store there, without a hub: see [On your own machine](#on-your-own-machine).
 
 ## What you can do
 
@@ -20,6 +20,8 @@ A [personal hub](./hub.md) can serve a web interface for you, its owner. From a 
 - The **audit log**, and your open **sign-ins**.
 
 The admin UI is available in English and Simplified Chinese, following your browser's language, and follows your system's light or dark mode. Both can be switched in the **Preferences** menu at the foot of the sidebar, which also signs you out, or below the form on the sign-in page.
+
+Origin is open source, and the UI says so: the foot of every page shows Origin's version, with links to this documentation, the source code on GitHub, and the forms to report an issue, and the sign-in page has a line under its form with the documentation and the source. `ORIGIN_POWERED_BY=off`, which leaves the credit to Origin off the hub's landing page, does not remove them.
 
 It adapts to the width of the window rather than squeezing a page. On a narrower window, between 860 and 1200 pixels, the sidebar becomes a column of icons, each named on hover, and the search field becomes a button. On a phone or a window narrower than that, the sidebar opens from the menu button at the top left. Where a page has no room beside its content, a list's filters open from a **Filters** button, with the filters that are on shown above the list as tags that remove them; a session's turns open from the button that says which turn is shown; and the details of a recall or an entry follow its content. Wide tables become rows that name each value, so nothing scrolls sideways and no column is left out.
 

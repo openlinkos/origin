@@ -26,7 +26,8 @@ import { createReplicaServer } from '@openlinkos/origin-mcp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HubConfig } from '../src/hub/config.js';
 import { checkHub } from '../src/hub/connect.js';
-import { createHubServer } from '../src/hub/server.js';
+import { poweredByEnv } from '../src/hub/serve.js';
+import { createHubServer, HUB_GUIDE_URL } from '../src/hub/server.js';
 import { syncWithHub } from '../src/hub/sync.js';
 
 const fixtures = fileURLToPath(
@@ -300,5 +301,95 @@ describe('personal hub', () => {
     expect(await syncWithHub({ db: deviceDb, home: deviceHome, hub: renewed })).toMatchObject({
       files: 1,
     });
+  });
+});
+
+describe('the hub in a browser', () => {
+  const CSP =
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'; trusted-types 'none'";
+
+  it('shows a public landing page at its root, and JSON to a client that asks for it', async () => {
+    const page = await fetch(`${hub.url}/`, {
+      headers: { Accept: 'text/html,*/*;q=0.8', 'Accept-Language': 'en-US,en;q=0.9' },
+    });
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(page.headers.get('content-security-policy')).toBe(CSP);
+    expect(page.headers.get('x-frame-options')).toBe('DENY');
+    const text = await page.text();
+    expect(text).toContain(
+      'A personal Origin hub: it keeps the memory of one person&#39;s AI agents across their devices.',
+    );
+    expect(text).toContain('<p>Powered by Origin, open source</p>');
+    expect(text).toContain('href="https://github.com/openlinkos/origin"');
+    // This hub has no admin UI, so nothing offers to sign in.
+    expect(text).not.toContain('/admin');
+    const css = /href="(\/assets\/ui\.[0-9a-f]{10}\.css)"/.exec(text)?.[1];
+    expect((await fetch(`${hub.url}${css}`)).status).toBe(200);
+
+    const zh = await (
+      await fetch(`${hub.url}/`, { headers: { 'Accept-Language': 'zh-CN,zh;q=0.9' } })
+    ).text();
+    expect(zh).toContain('<html lang="zh-CN">');
+    expect(zh).toContain('个人 Origin 中枢');
+    expect(zh).toContain('由开源的 Origin 驱动');
+
+    const json = await fetch(`${hub.url}/`, { headers: { Accept: 'application/json' } });
+    expect(json.status).toBe(200);
+    expect(await json.json()).toEqual({
+      service: 'origin',
+      docs: 'https://origin.openlinkos.com/',
+    });
+    expect((await fetch(`${hub.url}/`, { method: 'HEAD' })).status).toBe(200);
+
+    const robots = await fetch(`${hub.url}/robots.txt`);
+    expect(await robots.text()).toBe('User-agent: *\nAllow: /$\nAllow: /assets/\nDisallow: /\n');
+  });
+
+  it('refuses every other path without a token, pointing at the hub guide', async () => {
+    expect(HUB_GUIDE_URL).toBe('https://origin.openlinkos.com/guide/hub');
+    for (const p of ['/v1/device', '/v1/cursors?device=laptop', '/mcp', '/index.html', '/x']) {
+      const res = await fetch(`${hub.url}${p}`);
+      expect(res.status, p).toBe(401);
+      expect(res.headers.get('www-authenticate'), p).toBe('Bearer');
+      expect(await res.json(), p).toEqual({
+        error: 'Missing or invalid token.',
+        docs: HUB_GUIDE_URL,
+      });
+    }
+    // With its token, a device sees what it always did.
+    const device = await fetch(`${hub.url}/v1/device`, {
+      headers: { Authorization: `Bearer ${hub.token}` },
+    });
+    expect(await device.json()).toEqual({ device: 'laptop', hub: 'hub' });
+    expect((await fetch(`${hub.url}/healthz`)).status).toBe(200);
+  });
+
+  it('leaves out the credit to Origin when ORIGIN_POWERED_BY is off', async () => {
+    expect(poweredByEnv(undefined)).toBe(true);
+    expect(poweredByEnv('')).toBe(true);
+    expect(poweredByEnv('on')).toBe(true);
+    for (const off of ['0', 'off', 'OFF', 'false', 'no'])
+      expect(poweredByEnv(off), off).toBe(false);
+    expect(() => poweredByEnv('maybe')).toThrow(/ORIGIN_POWERED_BY must be "on" or "off"/);
+
+    const white = createHubServer({
+      db: hubDb,
+      home: hubHome,
+      adapters: [],
+      version: 'test',
+      poweredBy: false,
+    });
+    await new Promise<void>((resolve) => white.listen(0, '127.0.0.1', resolve));
+    try {
+      const url = `http://127.0.0.1:${(white.address() as AddressInfo).port}`;
+      const text = await (await fetch(`${url}/`)).text();
+      expect(text).toContain('A personal Origin hub');
+      expect(text).not.toContain('Powered by');
+      expect(text).not.toContain('github.com');
+    } finally {
+      white.closeAllConnections();
+      await new Promise((resolve) => white.close(resolve));
+    }
   });
 });

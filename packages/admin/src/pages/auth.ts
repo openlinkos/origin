@@ -2,7 +2,7 @@ import type { Ctx } from '../context.js';
 import { html } from '../html.js';
 import { SIGN_IN_LINK_MS } from '../sessions.js';
 import { alert, linkButton, pageIntro } from './components.js';
-import { brand, csrfField, renderPage } from './layout.js';
+import { brand, csrfField, openSourceNote, renderPage } from './layout.js';
 
 /** The password field and the submit button of the sign-in and re-authentication forms. */
 function passwordFields(ctx: Ctx, submit: string) {
@@ -30,7 +30,8 @@ export function loginPage(ctx: Ctx, status: number, o: { next: string; error?: s
         <summary>${t('auth.forgot')}</summary>
         <p class="ol-hint">${t('auth.passwordHint')}</p>
         <div class="ol-code"><pre><code>origin admin password</code></pre></div>
-      </details>`,
+      </details>
+      ${openSourceNote(ctx)}`,
   });
 }
 
@@ -47,7 +48,8 @@ export function localLoginPage(ctx: Ctx, status: number, o: { error?: string }):
       ${o.error ? alert(ctx, 'danger', o.error) : ''}
       <p>${t('local.signInHelp')}</p>
       <p class="ol-hint">${t('local.newLink', { min: SIGN_IN_LINK_MS / 60_000 })}</p>
-      <div class="ol-code"><pre><code>origin ui</code></pre></div>`,
+      <div class="ol-code"><pre><code>origin ui</code></pre></div>
+      ${openSourceNote(ctx)}`,
   });
 }
 

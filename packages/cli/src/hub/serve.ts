@@ -8,6 +8,7 @@ import {
 import {
   type Database,
   IDLE_SEAL_MS,
+  OriginError,
   prepareAdminCredential,
   recordAudit,
   type ScryptParams,
@@ -28,6 +29,18 @@ export interface HubAdminOptions {
   listen?: { host: string; port: number } | null;
   /** scrypt parameters for new password hashes, for tests. */
   passwordParams?: ScryptParams;
+}
+
+/**
+ * ORIGIN_POWERED_BY: whether the hub's landing page credits Origin, with links to its site and
+ * source. On unless set to `off` (or `0`, `false`, `no`), for a hub its owner presents under their
+ * own name; the admin UI keeps its links either way.
+ */
+export function poweredByEnv(value: string | undefined): boolean {
+  const v = (value ?? '').trim().toLowerCase();
+  if (['', '1', 'on', 'true', 'yes'].includes(v)) return true;
+  if (['0', 'off', 'false', 'no'].includes(v)) return false;
+  throw new OriginError(`ORIGIN_POWERED_BY must be "on" or "off", not "${value}".`);
 }
 
 /** The one-time notice for a generated admin password. */
@@ -52,6 +65,8 @@ export interface StartHubOptions {
   log?: (message: string) => void;
   /** Enable the admin UI. */
   admin?: HubAdminOptions | null;
+  /** Credit Origin on the public landing page (ORIGIN_POWERED_BY); on by default. */
+  poweredBy?: boolean;
 }
 
 export interface RunningHub {
@@ -147,6 +162,7 @@ export async function startHub(o: StartHubOptions): Promise<RunningHub> {
     version: o.version,
     log: o.log,
     admin: separate ? undefined : handler,
+    poweredBy: o.poweredBy,
   });
   await listen(hub, o.port, o.host);
   let adminServer: http.Server | null = null;

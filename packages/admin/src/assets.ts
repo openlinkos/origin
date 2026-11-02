@@ -25,7 +25,7 @@ export function vendorFile(file: string, root = PACKAGE_ROOT): string {
 export interface Asset {
   /** Logical name, e.g. `admin.css`. */
   name: string;
-  /** Name with a content hash, e.g. `admin.1a2b3c4d5e.css`; the URL is `/admin/assets/<file>`. */
+  /** Name with a content hash, e.g. `admin.1a2b3c4d5e.css`; the URL is the base, then the file. */
   file: string;
   type: string;
   body: Buffer;
@@ -62,16 +62,26 @@ const FONT_URL = /url\((["']?)fonts\/([A-Za-z0-9_-]+)\.woff2(["']?)\)/g;
 const SAFE_ICON =
   /^(?:\s*<(?:path|circle|rect|line|polyline|polygon|ellipse)(?:\s+(?:d|cx|cy|r|rx|ry|x|y|x1|x2|y1|y2|width|height|points|fill|stroke|stroke-width|stroke-linecap|stroke-linejoin)="[^"<>&]*")*\s*\/>)*\s*$/;
 
+export interface AssetsOptions {
+  /** Where they are served: `/admin/assets/` (the default), or `/assets/` for the landing page. */
+  base?: string;
+  /** Only these files, by logical name (the fonts of `ui.css` come with it); all when absent. */
+  only?: readonly string[];
+}
+
 /** Static files of the admin UI, loaded once, served under content-hashed names; and the icons. */
 export class Assets {
   private readonly byName = new Map<string, Asset>();
   private readonly byFile = new Map<string, Asset>();
   private readonly icons = new Map<string, string>();
+  private readonly base: string;
   /** The view box shared by every icon. */
   readonly iconViewBox: string;
 
-  constructor(root = PACKAGE_ROOT) {
+  constructor(root = PACKAGE_ROOT, o: AssetsOptions = {}) {
+    this.base = o.base ?? '/admin/assets/';
     for (const src of sources(root)) {
+      if (o.only && !o.only.includes(src.name)) continue;
       let body: Buffer;
       try {
         body = fs.readFileSync(src.path);
@@ -107,8 +117,8 @@ export class Assets {
   }
 
   /**
-   * Serve the fonts the stylesheet refers to next to it (`/admin/assets/fonts/…`) under
-   * content-hashed names, so they can be cached as immutable, and point the stylesheet at them.
+   * Serve the fonts the stylesheet refers to next to it (`<base>fonts/…`) under content-hashed
+   * names, so they can be cached as immutable, and point the stylesheet at them.
    */
   private withFonts(css: Buffer, root: string): Buffer {
     const text = css.toString('utf8').replace(FONT_URL, (_m, _open, font: string) => {
@@ -124,7 +134,7 @@ export class Assets {
   /** The URL of an asset, or null if it is not available (the browser script before a build). */
   url(name: string): string | null {
     const asset = this.byName.get(name);
-    return asset ? `/admin/assets/${asset.file}` : null;
+    return asset ? `${this.base}${asset.file}` : null;
   }
 
   find(file: string): Asset | undefined {

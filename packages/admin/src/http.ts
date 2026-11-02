@@ -39,12 +39,13 @@ export const CSP = [
  */
 export const SVG_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
-/** Headers set on every response under /admin. */
-export function securityHeaders(https: boolean): Record<string, string> {
-  const headers: Record<string, string> = {
+/**
+ * The headers of every page the hub serves, the admin UI's and the public landing page: the
+ * Content-Security-Policy, and guards against sniffing, framing, referrers, and device features.
+ */
+export function pageHeaders(): Record<string, string> {
+  return {
     'Content-Security-Policy': CSP,
-    'Cache-Control': 'no-store, private',
-    Vary: 'Cookie',
     'X-Content-Type-Options': 'nosniff',
     // Not no-referrer: with it, browsers send Origin: null on same-origin form posts (Fetch
     // standard), which would defeat the Origin check. same-origin still never sends a referrer
@@ -55,6 +56,15 @@ export function securityHeaders(https: boolean): Record<string, string> {
     'Cross-Origin-Resource-Policy': 'same-origin',
     'Permissions-Policy':
       'camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), hid=(), midi=()',
+  };
+}
+
+/** Headers set on every response under /admin: never cached, never indexed. */
+export function securityHeaders(https: boolean): Record<string, string> {
+  const headers: Record<string, string> = {
+    ...pageHeaders(),
+    'Cache-Control': 'no-store, private',
+    Vary: 'Cookie',
     'X-Robots-Tag': 'noindex, nofollow',
   };
   if (https) headers['Strict-Transport-Security'] = 'max-age=31536000';

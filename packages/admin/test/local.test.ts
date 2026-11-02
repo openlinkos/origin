@@ -299,9 +299,13 @@ describe('origin ui: the sign-in link', () => {
     expect(page.text).toContain('prints a sign-in link');
     expect(page.text).not.toContain('type="password"');
     expect(page.text).not.toContain('origin admin password');
+    expect(page.text).toContain(
+      '<p class="ol-hint ol-cluster admin-oss"><span>Origin is open source.</span><a href="https://origin.openlinkos.com/" rel="noreferrer">Documentation</a><a href="https://github.com/openlinkos/origin" rel="noreferrer">GitHub</a></p>',
+    );
     expect(pageProblems(page.text)).toEqual([]);
     const zh = await request(`${base}/admin/login`, { headers: { 'Accept-Language': 'zh-CN' } });
     expect(zh.text).toContain('登录链接');
+    expect(zh.text).toContain('<span>Origin 是开源软件。</span>');
   });
 });
 

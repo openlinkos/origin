@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-21b43c1d
+sourceHash: sha256-c24d1ee5
 ---
 
 # 个人中枢
@@ -42,18 +42,26 @@ origin serve --host 127.0.0.1 --port 7077
 
 `GET /healthz` 用于健康检查，不需要鉴权；`POST /mcp` 是 MCP 端点。加上 `--admin` 还会在 `/admin` 下提供[管理界面](./admin.md)。
 
+## 公开首页 {#the-landing-page}
+
+在浏览器中打开中枢的地址，比如 `http://localhost:7077/`，会看到一个不需要令牌的公开页面：Origin 的标志和名称，一句说明这个中枢是什么的话（按浏览器的偏好显示中文或英文）；如果[管理界面](./admin.md)在同一端口的 `/admin` 下提供，还有一个**登录**按钮；页脚是「由开源的 Origin 驱动」，以及指向本站和源代码的链接。页面不显示库里的任何内容。请求 JSON 的客户端（`Accept: application/json`）会收到 `{"service":"origin","docs":"https://origin.openlinkos.com/"}`。`/robots.txt` 只允许搜索引擎读取这个页面，页面用到的样式表、字体和标志由中枢自己在 `/assets/` 下提供。
+
+如果你以自己的名义展示这个中枢，设置 `ORIGIN_POWERED_BY=off` 可以去掉页面上对 Origin 的署名；管理界面中指向项目的链接仍然保留。
+
+除 `/healthz` 和有自己登录的管理界面外，其他所有路径都需要令牌（见[创建令牌](#create-tokens)）。没有令牌的请求会收到 `401` 和 `{"error":"Missing or invalid token.","docs":"https://origin.openlinkos.com/guide/hub"}`，其中的 `docs` 就是本指南。
+
 ## 放在 TLS 之后 {#put-it-behind-tls}
 
 中枢使用明文 HTTP。在 localhost 之外开放之前，请把它放在负责 TLS 的反向代理或 CDN 之后，并按以下要求配置代理：
 
-- 把 `/healthz`、`/mcp` 和 `/v1/*` 转发给中枢。
+- 把 `/healthz`、`/mcp` 和 `/v1/*` 转发给中枢；为了[公开首页](#the-landing-page)，还要转发 `/`、`/robots.txt` 和 `/assets/*`。
 - `/v1/ingest` 用于设备推送会话数据，请求体上限至少设为 16 MiB；如果有程序向中枢追加事件行，`/v1/sources/*/lines` 的请求体上限设为 8 MiB（见[追加事件行](#append-event-lines)）。
 - 不要缓存 `/mcp` 和 `/v1/*`。
 - 如果在 `/admin` 下启用了管理界面，还请按[放在 TLS 和 CDN 之后](./admin.md#behind-tls-and-a-cdn)配置；尤其要设置 `ORIGIN_CLIENT_IP_HEADER`，否则任何人的失败登录都会算在你头上。
 
 ## 创建令牌 {#create-tokens}
 
-除 `/healthz` 外，每个请求都需要 bearer 令牌。在中枢上为每台设备或每个云端 Agent 各建一个令牌，设备的令牌以设备命名：
+除 `/healthz` 和[公开首页](#the-landing-page)外，每个请求都需要 bearer 令牌。在中枢上为每台设备或每个云端 Agent 各建一个令牌，设备的令牌以设备命名：
 
 ```bash
 origin token create laptop          # 令牌只显示一次，以 ogn_ 开头

@@ -38,18 +38,26 @@ origin serve --host 127.0.0.1 --port 7077
 
 `GET /healthz` reports health without authentication, and `POST /mcp` is the MCP endpoint. Add `--admin` to also serve the [admin UI](./admin.md) at `/admin`.
 
+## The landing page
+
+Open the hub's address in a browser, such as `http://localhost:7077/`, and it shows a public page that needs no token: Origin's mark and name, one sentence on what the hub is, in English or Chinese as your browser prefers, a **Sign in** button when the [admin UI](./admin.md) is served at `/admin` on the same port, and at its foot "Powered by Origin, open source", with links to this site and to the source code. The page shows nothing from your store. A client that asks for JSON (`Accept: application/json`) gets `{"service":"origin","docs":"https://origin.openlinkos.com/"}` instead. `/robots.txt` lets search engines read that page and nothing else, and the hub serves the page's stylesheet, fonts, and marks itself, under `/assets/`.
+
+If you present the hub under your own name, set `ORIGIN_POWERED_BY=off` to leave the credit to Origin off the page; the admin UI keeps its links to the project.
+
+Every other path, except `/healthz` and the admin UI with its own sign-in, needs a token (see [Create tokens](#create-tokens)). A request without one gets `401` with `{"error":"Missing or invalid token.","docs":"https://origin.openlinkos.com/guide/hub"}`, whose `docs` is this guide.
+
 ## Put it behind TLS
 
 The hub speaks plain HTTP. Before you expose it beyond localhost, put it behind a reverse proxy or CDN that terminates TLS, and configure the proxy as follows:
 
-- Forward `/healthz`, `/mcp`, and `/v1/*` to the hub.
+- Forward `/healthz`, `/mcp`, and `/v1/*` to the hub, and `/`, `/robots.txt`, and `/assets/*` for its [landing page](#the-landing-page).
 - Allow request bodies of at least 16 MiB on `/v1/ingest`, which devices use to push session data, and of 8 MiB on `/v1/sources/*/lines`, if programs append event lines to the hub (see [Append event lines](#append-event-lines)).
 - Do not cache `/mcp` or `/v1/*`.
 - If you enable the admin UI at `/admin`, also follow [Behind TLS and a CDN](./admin.md#behind-tls-and-a-cdn); in particular, set `ORIGIN_CLIENT_IP_HEADER`, or failed sign-ins from anyone count against you.
 
 ## Create tokens
 
-Every request except `/healthz` needs a bearer token. Create one token per device or cloud agent, on the hub, and name a device's token after the device:
+Every request except `/healthz` and the [landing page](#the-landing-page) needs a bearer token. Create one token per device or cloud agent, on the hub, and name a device's token after the device:
 
 ```bash
 origin token create laptop          # prints the token once, starting with ogn_

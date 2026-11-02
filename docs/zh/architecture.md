@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-9d9e9e81
+sourceHash: sha256-41bcb797
 ---
 
 # 架构
@@ -134,7 +134,7 @@ pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.16（�
 | `@openlinkos/origin-core` | `packages/core` | 存储、schema 与迁移、采集（本地与远程）、中继、条目、遗忘、令牌、管理密码与会话、审计日志、查询 | — |
 | `@openlinkos/origin-adapters` | `packages/adapters` | 每个 Agent 一个确定性解析器，另有一个解析事件行，即人自己带来的来源所用的格式 | core |
 | `@openlinkos/origin-mcp` | `packages/mcp` | MCP 工具；基于 stdio 和无状态 HTTP 的 server，已接入中枢的设备上的 server（它把中枢的回答合并进自己的回答），以及中继上的 server（它把每一次工具调用都交给中枢） | core |
-| `@openlinkos/origin-admin` | `packages/admin` | 管理界面，供中枢和 `origin ui` 使用：服务器端渲染的页面、JSON API 及其静态资源 | core |
+| `@openlinkos/origin-admin` | `packages/admin` | 管理界面，供中枢和 `origin ui` 使用：服务器端渲染的页面、JSON API 及其静态资源；以及中枢的公开首页 | core |
 | `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢）、`origin ui`、`origin distill`、设备或中继与中枢之间的同步，以及中枢的 S3 客户端 | core, adapters, mcp, admin |
 | `@openlinkos/origin-openclaw` | `packages/openclaw` | OpenClaw 的插件，由它的 Gateway 加载：把 Gateway 上各个 Agent 的会话写成事件行，写入某个来源的目录或发往中枢 | — |
 
@@ -541,7 +541,7 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 
 ### 访问 {#access}
 
-- 发往 `/mcp` 和 `/v1/*` 的每个请求都需要 `Authorization: Bearer <token>`；`/admin` 下的管理界面有自己的登录（见[管理界面](#admin-ui)）。令牌在中枢上创建（`origin token create <name>`），只显示一次，只以 SHA-256 哈希的形式存储，并且可以吊销。每台设备、每个云端 Agent，以及每个追加事件行的程序，各用自己的令牌。
+- 发往 `/mcp` 和 `/v1/*` 的每个请求都需要 `Authorization: Bearer <token>`；`/admin` 下的管理界面有自己的登录（见[管理界面](#admin-ui)）。没有有效令牌的请求会被拒绝，返回 `401 { error, docs }`，`docs` 是中枢指南的地址。除管理界面外，只有 `/healthz`、公开首页、`/robots.txt` 以及首页用到的文件不需要令牌，它们不显示库里的任何内容。令牌在中枢上创建（`origin token create <name>`），只显示一次，只以 SHA-256 哈希的形式存储，并且可以吊销。每台设备、每个云端 Agent，以及每个追加事件行的程序，各用自己的令牌。
 - **每个令牌绑定一台设备，即与它同名的设备。** 在复制接口上，令牌只能为这台设备发送和接收数据：它推送的内容都记在令牌名下，请求里指明了其他设备（请求体或查询参数中的 `device`）时会被拒绝并返回 `403`，`origin` 不是这台设备的记录同样会被拒绝。因此设备的库必须与它的令牌同名，`origin hub connect` 会检查这一点（见[从设备使用中枢](#using-a-hub-from-a-device)）。与中枢自身同名的令牌不服务于任何设备；只用于 `/mcp` 的令牌（例如云端 Agent 的令牌）不需要对应设备。被吊销的令牌可以用同一个名称新建一个来替换，所以丢失令牌的设备仍能保留它的名称；有效的令牌必须先吊销。
 - 中枢使用明文 HTTP。在 localhost 之外开放之前，请把它放在 TLS（反向代理或 CDN）之后。
 - 设备推送上来的条目保留写入时的作者。通过中枢的 `/mcp` 写入的条目，如果调用方在 `X-Origin-Client` 中报上了它的 Agent（设备上的 `origin mcp` 就会这样做），作者记为 `<agent>@<令牌名>`（如 `claude-code@laptop`）；否则只记令牌名（例如云端 Agent 的令牌 `ci`），因为无状态请求不携带 MCP 客户端的名称。作者中的设备部分始终是令牌名：设备上的 `origin mcp` 还会在 `X-Origin-Device` 中报上自己的名称，如果这个请求头指明的是另一台设备，中枢会拒绝请求（`403`），所以任何令牌都不能以另一台设备的身份写入，库名与令牌不一致的设备也会明显地报错。中继上的 `origin mcp` 发送同样的请求头，所以它的 Agent 写入的内容记为 `<agent>@<中继名>`，origin 为中枢；它的 CLI 写入的内容记为 `user@<中继名>`。
@@ -551,6 +551,9 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 | 方法与路径 | 用途 |
 |---|---|
 | `GET /healthz` | `{ "ok": true, "version": … }`，无需鉴权 |
+| `GET /` | 公开首页，无需鉴权：Origin 的标志和名称，一句说明这个中枢是什么的话（语言取自 `Accept-Language`），管理界面挂在 `/admin/` 时有指向它的链接，以及「由开源的 Origin 驱动」和指向项目网站与源代码的链接（`ORIGIN_POWERED_BY` 为 off 时不显示）。接受 `application/json` 而不接受 `text/html` 的请求会收到 `{ "service": "origin", "docs": … }`。带有管理界面的 Content-Security-Policy 和防护响应头，`Cache-Control: no-store` |
+| `GET /robots.txt` | 允许 `/` 和 `/assets/`，禁止其他一切；无需鉴权 |
+| `GET /assets/…` | 公开首页用到的文件：设计系统的样式表及其字体，以及标志，使用带内容哈希的文件名，按不可变内容缓存；无需鉴权 |
 | `POST /mcp` | MCP Streamable HTTP，无状态，JSON 响应；与 stdio server 相同的十一个工具 |
 | `GET /v1/device` | `{ device, hub }`：令牌所属的设备（即令牌名）和中枢的名称 |
 | `GET /v1/cursors?device=<name>` | 令牌所属设备的每个文件在中枢上的字节游标；加上 `&source=<id>&path=<path>` 时，只给出那一个文件每个代次的游标（较早的中枢会忽略这两个参数，列出每个文件，由调用方从中挑出这个文件） |

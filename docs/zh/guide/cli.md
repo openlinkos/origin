@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-39b7a4c5
+sourceHash: sha256-beb1538b
 ---
 
 # 命令参考
@@ -206,7 +206,7 @@ To bring it back: origin restore tmb_2d8f0c1a9e35 --reason <text>
 
 这些命令用于运行[个人中枢](./hub.md)，以及把设备接入中枢。
 
-- 在中枢上，`origin serve` 提供 `POST /mcp`、复制接口，以及没有设备的程序用来追加[事件行](./sources.md#send-lines-to-your-hub)的 `POST /v1/sources/<name>/lines`，`GET /healthz` 用于健康检查，不需要鉴权。`origin token create <name>` 会打印一个新令牌，只显示一次（以 `ogn_` 开头）；中枢只保存令牌的哈希。设备的令牌请以设备命名：它只对同名的设备有效。被吊销的令牌可以用同一个名称新建一个来替换。
+- 在中枢上，`origin serve` 提供 `POST /mcp`、复制接口，以及没有设备的程序用来追加[事件行](./sources.md#send-lines-to-your-hub)的 `POST /v1/sources/<name>/lines`，`GET /healthz` 用于健康检查，不需要鉴权，`GET /` 是说明这个中枢是什么的[公开首页](./hub.md#the-landing-page)。`origin token create <name>` 会打印一个新令牌，只显示一次（以 `ogn_` 开头）；中枢只保存令牌的哈希。设备的令牌请以设备命名：它只对同名的设备有效。被吊销的令牌可以用同一个名称新建一个来替换。
 - 在设备上，`origin hub connect` 保存中枢地址和令牌；中枢以设备的库名称来识别它，这个名称必须与令牌名相同。`origin hub connect` 和 `origin hub status` 会向中枢核对，不一致时说明如何解决。此后 `origin sync` 也会与中枢同步：发送新的原始镜像字节，以及在本设备上写下的条目和遗忘记录，再应用中枢的遗忘记录。可以随时重跑，每次都会从上次停下的位置继续。`--local` 会跳过中枢。`origin status` 和 `origin hub status` 会显示这台设备上一次与中枢同步完成的时间（无论由哪个命令或 Agent 发起），如果此后有一次同步失败，还会显示它的错误。
 - 设备接入后，`origin mcp` 根据设备的库作答，并合并中枢的回答，等待中枢最多 2 秒；Agent 保存的内容写在设备上，然后再同步。
 - 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct`、`forget` 和 `restore` 之后会与中枢同步；如果连不上中枢，改动会留在设备上，直到下一次同步。
@@ -235,6 +235,7 @@ To bring it back: origin restore tmb_2d8f0c1a9e35 --reason <text>
 | `ORIGIN_PUBLIC_URL` | — | 中枢的公开 https URL（`--public-url`） |
 | `ORIGIN_CLIENT_IP_HEADER` | — | 由你的代理设置、携带客户端地址的请求头；只有设置了才会被信任，在代理或 CDN 之后必须设置 |
 | `ORIGIN_ADMIN_PASSWORD` | — | 管理界面的密码（至少 10 个字符）；设置后取代用 `origin admin password` 设置的密码 |
+| `ORIGIN_POWERED_BY` | `on` | 设为 `off` 时，中枢的[公开首页](./hub.md#the-landing-page)不显示对 Origin 的署名（「由开源的 Origin 驱动」及其链接） |
 | `ORIGIN_RAW_S3_ENDPOINT`, `ORIGIN_RAW_S3_BUCKET` | — | 把中枢已封存的帧保存在这个兼容 S3 的存储桶中（`--raw-s3-endpoint`、`--raw-s3-bucket`） |
 | `ORIGIN_RAW_S3_PREFIX` | 无 | 存储桶中键的前缀（`--raw-s3-prefix`） |
 | `ORIGIN_RAW_S3_REGION` | `us-east-1` | 发往存储桶的请求签名所用的区域（`--raw-s3-region`） |

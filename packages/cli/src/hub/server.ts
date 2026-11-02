@@ -5,7 +5,11 @@ import {
   isLinesSourceId,
   LINES_SOURCE_RULE,
 } from '@openlinkos/origin-adapters';
-import type { AdminHandler } from '@openlinkos/origin-admin';
+import {
+  type AdminHandler,
+  createLandingHandler,
+  type LandingHandler,
+} from '@openlinkos/origin-admin';
 import {
   appendRemote,
   appendRemoteLines,
@@ -44,6 +48,8 @@ const LINES_PATH_MAX = 200;
 const PATH_SEGMENT_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?$/;
 /** Names Windows keeps for devices, with or without an extension, which no file may take there. */
 const DEVICE_NAME_RE = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i;
+/** Where a client refused for want of a token can read how tokens work. */
+export const HUB_GUIDE_URL = 'https://origin.openlinkos.com/guide/hub';
 
 export interface HubOptions {
   db: Database;
@@ -60,6 +66,11 @@ export interface HubOptions {
    * sign-in; bearer tokens are never checked there, and its sessions are never accepted elsewhere.
    */
   admin?: AdminHandler;
+  /**
+   * Credit Origin on the public landing page at `/`, with links to its site and source; on unless
+   * set to false (ORIGIN_POWERED_BY=off). The admin UI keeps its links either way.
+   */
+  poweredBy?: boolean;
 }
 
 class HttpError extends Error {
@@ -81,8 +92,12 @@ export function createHubServer(opts: HubOptions): http.Server {
   // A store that starts serving without a name becomes `hub` (see docs/architecture.md#storage).
   initStoreName(opts.db, HUB_STORE_NAME);
   const adapterFor = hubAdapters(opts.adapters, opts.home);
+  const landing = createLandingHandler({
+    admin: opts.admin !== undefined,
+    poweredBy: opts.poweredBy ?? true,
+  });
   return http.createServer((req, res) => {
-    handle(opts, adapterFor, req, res).catch((err: unknown) => {
+    handle(opts, adapterFor, landing, req, res).catch((err: unknown) => {
       const status =
         err instanceof HttpError
           ? err.status
@@ -107,6 +122,7 @@ export function createHubServer(opts: HubOptions): http.Server {
 async function handle(
   opts: HubOptions,
   adapterFor: (source: string) => SourceAdapter | null,
+  landing: LandingHandler,
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): Promise<void> {
@@ -116,6 +132,8 @@ async function handle(
     sendJson(res, 200, { ok: true, version: opts.version });
     return;
   }
+  // The public landing page, robots.txt, and the page's files: no token, and nothing of the store.
+  if (landing(req, res, url)) return;
   if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
     // Routed before bearer authentication: /admin accepts only its own session, never a token.
     if (!opts.admin) throw new HttpError(404, 'Not found.');
@@ -127,7 +145,7 @@ async function handle(
   const caller = token ? verifyToken(opts.db, token) : null;
   if (!caller) {
     res.setHeader('WWW-Authenticate', 'Bearer');
-    sendJson(res, 401, { error: 'Missing or invalid token.' });
+    sendJson(res, 401, { error: 'Missing or invalid token.', docs: HUB_GUIDE_URL });
     return;
   }
 

@@ -3,6 +3,7 @@ import { type HtmlValue, href, html, type SafeHtml } from '../html.js';
 import { sendHtml } from '../http.js';
 import { HTML_LANG, type MessageKey } from '../i18n/index.js';
 import { type IconName, icon, iconSprite } from '../icons.js';
+import { docsHref, ISSUES_URL, SOURCE_URL } from '../project.js';
 
 export type NavKey =
   | 'overview'
@@ -81,7 +82,27 @@ export function csrfField(ctx: Ctx): SafeHtml {
 }
 
 export function docsUrl(ctx: Ctx, page = 'guide/admin'): string {
-  return `https://origin.openlinkos.com/${ctx.lang === 'zh' ? 'zh/' : ''}${page}`;
+  return docsHref(ctx.lang, page);
+}
+
+/**
+ * The open-source project, at the foot of every page of the app: the version, and links to the
+ * documentation (its home, in the page's language), the source, and the forms to report an issue.
+ */
+function appFooter(ctx: Ctx): SafeHtml {
+  const t = ctx.t;
+  return html`<footer class="ol-footer admin-foot">
+      <span>Origin v${ctx.version}</span>
+      <a href="${docsHref(ctx.lang)}" rel="noreferrer">${t('app.docs')}</a>
+      <a href="${SOURCE_URL}" rel="noreferrer">${t('app.source')}</a>
+      <a href="${ISSUES_URL}" rel="noreferrer">${t('app.reportIssue')}</a>
+    </footer>`;
+}
+
+/** One line under a sign-in form: Origin is open source, with its documentation and its source. */
+export function openSourceNote(ctx: Ctx): SafeHtml {
+  const t = ctx.t;
+  return html`<p class="ol-hint ol-cluster admin-oss"><span>${t('app.openSource')}</span><a href="${docsHref(ctx.lang)}" rel="noreferrer">${t('app.docs')}</a><a href="${SOURCE_URL}" rel="noreferrer">${t('app.source')}</a></p>`;
 }
 
 function logo(ctx: Ctx, size: number): SafeHtml {
@@ -224,7 +245,7 @@ function prefsMenu(ctx: Ctx): SafeHtml {
   const url = hubUrl(ctx);
   return html`<button class="ol-sidebar-account" type="button" popovertarget="prefs" title="${t('prefs.label')}">
       ${icon(ctx, 'settings')}
-      <span class="ol-sidebar-account-text"><span class="ol-sidebar-account-name">${t('prefs.label')}</span><span class="ol-sidebar-account-meta">Origin ${ctx.version}</span></span>
+      <span class="ol-sidebar-account-text"><span class="ol-sidebar-account-name">${t('prefs.label')}</span><span class="ol-sidebar-account-meta">Origin v${ctx.version}</span></span>
       ${icon(ctx, 'chevrons-up-down', 'sm')}
     </button>
     <div class="ol-menu ol-menu-above" id="prefs" popover>
@@ -297,6 +318,7 @@ function appShell(ctx: Ctx, o: PageOptions): SafeHtml {
     <main class="ol-content" id="main" tabindex="-1">
 ${o.body}
     </main>
+    ${appFooter(ctx)}
   </div>
 </div>`;
 }
@@ -320,7 +342,7 @@ function authShell(ctx: Ctx, o: PageOptions): SafeHtml {
 ${o.body}
     </div>
     <div class="ol-auth-foot">
-      <span>Origin ${ctx.version}</span>
+      <span>Origin v${ctx.version}</span>
       ${languageForm(ctx, 'ol-btn ol-btn-link')}
       <a href="${docsUrl(ctx)}" rel="noreferrer">${t('app.docs')}</a>
       ${themeForm(ctx, true)}
