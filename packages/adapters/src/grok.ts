@@ -45,14 +45,27 @@ const MEMORY_PREFIX = 'memory/';
 const INBOX = 'observations/_inbox';
 /** The name of the generated stream of a session's titles, next to its update stream. */
 const TITLES = 'title.jsonl';
-/** The fields of `summary.json` a title line holds, as stored. */
+/**
+ * The fields of `summary.json` a title line holds, as stored: the title, and what kind of session it
+ * is (`session_kind`, set for a sub-agent's and a headless run's), so that a sub-agent is known as
+ * one even when its parent's log is gone.
+ */
 const TITLE_FIELDS = [
   'info',
   'generated_title',
   'session_summary',
   'title_is_manual',
   'updated_at',
+  'session_kind',
 ];
+/**
+ * Leads the token of a title stream: a stream written before its lines held `session_kind` has
+ * another token, so it is read once more, and the session kind written out if the title line
+ * lacked it.
+ */
+const TITLE_TOKEN = 'k1';
+/** The `session_kind`s of a sub-agent's session: its parent agent wrote its prompts. */
+const CHILD_KINDS = new Set(['subagent', 'subagent_fork', 'subagent_resume']);
 const TOOL_USE_MAX = 2000;
 const TOOL_RESULT_MAX = 4000;
 
@@ -83,7 +96,18 @@ interface GrokUpdate {
   status?: string;
   rawInput?: unknown;
   rawOutput?: unknown;
-  _meta?: { 'x.ai/tool'?: { name?: string }; hideFromScrollback?: boolean };
+  /** A `subagent_spawned` notice's sub-agent, a session of its own. */
+  child_session_id?: unknown;
+  _meta?: {
+    'x.ai/tool'?: { name?: string };
+    hideFromScrollback?: boolean;
+    /** A prompt's place among the session's prompts. */
+    promptIndex?: unknown;
+    /** A message the user sent while a turn ran. */
+    interjection?: unknown;
+    /** A turn Grok's host started, not the user. */
+    hostTurn?: unknown;
+  };
 }
 
 interface GrokLine {
@@ -109,7 +133,7 @@ export function createGrokAdapter(opts: GrokAdapterOptions = {}): SourceAdapter 
         for (const session of subdirectories(path.join(sessions, group))) {
           const dir = path.join(sessions, group, session);
           const abs = path.join(dir, UPDATES);
-          if (!isFile(abs)) continue; // an internal planning agent's: no conversation
+          if (!isFile(abs)) continue; // a session that never held a conversation
           out.push({ absPath: abs, relPath: `sessions/${group}/${session}/${UPDATES}` });
           const summary = path.join(dir, SUMMARY);
           const st = stat(summary);
@@ -119,7 +143,7 @@ export function createGrokAdapter(opts: GrokAdapterOptions = {}): SourceAdapter 
               relPath: `sessions/${group}/${session}/${TITLES}`,
               generated: {
                 // summary.json is rewritten every turn; its title changes far less often.
-                token: `${st.size}:${st.mtimeMs}`,
+                token: `${TITLE_TOKEN}:${st.size}:${st.mtimeMs}`,
                 mtimeMs: st.mtimeMs,
                 next: (last) => titleLines(summary, last),
               },
@@ -257,8 +281,8 @@ function readGrokMemory(file: string, content: string): MemoryContent {
 
 /**
  * The title lines that follow `last`, the last one written out: one holding the title fields of
- * `summary.json` if its title is not that of `last`, else none. Grok rewrites the file in place; one
- * that cannot be read now is read again once it changes.
+ * `summary.json` if its title, or the kind of session it says it is, is not that of `last`, else
+ * none. Grok rewrites the file in place; one that cannot be read now is read again once it changes.
  */
 function titleLines(summary: string, last: string | null): string[] {
   let stored: unknown;
@@ -273,15 +297,23 @@ function titleLines(summary: string, last: string | null): string[] {
     TITLE_FIELDS.filter((k) => Object.hasOwn(record, k)).map((k) => [k, record[k]]),
   );
   const title = displayTitle(fields);
-  if (title === null) return [];
+  const kind = sessionKind(fields);
+  if (title === null && kind === null) return [];
   if (last !== null) {
     try {
-      if (displayTitle(JSON.parse(last) as Record<string, unknown>) === title) return [];
+      const before = JSON.parse(last) as Record<string, unknown>;
+      if (displayTitle(before) === title && sessionKind(before) === kind) return [];
     } catch {
       // an unreadable last line: write the title out again
     }
   }
   return [JSON.stringify(fields)];
+}
+
+/** The kind of session a title line says it is (`session_kind`), or null for none. */
+function sessionKind(fields: Record<string, unknown>): string | null {
+  const v = fields.session_kind;
+  return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
 /**
@@ -298,13 +330,31 @@ function displayTitle(fields: Record<string, unknown>): string | null {
 
 /**
  * Pure function: parse one line of a session's title stream. Grok keeps the current title itself,
- * a manual one included, so the latest line's title is the session's. Exported for tests.
+ * a manual one included, so the latest line's title is the session's. A line whose `session_kind`
+ * is a sub-agent's (`subagent`, `subagent_fork`, `subagent_resume`) makes the session a child, and
+ * `headless` a headless run. Exported for tests.
  */
 export function parseGrokTitleLine(line: string, ctx: ParseContext): ParsedLine | null {
   const where = sessionPath(ctx.relPath, TITLES);
   if (!where) return null;
-  const title = displayTitle(JSON.parse(line) as Record<string, unknown>);
-  return title === null ? null : { events: [], sessionTitle: title, sessionId: where.sessionId };
+  const fields = JSON.parse(line) as Record<string, unknown>;
+  const title = displayTitle(fields);
+  const kind = sessionKind(fields);
+  const parsed: ParsedLine = { events: [] };
+  if (title !== null) {
+    parsed.sessionTitle = title;
+    parsed.sessionId = where.sessionId;
+  }
+  if (kind !== null && (CHILD_KINDS.has(kind) || kind === 'headless')) {
+    parsed.sessionKinds = [
+      {
+        sessionId: where.sessionId,
+        kind: kind === 'headless' ? 'headless' : 'child',
+        signal: 'session_kind',
+      },
+    ];
+  }
+  return parsed.sessionTitle || parsed.sessionKinds ? parsed : null;
 }
 
 function subdirectories(dir: string): string[] {
@@ -379,13 +429,24 @@ export function parseGrokLine(line: string, ctx: ParseContext): ParsedLine | nul
   let role: Role;
   let kind: EventKind;
   let text: string;
+  let author: Partial<EventInput> = {};
   const meta: Record<string, unknown> = {};
   switch (u.sessionUpdate) {
+    case 'subagent_spawned': {
+      // A sub-agent runs as a session of its own, whose prompts this session's agent writes.
+      const child = u.child_session_id;
+      if (typeof child !== 'string' || child.length === 0) return null;
+      return {
+        events: [],
+        sessionKinds: [{ sessionId: child, kind: 'child', signal: 'subagent_spawned' }],
+      };
+    }
     case 'user_message_chunk':
       role = 'user';
       text = contentText(u.content);
       // Prompts Grok sends on its own (goal follow-ups, wake-ups) are hidden from the transcript.
       kind = u._meta?.hideFromScrollback ? 'meta' : 'message';
+      author = userAuthor(u._meta);
       break;
     case 'agent_message_chunk':
       role = 'assistant';
@@ -435,8 +496,24 @@ export function parseGrokLine(line: string, ctx: ParseContext): ParsedLine | nul
     text,
     agentVersion: null,
     meta: Object.keys(meta).length > 0 ? meta : null,
+    ...author,
   };
   return { events: [event] };
+}
+
+/**
+ * Who wrote a user message, as Grok marks it, in this order: one it hides from the transcript
+ * (`hideFromScrollback`) Grok sent on its own, though it numbers it among the prompts too; one its
+ * host started (`hostTurn`) is the system's; a numbered prompt (`promptIndex`) or a message sent
+ * while a turn ran (`interjection`) is the user's. A sub-agent's prompts are numbered as well: its
+ * session's kind decides those (see parseGrokTitleLine and `subagent_spawned`).
+ */
+function userAuthor(m: GrokUpdate['_meta']): Partial<EventInput> {
+  if (m?.hideFromScrollback) return { author: 'system', authorSignal: 'hideFromScrollback' };
+  if (m?.hostTurn) return { author: 'system', authorSignal: 'hostTurn' };
+  if (m?.promptIndex !== undefined) return { author: 'owner', authorSignal: 'promptIndex' };
+  if (m?.interjection) return { author: 'owner', authorSignal: 'interjection' };
+  return {};
 }
 
 /**

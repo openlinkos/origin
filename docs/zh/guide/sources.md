@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-1e1eb990
+sourceHash: sha256-1fa888e4
 ---
 
 # 接入你自己的来源
@@ -17,7 +17,7 @@ Origin 读取五个编码 Agent 的记录，每个 Agent 有自己的适配器�
 - `time` 是带时区偏移的 ISO 8601，例如 `2026-11-02T09:30:00Z` 或 `2026-11-02T17:30:00+08:00`，或者以数字表示的 epoch 毫秒。
 - `role` 是 `user`、`assistant` 或 `system`。
 - `kind` 是 `message`（说出的话）、`tool_use` 和 `tool_result`（一次调用和它返回的结果）、`meta`（并非说出的上下文，例如注入的通知），或者 `system`（系统的事件）。
-- 可选字段给出会话的标题（`title`）、项目和工作目录（`project`、`cwd`）、git 分支（`branch`）、一个事件所接续的那一行（`parent`），以及你想保留的其他任何内容（`meta`）。
+- 可选字段给出会话的标题（`title`）、项目和工作目录（`project`、`cwd`）、git 分支（`branch`）、一个事件所接续的那一行（`parent`）、一条消息是谁写的（`author`、`speaker`；见[谁写的](#who-wrote-it)），以及你想保留的其他任何内容（`meta`）。
 
 无效的行，例如没有 `time` 的行，会被计为解析错误并跳过，其他行照常读取。全部字段和规则见[会话来源](../sources.md#your-own-sources-event-lines)。
 
@@ -89,6 +89,23 @@ curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=2026/11
 - **行永远不会被修改。** 与 Origin 的整个归档一样，来源是只追加的：一个事件一旦读入，文本就不再改变。要表达别的内容，就用新的 id 写一个新事件。
 - **一个会话是一段对话。** 一个聊天线程、一次事故、一次任务运行、一天的笔记：任何你想作为整体打开的东西。它的事件按时间顺序显示，无论它们在哪个文件里。
 - **Origin 给自己的对象用的 id** 以 `ent_`、`thr_`、`rcl_` 或 `prp_` 开头；会话 id 不要以它们开头，否则 `get` 会把它当成这些对象之一。
+
+## 谁写的 {#who-wrote-it}
+
+Origin 会记录每条消息是谁写的：你、别人、某个 Agent，还是某个程序。它从不自行把一条消息当成你的：要由你的来源在 `role` 为 `user` 的行上用 `author` 说明。
+
+- `"author": "owner"`：你自己写的内容：你在聊天工作区里的消息、你的笔记，以及在你知道哪个说话人是你之后，转写稿中你说的那些行。
+- `"author": "person"`：别人，或者没人说明是谁的说话人。不带 `author` 的 `message` 行属于某个人（person）。
+- `"author": "agent"`：某个 Agent：在频道里回复的机器人，或者一个 Agent 给另一个 Agent 的提示。
+- `"author": "system"`：由程序生成的内容：通知、告警、定时发出的提示。不带 `author` 的 `meta` 行属于系统。
+- `"speaker"` 说明是谁，用人们认识的名字：`"Sam"`、`"Speaker 2"`、某个机器人的名字，最多 200 个字符。不要在这里写平台的用户 id：Origin 会原样显示它，也不识别任何人。
+
+```json
+{"id":"msg-2001","session":"incident-42","time":"2026-11-02T09:32:00Z","role":"user","kind":"message","text":"Roll back the migration.","author":"owner"}
+{"id":"msg-2002","session":"incident-42","time":"2026-11-02T09:33:00Z","role":"user","kind":"message","text":"Rolling it back now.","author":"person","speaker":"Sam"}
+```
+
+没有说话人信息的录音什么也没说明，它的行属于某个人（person）。规则，以及每个 Agent 的记录如何说明消息是谁写的，见[作者](../architecture.md#authors)。
 
 ## 标题、项目与线索 {#titles-projects-and-threads}
 

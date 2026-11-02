@@ -13,7 +13,12 @@ import {
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CURSOR_SETTLE_MS, createCursorAdapter, cursorTimestamp } from '../src/index.js';
+import {
+  CURSOR_SETTLE_MS,
+  createCursorAdapter,
+  cursorTimestamp,
+  parseCursorEditorLine,
+} from '../src/index.js';
 
 const fixtures = fileURLToPath(new URL('./fixtures/cursor/', import.meta.url));
 const TRANSCRIPT = '7c1e2a90-1b2c-4d5e-8f90-a1b2c3d4e5f6';
@@ -110,6 +115,30 @@ function seed(db: DatabaseSync): void {
   bubble(db, 'b2-copy', { type: 2, text: "I'll read it first.", createdAt: iso(T0 + 2500) });
   conversation(db, ['b1', 'b2', 'b3', 'b4']);
 }
+
+describe('who wrote a Cursor input', () => {
+  const line = (value: Record<string, unknown>) =>
+    JSON.stringify({
+      conversation: { composerId: CONVERSATION, createdAt: T0 },
+      key: `bubbleId:${CONVERSATION}:b9`,
+      value: JSON.stringify({ bubbleId: 'b9', createdAt: iso(T0), ...value }),
+    });
+
+  it("makes a message Cursor simulates in the user's place the system's, and leaves others to their text", () => {
+    expect(
+      parseCursorEditorLine(
+        line({ type: 1, text: 'Continue.', isSimulatedMsg: true, simulatedMsgReason: 'resume' }),
+      )?.events[0],
+    ).toMatchObject({ role: 'user', author: 'system', authorSignal: 'isSimulatedMsg' });
+    expect(
+      parseCursorEditorLine(line({ type: 1, text: 'Fix it.' }))?.events[0]?.author,
+    ).toBeUndefined();
+    expect(
+      parseCursorEditorLine(line({ type: 2, text: 'Done.', isSimulatedMsg: true }))?.events[0]
+        ?.author,
+    ).toBeUndefined();
+  });
+});
 
 describe('cursor adapter', () => {
   let home: string;

@@ -54,13 +54,22 @@ describe('parseGrokLine', () => {
       text: 'Add a retry to the upload client.',
       agentVersion: null,
       meta: null,
+      author: 'owner',
+      authorSignal: 'promptIndex',
     });
     expect(parse(2)?.events[0]).toMatchObject({
       role: 'assistant',
       kind: 'message',
       text: "I'll look at the upload client first.",
     });
-    expect(parse(12)?.events[0]).toMatchObject({ role: 'user', kind: 'meta' });
+    expect(parse(2)?.events[0]?.author).toBeUndefined();
+    // Numbered among the prompts, but hidden from the transcript: Grok sent it on its own.
+    expect(parse(12)?.events[0]).toMatchObject({
+      role: 'user',
+      kind: 'meta',
+      author: 'system',
+      authorSignal: 'hideFromScrollback',
+    });
     // Without the agent's timestamp, the line's own (in seconds) is used.
     expect(parse(15)?.events[0]?.ts).toBe(T0 + 16_000 + 250);
     // Ids that do not follow `<session-id>-<n>` are kept as they are.
@@ -329,5 +338,184 @@ describe('grok session titles', () => {
       fs.rmSync(hubHome, { recursive: true, force: true });
     }
     device.close();
+  });
+});
+
+describe('who wrote the input of a Grok session', () => {
+  const GROUP = '%2Fhome%2Fdev%2Fdemo-app';
+  const CHILD = '01a0f000-0000-7000-8000-0000000000c1';
+  const RUN = '01a0f000-0000-7000-8000-0000000000d1';
+  let grokHome: string;
+  let originHome: string;
+
+  beforeEach(() => {
+    grokHome = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-grok-'));
+    originHome = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-home-'));
+    fs.mkdirSync(path.join(grokHome, 'sessions', GROUP), { recursive: true });
+  });
+  afterEach(() => {
+    fs.rmSync(grokHome, { recursive: true, force: true });
+    fs.rmSync(originHome, { recursive: true, force: true });
+  });
+
+  const update = (session: string, n: number, u: Record<string, unknown>) =>
+    `${JSON.stringify({
+      method: 'session/update',
+      params: {
+        _meta: { agentTimestampMs: T0 + n * 1000, eventId: `${session}-${n}` },
+        sessionId: session,
+        update: u,
+      },
+      timestamp: (T0 + n * 1000) / 1000,
+    })}\n`;
+  const prompt = (session: string, n: number, text: string, meta: Record<string, unknown>) =>
+    update(session, n, {
+      sessionUpdate: 'user_message_chunk',
+      content: { type: 'text', text },
+      _meta: meta,
+    });
+  const dir = (session: string) => path.join(grokHome, 'sessions', GROUP, session);
+  const writeSession = (session: string, content: string, summary?: Record<string, unknown>) => {
+    fs.mkdirSync(dir(session), { recursive: true });
+    fs.appendFileSync(path.join(dir(session), 'updates.jsonl'), content);
+    if (summary) {
+      fs.writeFileSync(
+        path.join(dir(session), 'summary.json'),
+        JSON.stringify({ info: { id: session }, generated_title: 'Explore', ...summary }),
+      );
+    }
+  };
+  const authors = (db: Database) =>
+    Object.fromEntries(
+      listEvents(db).map((e) => [e.id.split(':').pop() === 'e1' ? e.sessionId : e.id, e.author]),
+    );
+
+  it('reads each message by what Grok marks it with', () => {
+    const at = (session: string) => ({
+      absPath: '',
+      relPath: `sessions/${GROUP}/${session}/updates.jsonl`,
+      lineNo: 1,
+      fileMtimeMs: 0,
+    });
+    const author = (meta: Record<string, unknown>) =>
+      parseGrokLine(prompt(SESSION, 1, 'Fix the build.', meta).trim(), at(SESSION))?.events[0];
+    expect(author({ promptIndex: 0 })).toMatchObject({
+      author: 'owner',
+      authorSignal: 'promptIndex',
+    });
+    expect(author({ interjection: true })).toMatchObject({
+      author: 'owner',
+      authorSignal: 'interjection',
+    });
+    expect(author({ hostTurn: true })).toMatchObject({
+      author: 'system',
+      authorSignal: 'hostTurn',
+    });
+    expect(author({ hideFromScrollback: true, promptIndex: 3 })).toMatchObject({
+      kind: 'meta',
+      author: 'system',
+    });
+    expect(author({})?.author).toBeUndefined();
+    // The parent names the sub-agent it spawns, a session of its own.
+    expect(
+      parseGrokLine(
+        update(SESSION, 2, {
+          sessionUpdate: 'subagent_spawned',
+          child_session_id: CHILD,
+          parent_session_id: SESSION,
+          subagent_type: 'explore',
+        }).trim(),
+        at(SESSION),
+      ),
+    ).toEqual({
+      events: [],
+      sessionKinds: [{ sessionId: CHILD, kind: 'child', signal: 'subagent_spawned' }],
+    });
+    // A sub-agent's title line says what it is; a headless run's too; a primary session's says nothing.
+    const titleAt = { ...at(CHILD), relPath: `sessions/${GROUP}/${CHILD}/title.jsonl` };
+    expect(
+      parseGrokTitleLine(
+        JSON.stringify({ generated_title: 'Explore', session_kind: 'subagent_fork' }),
+        titleAt,
+      ),
+    ).toEqual({
+      events: [],
+      sessionTitle: 'Explore',
+      sessionId: CHILD,
+      sessionKinds: [{ sessionId: CHILD, kind: 'child', signal: 'session_kind' }],
+    });
+    expect(
+      parseGrokTitleLine(JSON.stringify({ session_kind: 'headless' }), titleAt)?.sessionKinds,
+    ).toEqual([{ sessionId: CHILD, kind: 'headless', signal: 'session_kind' }]);
+    expect(
+      parseGrokTitleLine(JSON.stringify({ generated_title: 'Main' }), titleAt)?.sessionKinds,
+    ).toBeUndefined();
+  });
+
+  it("makes a sub-agent's prompts the agent's, whether the parent's notice or the child comes first", async () => {
+    for (const parentFirst of [true, false]) {
+      fs.rmSync(path.join(grokHome, 'sessions', GROUP), { recursive: true, force: true });
+      const db = openMemoryDatabase();
+      const adapter = createGrokAdapter({ home: grokHome });
+      const parent = () =>
+        writeSession(
+          SESSION,
+          prompt(SESSION, 1, 'Look around the repo.', { promptIndex: 0 }) +
+            update(SESSION, 2, { sessionUpdate: 'subagent_spawned', child_session_id: CHILD }),
+        );
+      // Grok numbers a sub-agent's prompt too; its parent's agent wrote it.
+      const child = () =>
+        writeSession(CHILD, prompt(CHILD, 1, 'List the packages.', { promptIndex: 0 }));
+      if (parentFirst) parent();
+      else child();
+      await syncSource({ db, home: originHome }, adapter);
+      if (parentFirst) child();
+      else parent();
+      await syncSource({ db, home: originHome }, adapter);
+      expect(authors(db)).toEqual({ [SESSION]: 'owner', [CHILD]: 'agent' });
+      db.close();
+    }
+  });
+
+  it("knows a sub-agent by its own title line when its parent's log is gone", async () => {
+    const db = openMemoryDatabase();
+    writeSession(CHILD, prompt(CHILD, 1, 'List the packages.', { promptIndex: 0 }), {
+      session_kind: 'subagent',
+    });
+    writeSession(RUN, prompt(RUN, 1, 'Run the nightly check.', { promptIndex: 0 }), {
+      session_kind: 'headless',
+    });
+    await syncSource({ db, home: originHome }, createGrokAdapter({ home: grokHome }));
+    expect(authors(db)).toEqual({ [CHILD]: 'agent', [RUN]: 'system' });
+    db.close();
+  });
+
+  it('writes the session kind out for a title stream of an earlier version, once', async () => {
+    const db = openMemoryDatabase();
+    const adapter = createGrokAdapter({ home: grokHome });
+    writeSession(CHILD, prompt(CHILD, 1, 'List the packages.', { promptIndex: 0 }), {});
+    await syncSource({ db, home: originHome }, adapter);
+    expect(authors(db)).toEqual({ [CHILD]: 'owner' });
+    // Grok's summary says it is a sub-agent; an earlier version wrote its title line without that,
+    // and kept the file's size and time as its token.
+    const summary = path.join(dir(CHILD), 'summary.json');
+    const fields = JSON.parse(fs.readFileSync(summary, 'utf8')) as Record<string, unknown>;
+    fs.writeFileSync(summary, JSON.stringify({ ...fields, session_kind: 'subagent' }));
+    const st = fs.statSync(summary);
+    db.prepare("UPDATE raw_file SET tail_hash = ? WHERE path LIKE '%summary.json'").run(
+      `${st.size}:${st.mtimeMs}`,
+    );
+    await syncSource({ db, home: originHome }, adapter);
+    expect(authors(db)).toEqual({ [CHILD]: 'agent' });
+    const titleFile = db
+      .prepare("SELECT lines_ingested AS n FROM raw_file WHERE path LIKE '%summary.json'")
+      .get() as { n: number };
+    expect(titleFile.n).toBe(2);
+    // Unchanged since: nothing more is written.
+    await syncSource({ db, home: originHome }, adapter);
+    expect(
+      db.prepare("SELECT lines_ingested AS n FROM raw_file WHERE path LIKE '%summary.json'").get(),
+    ).toEqual({ n: 2 });
+    db.close();
   });
 });

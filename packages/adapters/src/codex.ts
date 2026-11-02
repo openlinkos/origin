@@ -67,6 +67,10 @@ interface CodexLine {
     action?: { command?: string[]; query?: string };
     cwd?: string;
     cli_version?: string;
+    /** What started the session (`session_meta`): `cli`, `vscode`, `exec`, `{ subagent: … }`, … */
+    source?: unknown;
+    /** What a message is made of: `["user.text"]` for what the user typed. */
+    internal_chat_message_metadata_passthrough?: { content_item_kinds?: unknown };
   };
 }
 
@@ -111,7 +115,7 @@ export function createCodexAdapter(opts: CodexAdapterOptions = {}): SourceAdapte
         const info = sessionInfoFrom(obj);
         sessions.set(ctx.absPath, info);
         if (info.version) lastVersion = info.version;
-        return null;
+        return sessionKindOf(obj, ctx);
       }
       return parseRecord(obj, ctx, () => sessionInfo(ctx));
     },
@@ -209,8 +213,40 @@ export function parseCodexLine(
   session: CodexSessionInfo,
 ): ParsedLine | null {
   const obj = JSON.parse(line) as CodexLine;
-  if (obj.type === 'session_meta') return null;
+  if (obj.type === 'session_meta') return sessionKindOf(obj, ctx);
   return parseRecord(obj, ctx, () => session);
+}
+
+/**
+ * What `session_meta` says the session is, by what started it (`source`): a sub-agent Codex
+ * spawned (`{ "subagent": … }`, such as a thread spawned with its `parent_thread_id`) is a child,
+ * whose prompts an agent wrote, and `codex exec` a headless run. A session started by a person (`cli`,
+ * `vscode`) says nothing more; other sources are left alone.
+ */
+function sessionKindOf(obj: CodexLine, ctx: ParseContext): ParsedLine | null {
+  const sessionId = codexSessionIdFromPath(ctx.relPath);
+  const source = obj.payload?.source;
+  if (!sessionId) return null;
+  if (source === 'exec') {
+    return { events: [], sessionKinds: [{ sessionId, kind: 'headless', signal: 'source' }] };
+  }
+  if (typeof source === 'object' && source !== null && Object.hasOwn(source, 'subagent')) {
+    return { events: [], sessionKinds: [{ sessionId, kind: 'child', signal: 'source' }] };
+  }
+  return null;
+}
+
+/**
+ * Who wrote a user message, from what Codex says it is made of (`content_item_kinds`): typed by
+ * the user if it holds `user.text`, else put together by Codex (its environment context, say).
+ * Rollouts without it leave it to the message's kind and text.
+ */
+function messageAuthor(p: NonNullable<CodexLine['payload']>): Partial<EventInput> {
+  const kinds = p.internal_chat_message_metadata_passthrough?.content_item_kinds;
+  if (!Array.isArray(kinds)) return {};
+  return kinds.includes('user.text')
+    ? { author: 'owner', authorSignal: 'content_item_kinds' }
+    : { author: 'system', authorSignal: 'content_item_kinds' };
 }
 
 /** Text wrapped entirely in one tag, e.g. `<environment_context>…</environment_context>`, is injected by Codex. */
@@ -229,6 +265,7 @@ function parseRecord(
   let role: Role;
   let kind: EventKind;
   let text: string;
+  let author: Partial<EventInput> = {};
   const meta: Record<string, unknown> = {};
   switch (p.type) {
     case 'message': {
@@ -236,6 +273,7 @@ function parseRecord(
       role = p.role;
       text = joinContent(p.content);
       kind = role === 'user' && INJECTED_RE.test(text) ? 'meta' : 'message';
+      if (role === 'user') author = messageAuthor(p);
       if (p.phase) meta.phase = p.phase;
       break;
     }
@@ -291,6 +329,7 @@ function parseRecord(
     text,
     agentVersion: info.version,
     meta: Object.keys(meta).length > 0 ? meta : null,
+    ...author,
   };
   return { events: [event] };
 }

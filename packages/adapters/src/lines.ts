@@ -1,12 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type {
-  EventInput,
-  EventKind,
-  ParsedLine,
-  Role,
-  SourceAdapter,
-  SourceFile,
+import {
+  AUTHORS,
+  type Author,
+  type EventInput,
+  type EventKind,
+  type ParsedLine,
+  type Role,
+  type SourceAdapter,
+  type SourceFile,
+  SPEAKER_MAX,
 } from '@openlinkos/origin-core';
 import { CLAUDE_CODE_SOURCE_ID } from './claude-code.js';
 import { CODEX_SOURCE_ID } from './codex.js';
@@ -303,6 +306,17 @@ export function parseEventLine(line: string): ParsedLine {
   if (titleBy !== undefined && titleBy !== null && titleBy !== 'user' && titleBy !== 'agent') {
     return fail('"title_by" must be user or agent');
   }
+  const author = optionalString(obj, 'author');
+  if (author !== null) {
+    if (!AUTHORS.includes(author as Author)) {
+      return fail(`"author" must be one of ${AUTHORS.join(', ')}`);
+    }
+    if (role !== 'user') return fail('"author" is only for lines whose "role" is user');
+  }
+  const speaker = optionalString(obj, 'speaker');
+  if (speaker !== null && (speaker.length > SPEAKER_MAX || CONTROL_RE.test(speaker))) {
+    return fail(`"speaker" must have 1 to ${SPEAKER_MAX} characters, without control characters`);
+  }
 
   const event: EventInput = {
     id,
@@ -320,6 +334,13 @@ export function parseEventLine(line: string): ParsedLine {
         ? (meta as Record<string, unknown>)
         : null,
   };
+  // Who wrote an input: the line says so, or else a message is a person's, not known to be the
+  // owner's, and a meta event the system's. A source states `owner` itself.
+  if (role === 'user' && (kind === 'message' || kind === 'meta')) {
+    event.author = (author as Author | null) ?? (kind === 'message' ? 'person' : 'system');
+    event.authorSignal = author !== null ? 'author' : 'default';
+    if (speaker !== null) event.speaker = speaker;
+  }
   const parsed: ParsedLine = { events: [event] };
   if (title) {
     parsed.sessionTitle = title;

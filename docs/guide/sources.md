@@ -13,7 +13,7 @@ A file of event lines holds one JSON object per line, one event each, and is onl
 - `time` is ISO 8601 with an offset, such as `2026-11-02T09:30:00Z` or `2026-11-02T17:30:00+08:00`, or epoch milliseconds as a number.
 - `role` is `user`, `assistant`, or `system`.
 - `kind` is `message` for what was said, `tool_use` and `tool_result` for a call and what it returned, `meta` for context that was not said, such as an injected notice, and `system` for events of the system.
-- Optional fields give a session its `title`, its `project` and working directory (`cwd`), its git `branch`, the line an event follows (`parent`), and anything else you want to keep (`meta`).
+- Optional fields give a session its `title`, its `project` and working directory (`cwd`), its git `branch`, the line an event follows (`parent`), who wrote a message (`author`, `speaker`; see [Who wrote it](#who-wrote-it)), and anything else you want to keep (`meta`).
 
 A line that is not valid, for example one without a `time`, is counted as a parse error and skipped; the others are read as usual. Every field and rule is in [Session sources](../sources.md#your-own-sources-event-lines).
 
@@ -85,6 +85,23 @@ curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=2026/11
 - **Lines are never changed.** Like Origin's whole archive, a source is append-only: an event, once read, keeps its text. To say something else, write a new event with a new id.
 - **A session is one conversation.** A chat thread, an incident, a run of a job, a day of notes: whatever you would want to open as a whole. Its events are shown in time order, whichever file holds them.
 - **Ids Origin gives its own objects** start with `ent_`, `thr_`, `rcl_`, or `prp_`; do not start a session id with them, since `get` would read it as one of those.
+
+## Who wrote it
+
+Origin records who wrote each message: you, someone else, an agent, or a program. It never takes a message for yours on its own: your source says so, with `author`, on a line whose `role` is `user`.
+
+- `"author": "owner"` for what you wrote yourself: your messages in a chat workspace, your notes, your lines in a transcript once you know which speaker you are.
+- `"author": "person"` for someone else, or a speaker nobody named. A `message` line without `author` is a person's.
+- `"author": "agent"` for an agent: a bot replying in a channel, one agent prompting another.
+- `"author": "system"` for what a program generated: a notice, an alert, a scheduled prompt. A `meta` line without `author` is the system's.
+- `"speaker"` says who it was, as people know them: `"Sam"`, `"Speaker 2"`, a bot's name, at most 200 characters. Never put a platform's user id there: Origin shows it as it is, and identifies no one.
+
+```json
+{"id":"msg-2001","session":"incident-42","time":"2026-11-02T09:32:00Z","role":"user","kind":"message","text":"Roll back the migration.","author":"owner"}
+{"id":"msg-2002","session":"incident-42","time":"2026-11-02T09:33:00Z","role":"user","kind":"message","text":"Rolling it back now.","author":"person","speaker":"Sam"}
+```
+
+A recording with no speaker information says nothing, and its lines are a person's. The rules, and how each agent's logs say who wrote a message, are in [Authors](../architecture.md#authors).
 
 ## Titles, projects, and threads
 

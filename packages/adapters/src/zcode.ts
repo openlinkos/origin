@@ -79,7 +79,31 @@ interface MessageData {
   error?: unknown;
   time?: { created?: number; completed?: number };
   path?: { cwd?: string };
-  semantics?: { transcriptVisibility?: string };
+  /**
+   * `transcriptVisibility` (`hidden` for what ZCode adds for the model), and `origin`, who wrote a
+   * user message: `real_user` the user, `agent_runtime` and `system` ZCode itself.
+   */
+  semantics?: { transcriptVisibility?: string; origin?: string };
+}
+
+/** The `task_type`s of sessions an agent runs: a sub-agent's, or a workflow step's. */
+const CHILD_TASKS = new Set(['workflow_child', 'subagent_child']);
+
+/**
+ * Who wrote a user message, as ZCode records it (`semantics.origin`), or nothing to leave it to its
+ * kind and text. In a child session, ZCode labels the prompts its parent agent wrote `real_user`
+ * too: the session's `task_type` decides those (see parseZCodeLine).
+ */
+function messageAuthor(data: MessageData): Partial<EventInput> {
+  switch (data.semantics?.origin) {
+    case 'real_user':
+      return { author: 'owner', authorSignal: 'semantics.origin' };
+    case 'agent_runtime':
+    case 'system':
+      return { author: 'system', authorSignal: 'semantics.origin' };
+    default:
+      return {};
+  }
 }
 
 interface PartData {
@@ -294,6 +318,7 @@ export function parseZCodeLine(line: string, _ctx?: ParseContext): ParsedLine | 
     agentVersion: session.version ?? null,
   };
   const fallbackTs = message.time_created;
+  const author = role === 'user' ? messageAuthor(data) : {};
 
   const events: EventInput[] = [];
   const push = (
@@ -314,6 +339,7 @@ export function parseZCodeLine(line: string, _ctx?: ParseContext): ParsedLine | 
       kind,
       text: t,
       meta,
+      ...(r === 'user' && (kind === 'message' || kind === 'meta') ? author : {}),
     });
   };
   for (const part of parts) {
@@ -364,7 +390,12 @@ export function parseZCodeLine(line: string, _ctx?: ParseContext): ParsedLine | 
   }
   const title =
     typeof session.title === 'string' && session.title.length > 0 ? session.title : undefined;
-  return { events, sessionTitle: title, sessionId };
+  const parsed: ParsedLine = { events, sessionTitle: title, sessionId };
+  // A sub-agent's or a workflow step's session: its parent agent wrote its prompts.
+  if (typeof session.task_type === 'string' && CHILD_TASKS.has(session.task_type)) {
+    parsed.sessionKinds = [{ sessionId, kind: 'child', signal: 'task_type' }];
+  }
+  return parsed;
 }
 
 function inputText(input: unknown): string {

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-61c19920
+sourceHash: sha256-6b292428
 ---
 
 # 架构
@@ -327,11 +327,14 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 
 - **分开保存，读取时合并。** 采集把每条输入的作者、说话人和决定作者的字段以它的事件的 `seq` 为键保存（`event_author`），并把某一行声明为子会话或无界面运行的每个会话连同那个字段保存下来（`session_kind`）；事件从不改动（不变量 3）。读取时把两者合并为输入的**有效作者**：子会话的输入属于 Agent，无界面运行的输入属于系统，其余的属于它自己那一行给出的作者。所以行到达的顺序无关紧要：无论父会话的行先到还是子会话的行先到，子 Agent 的提示都属于 Agent，中枢从设备的镜像中也推导出同样的结果。
 - **派生、可重建。** 两者都派生自原始行，每个解析这些行的库都得出相同的结果，`rebuildAuthorship()` 会从镜像重新推导它们（见[存储](#storage)）。没有保存作者的输入（例如在已升级的库上仍在运行的旧版本进程所保存的输入）按第 3、4 条规则读取。
+- **每个来源的字段**见 [sources.md](sources.md)，与它的格式写在一起：Claude Code 的见下文；ZCode 按 `task_type` 把工作流步骤和子 Agent 的会话当作子会话，其余的读取 `semantics.origin`；Grok Build 按父会话的 `subagent_spawned` 更新或子 Agent 自己的 `session_kind` 把子 Agent 当作子会话；Codex 按 `session_meta` 的 `source` 把子 Agent 的 rollout 当作子会话，把 `codex exec` 当作无界面运行；Cursor 会标出它模拟的消息。不记录这些字段的来源，以及不记录它们的 Agent 版本，按上面的规则读取。
+- **事件行**自己说明，用 `author` 和 `speaker`（见[你自己的来源](sources.md#your-own-sources-event-lines)）：没有 `author` 的行，消息属于某个人（person），meta 事件属于系统，所以 `owner` 要由来源自己说明，没有说话人信息的录音属于某个人。
 
 ### Claude Code 映射 {#claude-code-mapping}
 
 - 文件：`<projects>/<cwd-slug>/<session-id>.jsonl`，以及 `<session-id>/subagents/` 下的子 Agent 记录。`tool-results/` 目录会被跳过，每个项目的 `memory/` 目录则作为记忆流读取（见[原生记忆](#native-memories)）。
 - `user` / `assistant` 行变成事件。文本块合并为一个 `message` 事件；每个 `tool_use` 和 `tool_result` 块各自成为一个事件（分别截断到 2,000 / 4,000 个字符）。`isMeta` 行变成 `meta` 事件。`thinking` 块不建立索引，但保留在原始镜像中。
+- 输入是谁写的（见[作者](#authors)），依次判断：子 Agent 的（`isSidechain`，或 `subagents/` 下的记录）属于 Agent；无界面运行的（`entrypoint` 为 `sdk-*`，`claude -p` 和 Agent SDK 的每一行都有）属于系统；然后是 `origin.kind`：`human` 属于主人，`task-notification` 属于系统，`peer` 和 `coordinator` 属于 Agent，说话人是 `origin.name`；压缩的摘要（`isCompactSummary`）属于系统；`promptSource` 为 `typed` 或 `queued` 的属于主人。2.1.303 之前的版本既不记录 `origin` 也不记录 `promptSource`，所以它们的其他输入按类型和正文读取。
 - 会话自己的记录中（而不是其子 Agent 的记录中）的标题行设置它的标题。每种标题行都会被写入很多次，最新的一行就是当前的标题：`ai-title` 行由 Claude Code 随着对话的进行而生成；`custom-title` 行是用户给出的名称（`/rename`、`--name`），之后的 `ai-title` 行不会替换它；较旧的记录中则是 `summary` 行。`agent-name` 行重复这些标题之一，不会被读取。
 - 项目名取 `cwd` 的最后一段。
 

@@ -99,6 +99,91 @@ describe('parseCodexLine', () => {
   });
 });
 
+describe('who wrote a Codex input', () => {
+  const meta = (source: unknown) =>
+    JSON.stringify({
+      timestamp: '2026-10-20T01:00:00Z',
+      type: 'session_meta',
+      payload: { id: SESSION, cwd: '/home/dev/demo-app', cli_version: '0.160.0', source },
+    });
+  const message = (text: string, kinds?: string[]) =>
+    JSON.stringify({
+      timestamp: '2026-10-20T01:00:05Z',
+      ordinal: 5,
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text }],
+        ...(kinds
+          ? { internal_chat_message_metadata_passthrough: { content_item_kinds: kinds } }
+          : {}),
+      },
+    });
+
+  it('reads what a user message is made of: typed by the user, or put together by Codex', () => {
+    expect(
+      parseCodexLine(message('Raise the timeout.', ['user.text']), ctx(6), info)?.events[0],
+    ).toMatchObject({
+      kind: 'message',
+      author: 'owner',
+      authorSignal: 'content_item_kinds',
+    });
+    expect(
+      parseCodexLine(
+        message('<environment_context><cwd>/x</cwd></environment_context>', [
+          'environments.environment_context',
+        ]),
+        ctx(6),
+        info,
+      )?.events[0],
+    ).toMatchObject({ kind: 'meta', author: 'system' });
+    // Rollouts of earlier versions say nothing: the prompt's kind and text decide.
+    expect(
+      parseCodexLine(message('Raise the timeout.'), ctx(6), info)?.events[0]?.author,
+    ).toBeUndefined();
+  });
+
+  it("knows a sub-agent's and an exec run's session from its session_meta, and a person's says nothing", () => {
+    const thread = {
+      subagent: {
+        thread_spawn: { parent_thread_id: '0199f0a1-0000-7000-8000-00000000aaaa', depth: 1 },
+      },
+    };
+    expect(parseCodexLine(meta(thread), ctx(1), info)).toEqual({
+      events: [],
+      sessionKinds: [{ sessionId: SESSION, kind: 'child', signal: 'source' }],
+    });
+    expect(parseCodexLine(meta({ subagent: 'review' }), ctx(1), info)?.sessionKinds).toEqual([
+      { sessionId: SESSION, kind: 'child', signal: 'source' },
+    ]);
+    expect(parseCodexLine(meta('exec'), ctx(1), info)?.sessionKinds).toEqual([
+      { sessionId: SESSION, kind: 'headless', signal: 'source' },
+    ]);
+    for (const source of ['cli', 'vscode', undefined]) {
+      expect(parseCodexLine(meta(source), ctx(1), info)).toBeNull();
+    }
+  });
+
+  it("makes every input of a sub-agent's session the agent's in a store", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-codex-'));
+    try {
+      const file = path.join(home, REL);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(
+        file,
+        `${meta({ subagent: { thread_spawn: { parent_thread_id: 'p', depth: 1 } } })}\n${message('Check the tests.', ['user.text'])}\n`,
+      );
+      const db = openMemoryDatabase();
+      await syncSource({ db, home }, createCodexAdapter({ home }));
+      expect(listEvents(db).map((e) => [e.author, e.authorSignal])).toEqual([['agent', 'source']]);
+      db.close();
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('codex adapter', () => {
   let codexHome: string;
   let originHome: string;

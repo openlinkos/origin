@@ -105,6 +105,8 @@ interface Bubble {
   bubbleId?: string;
   type?: number;
   text?: string;
+  /** A user message Cursor wrote itself, not the user (`simulatedMsgReason` says why). */
+  isSimulatedMsg?: boolean;
   createdAt?: string;
   startedAtMs?: number;
   toolFormerData?: {
@@ -365,11 +367,19 @@ export function parseCursorEditorLine(line: string): ParsedLine | null {
     kind: EventKind,
     t: string,
     meta: Record<string, unknown> | null,
+    extra: Partial<EventInput> = {},
   ) => {
     const trimmed = t.trim();
-    if (trimmed.length > 0) events.push({ ...base, id: eid, role: r, kind, text: trimmed, meta });
+    if (trimmed.length > 0) {
+      events.push({ ...base, id: eid, role: r, kind, text: trimmed, meta, ...extra });
+    }
   };
-  push(id, role, 'message', b.text ?? '', null);
+  // A message Cursor simulates in the user's place is the runtime's; others are left to their text.
+  const simulated: Partial<EventInput> =
+    role === 'user' && b.isSimulatedMsg === true
+      ? { author: 'system', authorSignal: 'isSimulatedMsg' }
+      : {};
+  push(id, role, 'message', b.text ?? '', null, simulated);
   const tool = b.toolFormerData;
   if (tool?.name) {
     const meta: Record<string, unknown> = { toolName: tool.name };

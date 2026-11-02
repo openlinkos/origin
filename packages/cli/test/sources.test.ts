@@ -23,6 +23,7 @@ import {
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { downgradeToV7 } from '../../core/test/legacy.js';
 import type { HubConfig } from '../src/hub/config.js';
 import { relayWithHub } from '../src/hub/relay.js';
 import { createHubServer, MAX_LINES_BODY } from '../src/hub/server.js';
@@ -205,6 +206,45 @@ describe('your own sources on a device', () => {
     // A source is chosen by its name; one that names no source is not there.
     expect((await run(['sync', '--local', '--source', 'Bad_Name'])).code).toBe(2);
     expect(err.at(-1)).toMatch(/^No source Bad_Name \(sources: claude-code, .*, notes\)/);
+  });
+
+  it('says who wrote each line, and reads it again on upgrade even when the directory is gone', async () => {
+    writeSource('chat', 'ops.jsonl', [
+      eventLine({ id: 'o1', session: 'ops', time: iso(T0), text: 'Ship it.', author: 'owner' }),
+      eventLine({
+        id: 'o2',
+        session: 'ops',
+        time: iso(T0 + 1000),
+        text: 'Wait for QA.',
+        author: 'person',
+        speaker: 'Dana',
+      }),
+      // A line that does not say: someone, not known to be the owner.
+      eventLine({ id: 'o3', session: 'ops', time: iso(T0 + 2000), text: 'Who is on call?' }),
+      eventLine({ id: 'o4', session: 'ops', time: iso(T0 + 3000), kind: 'meta', text: 'joined' }),
+    ]);
+    expect((await run(['sync', '--local', '--source', 'chat'])).code).toBe(0);
+    const authors = () => {
+      const db = openDatabase(dbPath(home), { adapters: storeAdapters(home) });
+      try {
+        return listEvents(db, { source: 'chat' }).map((e) => [e.id, e.author, e.speaker]);
+      } finally {
+        db.close();
+      }
+    };
+    const fresh = authors();
+    expect(fresh).toEqual([
+      ['chat:o1', 'owner', null],
+      ['chat:o2', 'person', 'Dana'],
+      ['chat:o3', 'person', null],
+      ['chat:o4', 'system', null],
+    ]);
+    // A store of version 7 whose source's directory is gone since: its mirror is all there is.
+    downgradeToV7(dbPath(home));
+    fs.rmSync(path.join(home, 'sources', 'chat'), { recursive: true });
+    expect((await run(['status'])).code).toBe(0);
+    expect(err.join('\n')).toMatch(/Upgrading the store to version 8/);
+    expect(authors()).toEqual(fresh);
   });
 
   it('ingests one file through its adapter, as a hook would', async () => {
@@ -450,6 +490,20 @@ describe('your own sources on a hub', () => {
       expect(readRawLine(hubDb, hubHome, rawLocator(hubDb, hubHome, ev as never) as never)).toBe(
         notesLines()[3],
       );
+
+      // Upgraded from version 7, the hub reads who wrote each line again from the device's
+      // mirror, with a lines adapter of its own: it has no sources/ directory of that name.
+      const authors = () =>
+        listEvents(hubDb, { source: 'notes' }).map((e) => [e.id, e.author, e.authorSignal]);
+      const before = authors();
+      expect(before.filter((a) => a[1] !== null)).toEqual([
+        ['notes:a1', 'person', 'default'],
+        ['notes:b1', 'person', 'default'],
+      ]);
+      hubDb.close();
+      downgradeToV7(path.join(hubHome, 'origin.db'));
+      hubDb = openDatabase(path.join(hubHome, 'origin.db'), { adapters: storeAdapters(hubHome) });
+      expect(authors()).toEqual(before);
     } finally {
       deviceDb.close();
     }

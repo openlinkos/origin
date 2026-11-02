@@ -48,9 +48,40 @@ describe('parseEventLine', () => {
           kind: 'message',
           text: 'Ship the retry fix before the demo.',
           meta: null,
+          // A line that does not say who wrote it: a person, not known to be the owner.
+          author: 'person',
+          authorSignal: 'default',
         },
       ],
     });
+  });
+
+  it('says who wrote an input: the author and speaker a line gives, or a person and the system', () => {
+    const input = (o: Record<string, unknown>) => parseEventLine(line(o)).events[0];
+    expect(input({ author: 'owner' })).toMatchObject({ author: 'owner', authorSignal: 'author' });
+    // A recording with diarized speakers, and one with no speaker information at all.
+    expect(input({ author: 'person', speaker: 'Speaker 2' })).toMatchObject({
+      author: 'person',
+      speaker: 'Speaker 2',
+    });
+    expect(input({})).toMatchObject({ author: 'person', authorSignal: 'default' });
+    expect(input({}).speaker).toBeUndefined();
+    expect(input({ kind: 'meta' })).toMatchObject({ author: 'system', authorSignal: 'default' });
+    expect(input({ author: 'agent', speaker: 'Reviewer bot' })).toMatchObject({ author: 'agent' });
+    expect(input({ author: null, speaker: '' })).toMatchObject({ author: 'person' });
+    // Tool results and the agent's side have no author.
+    expect(input({ kind: 'tool_result', author: 'owner' }).author).toBeUndefined();
+    expect(input({ role: 'assistant' }).author).toBeUndefined();
+    for (const [bad, message] of [
+      [{ author: 'me' }, /"author" must be one of owner, person, agent, system/],
+      [{ author: 1 }, /"author" must be a string/],
+      [{ role: 'assistant', author: 'agent' }, /"author" is only for lines whose "role" is user/],
+      [{ speaker: 'x'.repeat(201) }, /"speaker" must have 1 to 200 characters/],
+      [{ speaker: 'Ann\u0007' }, /"speaker" must have 1 to 200 characters, without control/],
+      [{ speaker: 7 }, /"speaker" must be a string/],
+    ] as const) {
+      expect(() => parseEventLine(line(bad))).toThrow(message);
+    }
   });
 
   it('keeps the optional fields: project, directory, branch, parent, and meta', () => {

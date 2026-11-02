@@ -198,9 +198,14 @@ interface ClaudeLine {
   version?: string;
   isMeta?: boolean;
   isSidechain?: boolean;
+  isCompactSummary?: boolean;
   userType?: string;
   entrypoint?: string;
   promptId?: string;
+  /** Who sent a user line (2.1.303): `human`, `task-notification`, `peer`, `coordinator`, … */
+  origin?: { kind?: string; name?: unknown };
+  /** How a prompt was entered: `typed`, `queued`, `system`, `sdk`, … */
+  promptSource?: string;
   summary?: string;
   aiTitle?: string;
   customTitle?: string;
@@ -220,6 +225,51 @@ const TITLES: Record<string, { field: 'aiTitle' | 'customTitle' | 'summary'; man
   'custom-title': { field: 'customTitle', manual: true },
   summary: { field: 'summary', manual: false },
 };
+
+/** Who wrote an input, as an event carries it. */
+type InputAuthor = Pick<EventInput, 'author' | 'authorSignal' | 'speaker'>;
+
+/** Whether a log is a sub-agent's: `<session>/subagents/…`. */
+const inSubagents = (relPath: string) => relPath.split('/').slice(0, -1).includes('subagents');
+
+/**
+ * Who wrote the input of a user line, as Claude Code records it, or null to leave it to its kind
+ * and text (older versions record none of this; see docs/sources.md#claude-code):
+ * - a sub-agent's thread (`isSidechain`, or a log under `subagents/`): its parent agent wrote its
+ *   prompts, whatever else the line says;
+ * - a headless run (`entrypoint` `sdk-*`, as `claude -p` and the Agent SDK record it): a program's;
+ * - `origin.kind`: `human` the user's; `task-notification` the runtime's; `peer` and `coordinator`
+ *   another agent's, named by `origin.name`;
+ * - `isCompactSummary`, the summary a compaction writes: the runtime's;
+ * - `promptSource` `typed` or `queued`: the user's.
+ */
+function inputAuthor(obj: ClaudeLine, relPath: string): InputAuthor | null {
+  if (obj.isSidechain === true) return { author: 'agent', authorSignal: 'isSidechain' };
+  if (inSubagents(relPath)) return { author: 'agent', authorSignal: 'subagents' };
+  if (typeof obj.entrypoint === 'string' && obj.entrypoint.startsWith('sdk-')) {
+    return { author: 'system', authorSignal: 'entrypoint' };
+  }
+  switch (obj.origin?.kind) {
+    case 'human':
+      return { author: 'owner', authorSignal: 'origin.kind' };
+    case 'task-notification':
+      return { author: 'system', authorSignal: 'origin.kind' };
+    case 'peer':
+    case 'coordinator': {
+      const name = obj.origin.name;
+      return {
+        author: 'agent',
+        authorSignal: 'origin.kind',
+        speaker: typeof name === 'string' ? name : null,
+      };
+    }
+  }
+  if (obj.isCompactSummary === true) return { author: 'system', authorSignal: 'isCompactSummary' };
+  if (obj.promptSource === 'typed' || obj.promptSource === 'queued') {
+    return { author: 'owner', authorSignal: 'promptSource' };
+  }
+  return null;
+}
 
 /** Pure function: parse one line. Exported for tests. */
 export function parseClaudeCodeLine(line: string, ctx: ParseContext): ParsedLine | null {
@@ -264,6 +314,7 @@ export function parseClaudeCodeLine(line: string, ctx: ParseContext): ParsedLine
 
   const events: EventInput[] = [];
   const content = obj.message.content;
+  const author = role === 'user' ? inputAuthor(obj, ctx.relPath) : null;
   const pushEvent = (
     suffix: string | null,
     kind: EventKind,
@@ -280,6 +331,8 @@ export function parseClaudeCodeLine(line: string, ctx: ParseContext): ParsedLine
       text: cleaned,
       meta: Object.keys(m).length > 0 ? m : null,
       ...base,
+      // Who wrote an input (a tool result has its kind instead).
+      ...(author && (kind === 'message' || kind === 'meta') ? author : {}),
     });
   };
 

@@ -323,4 +323,108 @@ describe('zcode adapter', () => {
       sessionId: SESSION,
     });
   });
+
+  it("reads who wrote a message from its semantics, and a child session's prompts as the agent's", async () => {
+    const line = (taskType: string, data: Record<string, unknown>) =>
+      JSON.stringify({
+        session: {
+          id: SESSION,
+          directory: '/srv/app',
+          title: 'T',
+          version: '0.16.9',
+          task_type: taskType,
+        },
+        message: {
+          id: 'm',
+          sequence: 1,
+          time_created: T0,
+          time_updated: T0,
+          data: JSON.stringify(data),
+        },
+        parts: [
+          {
+            id: 'p',
+            sequence: 0,
+            time_created: T0,
+            data: JSON.stringify({ type: 'text', text: 'Go on.' }),
+          },
+        ],
+      });
+    const said = (taskType: string, origin: string, visibility = 'visible') =>
+      parseZCodeLine(
+        line(taskType, {
+          role: 'user',
+          semantics: { kind: 'user_prompt', origin, transcriptVisibility: visibility },
+        }),
+      );
+    expect(said('interactive', 'real_user')).toMatchObject({
+      events: [{ kind: 'message', author: 'owner', authorSignal: 'semantics.origin' }],
+    });
+    expect(said('interactive', 'real_user').sessionKinds).toBeUndefined();
+    expect(said('interactive', 'agent_runtime', 'hidden')?.events[0]).toMatchObject({
+      kind: 'meta',
+      author: 'system',
+    });
+    expect(said('interactive', 'system', 'hidden')?.events[0]).toMatchObject({ author: 'system' });
+    // A side chat's prompt ZCode hides is still the user's, though it is no prompt.
+    expect(said('selection_side_chat', 'real_user', 'hidden')?.events[0]).toMatchObject({
+      kind: 'meta',
+      author: 'owner',
+    });
+    // ZCode labels a workflow step's and a sub-agent's prompts real_user: their session says whose.
+    for (const taskType of ['workflow_child', 'subagent_child']) {
+      expect(said(taskType, 'real_user').sessionKinds).toEqual([
+        { sessionId: SESSION, kind: 'child', signal: 'task_type' },
+      ]);
+    }
+    const reply = parseZCodeLine(
+      line('workflow_child', { role: 'assistant', time: { created: T0, completed: T0 } }),
+    );
+    expect(reply?.events[0]?.author).toBeUndefined();
+
+    // In a store: the step's prompt is the agent's, the interactive session's the owner's.
+    const zcodeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-zcode-'));
+    const originHome = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-home-'));
+    const zdb = createZCodeDb(path.join(zcodeHome, 'cli', 'db', 'db.sqlite'));
+    try {
+      const conversation = new Conversation(zdb);
+      conversation.add(
+        { role: 'user', time: { created: T0 }, semantics: { origin: 'real_user' } },
+        [{ type: 'text', text: 'Split the upload client into steps.' }],
+      );
+      zdb
+        .prepare(
+          `INSERT INTO session (id, project_id, parent_id, directory, title, version, task_type,
+                              time_created, time_updated)
+         VALUES ('ses_step', 'prj_1', ?, '/home/dev/demo-app', 'Step', '0.16.9', 'workflow_child', ?, ?)`,
+        )
+        .run(SESSION, T0, T0);
+      zdb
+        .prepare(
+          `INSERT INTO message (id, session_id, time_created, time_updated, data, sequence)
+         VALUES ('msg_step', 'ses_step', ?, ?, ?, 0)`,
+        )
+        .run(T0, T0, JSON.stringify({ role: 'user', semantics: { origin: 'real_user' } }));
+      zdb
+        .prepare(
+          `INSERT INTO part (id, message_id, session_id, time_created, time_updated, data, sequence)
+         VALUES ('prt_step', 'msg_step', 'ses_step', ?, ?, ?, 0)`,
+        )
+        .run(T0, T0, JSON.stringify({ type: 'text', text: 'Write the retry step.' }));
+      const store = openMemoryDatabase();
+      await syncSource(
+        { db: store, home: originHome },
+        createZCodeAdapter({ home: zcodeHome, now: () => T0 + 60_000, keepOpenMs: 0 }),
+      );
+      expect(listEvents(store).map((e) => [e.sessionId, e.author, e.authorSignal])).toEqual([
+        [SESSION, 'owner', 'semantics.origin'],
+        ['ses_step', 'agent', 'task_type'],
+      ]);
+      store.close();
+    } finally {
+      zdb.close();
+      fs.rmSync(zcodeHome, { recursive: true, force: true });
+      fs.rmSync(originHome, { recursive: true, force: true });
+    }
+  });
 });

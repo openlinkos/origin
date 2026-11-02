@@ -163,6 +163,101 @@ describe('createClaudeCodeAdapter end-to-end', () => {
   });
 });
 
+describe('who wrote a Claude Code input', () => {
+  const user = (fields: Record<string, unknown>, content: unknown = 'Fix the flaky test.') =>
+    JSON.stringify({
+      type: 'user',
+      uuid: '33333333-3333-4333-8333-333333333333',
+      sessionId: SESSION,
+      timestamp: '2026-10-20T09:00:00.000Z',
+      cwd: 'D:\\demo\\project',
+      version: '2.1.303',
+      entrypoint: 'cli',
+      message: { role: 'user', content },
+      ...fields,
+    });
+  const input = (fields: Record<string, unknown>, rel = REL, content?: unknown) =>
+    parseClaudeCodeLine(user(fields, content), { ...ctx(1), relPath: rel })?.events[0];
+
+  it('reads origin.kind, isCompactSummary, and promptSource, as 2.1.303 writes them', () => {
+    expect(input({ origin: { kind: 'human' }, promptSource: 'typed' })).toMatchObject({
+      author: 'owner',
+      authorSignal: 'origin.kind',
+    });
+    expect(input({ origin: { kind: 'task-notification' }, promptSource: 'system' })).toMatchObject({
+      author: 'system',
+      authorSignal: 'origin.kind',
+    });
+    // Another agent's message, named as Claude Code names it, never by its id.
+    expect(
+      input({ isMeta: true, origin: { kind: 'peer', name: 'reviewer', from: 'a1b2c3d4e5f60718' } }),
+    ).toMatchObject({ kind: 'meta', author: 'agent', speaker: 'reviewer' });
+    expect(input({ origin: { kind: 'coordinator' } })).toMatchObject({ author: 'agent' });
+    expect(input({ isCompactSummary: true, isVisibleInTranscriptOnly: true })).toMatchObject({
+      author: 'system',
+      authorSignal: 'isCompactSummary',
+    });
+    expect(input({ promptSource: 'queued' })).toMatchObject({
+      author: 'owner',
+      authorSignal: 'promptSource',
+    });
+    // Older versions record none of it: the prompt's kind and text decide, in the store.
+    expect(input({ entrypoint: undefined })?.author).toBeUndefined();
+    expect(input({ isMeta: true })?.author).toBeUndefined();
+  });
+
+  it("makes a sub-agent's and a headless run's input the agent's and the system's, whatever else it says", () => {
+    expect(input({ isSidechain: true, origin: { kind: 'human' } })).toMatchObject({
+      author: 'agent',
+      authorSignal: 'isSidechain',
+    });
+    expect(
+      input({ promptSource: 'typed' }, `D--demo-project/${SESSION}/subagents/agent-a1.jsonl`),
+    ).toMatchObject({ author: 'agent', authorSignal: 'subagents' });
+    expect(input({ entrypoint: 'sdk-cli', promptSource: 'sdk' })).toMatchObject({
+      author: 'system',
+      authorSignal: 'entrypoint',
+    });
+  });
+
+  it('gives a tool result no author', () => {
+    const result = input({ origin: { kind: 'human' } }, REL, [
+      { type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' },
+    ]);
+    expect(result).toMatchObject({ kind: 'tool_result' });
+    expect(result?.author).toBeUndefined();
+  });
+
+  it('is what a store reads, the text rule deciding for older lines', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-cc-authors-'));
+    try {
+      const projects = path.join(dir, 'projects');
+      fs.mkdirSync(path.join(projects, 'D--demo-project'), { recursive: true });
+      const lines = [
+        user({ uuid: 'a0000000-0000-4000-8000-000000000001', origin: { kind: 'human' } }),
+        user({ uuid: 'a0000000-0000-4000-8000-000000000002', isCompactSummary: true }),
+        user(
+          { uuid: 'a0000000-0000-4000-8000-000000000003', entrypoint: undefined },
+          '<command-name>/clear</command-name>',
+        ),
+        user({ uuid: 'a0000000-0000-4000-8000-000000000004', entrypoint: undefined }),
+      ];
+      fs.writeFileSync(path.join(projects, REL), `${lines.join('\n')}\n`);
+      const db = openMemoryDatabase();
+      await syncSource({ db, home: dir }, createClaudeCodeAdapter({ projectsDir: projects }));
+      expect(listEvents(db).map((e) => [e.id.slice(-1), e.author, e.authorSignal])).toEqual([
+        ['1', 'owner', 'origin.kind'],
+        ['2', 'system', 'isCompactSummary'],
+        ['3', 'system', 'text'],
+        ['4', 'owner', 'text'],
+      ]);
+      db.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 /** What a store holds of its sessions' files: each mirror with its cursor and content, and the events. */
 function holdings(db: Database, home: string) {
   const files = (
