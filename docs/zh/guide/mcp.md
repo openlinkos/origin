@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-b4fc534b
+sourceHash: sha256-31c70e7d
 ---
 
 # MCP 工具
@@ -578,7 +578,7 @@ Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话�
 }
 ```
 
-可能的错误包括 `No event contains the quote "…". Search for the event and cite its id instead.`、`Quote not found in event <id>: "…"` 和 `Event <id> has been forgotten and cannot be cited.`
+`cognition` 只能来自用户自己的话：来源中有消息或 meta 事件、却没有一条是用户写的（例如别人的消息、Agent 给子 Agent 的提示或程序的通知），就会被拒绝；只有 Agent 自己的消息和工具事件时，两边都不算。可能的错误包括 `No event contains the quote "…". Search for the event and cite its id instead.`、`Quote not found in event <id>: "…"`、`Event <id> has been forgotten and cannot be cited.` 和 ``A preference can only come from the user's own words: <id> (by person, Sam) is not the user's. Cite what the user wrote, or save this as memory or knowledge.``
 
 ## propose {#propose}
 
@@ -633,7 +633,7 @@ Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话�
 | `sources` | 列表 | 更多来源，加在沿用下来的来源之后 |
 | `valid_from`、`valid_to` | 时间 | 新的有效期；默认沿用旧的 |
 
-只能纠正当前版本：纠正其他版本会失败，并给出当前版本的 id（`Entry <id> was already corrected; its current version is <id>. Correct that one instead.`）。纠正的时间总是晚于它所纠正的版本。返回 `{ entry }`，即新版本。在连接了中枢的设备上，只有中枢才有的条目会在中枢上纠正，这需要能连上中枢。
+只能纠正当前版本：纠正其他版本会失败，并给出当前版本的 id（`Entry <id> was already corrected; its current version is <id>. Correct that one instead.`）。纠正的时间总是晚于它所纠正的版本。把条目改为 `cognition`、或给 cognition 增加来源的纠正，会像 [`remember`](#remember) 检查 cognition 那样检查。返回 `{ entry }`，即新版本。在连接了中枢的设备上，只有中枢才有的条目会在中枢上纠正，这需要能连上中枢。
 
 ```json
 { "id": "ent_3f9a1c2b7d4e", "text": "Releases are tagged from master once CI passes on Ubuntu, Windows, and macOS." }

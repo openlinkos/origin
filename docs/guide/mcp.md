@@ -574,7 +574,7 @@ A source with an `event_id` must name a visible event, and its `quote`, if given
 }
 ```
 
-Errors include `No event contains the quote "…". Search for the event and cite its id instead.`, `Quote not found in event <id>: "…"`, and `Event <id> has been forgotten and cannot be cited.`
+A `cognition` comes only from the user's own words: one whose sources include messages or meta events none of which the user wrote, such as another person's message, an agent's prompt to a sub-agent, or a program's notice, is refused; the agent's own messages and tool events alone do not count either way. Errors include `No event contains the quote "…". Search for the event and cite its id instead.`, `Quote not found in event <id>: "…"`, `Event <id> has been forgotten and cannot be cited.`, and ``A preference can only come from the user's own words: <id> (by person, Sam) is not the user's. Cite what the user wrote, or save this as memory or knowledge.``
 
 ## propose {#propose}
 
@@ -629,7 +629,7 @@ Replace an entry with a corrected version. The old version stays in the history;
 | `sources` | list | More sources, added to those that carry over |
 | `valid_from`, `valid_to` | time | New validity; the old one by default |
 
-Only the current version can be corrected: correcting another fails with the id of the current one (`Entry <id> was already corrected; its current version is <id>. Correct that one instead.`). A correction is dated after the version it corrects. It returns `{ entry }`, the new version. On a connected device, an entry that only the hub has is corrected on the hub, which needs the hub to be reachable.
+Only the current version can be corrected: correcting another fails with the id of the current one (`Entry <id> was already corrected; its current version is <id>. Correct that one instead.`). A correction is dated after the version it corrects. One that makes an entry a `cognition`, or adds sources to one, is checked as [`remember`](#remember) checks a cognition. It returns `{ entry }`, the new version. On a connected device, an entry that only the hub has is corrected on the hub, which needs the hub to be reachable.
 
 ```json
 { "id": "ent_3f9a1c2b7d4e", "text": "Releases are tagged from master once CI passes on Ubuntu, Windows, and macOS." }

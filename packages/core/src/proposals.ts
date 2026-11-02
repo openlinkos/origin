@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
 import {
+  checkCognitionSources,
   ENTRY_KINDS,
   type Entry,
   type EntryKind,
@@ -132,6 +133,7 @@ export function prepareProposal(db: Database, input: ProposalInput): ProposalRec
     note,
     sources: resolveSources(db, input.sources),
   };
+  checkCognitionSources(db, record.kind, record.sources);
   const length = JSON.stringify(proposalJson(record), null, 2).length;
   if (length > PROPOSAL_RESULT_MAX) {
     throw new OriginError(

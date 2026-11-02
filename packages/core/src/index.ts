@@ -57,6 +57,7 @@ export {
 export {
   type CorrectInput,
   CURRENT_VERSION,
+  checkCognitionSources,
   correct,
   currentEntriesCiting,
   ENTRY_ID_RE,

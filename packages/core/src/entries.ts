@@ -1,11 +1,12 @@
 import { randomBytes } from 'node:crypto';
+import { AUTHOR_SQL, SPEAKER_SQL } from './authors.js';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { OriginError } from './errors.js';
 import { storeName } from './identity.js';
 import { findNewest, parseQuery, phraseQuery, type QueryTerm, termCheck } from './search.js';
 import { getEvent, VISIBLE_EVENT } from './store.js';
-import type { EventRow } from './types.js';
+import type { Author, EventRow } from './types.js';
 
 /** memory = what happened; knowledge = stable facts; cognition = the person's preferences, methods, goals, boundaries. */
 export const ENTRY_KINDS = ['memory', 'knowledge', 'cognition'] as const;
@@ -502,6 +503,40 @@ export function resolveSources(
   return [...out].map(([eventId, q]) => ({ eventId, quote: q }));
 }
 
+/**
+ * A cognition is the user's preference, method, goal, or boundary, so it can only come from the
+ * user's own words. Refuse one whose sources include input (role `user`, kind `message` or `meta`)
+ * none of which the owner wrote (see authors.ts): what another person said, what an agent prompted
+ * a sub-agent with, what a program injected. Sources that are no input, such as the agent's own
+ * messages, tool calls and results, and versions of memory files, do not count either way. Throws
+ * an OriginError.
+ */
+export function checkCognitionSources(
+  db: Database,
+  kind: string,
+  sources: ReadonlyArray<{ eventId: string }>,
+): void {
+  if (kind !== 'cognition' || sources.length === 0) return;
+  const ids = [...new Set(sources.map((s) => s.eventId))];
+  const inputs = db
+    .prepare(
+      `SELECT e.id, (${AUTHOR_SQL}) AS author, (${SPEAKER_SQL}) AS speaker FROM event e
+        WHERE e.id IN (${ids.map(() => '?').join(', ')})
+          AND e.role = 'user' AND e.kind IN ('message', 'meta')
+        ORDER BY e.seq`,
+    )
+    .all(...ids) as unknown as Array<{ id: string; author: Author; speaker: string | null }>;
+  if (inputs.length === 0 || inputs.some((e) => e.author === 'owner')) return;
+  const shown = inputs
+    .slice(0, 5)
+    .map((e) => `${e.id} (by ${e.author}${e.speaker ? `, ${e.speaker}` : ''})`)
+    .join(', ');
+  const more = inputs.length > 5 ? `, and ${inputs.length - 5} more,` : '';
+  throw new OriginError(
+    `A preference can only come from the user's own words: ${shown}${more} ${inputs.length === 1 ? 'is' : 'are'} not the user's. Cite what the user wrote, or save this as memory or knowledge.`,
+  );
+}
+
 export function validateEntry(input: {
   kind: string;
   text: string;
@@ -585,6 +620,8 @@ export function rememberInTransaction(
   opts: CiteOptions = {},
 ): Entry {
   validateEntry(input);
+  const sources = resolveSources(db, input.sources, opts);
+  checkCognitionSources(db, input.kind, sources);
   const id = newEntryId();
   insertEntry(db, {
     id,
@@ -598,7 +635,7 @@ export function rememberInTransaction(
     validTo: input.validTo ?? null,
     createdAt: now,
     origin: storeName(db),
-    sources: resolveSources(db, input.sources, opts),
+    sources,
   });
   return getEntry(db, id) as Entry;
 }
@@ -640,6 +677,15 @@ export function correct(db: Database, id: string, input: CorrectInput, now = Dat
       for (const s of added) merged.set(s.eventId, s.quote ?? merged.get(s.eventId) ?? null);
       if (merged.size === 0) {
         throw new OriginError(`Entry ${id} has no remaining sources; cite at least one.`);
+      }
+      // A correction that makes an entry a cognition, or adds to a cognition's sources, is checked
+      // as remember checks one; one that only rewords a cognition keeps the sources it had.
+      if (fields.kind !== old.kind || added.length > 0) {
+        checkCognitionSources(
+          db,
+          fields.kind,
+          [...merged.keys()].map((eventId) => ({ eventId })),
+        );
       }
       insertEntry(db, {
         id: newId,
