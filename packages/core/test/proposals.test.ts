@@ -10,6 +10,8 @@ import {
   type Database,
   describeProposal,
   entrySources,
+  exportEntry,
+  exportTombstone,
   forget,
   getProposal,
   getTombstone,
@@ -23,6 +25,8 @@ import {
   proposalJson,
   proposalState,
   rebuildProposals,
+  receiveEntry,
+  receiveTombstone,
   rejectProposal,
   remember,
   resolveId,
@@ -488,5 +492,46 @@ describe('the change feed', () => {
     expect(changesSince(db, { after: first.next, now }).proposals.map((p) => p.status)).toEqual([
       'accepted',
     ]);
+  });
+});
+
+describe('a proposal on a device and its hub', () => {
+  it('is accepted, or rejected, on the hub once the entry, or the forget, reaches it', async () => {
+    proposedSession();
+    write('s5.jsonl', [
+      {
+        id: 'p5',
+        session: 's5',
+        ts: T0 + 90_000,
+        kind: 'tool_result',
+        text: proposeResult('prp_00000000000e'),
+      },
+    ]);
+    await sync();
+    // The hub parses the same lines (a device's mirrors), so it derives the same proposals.
+    const hubHome = path.join(tmp, 'hub');
+    const hub = openDatabase(path.join(hubHome, 'origin.db'));
+    initStoreName(hub, 'hub');
+    await syncSource({ db: hub, home: hubHome }, fakeAdapter(logs));
+    try {
+      expect(
+        listProposals(hub)
+          .map((p) => p.id)
+          .sort(),
+      ).toEqual(['prp_00000000000e', P1]);
+      const entry = acceptProposal(db, P1, 'user@laptop');
+      expect(receiveEntry(hub, exportEntry(db, entry.id)!, { growthOrigin: 'hub' })).toEqual({
+        status: 'applied',
+      });
+      expect(getProposal(hub, P1)).toMatchObject({ status: 'accepted', entry: entry.id });
+      const r = rejectProposal(db, 'prp_00000000000e', { reason: 'No.', author: 'user@laptop' });
+      receiveTombstone(hub, exportTombstone(db, r.tombstoneId as string)!, { growthOrigin: 'hub' });
+      expect(getProposal(hub, 'prp_00000000000e')).toBeNull();
+      expect(listRejectedProposals(hub)).toMatchObject([
+        { id: 'prp_00000000000e', forget: r.tombstoneId, reason: 'No.', author: 'user@laptop' },
+      ]);
+    } finally {
+      hub.close();
+    }
   });
 });
