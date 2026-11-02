@@ -10,6 +10,7 @@ export type NavKey =
   | 'search'
   | 'entries'
   | 'recalls'
+  | 'proposals'
   | 'devices'
   | 'tokens'
   | 'connect'
@@ -42,6 +43,7 @@ const NAV: Array<{ label?: MessageKey; items: NavItem[] }> = [
       { key: 'sessions', path: 'sessions', label: 'nav.sessions', icon: 'history' },
       { key: 'recalls', path: 'recalls', label: 'nav.recalls', icon: 'lightbulb' },
       { key: 'entries', path: 'entries', label: 'nav.entries', icon: 'book-marked' },
+      { key: 'proposals', path: 'proposals', label: 'nav.proposals', icon: 'inbox' },
     ],
   },
   {
@@ -256,7 +258,9 @@ function appShell(ctx: Ctx, o: PageOptions): SafeHtml {
   const t = ctx.t;
   const counts = ctx.service.navCounts();
   const count = (key: NavKey) =>
-    key === 'sessions' || key === 'recalls' || key === 'entries' ? counts[key] : null;
+    key === 'sessions' || key === 'recalls' || key === 'entries' || key === 'proposals'
+      ? counts[key]
+      : null;
   return html`<a class="ol-skip-link" href="#main">${t('nav.skip')}</a>
 <div class="ol-app ol-app-workbench">
   <aside class="ol-sidebar" id="nav" popover aria-label="${t('nav.label')}">

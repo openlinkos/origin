@@ -3,11 +3,14 @@ import path from 'node:path';
 import {
   type AdminSessionInfo,
   type AuditRecord,
+  acceptProposal,
   activeProjects,
   createToken as coreCreateToken,
   correct,
+  countProposals,
   type Database,
   type DeviceFile,
+  describeProposal,
   describeThread,
   deviceFiles,
   ENTRY_KINDS,
@@ -41,19 +44,25 @@ import {
   listEntries,
   listEvents,
   listProjects,
+  listProposals,
   listRecalls,
+  listRejectedProposals,
   listSessionEvents,
   listSessions,
   listThreadSessions,
   listTokens,
   listTombstones,
   OriginError,
+  type Proposal,
+  type ProposalCard,
   planForget,
   planRestore,
+  proposalState,
   RECALL_OCCASIONS,
   type RecallItemRecord,
   type RecallOccasion,
   type RecallRecord,
+  type RejectedProposal,
   type RestorePlan,
   type RestoreResult,
   rawDir,
@@ -65,6 +74,7 @@ import {
   recallSession,
   recallsWith,
   recordAudit,
+  rejectProposal,
   remember,
   restore,
   revokeToken,
@@ -369,6 +379,8 @@ export interface NavCounts {
   sessions: number;
   recalls: number;
   entries: number;
+  /** Proposals that wait for review. */
+  proposals: number;
 }
 
 interface BoardSession {
@@ -457,6 +469,8 @@ export interface Overview {
   latestEntries: Entry[];
   /** The latest forgets and restores (ids, reasons, and counts; never what they hide). */
   latestTombstones: TombstoneSummary[];
+  /** How many proposals wait for review. */
+  pendingProposals: number;
 }
 
 /** A page of a session's turns (see AdminService.sessionTurns). */
@@ -617,6 +631,38 @@ export interface ForgetPlan {
   /** Digest of the plan: forgetting is refused if the plan changed after it was shown. */
   digest: string;
 }
+
+/** Which proposals the Proposals page lists. */
+export const PROPOSAL_STATUSES = ['pending', 'accepted', 'rejected', 'all'] as const;
+export type ProposalStatusFilter = (typeof PROPOSAL_STATUSES)[number];
+
+export interface ProposalBoardFilter {
+  status: ProposalStatusFilter;
+  projects: string[];
+  page: number;
+}
+
+/** A proposal as the Proposals page lists it: shown, or rejected (by id and reason only). */
+export type ProposalRow =
+  | { rejected: false; proposal: Proposal }
+  | { rejected: true; proposal: RejectedProposal };
+
+/** The Proposals page (see pages/proposals.ts). */
+export interface ProposalBoard {
+  rows: ProposalRow[];
+  total: number;
+  page: number;
+  more: boolean;
+  /** How many there are of each status, under the project filter. */
+  counts: Record<'pending' | 'accepted' | 'rejected', number>;
+  /** The projects of the proposals of the status chosen, with how many each has. */
+  projects: FacetValue[];
+}
+
+/** A proposal's page: its card, or, when it was rejected, the record that rejected it. */
+export type ProposalDetail =
+  | { state: 'shown'; card: ProposalCard }
+  | { state: 'rejected'; rejected: RejectedProposal };
 
 /** A forget or a restore, for its page. */
 export interface TombstoneDetail {
@@ -815,6 +861,7 @@ export class AdminService {
       projects: activity.projects,
       latestEntries: listEntries(this.db, { limit: 5 }),
       latestTombstones: listTombstones(this.db, { limit: 5 }),
+      pendingProposals: countProposals(this.db, { status: 'pending' }),
     };
   }
 
@@ -1161,6 +1208,7 @@ export class AdminService {
         'SELECT COUNT(*) AS n FROM recall r WHERE EXISTS (SELECT 1 FROM recall_item i WHERE i.recall_id = r.id)',
       ),
       entries: entries.memory + entries.knowledge + entries.cognition,
+      proposals: countProposals(this.db, { status: 'pending' }),
     };
   }
 
@@ -1879,6 +1927,97 @@ export class AdminService {
     this.audit(who, 'entry.correct', id, { newId: entry.id });
     this.written();
     return entry;
+  }
+
+  /**
+   * The Proposals page: the proposals of a status, pending first when all are listed, newest first
+   * within each, with the counts of each status and of each project. Proposals are few next to
+   * events, so they are filtered in memory. Rejected ones are listed by id, with their forget's
+   * reason, never their text (invariant 2).
+   */
+  proposalBoard(f: ProposalBoardFilter): ProposalBoard {
+    const projectOf = (p: Proposal) => p.project ?? p.sessionProject;
+    const shown = listProposals(this.db, { limit: Number.MAX_SAFE_INTEGER });
+    const rejectedRows = listRejectedProposals(this.db, { limit: Number.MAX_SAFE_INTEGER });
+    // The project of a rejected proposal is not shown, but it is filtered on, as the CLI does.
+    const rejectedProject = new Map(
+      f.projects.length === 0
+        ? []
+        : f.projects.flatMap((project) =>
+            listRejectedProposals(this.db, { project, limit: Number.MAX_SAFE_INTEGER }).map(
+              (r) => [r.id, project] as const,
+            ),
+          ),
+    );
+    const inProjects = (p: string | null) =>
+      f.projects.length === 0 || (p !== null && f.projects.includes(p));
+    const pending = shown.filter((p) => p.status === 'pending' && inProjects(projectOf(p)));
+    const accepted = shown.filter((p) => p.status === 'accepted' && inProjects(projectOf(p)));
+    const rejected = rejectedRows.filter(
+      (r) => f.projects.length === 0 || rejectedProject.has(r.id),
+    );
+    const all: ProposalRow[] = [
+      ...(f.status === 'pending' || f.status === 'all' ? pending : []).map(
+        (proposal): ProposalRow => ({ rejected: false, proposal }),
+      ),
+      ...(f.status === 'accepted' || f.status === 'all' ? accepted : []).map(
+        (proposal): ProposalRow => ({ rejected: false, proposal }),
+      ),
+      ...(f.status === 'rejected' || f.status === 'all' ? rejected : []).map(
+        (proposal): ProposalRow => ({ rejected: true, proposal }),
+      ),
+    ];
+    const byProject = new Map<string, number>();
+    for (const p of shown) {
+      const project = projectOf(p);
+      if (project === null) continue;
+      if (f.status !== 'all' && f.status !== p.status) continue;
+      byProject.set(project, (byProject.get(project) ?? 0) + 1);
+    }
+    const page = Math.max(0, f.page);
+    return {
+      rows: all.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+      total: all.length,
+      page,
+      more: (page + 1) * PAGE_SIZE < all.length,
+      counts: { pending: pending.length, accepted: accepted.length, rejected: rejected.length },
+      projects: [...byProject]
+        .map(([value, count]) => ({ value, count }))
+        .sort((a, b) => b.count - a.count || (a.value < b.value ? -1 : 1)),
+    };
+  }
+
+  /** A proposal, for its page: shown, or rejected (404 when unknown, 410 when forgotten). */
+  proposal(id: unknown): ProposalDetail {
+    const proposalId = checkId(id, 'proposal id');
+    const state = proposalState(this.db, proposalId);
+    if (!state) throw new HttpError(404, `Unknown proposal ${proposalId}.`);
+    if (state.state === 'rejected') return { state: 'rejected', rejected: state.rejected };
+    const card = state.state === 'shown' ? describeProposal(this.db, proposalId) : null;
+    if (!card) throw new HttpError(410, `Proposal ${proposalId} has been forgotten.`);
+    return { state: 'shown', card };
+  }
+
+  /** Accept a proposal, as the owner: its entry is written, as `origin accept` writes it. */
+  acceptProposal(who: Actor, input: { id: unknown }): Entry {
+    const id = checkId(input.id, 'proposal id');
+    const entry = acceptProposal(this.db, id, `user@${storeName(this.db)}`);
+    this.audit(who, 'proposal.accept', id, { entryId: entry.id });
+    this.written();
+    return entry;
+  }
+
+  /** Reject a proposal, with the owner's reason: a forget of its event, as `origin reject`. */
+  rejectProposal(who: Actor, input: { id: unknown; reason?: unknown }): ForgetResult {
+    const id = checkId(input.id, 'proposal id');
+    const result = rejectProposal(this.db, id, {
+      reason: typeof input.reason === 'string' ? input.reason : '',
+      author: `user@${storeName(this.db)}`,
+    });
+    // Ids only: the audit log never keeps text, the reason included.
+    this.audit(who, 'proposal.reject', id, { tombstoneId: result.tombstoneId });
+    this.written();
+    return result;
   }
 
   tombstones(before?: string): { tombstones: TombstoneSummary[]; more: boolean } {

@@ -312,6 +312,8 @@ describe('routes', () => {
         "/admin/prefs (none)",
         "/admin/tokens (fresh)",
         "/admin/tokens/revoke (fresh)",
+        "/admin/proposal/accept (session)",
+        "/admin/proposal/reject (session)",
         "/admin/correct (session)",
         "/admin/remember (session)",
         "/admin/forget (session)",
@@ -324,13 +326,16 @@ describe('routes', () => {
         "/admin/api/token-revoke (fresh)",
         "/admin/api/entries (session)",
         "/admin/api/correct (session)",
+        "/admin/api/proposal-accept (session)",
+        "/admin/api/proposal-reject (session)",
         "/admin/api/forget (session)",
         "/admin/api/restore (session)",
         "/admin/api/sessions-revoke (fresh)",
       ]
     `);
-    // Restoring a forget adds a record and deletes nothing. Nothing else could edit or delete
-    // history, or change the admin password.
+    // Restoring a forget adds a record and deletes nothing; accepting a proposal writes an entry
+    // through remember, and rejecting one is a forget. Nothing else could edit or delete history,
+    // or change the admin password.
     for (const r of ADMIN_ROUTES) {
       expect(r.path).not.toMatch(/delete|edit|update|unforget|purge|password|key|sql|file/i);
     }

@@ -31,6 +31,7 @@ export const ICON_NAMES = [
   'gauge',
   'hard-drive',
   'history',
+  'inbox',
   'info',
   'key-round',
   'languages',

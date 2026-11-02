@@ -435,8 +435,9 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
       ? ''
       : html`${linkButton(ctx, { href: '/admin/connect', label: t('nav.connect'), icon: 'plug', size: 'sm' })}${linkButton(ctx, { href: '/admin/tokens/new', label: t('tokens.create'), icon: 'plus', variant: 'primary', size: 'sm' })}`,
     body: html`${
-      stale.length > 0 || o.parseErrors.last24h > 0
+      stale.length > 0 || o.parseErrors.last24h > 0 || o.pendingProposals > 0
         ? html`<div class="ol-notices">
+      ${o.pendingProposals > 0 ? alert(ctx, 'info', html`${t('overview.pendingProposals', { n: o.pendingProposals })} <a href="/admin/proposals">${t('overview.reviewProposals')}</a>`) : ''}
       ${stale.length > 0 ? alert(ctx, 'warning', t('overview.staleDevices', { n: stale.length })) : ''}
       ${o.parseErrors.last24h > 0 ? alert(ctx, 'warning', t('overview.parseErrors24h', { n: o.parseErrors.last24h })) : ''}
     </div>`

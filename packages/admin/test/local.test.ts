@@ -20,6 +20,7 @@ import {
   threadIdOf,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { fakeAdapter as coreFakeAdapter } from '../../core/test/helpers.js';
 import {
   type AdminHandler,
   createLocalAdmin,
@@ -849,6 +850,8 @@ describe('origin ui: writes', () => {
     expect(writes).toEqual([
       '/admin/logout (session)',
       '/admin/prefs (none)',
+      '/admin/proposal/accept (session)',
+      '/admin/proposal/reject (session)',
       '/admin/correct (session)',
       '/admin/remember (session)',
       '/admin/forget (session)',
@@ -856,6 +859,8 @@ describe('origin ui: writes', () => {
       '/admin/api/logout (session)',
       '/admin/api/entries (session)',
       '/admin/api/correct (session)',
+      '/admin/api/proposal-accept (session)',
+      '/admin/api/proposal-reject (session)',
       '/admin/api/forget (session)',
       '/admin/api/restore (session)',
     ]);
@@ -977,5 +982,141 @@ describe('origin ui: threads', () => {
     expect(pageProblems(handed.text)).toEqual([]);
     expect(handed.text).toContain(`href="/admin/thread?id=${thread}"`);
     expect(handed.text).toContain(`- ${thread} (2 sessions: agent; 2026-10-21 – 2026-10-23)`);
+  });
+});
+
+describe('origin ui: proposals', () => {
+  /** What `propose` returned, as an agent's log records it. */
+  const result = (id: string, text: string) =>
+    JSON.stringify(
+      {
+        proposal: id,
+        kind: 'knowledge',
+        text,
+        confidence: 0.7,
+        project: 'demo',
+        valid_from: null,
+        valid_to: null,
+        note: 'Inferred from the first prompt.',
+        sources: [{ event_id: EVENT, quote: 'schema simple' }],
+      },
+      null,
+      2,
+    );
+
+  beforeEach(async () => {
+    const logs = path.join(tmp, 'proposed');
+    fs.mkdirSync(logs);
+    const at = Date.UTC(2026, 9, 20, 10);
+    fs.writeFileSync(
+      path.join(logs, 'run.jsonl'),
+      [
+        {
+          id: 'p1',
+          session: 'run',
+          ts: at,
+          role: 'user',
+          kind: 'tool_result',
+          text: result('prp_0000000000e1', `Keep it simple ${XSS}`),
+        },
+        {
+          id: 'p2',
+          session: 'run',
+          ts: at + 1,
+          role: 'user',
+          kind: 'tool_result',
+          text: result('prp_0000000000e2', 'Schemas stay unversioned.'),
+        },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join('\n')
+        .concat('\n'),
+    );
+    await syncSource({ db, home: tmp }, coreFakeAdapter(logs, 'fake'));
+  });
+
+  it('are listed pending first, counted, and announced on the overview, escaped', async () => {
+    const local = await serveLocal();
+    const b = await local.signedIn();
+    const overview = await b.get('/admin/');
+    expect(overview.text).toContain('2 proposals wait for your review.');
+    expect(overview.text).toMatch(
+      /href="\/admin\/proposals"[^>]*>.*Proposals.*<span class="ol-nav-count">2<\/span>/s,
+    );
+    const list = await b.get('/admin/proposals');
+    expect(list.status).toBe(200);
+    expect(pageProblems(list.text)).toEqual([]);
+    expect(list.text).toContain('prp_0000000000e1');
+    expect(list.text).toContain('Schemas stay unversioned.');
+    expect(list.text).not.toContain(XSS);
+    expect(list.text).toContain('Keep it simple &lt;img');
+    const page = await b.get('/admin/proposal?id=prp_0000000000e1');
+    expect(page.status).toBe(200);
+    expect(pageProblems(page.text)).toEqual([]);
+    expect(page.text).toContain('Inferred from the first prompt.');
+    expect(page.text).toContain('schema simple');
+    expect(page.text).toContain('action="/admin/proposal/accept"');
+    expect(page.text).toContain('action="/admin/proposal/reject"');
+    expect((await b.get('/admin/proposal?id=prp_000000000000')).status).toBe(404);
+  });
+
+  it('accept one as an entry of the owner, and reject one with a reason, as a forget', async () => {
+    let writes = 0;
+    const local = await serveLocal({ afterWrite: () => void writes++ });
+    const b = await local.signedIn();
+    await b.get('/admin/proposal?id=prp_0000000000e2');
+    expect(
+      (await b.post('/admin/proposal/accept', { id: 'prp_0000000000e2', _csrf: 'x'.repeat(43) }))
+        .status,
+    ).toBe(403);
+    const accepted = await b.post('/admin/proposal/accept', { id: 'prp_0000000000e2' });
+    expect(accepted.status).toBe(303);
+    const entryId = /id=(ent_[0-9a-f]+)/.exec(accepted.headers.location ?? '')?.[1] ?? '';
+    expect(getEntry(db, entryId)).toMatchObject({
+      author: 'user@laptop',
+      text: 'Schemas stay unversioned.',
+      kind: 'knowledge',
+    });
+    const again = await b.post('/admin/proposal/accept', { id: 'prp_0000000000e2' });
+    expect(again.status).toBe(400);
+    expect(again.text).toContain('was already accepted');
+    expect((await b.get('/admin/proposal?id=prp_0000000000e2')).text).toContain(entryId);
+
+    await b.get('/admin/proposal?id=prp_0000000000e1');
+    const noReason = await b.post('/admin/proposal/reject', {
+      id: 'prp_0000000000e1',
+      reason: ' ',
+    });
+    expect(noReason.status).toBe(400);
+    expect(noReason.text).toContain('A reason is required');
+    const rejected = await b.post('/admin/proposal/reject', {
+      id: 'prp_0000000000e1',
+      reason: 'Not how we work.',
+    });
+    expect(rejected.status).toBe(303);
+    const tombstone = /id=(tmb_[0-9a-f]+)/.exec(rejected.headers.location ?? '')?.[1] ?? '';
+    expect(tombstone).toMatch(/^tmb_/);
+    // Rejected: listed by id and reason, its text only on the record's own page.
+    const list = await b.get('/admin/proposals?status=rejected');
+    expect(list.text).toContain('prp_0000000000e1');
+    expect(list.text).toContain('Not how we work.');
+    expect(list.text).not.toContain('Keep it simple');
+    const page = await b.get('/admin/proposal?id=prp_0000000000e1');
+    expect(page.text).toContain(`href="/admin/tombstone?id=${tombstone}"`);
+    expect(page.text).not.toContain('Keep it simple');
+    expect((await b.get(`/admin/tombstone?id=${tombstone}`)).text).toContain('Keep it simple');
+    expect(writes).toBe(2);
+    expect(
+      listAudit(db)
+        .filter((r) => r.action.startsWith('proposal'))
+        .map((r) => [r.action, r.target, r.actor]),
+    ).toEqual([
+      ['proposal.reject', 'prp_0000000000e1', 'local'],
+      ['proposal.accept', 'prp_0000000000e2', 'local'],
+    ]);
+    expect(JSON.stringify(listAudit(db))).not.toContain('Not how we work');
+    // The JSON API does the same through the same service.
+    const api = await b.api('GET', 'proposals?status=all');
+    expect(api.json().counts).toEqual({ pending: 0, accepted: 1, rejected: 1 });
   });
 });

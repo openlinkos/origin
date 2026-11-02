@@ -30,6 +30,7 @@ export const zh: Messages = {
   'nav.search': '检索',
   'nav.entries': '条目',
   'nav.recalls': '召回',
+  'nav.proposals': '提议',
   'nav.devices': '设备',
   'nav.tokens': '令牌',
   'nav.connect': '接入',
@@ -180,6 +181,8 @@ export const zh: Messages = {
   'overview.mirrorsRemote': '原始镜像（来自设备）',
   'overview.mirrorSize': '{stored}（解压后 {size}）',
   'overview.freeDisk': '可用磁盘空间',
+  'overview.pendingProposals': '有 {n} 条提议等你审阅。',
+  'overview.reviewProposals': '去审阅',
   'overview.staleDevices': '有 {n} 台设备超过 24 小时没有发送任何数据。',
   'overview.activityTitle': '近 {days} 天的活动',
   'overview.activityNone': '近 {days} 天没有事件。',
@@ -560,6 +563,37 @@ export const zh: Messages = {
   'tombstone.more': '另有 {n} 项',
   'tombstone.nothingHidden':
     '它覆盖的内容在这个存储上都没有被隐藏：这些内容在别的存储上，或者已被其他记录改变。',
+
+  'proposals.help':
+    'Agent 提出而没有直接保存的条目：它们推断出、你尚未确认的内容，以及 origin distill 让 Claude Code 整理出的内容。接受会以你的身份写下条目；拒绝会遗忘这条提议，并留下一条带有你的原因的记录，恢复这条记录即可撤销。',
+  'proposals.status': '状态',
+  'proposals.status.pending': '待审',
+  'proposals.status.accepted': '已接受',
+  'proposals.status.rejected': '已拒绝',
+  'proposals.status.all': '全部',
+  'proposals.agent': 'Agent',
+  'proposals.when': '时间',
+  'proposals.nonePending': '没有等待审阅的提议',
+  'proposals.none': '没有提议',
+  'proposals.noneHelp':
+    'Agent 用 propose 工具提议条目；origin distill 会让 Claude Code 读你一天的工作，提议值得保留的内容。',
+  'proposals.howItWorks': '整理记忆如何进行',
+  'proposal.rejectedNotice':
+    '已于 {when} 由 {author} 拒绝。它提议的内容显示在拒绝它的那条记录的页面上，你可以在那里恢复它：',
+  'proposal.sourcesHelp': '它依据的事件',
+  'proposal.sessionProject': '{project}（所在会话的项目）',
+  'proposal.session': '会话',
+  'proposal.event': '读自',
+  'proposal.decide': '审阅',
+  'proposal.acceptHelp':
+    '接受会以你的身份写下这个条目，引用这些事件以及这条提议本身。之后你可以纠正或遗忘它。',
+  'proposal.accept': '接受',
+  'proposal.rejectHelp':
+    '拒绝会在每个库中遗忘这条提议，并留下一条带有你的原因的记录；恢复这条记录会让它重新成为待审。',
+  'proposal.reject': '拒绝',
+  'proposal.acceptedAs': '已接受，成为条目',
+  'proposal.missing': '它引用的事件中有 {n} 个还不在本库中：等它们到达后才能接受。',
+  'proposal.note': 'Agent 的说明',
 
   'audit.title': '审计日志',
   'audit.help': '来自这个界面和 CLI 的管理操作，只记录 id 和数量。日志只追加。',

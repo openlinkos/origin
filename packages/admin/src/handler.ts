@@ -58,6 +58,7 @@ import {
 } from './pages/entries.js';
 import { here } from './pages/layout.js';
 import { connectPage, devicePage, devicesPage, overviewPage } from './pages/overview.js';
+import { proposalPage, proposalsPage } from './pages/proposals.js';
 import { recallPage, recallsPage } from './pages/recalls.js';
 import { auditPage, signinsPage, tombstonePage, tombstonesPage } from './pages/records.js';
 import { sessionPage, threadPage } from './pages/session.js';
@@ -68,6 +69,8 @@ import {
   AdminService,
   type EntryBoardFilter,
   type HubLink,
+  PROPOSAL_STATUSES,
+  type ProposalBoardFilter,
   type RecallBoardFilter,
   SESSION_RANGES,
   SESSION_SORTS,
@@ -192,6 +195,17 @@ function turnParam(ctx: Ctx, name: 'turn' | 'part'): number | undefined {
 function choice<T extends string>(ctx: Ctx, name: string, values: readonly T[], fallback: T): T {
   const v = query(ctx, name);
   return (values as readonly string[]).includes(v) ? (v as T) : fallback;
+}
+
+/** The filters of the Proposals page, from its query. */
+function proposalFilter(ctx: Ctx): ProposalBoardFilter {
+  return {
+    status: choice(ctx, 'status', PROPOSAL_STATUSES, 'pending'),
+    projects: queryAll(ctx, 'project')
+      .slice(0, 50)
+      .map((v) => v.slice(0, 200)),
+    page: pageParam(ctx),
+  };
 }
 
 /** The filters of the sessions page, from its query. */
@@ -540,6 +554,36 @@ const PAGES: Route[] = [
     recallsPage(ctx, { ...ctx.service.recallBoard(filter, ctx.now), filter });
   }),
   page('GET', '/recall', 'session', (ctx) => recallPage(ctx, ctx.service.recall(query(ctx, 'id')))),
+  page('GET', '/proposals', 'session', (ctx) => {
+    const filter = proposalFilter(ctx);
+    proposalsPage(ctx, { ...ctx.service.proposalBoard(filter), filter });
+  }),
+  page('GET', '/proposal', 'session', (ctx) =>
+    proposalPage(ctx, 200, ctx.service.proposal(query(ctx, 'id'))),
+  ),
+  page('POST', '/proposal/accept', 'session', (ctx) => {
+    const id = field(ctx, 'id');
+    try {
+      const entry = ctx.service.acceptProposal(actorOf(ctx), { id });
+      redirect(ctx.res, `/admin/entry?id=${encodeURIComponent(entry.id)}`);
+    } catch (err) {
+      if (!(err instanceof OriginError)) throw err;
+      proposalPage(ctx, 400, ctx.service.proposal(id), { error: err.message });
+    }
+  }),
+  page('POST', '/proposal/reject', 'session', (ctx) => {
+    const id = field(ctx, 'id');
+    try {
+      const result = ctx.service.rejectProposal(actorOf(ctx), { id, reason: ctx.body.reason });
+      redirect(ctx.res, `/admin/tombstone?id=${encodeURIComponent(result.tombstoneId ?? '')}`);
+    } catch (err) {
+      if (!(err instanceof OriginError)) throw err;
+      proposalPage(ctx, 400, ctx.service.proposal(id), {
+        error: err.message,
+        reason: field(ctx, 'reason'),
+      });
+    }
+  }),
   page('GET', '/correct', 'session', (ctx) =>
     correctPage(ctx, 200, { entry: ctx.service.entry(query(ctx, 'id')).entry }),
   ),
@@ -821,6 +865,22 @@ const API: Route[] = [
       }),
     }),
   ),
+  api('GET', 'proposals', 'session', (ctx) =>
+    json(ctx, 200, ctx.service.proposalBoard(proposalFilter(ctx))),
+  ),
+  api('GET', 'proposal', 'session', (ctx) =>
+    json(ctx, 200, ctx.service.proposal(query(ctx, 'id'))),
+  ),
+  api('POST', 'proposal-accept', 'session', (ctx) =>
+    json(ctx, 201, { entry: ctx.service.acceptProposal(actorOf(ctx), { id: ctx.body.id }) }),
+  ),
+  api('POST', 'proposal-reject', 'session', (ctx) => {
+    const r = ctx.service.rejectProposal(actorOf(ctx), {
+      id: ctx.body.id,
+      reason: ctx.body.reason,
+    });
+    json(ctx, 200, { tombstoneId: r.tombstoneId, target: r.target, events: r.events.length });
+  }),
   api('GET', 'forget-plan', 'session', (ctx) =>
     json(ctx, 200, ctx.service.forgetPlan(query(ctx, 'id'))),
   ),

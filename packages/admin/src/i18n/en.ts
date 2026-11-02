@@ -31,6 +31,7 @@ export const en = {
   'nav.search': 'Search',
   'nav.entries': 'Entries',
   'nav.recalls': 'Recalls',
+  'nav.proposals': 'Proposals',
   'nav.devices': 'Devices',
   'nav.tokens': 'Tokens',
   'nav.connect': 'Connect',
@@ -184,6 +185,8 @@ export const en = {
   'overview.mirrorsRemote': 'Raw mirrors, from devices',
   'overview.mirrorSize': '{stored} ({size} uncompressed)',
   'overview.freeDisk': 'Free disk space',
+  'overview.pendingProposals': '{n} {n|proposal waits|proposals wait} for your review.',
+  'overview.reviewProposals': 'Review them',
   'overview.staleDevices': '{n} {n|device has|devices have} sent nothing for more than 24 hours.',
   'overview.activityTitle': 'Activity, last {days} days',
   'overview.activityNone': 'No events in the last {days} days.',
@@ -583,6 +586,38 @@ export const en = {
   'tombstone.more': 'and {n} more',
   'tombstone.nothingHidden':
     'Nothing it covers is hidden on this store: what it hid is held elsewhere, or another record changed it.',
+
+  'proposals.help':
+    'Entries agents proposed rather than saved: what they inferred and you have not confirmed, and what origin distill had Claude Code consolidate. Accepting writes the entry as you; rejecting forgets the proposal, as a record with your reason that a restore lifts.',
+  'proposals.status': 'Status',
+  'proposals.status.pending': 'Pending',
+  'proposals.status.accepted': 'Accepted',
+  'proposals.status.rejected': 'Rejected',
+  'proposals.status.all': 'All',
+  'proposals.agent': 'Agent',
+  'proposals.when': 'When',
+  'proposals.nonePending': 'No proposals wait for review',
+  'proposals.none': 'No proposals',
+  'proposals.noneHelp':
+    'Agents propose entries with the propose tool, and origin distill has Claude Code read a day of your work and propose what is worth keeping.',
+  'proposals.howItWorks': 'How consolidation works',
+  'proposal.rejectedNotice':
+    'Rejected {when} by {author}. What it proposed shows on the page of the record that rejected it, where you can restore it:',
+  'proposal.sourcesHelp': 'The events it rests on',
+  'proposal.sessionProject': "{project} (its session's)",
+  'proposal.session': 'Session',
+  'proposal.event': 'Read from',
+  'proposal.decide': 'Review',
+  'proposal.acceptHelp':
+    'Accepting writes this entry as you, citing these events and the proposal itself. You can correct or forget it afterwards.',
+  'proposal.accept': 'Accept',
+  'proposal.rejectHelp':
+    'Rejecting forgets the proposal on every store, as a record with your reason; restoring that record makes it pending again.',
+  'proposal.reject': 'Reject',
+  'proposal.acceptedAs': 'Accepted, as the entry',
+  'proposal.missing':
+    '{n} {n|event it cites is|events it cites are} not in this store yet: it can be accepted once {n|it arrives|they arrive}.',
+  'proposal.note': "The agent's note",
 
   'audit.title': 'Audit log',
   'audit.help':
