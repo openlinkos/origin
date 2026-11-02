@@ -8,10 +8,11 @@ The plugin was checked against OpenClaw 2026.10.6: its hooks and their payloads,
 
 - **Each turn, as it ends.** With conversation access (see [below](#with-or-without-conversation-access)), the plugin reads the run's messages when it ends (`agent_end`), and before OpenClaw compacts them away (`before_compaction`). Without it, it builds each turn from the message that arrived (`message_received`), the tool calls (`after_tool_call`), and each reply as it is sent (`message_sent`).
 - **Messages and tools.** The user's messages, the agent's replies, its tool calls (`tool_use`) and their results (`tool_result`), cut to 2,000 and 4,000 characters as Origin's adapters keep them. The context OpenClaw adds to a turn, and the summaries it writes when it compacts a session, are kept as `meta`. Thinking is left out.
+- **Who wrote each message.** Each user message says who wrote it, as OpenClaw records it: OpenClaw's owner, another person, another agent, or OpenClaw itself, and by what name (see [below](#who-wrote-each-message)).
 - **Sessions.** One session per OpenClaw session key, such as `agent:main:telegram:direct:42`, titled once by its first user message, cut to 80 characters and without the channel's envelope. `/new` and `/reset` keep the key, so the conversation goes on in the same session in Origin; each line's `meta.sessionId` tells OpenClaw's sessions apart.
 - **Projects.** Each session's project is its agent's id, such as `main`, unless you name it after the channel or give one name to all (`projectBy`, `project`).
 - **Context.** Each line's `meta` holds the agent, the channel and its account, the session key and id, and the run, as OpenClaw gives them; a tool line also holds the tool's name and its call's id (`callId`), which pairs a call with its result.
-- **Stable ids.** A line's id is a hash of its session, its message's time, its role and kind, and its place in the message, so a message sent again, as after a lost answer or a restart, has the same id, and Origin adds nothing for it.
+- **Stable ids.** A line's id is a hash of its session, its message's time, its role and kind, and its place in the message, not of who wrote it, so a message sent again, as after a lost answer or a restart, has the same id, and Origin adds nothing for it.
 - **What it leaves out.** The agents you do not list (`agents`); runs that are not a person's turn (`triggers`), such as heartbeats and cron jobs, with the messages they add; incognito threads; and every result of the 1Password plugin's agent tool (`onepassword`), which returns secret values. Before a line leaves the Gateway, Origin tokens (`ogn_…`) and 1Password references (`op://…`) in it are replaced with `[redacted]`.
 
 ## Install
@@ -78,7 +79,7 @@ OpenClaw applies a change to this block by reloading the plugin; the Gateway nee
 OpenClaw lets a plugin it does not bundle read a run's messages at its end only with `hooks.allowConversationAccess` set to `true` in its entry, beside `config`, not inside it. The plugin reads that setting, as OpenClaw does, and records accordingly:
 
 - **With it**, the plugin sees each run as the model saw it: every message, every tool call and result, whichever channel, and runs nobody sent a message for. It also knows which kind of run each was, for `triggers`. This is the way to use it.
-- **Without it**, it sees what goes through the Gateway's message and tool hooks: each message that arrives on a channel, each tool call, and each reply sent to a channel, which sends the turn so far. It cannot tell a heartbeat or a cron run from a person's turn except by its session key, and it misses what is not sent to a channel. Drop `hooks` from the block above to use it this way.
+- **Without it**, it sees what goes through the Gateway's message and tool hooks: each message that arrives on a channel, each tool call, and each reply sent to a channel, which sends the turn so far. It cannot tell a heartbeat or a cron run from a person's turn except by its session key, nor whether a sender is OpenClaw's owner, and it misses what is not sent to a channel. Drop `hooks` from the block above to use it this way.
 
 ### Send to your hub
 
@@ -116,6 +117,24 @@ origin search "migration lock" --source openclaw        # its messages, among ev
 
 On the hub, the sessions appear in the [admin UI](./admin.md) under `openclaw`, and agents connected to the hub find them through `search`, `timeline`, and `get`. A line's provenance leads to the hub's mirror of the file it was sent in, `raw/devices/openclaw-us/openclaw/…`, and through `origin show` to the line as the plugin wrote it.
 
+## Who wrote each message
+
+Each user message's line says who wrote it, in the [event-line](../sources.md#your-own-sources-event-lines) fields `author` and `speaker`. It records what OpenClaw keeps with the message, as a fact: neither the plugin nor Origin judges a message or works out who anyone is.
+
+| The message, as OpenClaw records it | `author` | `speaker` |
+|---|---|---|
+| From a sender OpenClaw takes for its owner | `owner` | Their name on the channel, when it gives one |
+| From anyone else, or from a sender OpenClaw does not know | `person` | Their name, or else their username, on the channel, when it gives one |
+| From a bot on the channel | `person`, and `meta.senderKind` is `bot` | Its name |
+| Routed from another session (`inter_session`): `sessions_send`, a sub-agent's report, a tool's completion | `agent` | The sending agent's name in the Gateway's config (`name`, or `identity.name`), or else its id; without a sending session, the tool |
+| Made by OpenClaw itself (`internal_system`): cron jobs, heartbeats, wake-ups, recovery after a restart | `system` | |
+
+The context OpenClaw adds to a turn stays a `meta` line with neither field, which event lines read as the system's. No line carries a sender's id, in `speaker` or in `meta`: a name that is only the sender's id is left out.
+
+- **The owner is whom OpenClaw names.** OpenClaw marks a message as its owner's when the sender matches an entry of `commands.ownerAllowFrom` in the Gateway's config, such as `telegram:<your user id>`, or writes in the Control UI as an operator with `operator.admin`. The plugin has no setting of its own for this. Your accounts that the list leaves out are recorded as a `person`'s: if it names only your Discord account, your messages on Telegram, Feishu, or WeChat are recorded as `person` until you add those accounts to `commands.ownerAllowFrom`. Adding an account there also gives it what OpenClaw keeps for its owner, such as owner-only commands and exec approvals.
+- **From an internal field.** The sender's facts, whether OpenClaw takes the sender for its owner, their name, and whether they are a bot, come from `__openclaw`, a field OpenClaw keeps on each message for itself and does not declare to plugins. The plugin was checked against how OpenClaw 2026.10.6 writes it, and is checked again with each OpenClaw version it supports. A message without it is recorded as a `person`'s, without a name.
+- **Without conversation access**, the plugin sees only the message hooks, which give the sender's name but not whether OpenClaw takes the sender for its owner: every message that arrives is recorded as a `person`'s, by that name, and nothing as the owner's.
+
 ## Limits
 
 - **From the time it is installed.** The plugin sends what the Gateway's runs show it. The first turn of a session sends the session's history as the model sees it then; what OpenClaw compacted away before is only in its summary.
@@ -131,6 +150,7 @@ On the hub, the sessions appear in the [admin UI](./admin.md) under `openclaw`, 
 | Nothing reaches Origin | The Gateway's log: `origin: not recording: …` says what to fix in the config; `openclaw plugins inspect origin --runtime --json` lists the hooks it registered |
 | The log says `origin: recording … from the message hooks` | Conversation access is off: set `hooks.allowConversationAccess` to `true` in the entry, beside `config`, not inside it |
 | `cannot deliver to …: the hub answered 401` | The token is wrong or was revoked: create a new one on the hub |
+| Your own messages show as `person` | The account you wrote from is not in OpenClaw's `commands.ownerAllowFrom`, or the plugin has no conversation access (see [Who wrote each message](#who-wrote-each-message)) |
 | `the hub answered 404` | The hub runs an Origin from before `/v1/sources/<name>/lines`: upgrade it; the lines wait in the spool |
 | `… lines wait in …/spool` | The hub could not be reached; they are sent with the next turn, or when the Gateway starts |
 | A directory's lines never show | Its name must be a source's: 2 to 32 lowercase letters, digits, and hyphens, such as `openclaw`; `origin status` lists the source once it is read |

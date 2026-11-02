@@ -8,6 +8,11 @@ import { createHash } from 'node:crypto';
 
 export type Role = 'user' | 'assistant' | 'system';
 export type Kind = 'message' | 'tool_use' | 'tool_result' | 'meta' | 'system';
+/**
+ * Who wrote a user line, as OpenClaw knows it: its owner, another person, another agent or session,
+ * or OpenClaw itself. Recorded as a fact, never guessed.
+ */
+export type Author = 'owner' | 'person' | 'agent' | 'system';
 
 /** One event line, its fields in the order they are written. */
 export interface EventLine {
@@ -15,6 +20,9 @@ export interface EventLine {
   session: string;
   time: string;
   role: Role;
+  author?: Author;
+  /** The name of whoever wrote it, as the channel or OpenClaw's config gives it; never an id. */
+  speaker?: string;
   kind: Kind;
   text: string;
   project?: string;
@@ -44,6 +52,8 @@ export const TOOL_USE_MAX = 2000;
 export const TOOL_RESULT_MAX = 4000;
 /** Longest title, in characters. */
 export const TITLE_MAX = 80;
+/** Longest speaker, in characters, as event lines take it. */
+export const SPEAKER_MAX = 200;
 /**
  * Tools whose results never leave OpenClaw: the 1Password plugin's agent tool returns secret values
  * in its results, and they stay in the model's context and the transcript.
@@ -93,6 +103,32 @@ export const asRecord = (v: unknown): Record<string, unknown> | null =>
 export const str = (v: unknown): string | null =>
   typeof v === 'string' && v.trim().length > 0 ? v.trim() : null;
 
+/** The agent of a session key, `agent:<agentId>:…`. */
+export function agentOfSessionKey(sessionKey: string): string | null {
+  const m = /^agent:([^:]+):/.exec(sessionKey);
+  return m ? (m[1] as string) : null;
+}
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it replaces
+const SPACES_RE = /[\s\u0000-\u001f\u007f-\u009f]+/g;
+
+/**
+ * A name as a line's speaker: on one line, at most SPEAKER_MAX characters; null when there is none,
+ * or when it is one of `ids`, as a channel that knows no name may give the sender's id in its place.
+ */
+export function speakerName(value: unknown, ids: readonly unknown[] = []): string | null {
+  if (typeof value !== 'string') return null;
+  const name = value.replace(SPACES_RE, ' ').trim();
+  if (name.length === 0 || ids.some((id) => str(id) === value.trim())) return null;
+  if (name.length <= SPEAKER_MAX) return name;
+  let cut = '';
+  for (const ch of name) {
+    if (cut.length + ch.length > SPEAKER_MAX) break;
+    cut += ch;
+  }
+  return cut.trimEnd();
+}
+
 /** A time in epoch ms, from a number or a parseable string, or null. */
 export function timeMs(v: unknown): number | null {
   if (typeof v === 'number') return Number.isFinite(v) && Math.abs(v) <= 8.64e15 ? v : null;
@@ -135,6 +171,8 @@ interface LineSpec {
   id: string;
   ms: number;
   role: Role;
+  author?: Author;
+  speaker?: string | null;
   kind: Kind;
   text: string;
   meta?: Record<string, unknown>;
@@ -152,6 +190,8 @@ function draft(info: SessionInfo, spec: LineSpec): Draft | null {
       session: info.sessionKey,
       time: new Date(spec.ms).toISOString(),
       role: spec.role,
+      ...(spec.author ? { author: spec.author } : {}),
+      ...(spec.speaker ? { speaker: spec.speaker } : {}),
       kind: spec.kind,
       text,
       project: info.project,
@@ -176,6 +216,40 @@ export interface BuildOptions {
   includeTools: boolean;
   /** The time of a message that carries none. */
   now: number;
+  /** The names of the Gateway's agents by id, lowercase, from its config. */
+  agentNames?: ReadonlyMap<string, string>;
+}
+
+interface Authorship {
+  author: Author;
+  speaker: string | null;
+  meta?: Record<string, unknown>;
+}
+
+/**
+ * Who wrote a user message, from what OpenClaw records with it: its `provenance`, which marks an
+ * input routed from another session or one OpenClaw made itself, and for a person's input the
+ * sender facts in its internal `__openclaw` field. The owner is the sender OpenClaw itself takes
+ * for its owner (`senderIsOwner`, from `commands.ownerAllowFrom`); anyone else is a person, by the
+ * name the channel gives. No sender id is kept.
+ */
+function authorshipOf(m: Record<string, unknown>, opts: BuildOptions): Authorship {
+  const provenance = asRecord(m.provenance);
+  if (provenance?.kind === 'internal_system') return { author: 'system', speaker: null };
+  if (provenance?.kind === 'inter_session') {
+    const source = str(provenance.sourceSessionKey);
+    const agent = source ? agentOfSessionKey(source) : null;
+    const name = agent ? (opts.agentNames?.get(agent.toLowerCase()) ?? speakerName(agent)) : null;
+    return { author: 'agent', speaker: name ?? speakerName(provenance.sourceTool) };
+  }
+  const sender = asRecord(m.__openclaw) ?? {};
+  const identity = asRecord(sender.senderIdentity);
+  const ids = [sender.senderId, identity?.id];
+  return {
+    author: sender.senderIsOwner === true ? 'owner' : 'person',
+    speaker: speakerName(sender.senderName, ids) ?? speakerName(sender.senderUsername, ids),
+    ...(identity?.senderKind === 'bot' ? { meta: { senderKind: 'bot' } } : {}),
+  };
 }
 
 /**
@@ -184,6 +258,7 @@ export interface BuildOptions {
  * tool calls and their results, and compaction summaries. Thinking, and messages of kinds it does
  * not know, are left out. A message has no id of its own, so a line's id is a hash of the session,
  * the message's time, its role and kind, and its place in the message (or its tool call's id).
+ * A user message's line also says who wrote it (`author`, `speaker`), which is not in its id.
  */
 export function draftsFromMessages(
   messages: readonly unknown[],
@@ -215,7 +290,19 @@ export function draftsFromMessages(
         m.runtimeContextCarrier === true ||
         text.includes(RUNTIME_CONTEXT_MARKER);
       const kind: Kind = runtime ? 'meta' : 'message';
-      push(draft(info, { id: lineId([key, at, 'user', kind, 0]), ms, role: 'user', kind, text }));
+      // The runtime context is no one's input: a meta line, which event lines take as the system's.
+      const by = runtime ? null : authorshipOf(m, opts);
+      push(
+        draft(info, {
+          // Who wrote a message is not part of what identifies it.
+          id: lineId([key, at, 'user', kind, 0]),
+          ms,
+          role: 'user',
+          ...(by ?? {}),
+          kind,
+          text,
+        }),
+      );
     } else if (role === 'assistant') {
       const blocks = Array.isArray(m.content) ? m.content : [];
       const text =
@@ -295,7 +382,9 @@ export function draftsFromMessages(
  * Lines from the hooks that need no conversation access, for a Gateway that does not let the
  * plugin read `agent_end`: a message that arrived (`message_received`), one that was sent
  * (`message_sent`), and a tool call with its result (`after_tool_call`). Their ids come from the
- * channel's message id or the tool call's id when there is one.
+ * channel's message id or the tool call's id when there is one. A message that arrived is a
+ * person's, by the name the channel gives: these hooks do not say whether its sender is OpenClaw's
+ * owner, so nothing they see is recorded as the owner's.
  */
 export function draftFromInbound(
   event: unknown,
@@ -307,12 +396,16 @@ export function draftFromInbound(
   const c = asRecord(ctx) ?? {};
   const ms = timeMs(e.timestamp) ?? now;
   const messageId = str(e.messageId) ?? str(c.messageId);
+  const metadata = asRecord(e.metadata) ?? {};
+  const ids = [e.senderId, metadata.senderId];
   return draft(info, {
     id: messageId
       ? lineId([info.sessionKey, 'in', messageId])
       : lineId([info.sessionKey, ms, 'user', 'message', 0]),
     ms,
     role: 'user',
+    author: 'person',
+    speaker: speakerName(metadata.senderName, ids) ?? speakerName(metadata.senderUsername, ids),
     kind: 'message',
     text: typeof e.content === 'string' ? e.content : '',
     meta: messageId ? { messageId } : undefined,

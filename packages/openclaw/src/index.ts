@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { type Config, isSourceName, parseConfig } from './config.js';
 import { DirSink, HubSink, type Sink } from './delivery.js';
-import { asRecord } from './lines.js';
+import { asRecord, speakerName, str } from './lines.js';
 import { type Log, pluginLog } from './log.js';
 import { Recorder, type TurnSource } from './recorder.js';
 import type { HookHandler, PluginApi, PluginDefinition } from './types.js';
@@ -50,6 +50,7 @@ export function registerOrigin(api: PluginApi, opts: RegisterOptions = {}): Reco
     sink: opts.sink ?? sinkFor(config, api, log),
     log,
     turns,
+    agentNames: agentNames(api.config),
     now: opts.now,
   });
 
@@ -126,6 +127,28 @@ export function hasConversationAccess(config: unknown, id: string): boolean {
     Object.keys(entries).find((k) => k.toLowerCase() === id.toLowerCase());
   const entry = key ? asRecord(entries[key]) : null;
   return asRecord(entry?.hooks)?.allowConversationAccess === true;
+}
+
+/**
+ * The names of the Gateway's agents, by id in lowercase as session keys hold it, from its config as
+ * OpenClaw lists them: `agents.entries`, keyed by id, or else `agents.list`; each named by its
+ * `name`, or its `identity.name`. An agent without a name is left out.
+ */
+export function agentNames(config: unknown): Map<string, string> {
+  const names = new Map<string, string>();
+  const agents = asRecord(asRecord(config)?.agents);
+  const add = (id: unknown, entry: unknown) => {
+    const e = asRecord(entry);
+    const key = str(id)?.toLowerCase();
+    const name = speakerName(e?.name) ?? speakerName(asRecord(e?.identity)?.name);
+    if (key && name && !names.has(key)) names.set(key, name);
+  };
+  if (agents?.entries !== undefined) {
+    for (const [id, entry] of Object.entries(asRecord(agents.entries) ?? {})) add(id, entry);
+  } else if (Array.isArray(agents?.list)) {
+    for (const entry of agents.list) add(asRecord(entry)?.id, entry);
+  }
+  return names;
 }
 
 function sinkFor(config: Config, api: PluginApi, log: Log): Sink {

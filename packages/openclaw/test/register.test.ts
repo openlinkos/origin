@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import plugin, { hasConversationAccess, registerOrigin } from '../src/index.js';
-import { fakeApi, tmpDir } from './fake.js';
+import plugin, { agentNames, hasConversationAccess, registerOrigin } from '../src/index.js';
+import { agentCtx, fakeApi, MemorySink, T, tmpDir, user } from './fake.js';
 
 let state: string;
 beforeEach(() => {
@@ -75,6 +75,62 @@ describe('register', () => {
       false,
     );
     expect(hasConversationAccess(undefined, 'origin')).toBe(false);
+  });
+
+  it("reads the agents' names from the Gateway's config, as OpenClaw lists them", () => {
+    expect(
+      agentNames({
+        agents: {
+          list: [
+            { id: 'Main', name: 'Ops Lead', identity: { name: 'Not this one' } },
+            { id: 'xiaowen', identity: { name: 'Xiaowen' } },
+            { id: 'bare' },
+            { id: 'main', name: 'A second main' },
+            { name: 'No id' },
+            null,
+          ],
+        },
+      }),
+    ).toEqual(
+      new Map([
+        ['main', 'Ops Lead'],
+        ['xiaowen', 'Xiaowen'],
+      ]),
+    );
+    // `agents.entries`, keyed by id, is read in place of `agents.list`.
+    expect(
+      agentNames({
+        agents: { entries: { scout: { name: 'Scout' } }, list: [{ id: 'other', name: 'Other' }] },
+      }),
+    ).toEqual(new Map([['scout', 'Scout']]));
+    expect(agentNames({ agents: { entries: null, list: [{ id: 'a', name: 'A' }] } })).toEqual(
+      new Map(),
+    );
+    expect(agentNames(undefined)).toEqual(new Map());
+    expect(agentNames({ agents: { list: 'main' } })).toEqual(new Map());
+  });
+
+  it('names the agent behind a routed input after its name in the config', async () => {
+    const sink = new MemorySink();
+    const { api, hooks } = fakeApi({
+      pluginConfig: dirConfig(),
+      stateDir: state,
+      config: {
+        agents: { list: [{ id: 'xiaowen', name: 'Xiaowen' }] },
+        plugins: { entries: { origin: { hooks: { allowConversationAccess: true } } } },
+      },
+    });
+    const rec = registerOrigin(api, { sink });
+    const routed = user('The report is ready.', T, {
+      provenance: {
+        kind: 'inter_session',
+        sourceSessionKey: 'agent:xiaowen:main',
+        sourceTool: 'sessions_send',
+      },
+    });
+    await hooks.get('agent_end')!({ messages: [routed], success: true }, agentCtx());
+    await rec!.idle();
+    expect(sink.lines()[0]).toMatchObject({ author: 'agent', speaker: 'Xiaowen' });
   });
 
   it.each([

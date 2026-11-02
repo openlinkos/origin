@@ -3,7 +3,7 @@ import { parseEventLine } from '@openlinkos/origin-adapters';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type Config, parseConfig } from '../src/config.js';
 import { agentDir, isSafeLinesPath, linesPath, sessionFileBase } from '../src/files.js';
-import { draftsFromMessages, lineId, redact, titleOf } from '../src/lines.js';
+import { draftsFromMessages, lineId, redact, speakerName, titleOf } from '../src/lines.js';
 import { pluginLog } from '../src/log.js';
 import { Recorder, type TurnSource, triggerOfSessionKey } from '../src/recorder.js';
 import {
@@ -47,14 +47,56 @@ function recorder(over: Record<string, unknown> = {}, turns: TurnSource = 'agent
   return { rec, sink };
 }
 
+const AUTHORS = ['owner', 'person', 'agent', 'system'];
+// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it finds
+const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/;
+
+/**
+ * What event lines take for who wrote a line (docs/sources.md#your-own-sources-event-lines): an
+ * `author` of four, on user lines only, and a `speaker` of 1 to 200 characters on one line. Checked
+ * here as well, since the lines adapter this package is tested against may not know them yet, and
+ * leaves fields it does not know in the mirror.
+ */
+function followsAuthorship(l: Record<string, unknown>) {
+  if ('author' in l) {
+    expect(l.role).toBe('user');
+    expect(AUTHORS).toContain(l.author);
+  }
+  if ('speaker' in l) {
+    expect(l.author).toBeDefined();
+    expect(typeof l.speaker).toBe('string');
+    const s = l.speaker as string;
+    expect(s.length).toBeGreaterThan(0);
+    expect(s.length).toBeLessThanOrEqual(200);
+    expect(CONTROL_RE.test(s)).toBe(false);
+  }
+}
+
 /** Every line parses as an event line, and gives the event Origin will store. */
 function parsed(lines: Array<Record<string, unknown>>) {
   return lines.map((l) => {
+    followsAuthorship(l);
     const p = parseEventLine(JSON.stringify(l));
     expect(p.events).toHaveLength(1);
     return { ...p, event: p.events[0]! };
   });
 }
+
+/** Synthetic sender ids, which no line may carry. */
+const IDS = ['555000111', '555000222', '555000333', '555000444', '555000555', '555000999'];
+
+/** OpenClaw's internal sender facts on a user message, as 2026.10.6 persists them. */
+const sender = (facts: Record<string, unknown>) => ({ __openclaw: facts });
+const observed = (id: string, senderKind: string) => ({
+  type: 'observation',
+  id,
+  pluginId: 'telegram',
+  accountId: 'bot-a',
+  senderKind,
+});
+
+const by = (lines: Array<Record<string, unknown>>) =>
+  lines.filter((l) => l.role === 'user').map((l) => [l.author, l.speaker]);
 
 describe('lines from agent_end', () => {
   it('turns a turn into valid event lines: messages, tool calls, and results', async () => {
@@ -232,6 +274,231 @@ describe('lines from agent_end', () => {
     rec.agentEnd({ messages: firstTurn(), success: true }, agentCtx());
     await rec.idle();
     expect(sink.lines().map((l) => l.kind)).toEqual(['message', 'message', 'message']);
+  });
+});
+
+describe('who wrote each message', () => {
+  const info = { sessionKey: SESSION, agentId: 'xiaohan', project: 'xiaohan', meta: {} };
+  const build = (messages: unknown[], agentNames?: Map<string, string>) =>
+    draftsFromMessages(messages, info, { includeTools: true, now: T, agentNames }).map(
+      (d) => d.line as unknown as Record<string, unknown>,
+    );
+
+  it('records the owner only when OpenClaw says the sender is its owner', async () => {
+    const { rec, sink } = recorder();
+    const messages = [
+      user('Ship the fix.', T, {
+        ...sender({
+          senderIsOwner: true,
+          senderId: '555000111',
+          senderName: 'Dana',
+          senderUsername: 'dana_ops',
+          senderIdentity: observed('555000111', 'human'),
+        }),
+        provenance: { kind: 'external_user' },
+      }),
+      user('Can I see it too?', T + 1000, sender({ senderIsOwner: false, senderName: 'Lee' })),
+      user('Who decides?', T + 2000, sender({ senderId: '555000333', senderUsername: 'kim_k' })),
+      user('Not quite the owner.', T + 3000, sender({ senderIsOwner: 'true', senderName: 'Ana' })),
+      user('Nothing known of me.', T + 4000),
+    ];
+    rec.agentEnd({ messages, success: true }, agentCtx());
+    await rec.idle();
+    const lines = sink.lines();
+    expect(by(lines)).toEqual([
+      ['owner', 'Dana'],
+      ['person', 'Lee'],
+      ['person', 'kim_k'],
+      ['person', 'Ana'],
+      ['person', undefined],
+    ]);
+    expect(lines.map((l) => l.kind)).toEqual(Array(5).fill('message'));
+    expect(lines.some((l) => 'senderKind' in (l.meta as object))).toBe(false);
+    expect(lines[0]).toMatchObject({ title: 'Ship the fix.' });
+    // The fields come right after the role, and the line is a valid event line.
+    expect(Object.keys(lines[0]!).slice(0, 7)).toEqual([
+      'id',
+      'session',
+      'time',
+      'role',
+      'author',
+      'speaker',
+      'kind',
+    ]);
+    parsed(lines);
+  });
+
+  it('names a bot by its name, as a person, and says it is a bot', () => {
+    const [line] = build([
+      user(
+        'Build 12 failed.',
+        T,
+        sender({
+          senderIsOwner: false,
+          senderId: '555000444',
+          senderName: 'CI Bot',
+          senderIdentity: observed('555000444', 'bot'),
+        }),
+      ),
+    ]);
+    expect(line).toMatchObject({
+      author: 'person',
+      speaker: 'CI Bot',
+      meta: { senderKind: 'bot' },
+    });
+    parsed([line!]);
+  });
+
+  it('records what another session routed in as its agent, by the name the config gives it', () => {
+    const lines = build(
+      [
+        user(
+          '[Inter-session message] sourceSession=agent:xiaowen:telegram:direct:555000999 sourceTool=sessions_send isUser=false\nThe report is ready.',
+          T,
+          {
+            ...sender({ senderIsOwner: false }),
+            provenance: {
+              kind: 'inter_session',
+              sourceSessionKey: 'agent:xiaowen:telegram:direct:555000999',
+              sourceTool: 'sessions_send',
+            },
+          },
+        ),
+        user('Found three flaky tests.', T + 1000, {
+          provenance: {
+            kind: 'inter_session',
+            sourceSessionKey: 'agent:scout:subagent:0b5f6c1e-synthetic',
+            sourceTool: 'subagent_announce',
+            sourceRole: 'subagent',
+          },
+        }),
+        user('The image is ready.', T + 2000, {
+          provenance: { kind: 'inter_session', sourceTool: 'image_generate' },
+        }),
+        user('From somewhere.', T + 3000, { provenance: { kind: 'inter_session' } }),
+      ],
+      new Map([['xiaowen', 'Xiaowen']]),
+    );
+    expect(by(lines)).toEqual([
+      ['agent', 'Xiaowen'],
+      ['agent', 'scout'],
+      ['agent', 'image_generate'],
+      ['agent', undefined],
+    ]);
+    expect(lines.map((l) => l.kind)).toEqual(Array(4).fill('message'));
+    parsed(lines);
+  });
+
+  it('records what OpenClaw itself sent as the system, as the message it was', async () => {
+    const { rec, sink } = recorder({ triggers: ['user', 'cron'] });
+    rec.agentEnd(
+      {
+        messages: [
+          user('Write the nightly report.', T, {
+            ...sender({ senderIsOwner: false }),
+            provenance: { kind: 'internal_system', sourceTool: 'cron', jobId: 'job-1' },
+          }),
+          assistant([{ type: 'text', text: 'Report written.' }], T + 1000),
+        ],
+        success: true,
+      },
+      agentCtx({ trigger: 'cron', sessionKey: 'agent:xiaohan:cron:nightly' }),
+    );
+    await rec.idle();
+    const [prompt, answer] = sink.lines();
+    expect(prompt).toMatchObject({ role: 'user', author: 'system', kind: 'message' });
+    expect(prompt).not.toHaveProperty('speaker');
+    expect(answer).not.toHaveProperty('author');
+    parsed(sink.lines());
+  });
+
+  it('leaves the runtime context a meta line of no one, and other lines without an author', () => {
+    const lines = build([
+      user(
+        '<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nConversation info: sender 555000111\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>',
+        T - 1,
+        {
+          runtimeContext: { retained: true },
+          ...sender({ senderIsOwner: true, senderName: 'Dana' }),
+        },
+      ),
+      ...firstTurn(),
+      { role: 'compactionSummary', summary: 'Earlier: the deploy.', timestamp: T + 4000 },
+    ]);
+    expect(lines.map((l) => [l.role, l.kind, l.author ?? null])).toEqual([
+      ['user', 'meta', null],
+      ['user', 'message', 'person'],
+      ['assistant', 'message', null],
+      ['assistant', 'tool_use', null],
+      ['user', 'tool_result', null],
+      ['assistant', 'message', null],
+      ['system', 'meta', null],
+    ]);
+    expect(lines.some((l) => l.kind !== 'message' && 'speaker' in l)).toBe(false);
+    parsed(lines);
+  });
+
+  it('keeps who wrote a message out of its id', () => {
+    const plain = build([user('Ship the fix.', T)]);
+    const owned = build([
+      user('Ship the fix.', T, {
+        ...sender({ senderIsOwner: true, senderName: 'Dana' }),
+        provenance: { kind: 'external_user' },
+      }),
+    ]);
+    const routed = build([
+      user('Ship the fix.', T, {
+        provenance: { kind: 'inter_session', sourceTool: 'sessions_send' },
+      }),
+    ]);
+    expect(plain[0]!.id).toBe(lineId([SESSION, T, 'user', 'message', 0]));
+    expect(owned[0]!.id).toBe(plain[0]!.id);
+    expect(routed[0]!.id).toBe(plain[0]!.id);
+  });
+
+  it('keeps no sender id in any line, not even as a name', () => {
+    const lines = build(
+      [
+        user(
+          'One.',
+          T,
+          sender({
+            senderIsOwner: false,
+            senderId: '555000555',
+            senderName: '555000555',
+            senderUsername: 'dana_ops',
+            senderIdentity: observed('555000555', 'human'),
+          }),
+        ),
+        user('Two.', T + 1000, sender({ senderId: '555000222', senderName: ' 555000222 ' })),
+        user('Three.', T + 2000, {
+          provenance: {
+            kind: 'inter_session',
+            sourceSessionKey: 'agent:xiaowen:telegram:direct:555000999',
+          },
+        }),
+      ],
+      new Map(),
+    );
+    expect(by(lines)).toEqual([
+      ['person', 'dana_ops'],
+      ['person', undefined],
+      ['agent', 'xiaowen'],
+    ]);
+    const all = JSON.stringify(lines);
+    for (const id of IDS) expect(all).not.toContain(id);
+  });
+
+  it('keeps a speaker to one line of at most 200 characters', () => {
+    expect(speakerName('  Dana\n\tOps\u0007 ')).toBe('Dana Ops');
+    expect(speakerName('x'.repeat(300))).toBe('x'.repeat(200));
+    expect(speakerName(`a${'😀'.repeat(150)}`)).toBe(`a${'😀'.repeat(99)}`);
+    expect(speakerName(' \n ')).toBeNull();
+    expect(speakerName(42)).toBeNull();
+    expect(speakerName('kim_k', [undefined, 'kim_k'])).toBeNull();
+    const [line] = build([user('Hi.', T, sender({ senderName: `Dana\n${'y'.repeat(250)}` }))]);
+    expect((line!.speaker as string).length).toBe(200);
+    parsed([line!]);
   });
 });
 
@@ -446,6 +713,53 @@ describe('lines from the message hooks', () => {
     const events = parsed(lines);
     expect(events[0]!.event.ts).toBe(T);
     expect(events[0]!.event.id).toBe(lineId([SESSION, 'in', '1001']));
+  });
+
+  it('names the sender of a message that arrived, and never takes it for the owner', async () => {
+    const { rec, sink } = recorder({}, 'messages');
+    const msgCtx = { channelId: 'telegram', accountId: 'bot-a', sessionKey: SESSION };
+    const received = (content: string, at: number, extra: Record<string, unknown>) =>
+      rec.messageReceived({ content, timestamp: at, sessionKey: SESSION, ...extra }, msgCtx);
+    received('Is the deploy stuck?', T, {
+      from: 'telegram:555000111',
+      messageId: '1001',
+      senderId: '555000111',
+      // Not a field of message_received; were it one, it would not make the sender the owner here.
+      senderIsOwner: true,
+      metadata: {
+        messageId: '1001',
+        senderId: '555000111',
+        senderName: 'Dana',
+        senderUsername: 'dana_ops',
+        senderIsOwner: true,
+      },
+    });
+    received('Me too.', T + 1000, {
+      messageId: '1002',
+      metadata: { senderId: '555000222', senderUsername: 'lee' },
+    });
+    received('As my id.', T + 2000, {
+      messageId: '1003',
+      metadata: { senderId: '555000333', senderName: '555000333' },
+    });
+    received('Nothing known.', T + 3000, { messageId: '1004' });
+    rec.messageSent(
+      { to: '42', content: 'It waits on a lock.', success: true, sessionKey: SESSION },
+      msgCtx,
+    );
+    await rec.idle();
+    const lines = sink.lines();
+    expect(by(lines)).toEqual([
+      ['person', 'Dana'],
+      ['person', 'lee'],
+      ['person', undefined],
+      ['person', undefined],
+    ]);
+    expect(lines.at(-1)).toMatchObject({ role: 'assistant' });
+    expect(lines.at(-1)).not.toHaveProperty('author');
+    const all = JSON.stringify(lines);
+    for (const id of IDS) expect(all).not.toContain(id);
+    parsed(lines);
   });
 
   it('flushes the buffered turn when agent_end carries no messages', async () => {

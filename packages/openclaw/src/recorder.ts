@@ -2,6 +2,7 @@ import type { Config } from './config.js';
 import { type Batch, Deliverer, type Sink, Spool } from './delivery.js';
 import { linesPath } from './files.js';
 import {
+  agentOfSessionKey,
   asRecord,
   type Draft,
   draftFromInbound,
@@ -30,6 +31,8 @@ export interface RecorderOptions {
   sink: Sink;
   log: Log;
   turns: TurnSource;
+  /** The names of the Gateway's agents by id, lowercase, which name the agent behind a routed input. */
+  agentNames?: ReadonlyMap<string, string>;
   now?: () => number;
 }
 
@@ -57,16 +60,11 @@ export function triggerOfSessionKey(sessionKey: string): string {
 const isIncognito = (sessionKey: string) =>
   sessionKey.split(':').some((p) => p.toLowerCase().startsWith('incognito'));
 
-/** The agent of a session key, `agent:<agentId>:…`. */
-export function agentOfSessionKey(sessionKey: string): string | null {
-  const m = /^agent:([^:]+):/.exec(sessionKey);
-  return m ? (m[1] as string) : null;
-}
-
 export class Recorder {
   readonly config: Config;
   readonly turns: TurnSource;
   private readonly log: Log;
+  private readonly agentNames: ReadonlyMap<string, string>;
   private readonly now: () => number;
   private readonly sessions: SessionStore;
   private readonly deliverer: Deliverer;
@@ -76,6 +74,7 @@ export class Recorder {
     this.config = opts.config;
     this.turns = opts.turns;
     this.log = opts.log;
+    this.agentNames = opts.agentNames ?? new Map();
     this.now = opts.now ?? Date.now;
     this.sessions = new SessionStore(opts.config.stateDir, opts.log);
     this.deliverer = new Deliverer(opts.sink, new Spool(opts.config.stateDir), opts.log);
@@ -217,6 +216,7 @@ export class Recorder {
     return draftsFromMessages(messages, info, {
       includeTools: this.config.includeTools,
       now: this.now(),
+      agentNames: this.agentNames,
     });
   }
 
@@ -266,8 +266,18 @@ export class Recorder {
     let titled = false;
     let parent: string | undefined;
     const placed = fresh.map((d) => {
-      const { id, session, time, role, kind, text, project, meta } = d.line;
-      const line: EventLine = { id, session, time, role, kind, text, project };
+      const { id, session, time, role, author, speaker, kind, text, project, meta } = d.line;
+      const line: EventLine = {
+        id,
+        session,
+        time,
+        role,
+        ...(author ? { author } : {}),
+        ...(speaker ? { speaker } : {}),
+        kind,
+        text,
+        project,
+      };
       if (parent) line.parent = parent;
       if (!record.titled && !titled && role === 'user' && kind === 'message') {
         const title = titleOf(text);
