@@ -578,7 +578,7 @@ Errors include `No event contains the quote "…". Search for the event and cite
 
 ## propose {#propose}
 
-Propose an entry for the user to review, rather than saving it: for what the agent infers and the user has not confirmed, and for everything it writes when it consolidates the user's memory on their behalf. Only the user accepts or rejects a proposal, with `origin accept` and `origin reject` or in the admin UI; agents have no tool for either (see [Proposals](../architecture.md#proposals)).
+Propose an entry for the user to review, rather than saving it: for what the agent infers and the user has not confirmed, and for everything it writes when it consolidates the user's memory on their behalf, as [`origin distill`](./distill.md) has it do. Only the user accepts or rejects a proposal, with `origin accept` and `origin reject` or in the admin UI; agents have no tool for either (see [Proposals](../architecture.md#proposals)).
 
 | Parameter | Type | Meaning |
 |---|---|---|

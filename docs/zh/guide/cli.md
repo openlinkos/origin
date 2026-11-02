@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-92cfce45
+sourceHash: sha256-fc24913b
 ---
 
 # 命令参考
@@ -11,12 +11,17 @@ origin status                                          各来源统计、条目�
 origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
 origin timeline  --session <id> [--all]                单个会话的事件（默认不含工具事件）
 origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
-origin show      <id> [--source <id>]                  显示条目、事件（以及它的原始来源）、会话、线索或一次召回
+origin show      <id> [--source <id>]                  显示条目、事件（以及它的原始来源）、会话、线索、一次召回或一条提议
 origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
 origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
 origin forget    <id> --reason <text> [--yes]          在每个库中隐藏条目或事件，并保存为记录（需加 --yes 确认）
 origin forgotten [--limit 50]                          遗忘与恢复的记录，从新到旧，附原因
 origin restore   <tombstone-id> --reason <text> [--yes]  带回一次遗忘隐藏的内容（需加 --yes 确认）
+origin proposals [--project <name>] [--status pending|accepted|rejected|all] [--limit 50]   Agent 提出、等你审阅的条目
+origin accept    <proposal-id> [--yes]                 接受一条提议：写下它的条目（需要 --yes）
+origin reject    <proposal-id> --reason <text> [--yes] 拒绝一条提议：遗忘它，并留下记录（需要 --yes）
+origin distill   [--project <name> | --thread <thr_…>] [--day <YYYY-MM-DD> | --since <t>] [--max 10] [--dry-run]
+                                                       让无头的 Claude Code 读取一个范围并提议条目
 origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   Agent 在该目录会拿到什么；--hook <agent> 用于回应它的 hook
 origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   Agent 拿到过什么，从新到旧
 origin projects                                        已知的项目名
@@ -40,7 +45,7 @@ origin push                                            与 origin sync 相同（
 - **来源 id**：`claude-code`、`codex`、`cursor`、`grok` 与 `zcode`。
 - **条目类型**：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。
 - **条目**：列出和检索到的都是当前的条目。已被取代的版本，以及有效期已经结束的条目（例如文件已被删除的导入记忆），用 `origin entries --history` 或 `origin show` 才能看到。从 Agent 为自己保存的记忆文件导入的条目会标记为导入的。
-- **id 形式**：条目如 `ent_5f0c2a9e41b7`；事件如 `claude-code:<uuid>` 或 `codex:<session>:o12`；遗忘记录（遗忘与恢复留下的记录）如 `tmb_3a9d70c1e2f4`；召回如 `rcl_7d2e9a0b1c3f`；线索，即属于同一件工作的那些会话（见[线索](./concepts.md#threads)），如 `thr_4c1e9a7b2d30`。会话用它的 Agent 给的 id，例如一个 UUID；`origin timeline` 会在会话 id 旁显示它的线索。
+- **id 形式**：条目如 `ent_5f0c2a9e41b7`；事件如 `claude-code:<uuid>` 或 `codex:<session>:o12`；遗忘记录（遗忘与恢复留下的记录）如 `tmb_3a9d70c1e2f4`；召回如 `rcl_7d2e9a0b1c3f`；提议，即 Agent 提出、等你审阅的条目，如 `prp_1b7e4c0a9d23`；线索，即属于同一件工作的那些会话（见[线索](./concepts.md#threads)），如 `thr_4c1e9a7b2d30`。会话用它的 Agent 给的 id，例如一个 UUID；`origin timeline` 会在会话 id 旁显示它的线索。
 - CLI 输出为英文。
 
 ## 检索 {#searching}
@@ -161,6 +166,37 @@ The forget is kept as a record with its reason; you can restore it later with or
 
 遗忘规则见[隐私与数据](./privacy.md#forgetting)。
 
+## 审阅提议 {#reviewing-proposals}
+
+Agent 用 MCP 工具 [`propose`](./mcp.md#propose) 提议它推断出、你尚未确认的内容，以及它替你整理记忆时写下的内容，[`origin distill`](./distill.md) 就让它这样做。提议在你接受之前都不是条目。`origin proposals` 从新到旧列出等着你的提议；`--status accepted` 列出你接受了的，以及每条成为的条目；`--status rejected` 列出你拒绝了的，只列 id 和原因；`--status all` 三者都列。`--project` 只保留一个项目的提议：提议指明的项目，或者它所在会话的项目。
+
+```console
+$ origin proposals
+proposal          status   kind       proposed          project  text
+----------------  -------  ---------  ----------------  -------  -------------------------------------------------
+prp_1b7e4c0a9d23  pending  knowledge  2026-10-22 17:39  origin   Releases are tagged only after both CI jobs pass.
+
+1 proposal pending. Review one with origin show <id>, then origin accept <id> or origin reject <id> --reason <text>.
+```
+
+`origin show prp_…` 像 MCP 工具 `get` 交给 Agent 的那样显示一条提议：它提议的内容，由谁、在哪个会话中提出，Agent 的说明，以及它引用的事件和引文。`origin accept` 以你的身份（`user@<设备>`）写下它的条目，引用这些事件以及这条提议本身；`origin reject` 以你给的原因遗忘这条提议的事件，留下一条记录，`origin restore` 可以解除它，使提议重新成为待审。两者都会先说明将要做什么，只有加上 `--yes` 才执行：
+
+```console
+$ origin accept prp_1b7e4c0a9d23 --yes
+Accepted prp_1b7e4c0a9d23 as ent_7a2c9e1f0b44.
+To change it: origin correct ent_7a2c9e1f0b44 <text>
+
+$ origin reject prp_6e2d9a4c1b07 --reason "We tag from release branches now" --yes
+Rejected prp_6e2d9a4c1b07 (tombstone tmb_2d8f0c1a9e35).
+To bring it back: origin restore tmb_2d8f0c1a9e35 --reason <text>
+```
+
+被接受的提议就是一个普通的条目：照常纠正或遗忘它。在连接了中枢的设备上，接受和拒绝之后会与中枢同步，这样条目或遗忘就会到达每个库。在中继上，请在中枢的管理界面中审阅提议；`origin show prp_…` 仍然会询问中枢。规则见[提议](../architecture.md#proposals)。
+
+## 整理记忆 {#consolidating}
+
+`origin distill` 在一个范围上以无头方式运行 Claude Code（`claude -p`），默认范围是你所在项目的最近 24 小时；它只连接本 Origin 自己的 MCP server，读取发生了什么，并提议条目交给你审阅。`--project` 或 `--thread` 选择读什么，`--day` 或 `--since` 选择什么时候，`--max` 限制它最多提议多少条（默认 10 条），`--max-turns` 限制它最多用多少轮（40）；`--dry-run` 只打印提示词和命令，不运行任何东西。结束时，它采集这次运行的会话，并列出它的提议。见[用无头 Agent 整理记忆](./distill.md)。
+
 ## 在浏览器中 {#in-your-browser}
 
 `origin ui` 为这台机器的库提供[管理界面](./admin.md#on-your-own-machine)，只监听 `127.0.0.1`，端口默认为 7079，可用 `--port` 指定。它会打印一个登录链接，并在默认浏览器中打开；链接只能使用一次，须在 5 分钟内使用；`--no-open` 只打印链接。这里没有密码。它在终端里运行时，按 Enter 就会得到一个新链接，同样会打印并打开；之前的链接随即失效。用 Ctrl+C 停止它，浏览器也随之退出登录。它启动时会在后台归档这台机器上 Agent 的会话，和 `origin sync --local` 一样，所以界面能显示 Agent 最近写下的内容；归档期间界面照常可用。它拒绝在中继上运行，因为中继不保有自己的会话。在已接入中枢的设备上，你在那里写入的条目以及遗忘和恢复操作，会在后台与中枢同步，与 `correct`、`forget` 和 `restore` 之后一样。
@@ -191,6 +227,7 @@ The forget is kept as a record with its reason; you can restore it later with or
 | `ORIGIN_HUB_TOKEN` | — | 中枢令牌，覆盖 `origin hub connect` 的配置 |
 | `ORIGIN_DEVICE` | 主机名 | 新库使用的名称：也就是本设备在中枢上的名称，以及它写入的内容所记录的来源库（origin） |
 | `ORIGIN_HUB_TIMEOUT_MS` | `2000` | 已接入中枢的设备上，`origin mcp` 等待中枢多久，超时后不再等待中枢直接作答 |
+| `ORIGIN_DISTILL_COMMAND` | `PATH` 上的 `claude` | `origin distill` 用来代替 `claude` 运行的命令：一个程序，或者用 Node 运行的 `.js` 或 `.mjs` 脚本 |
 | `ORIGIN_WATCH_INTERVAL_MS` | `60000` | Agent 运行期间，`origin mcp` 多久查看一次新的记录行（已接入中枢时一并同步），作为 Agent 的 hook 没有交来的内容的后备；设为 `0` 则关闭 |
 | `ORIGIN_ADMIN` | `off` | 设为 `on` 时在 `/admin` 下提供管理界面（`origin serve --admin`） |
 | `ORIGIN_ADMIN_LISTEN` | — | 改为在这个 `host:port` 上提供管理界面（`--admin-listen`） |

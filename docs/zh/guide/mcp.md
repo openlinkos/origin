@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-89694094
+sourceHash: sha256-e0193343
 ---
 
 # MCP 工具
@@ -582,7 +582,7 @@ Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话�
 
 ## propose {#propose}
 
-提议一个条目交给用户审阅，而不是直接保存它：用于 Agent 推断出、用户尚未确认的内容，以及 Agent 代用户整理记忆时写下的一切。只有用户可以接受或拒绝提议，用 `origin accept` 和 `origin reject`，或在管理界面中；Agent 没有做这两件事的工具（见[提议](../architecture.md#proposals)）。
+提议一个条目交给用户审阅，而不是直接保存它：用于 Agent 推断出、用户尚未确认的内容，以及 Agent 代用户整理记忆时写下的一切，[`origin distill`](./distill.md) 就让它这样做。只有用户可以接受或拒绝提议，用 `origin accept` 和 `origin reject`，或在管理界面中；Agent 没有做这两件事的工具（见[提议](../architecture.md#proposals)）。
 
 | 参数 | 类型 | 含义 |
 |---|---|---|

@@ -72,6 +72,15 @@ Every forget needs a reason and is kept as a record, with when, where, and by wh
 
 Forgetting hides; it does not erase. The raw mirrors keep the original lines, which is what makes a restore possible. See [Privacy and your data](./privacy.md#forgetting) for the commands, and [Forgetting](../architecture.md#forgetting) in the architecture for the exact rules.
 
+## Proposals
+
+Not everything an agent works out should become knowledge at once. When an agent infers something you have not confirmed, or consolidates your memory for you, it **proposes** an entry instead of saving it, with the MCP tool `propose`. A proposal holds what an entry would, its kind, text, confidence, project, and sources, with a note on why, and waits for you:
+
+- **Accept** it, with `origin accept` or in the admin UI, and it becomes an entry written by you, citing what it rests on and the proposal itself.
+- **Reject** it, with `origin reject` and a reason, and it is forgotten, as a record: `origin restore` makes it pending again.
+
+Until you decide, it is not knowledge: search, briefs, and recall do not hand it over, and agents cannot accept or reject it. Like follow links, proposals are read from the agents' own logs, so every store that archives a log has the same ones. [`origin distill`](./distill.md) has Claude Code, running headless, read a day or a thread of your work and propose what is worth keeping. See [Proposals](../architecture.md#proposals) in the architecture for the exact rules.
+
 ## Devices, hubs, and relays
 
 Each machine you use agents on is a **device** with a complete store of its own, which works offline. A self-hosted **personal hub** gathers what every device archives and writes into one store, so that agents on any machine, and cloud agents, can find it; forgets made anywhere reach every store. A machine with little disk can be a **relay** instead: it keeps nothing of its own, sends its agents' logs straight to the hub, and answers through it. See [Personal hub](./hub.md) to set one up.

@@ -7,12 +7,17 @@ origin status                                          Per-source counts, entrie
 origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
 origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
 origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
-origin show      <id> [--source <id>]                  Show an entry, an event (with its original source), a session, a thread, or a recall
+origin show      <id> [--source <id>]                  Show an entry, an event (with its original source), a session, a thread, a recall, or a proposal
 origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
 origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
 origin forget    <id> --reason <text> [--yes]          Hide an entry or event on every store, as a record (needs --yes)
 origin forgotten [--limit 50]                          Forgets and restores, newest first, with their reasons
 origin restore   <tombstone-id> --reason <text> [--yes]  Bring back what a forget hid (needs --yes)
+origin proposals [--project <name>] [--status pending|accepted|rejected|all] [--limit 50]   Entries agents proposed, for you to review
+origin accept    <proposal-id> [--yes]                 Accept a proposal: write its entry (needs --yes)
+origin reject    <proposal-id> --reason <text> [--yes] Reject a proposal: forget it, as a record (needs --yes)
+origin distill   [--project <name> | --thread <thr_…>] [--day <YYYY-MM-DD> | --since <t>] [--max 10] [--dry-run]
+                                                       Have Claude Code, headless, read a scope and propose entries
 origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   What an agent would be handed there; --hook <agent> answers its hooks
 origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   What agents were handed, newest first
 origin projects                                        Known project names
@@ -36,7 +41,7 @@ origin push                                            Same as origin sync (kept
 - **Source ids** are `claude-code`, `codex`, `cursor`, `grok`, and `zcode`.
 - **Entry kinds** are `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries).
 - **Entries** listed and found are the current ones. Superseded versions, and entries whose validity has ended (such as an imported memory whose file was deleted), appear with `origin entries --history` and in `origin show`. Entries imported from the memory files agents keep for themselves are marked as imported.
-- **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting and restoring leave, `rcl_7d2e9a0b1c3f` for recalls, and `thr_4c1e9a7b2d30` for threads, the sessions of one piece of work (see [Threads](./concepts.md#threads)). Sessions go by the id their agent gives them, such as a UUID; `origin timeline` shows a session's thread next to its id.
+- **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting and restoring leave, `rcl_7d2e9a0b1c3f` for recalls, `prp_1b7e4c0a9d23` for proposals, entries agents proposed for you to review, and `thr_4c1e9a7b2d30` for threads, the sessions of one piece of work (see [Threads](./concepts.md#threads)). Sessions go by the id their agent gives them, such as a UUID; `origin timeline` shows a session's thread next to its id.
 
 ## Searching
 
@@ -156,6 +161,37 @@ The forget is kept as a record with its reason; you can restore it later with or
 
 The rules are described in [Privacy and your data](./privacy.md#forgetting).
 
+## Reviewing proposals
+
+Agents propose, with the MCP tool [`propose`](./mcp.md#propose), what they infer and you have not confirmed, and what they write when they consolidate your memory for you, as [`origin distill`](./distill.md) has them do. A proposal is no entry until you accept it. `origin proposals` lists those that wait for you, newest first; `--status accepted` lists those you accepted, with the entry each became, `--status rejected` those you rejected, by id and reason only, and `--status all` all three. `--project` keeps those of one project: the project a proposal names, or its session's.
+
+```console
+$ origin proposals
+proposal          status   kind       proposed          project  text
+----------------  -------  ---------  ----------------  -------  -------------------------------------------------
+prp_1b7e4c0a9d23  pending  knowledge  2026-10-22 17:39  origin   Releases are tagged only after both CI jobs pass.
+
+1 proposal pending. Review one with origin show <id>, then origin accept <id> or origin reject <id> --reason <text>.
+```
+
+`origin show prp_…` prints a proposal as the MCP tool `get` hands it: what it proposes, who proposed it and in which session, the agent's note, and the events it cites, with their quotes. `origin accept` writes its entry, as you (`user@<device>`), citing those events and the proposal itself; `origin reject` forgets the proposal's event with your reason, as a record that `origin restore` lifts, which makes the proposal pending again. Both first say what they will do, and only act with `--yes`:
+
+```console
+$ origin accept prp_1b7e4c0a9d23 --yes
+Accepted prp_1b7e4c0a9d23 as ent_7a2c9e1f0b44.
+To change it: origin correct ent_7a2c9e1f0b44 <text>
+
+$ origin reject prp_6e2d9a4c1b07 --reason "We tag from release branches now" --yes
+Rejected prp_6e2d9a4c1b07 (tombstone tmb_2d8f0c1a9e35).
+To bring it back: origin restore tmb_2d8f0c1a9e35 --reason <text>
+```
+
+An accepted proposal is an entry like any other: correct it or forget it as such. On a connected device, accepting and rejecting then sync with the hub, so that the entry or the forget reaches every store. On a relay, review proposals in the hub's admin UI; `origin show prp_…` still asks the hub. See [Proposals](../architecture.md#proposals) for the rules.
+
+## Consolidating
+
+`origin distill` runs Claude Code headless (`claude -p`) on a scope, by default the last 24 hours of the project you are in, against this Origin's own MCP server and nothing else, to read what happened and propose entries for you to review. `--project` or `--thread` picks what it reads, `--day` or `--since` when, `--max` how many it may propose (10 by default), and `--max-turns` how many turns it may take (40); `--dry-run` prints the prompt and the command and runs nothing. When it ends, it ingests the run's session and lists what it proposed. See [Consolidate with a headless agent](./distill.md).
+
 ## In your browser
 
 `origin ui` serves the [admin UI](./admin.md#on-your-own-machine) for this machine's store, on `127.0.0.1` only, at port 7079 unless you pass `--port`. It prints a sign-in link, which works once, within 5 minutes, and opens it in your default browser; `--no-open` only prints it. There is no password. While it runs in a terminal, press Enter for a new link, which it prints and opens the same way; the previous link stops working. Stop it with Ctrl+C, which also signs the browser out. When it starts, it ingests this machine's agent sessions in the background, as `origin sync --local` does, so the UI shows what your agents wrote last; the UI can be used meanwhile. It refuses to run on a relay, which keeps no sessions of its own. On a device connected to a hub, the entries you write, and what you forget or restore there, are synced with the hub in the background, as after `correct`, `forget`, and `restore`.
@@ -186,6 +222,7 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 | `ORIGIN_HUB_TOKEN` | — | Hub token; overrides `origin hub connect` |
 | `ORIGIN_DEVICE` | host name | The name a new store takes: this device's name on the hub, and the origin recorded on what it writes |
 | `ORIGIN_HUB_TIMEOUT_MS` | `2000` | How long `origin mcp` on a connected device waits for the hub before answering without it |
+| `ORIGIN_DISTILL_COMMAND` | `claude` on the `PATH` | The command `origin distill` runs in place of `claude`: a program, or a `.js` or `.mjs` script run with Node |
 | `ORIGIN_WATCH_INTERVAL_MS` | `60000` | How often `origin mcp` looks for new log lines while an agent runs (and syncs them with the hub when connected), the fallback for what agents' hooks do not hand over; `0` turns it off |
 | `ORIGIN_ADMIN` | `off` | `on` serves the admin UI at `/admin` (`origin serve --admin`) |
 | `ORIGIN_ADMIN_LISTEN` | — | Serve the admin UI on this `host:port` instead (`--admin-listen`) |

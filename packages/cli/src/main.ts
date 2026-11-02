@@ -31,6 +31,7 @@ import {
   isEntryForgotten,
   isEntryId,
   isEventForgotten,
+  isProposalId,
   isRecallId,
   isRelay,
   isStoreNameFixed,
@@ -80,6 +81,7 @@ import {
   type EventResult,
   type EventView,
   type GetResult,
+  isProposalResult,
   isRecallResult,
   isSessionResult,
   isThreadResult,
@@ -98,6 +100,7 @@ import {
   WATCH_INTERVAL_MS,
 } from '@openlinkos/origin-mcp';
 import { cmdAgents } from './agents.js';
+import { cmdDistill } from './distill.js';
 import { cmdForget, cmdForgotten, cmdRestore, type ForgettingCtx } from './forgetting.js';
 import { count, oneLine, table } from './format.js';
 import { BUCKET_OPTIONS, bucketFlags, setUpFrames } from './hub/bucket.js';
@@ -115,6 +118,14 @@ import { RetentionWatch, retentionWarning, retentionWarnings } from './hub/reten
 import { type HubAdminOptions, startHub } from './hub/serve.js';
 import { type HubSyncResult, lastHubSync, syncWithHub } from './hub/sync.js';
 import { readNewPassword } from './password.js';
+import {
+  cmdAccept,
+  cmdProposals,
+  cmdReject,
+  type ProposalsCtx,
+  printProposal,
+  showProposal,
+} from './proposals.js';
 import { isHookCall, main as syncHook } from './sync-hook.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
 import { onEnter, openInBrowser, startLocalUi, UI_PORT, writeSignInFile } from './ui.js';
@@ -130,12 +141,17 @@ Usage:
   origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
   origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
   origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
-  origin show      <id> [--source <id>]                  Show an entry, an event (with its original source), a session, or a recall
+  origin show      <id> [--source <id>]                  Show an entry, an event (with its original source), a session, a thread, a recall, or a proposal
   origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
   origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
   origin forget    <id> --reason <text> [--yes]          Hide an entry or event on every store, as a record (needs --yes)
   origin forgotten [--limit 50]                          Forgets and restores, newest first, with their reasons
   origin restore   <tombstone-id> --reason <text> [--yes]  Bring back what a forget hid (needs --yes)
+  origin proposals [--project <name>] [--status pending|accepted|rejected|all] [--limit 50]   Entries agents proposed, for you to review
+  origin accept    <proposal-id> [--yes]                 Accept a proposal: write its entry (needs --yes)
+  origin reject    <proposal-id> --reason <text> [--yes] Reject a proposal: forget it, as a record (needs --yes)
+  origin distill   [--project <name> | --thread <thr_…>] [--day <YYYY-MM-DD> | --since <t>] [--max 10] [--dry-run]
+                                                         Have Claude Code, headless, read a scope and propose entries
   origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   What an agent would be handed there; --hook <agent> answers its hooks
   origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   What agents were handed, newest first
   origin projects                                        Known project names
@@ -174,6 +190,9 @@ const NAMED_COMMANDS = new Set([
   'correct',
   'forget',
   'restore',
+  'accept',
+  'reject',
+  'distill',
   'hub',
   'ui',
 ]);
@@ -253,6 +272,17 @@ export async function main(argv: string[]): Promise<number> {
         return cmdForgotten(forgettingCtx(ctx), rest);
       case 'restore':
         return await cmdRestore(forgettingCtx(ctx), rest);
+      case 'proposals':
+        return cmdProposals(proposalsCtx(ctx), rest);
+      case 'accept':
+        return await cmdAccept(proposalsCtx(ctx), rest);
+      case 'reject':
+        return await cmdReject(proposalsCtx(ctx), rest);
+      case 'distill':
+        return await cmdDistill(
+          { db: ctx.db, home: ctx.home, afterChange: () => syncAfterChange(ctx) },
+          rest,
+        );
       case 'projects':
         return cmdProjects(ctx);
       case 'backup':
@@ -908,6 +938,7 @@ async function cmdShow(ctx: Ctx, args: string[]): Promise<number> {
   }
   if (isRelay(ctx.db)) return showFromHub(relayHub(ctx), id, values.source);
   if (isRecallId(id)) return showRecall(ctx, id);
+  if (isProposalId(id)) return showProposal(ctx.db, id);
   if (isEntryId(id)) return showEntry(ctx, id);
   if (isThreadId(id)) {
     if (!resolveId(ctx.db, id)) return notFound(ctx, id);
@@ -1088,6 +1119,10 @@ async function showFromHub(hub: HubConfig, id: string, source?: string): Promise
   }
   if (isRecallResult(r)) {
     printRecall(r);
+    return 0;
+  }
+  if (isProposalResult(r)) {
+    printProposal(r);
     return 0;
   }
   if ('entry' in r) {
@@ -1306,6 +1341,11 @@ async function cmdCorrect(ctx: Ctx, args: string[]): Promise<number> {
   console.log(`Corrected ${id} → ${e.id}`);
   await syncAfterChange(ctx);
   return 0;
+}
+
+/** What `origin proposals`, `accept`, and `reject` need from this command line. */
+function proposalsCtx(ctx: Ctx): ProposalsCtx {
+  return { db: ctx.db, afterChange: () => syncAfterChange(ctx) };
 }
 
 /** What `origin forget`, `forgotten`, and `restore` need from this command line. */
