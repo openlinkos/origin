@@ -19,10 +19,6 @@ export default defineOpenLinkOSConfig({
     socialLinks: [{ icon: 'github', link: repo }],
   },
   legal: [
-    {
-      text: { en: 'Privacy', zh: '隐私说明' },
-      link: { en: 'https://linkos.io/privacy', zh: 'https://linkos.io/zh/privacy' },
-    },
     { text: { en: 'MIT License', zh: 'MIT 许可证' }, link: `${repo}/blob/master/LICENSE` },
   ],
   locales: {
