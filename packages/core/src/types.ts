@@ -167,6 +167,8 @@ export interface SessionRow {
   startedAt: number | null;
   endedAt: number | null;
   eventCount: number;
+  /** The thread the session is in with other sessions (see threads.ts), or null. */
+  thread: string | null;
 }
 
 export interface SyncResult {

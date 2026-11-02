@@ -65,6 +65,7 @@ A store records the version of its format. When a newer Origin opens an older st
 | 0.2.0 | 3 | Records the format version; adds whether the user named a session; reads the titles of Claude Code sessions from the lines already archived |
 | 0.3.0 | 4 | Reads the memory streams a hub archived before it could (see [Native memories](../sources.md#native-memories)) |
 | 0.4.0 | 4 | Adds the tables of recalls; the format, and what is stored, are unchanged |
+| Unreleased | 5 | Records the git branch of each session, and groups sessions into threads, from what is already archived; recall records can name a thread |
 
 Formats 2 and 3 were both introduced by 0.2.0. The details of each step are in [Architecture](../architecture.md#migrations).
 

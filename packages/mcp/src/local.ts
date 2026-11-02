@@ -467,6 +467,9 @@ export function getById(
       return eventResult(db, opened.id, args.offset ?? 0);
     case 'session':
       return sessionResult(db, opened.session);
+    case 'thread':
+      // Threads open as cards once the MCP tools know them; until then, as before, an unknown id.
+      return missing(db, args.id);
   }
 }
 

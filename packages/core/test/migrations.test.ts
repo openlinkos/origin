@@ -23,9 +23,10 @@ import {
   storeName,
   storeVersion,
   syncSource,
+  threadIdOf,
 } from '../src/index.js';
 import { fakeAdapter, line } from './helpers.js';
-import { legacyStore, schemaOf, userVersion } from './legacy.js';
+import { legacyStore, schemaOf, store040, userVersion } from './legacy.js';
 
 let tmp: string;
 let home: string;
@@ -233,6 +234,85 @@ describe('a store of 0.1.0', () => {
     );
     const db = openDatabase(file, { migrations: needsFake, adapters: [adapter] });
     expect(userVersion(db)).toBe(2);
+    db.close();
+  });
+});
+
+describe('a store of 0.4.0 (version 4)', () => {
+  /** Three sessions on a work branch and one on main, and a recall, as 0.4.0 stored them. */
+  function makeStore040(): void {
+    const db = store040(file);
+    db.prepare(
+      `INSERT INTO raw_file (id, source, path, generation, mirror, bytes_ingested, lines_ingested,
+                             tail_hash, first_seen_at, updated_at)
+       VALUES (1, 'fake', '/logs/a.jsonl', 1, 'fake/a.jsonl', 0, 0, '', 1000, 1000)`,
+    ).run();
+    const ev = db.prepare(
+      `INSERT INTO event (id, source, session_id, ts, project, git_branch, role, kind, text,
+                          raw_file_id, raw_line)
+       VALUES (?, 'fake', ?, ?, 'demo', ?, ?, 'message', ?, 1, ?)`,
+    );
+    const day = 86_400_000;
+    const rows: Array<[string, string, number, string | null]> = [
+      ['a1', 's1', 1 * day, 'feat-x'],
+      ['a2', 's1', 1 * day + 5, 'feat-x'],
+      ['b1', 's2', 3 * day, 'main'],
+      ['b2', 's2', 3 * day + 5, 'feat-x'],
+      ['b3', 's2', 3 * day + 9, 'feat-x'],
+      ['c1', 's3', 4 * day, 'main'],
+      ['c2', 's3', 4 * day + 5, 'main'],
+      ['d1', 's4', 5 * day, null],
+    ];
+    rows.forEach(([id, session, ts, branch], i) => {
+      ev.run(`fake:${id}`, session, ts, branch, i % 2 ? 'assistant' : 'user', `text ${id}`, i + 1);
+    });
+    for (const s of ['s1', 's2', 's3', 's4']) {
+      db.prepare(
+        `INSERT INTO session (source, session_id, project, started_at, ended_at, event_count)
+         SELECT 'fake', ?, 'demo', MIN(ts), MAX(ts), COUNT(*) FROM event WHERE session_id = ?`,
+      ).run(s, s);
+    }
+    db.prepare(
+      `INSERT INTO recall (id, at, origin, occasion, budget, tokens)
+       VALUES ('rcl_000000000001', 1000, 'laptop', 'start', 800, 40)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO recall_item (recall_id, rank, layer, kind, ref, score, tokens)
+       VALUES ('rcl_000000000001', 1, 'sessions', 'session', 'fake:s1', NULL, 20)`,
+    ).run();
+    db.close();
+  }
+
+  it('gets session branches, threads, and recall items that name a thread (version 5)', () => {
+    makeStore040();
+    const db = openDatabase(file);
+    expect(userVersion(db)).toBe(STORE_VERSION);
+    const branches = db
+      .prepare('SELECT session_id, git_branch FROM session ORDER BY session_id')
+      .all();
+    expect(branches).toEqual([
+      { session_id: 's1', git_branch: 'feat-x' },
+      { session_id: 's2', git_branch: 'feat-x' },
+      { session_id: 's3', git_branch: 'main' },
+      { session_id: 's4', git_branch: null },
+    ]);
+    const thread = threadIdOf('fake', 's1');
+    expect(listSessions(db, { since: 0 }).map((s) => [s.sessionId, s.thread])).toEqual([
+      ['s4', null],
+      ['s3', null],
+      ['s2', thread],
+      ['s1', thread],
+    ]);
+    // Recall items kept, and a thread can be an item now.
+    expect(db.prepare('SELECT ref FROM recall_item').all()).toEqual([{ ref: 'fake:s1' }]);
+    db.prepare(
+      `INSERT INTO recall_item (recall_id, rank, layer, kind, ref, score, tokens)
+       VALUES ('rcl_000000000001', 2, 'sessions', 'thread', ?, NULL, 20)`,
+    ).run(thread);
+    expect(() => db.prepare('DELETE FROM recall_item').run()).toThrow(/append-only/);
+    const fresh = openDatabase(path.join(tmp, 'fresh.db'));
+    expect(schemaOf(db)).toEqual(schemaOf(fresh));
+    fresh.close();
     db.close();
   });
 });

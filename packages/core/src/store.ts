@@ -413,8 +413,9 @@ export function latestAgentVersions(db: Database): Map<string, string> {
   return out;
 }
 
-const SESSION_COLUMNS =
-  'source, session_id, project, cwd, title, started_at, ended_at, event_count';
+const SESSION_COLUMNS = `source, session_id, project, cwd, title, started_at, ended_at, event_count,
+  (SELECT t.thread_id FROM session_thread t
+    WHERE t.source = session.source AND t.session_id = session.session_id) AS thread_id`;
 
 interface SessionRecord {
   source: string;
@@ -425,6 +426,7 @@ interface SessionRecord {
   started_at: number | null;
   ended_at: number | null;
   event_count: number;
+  thread_id: string | null;
 }
 
 function toSessionRow(
@@ -441,7 +443,30 @@ function toSessionRow(
     startedAt: r.started_at,
     endedAt: r.ended_at,
     eventCount: r.event_count,
+    thread: r.thread_id,
   };
+}
+
+/**
+ * The sessions of a thread (see threads.ts) with visible events, oldest first by when they started
+ * (then source and id), from `offset` on, at most `limit`.
+ */
+export function listThreadSessions(
+  db: Database,
+  threadId: string,
+  opts: { limit?: number; offset?: number } = {},
+): SessionRow[] {
+  const rows = db
+    .prepare(
+      `SELECT ${SESSION_COLUMNS} FROM session
+        WHERE (source, session_id) IN
+            (SELECT t.source, t.session_id FROM session_thread t WHERE t.thread_id = ?)
+          AND event_count > 0
+        ORDER BY started_at, source, session_id LIMIT ? OFFSET ?`,
+    )
+    .all(threadId, opts.limit ?? -1, opts.offset ?? 0) as unknown as SessionRecord[];
+  const prompt = promptFinder(db);
+  return rows.map((r) => toSessionRow(r, prompt));
 }
 
 /** One session with visible events, or null (a session whose events were all forgotten is hidden). */

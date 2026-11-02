@@ -1,7 +1,9 @@
 import type { Database } from './db.js';
 import { OriginError } from './errors.js';
+import { sessionBranchQuery } from './ingest.js';
 import { reparseMemories, reparseTitles } from './reparse.js';
 import { SCHEMA } from './schema.js';
+import { deriveThreads } from './threads.js';
 import type { SourceAdapter } from './types.js';
 
 /**
@@ -80,7 +82,74 @@ export const MIGRATIONS: Migration[] = [
       for (const source of ['claude-code', 'zcode', 'grok']) reparseMemories(ctx, source);
     },
   },
+  {
+    // Threads (see threads.ts): each session's branch, the follow links and threads derived from
+    // the store, and recall items that name a thread.
+    version: 5,
+    name: 'session branches and threads',
+    up: ({ db }) => {
+      if (!hasColumn(db, 'session', 'git_branch')) {
+        db.exec('ALTER TABLE session ADD COLUMN git_branch TEXT');
+      }
+      db.exec(
+        `UPDATE session SET git_branch = (${sessionBranchQuery(
+          'e.source = session.source AND e.session_id = session.session_id',
+        )})`,
+      );
+      db.exec(THREAD_TABLES_V5);
+      // A CHECK constraint cannot be changed in place: the table is made again, rows and all. A
+      // store of 0.3 has no recall tables yet; the schema creates them after the migrations.
+      if (hasTable(db, 'recall_item')) db.exec(RECALL_ITEM_V5);
+      deriveThreads(db);
+    },
+  },
 ];
+
+/** The tables of threads, as version 5 created them. */
+const THREAD_TABLES_V5 = `
+CREATE TABLE IF NOT EXISTS session_follow (
+  source            TEXT NOT NULL,
+  session_id        TEXT NOT NULL,
+  link_id           TEXT NOT NULL,
+  target_source     TEXT NOT NULL,
+  target_session_id TEXT NOT NULL,
+  event_id          TEXT PRIMARY KEY
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_follow_from ON session_follow (source, session_id);
+CREATE INDEX IF NOT EXISTS session_follow_to ON session_follow (target_source, target_session_id);
+CREATE TABLE IF NOT EXISTS session_thread (
+  source     TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  thread_id  TEXT NOT NULL,
+  PRIMARY KEY (source, session_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_thread_id ON session_thread (thread_id);
+`;
+
+/** recall_item again, whose items may now be threads; its triggers and index go with it. */
+const RECALL_ITEM_V5 = `
+CREATE TABLE recall_item_v5 (
+  recall_id TEXT    NOT NULL REFERENCES recall(id),
+  rank      INTEGER NOT NULL,
+  layer     TEXT    NOT NULL CHECK (layer IN ('cognition', 'project', 'sessions', 'prompt')),
+  kind      TEXT    NOT NULL CHECK (kind IN ('entry', 'session', 'thread')),
+  ref       TEXT    NOT NULL,
+  score     REAL,
+  tokens    INTEGER NOT NULL,
+  PRIMARY KEY (recall_id, rank)
+) WITHOUT ROWID;
+INSERT INTO recall_item_v5 (recall_id, rank, layer, kind, ref, score, tokens)
+  SELECT recall_id, rank, layer, kind, ref, score, tokens FROM recall_item;
+DROP TABLE recall_item;
+ALTER TABLE recall_item_v5 RENAME TO recall_item;
+CREATE INDEX IF NOT EXISTS recall_item_ref ON recall_item (ref);
+CREATE TRIGGER IF NOT EXISTS recall_item_no_update BEFORE UPDATE ON recall_item BEGIN
+  SELECT RAISE(ABORT, 'recall_item is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS recall_item_no_delete BEFORE DELETE ON recall_item BEGIN
+  SELECT RAISE(ABORT, 'recall_item is append-only');
+END;
+`;
 
 /** The version of a store created by 0.1.0, the first release, which recorded none. */
 export const FIRST_VERSION = 1;
@@ -123,6 +192,12 @@ function latestVersion(migrations: Migration[]): number {
 /** `PRAGMA user_version`: 0 for a store that records none. */
 function userVersion(db: Database): number {
   return (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+}
+
+function hasColumn(db: Database, table: string, column: string): boolean {
+  return (db.prepare(`PRAGMA table_info("${table}")`).all() as Array<{ name: string }>).some(
+    (c) => c.name === column,
+  );
 }
 
 function hasTable(db: Database, name: string): boolean {

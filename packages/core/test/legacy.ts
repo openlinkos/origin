@@ -10,11 +10,34 @@ export const SCHEMA_0_1_0 = fs.readFileSync(
   'utf8',
 );
 
+/** The schema of Origin 0.4.0, verbatim: store format version 4. */
+export const SCHEMA_0_4_0 = fs.readFileSync(
+  fileURLToPath(new URL('./fixtures/schema-0.4.0.sql', import.meta.url)),
+  'utf8',
+);
+
 /**
  * A database as Origin 0.1.0 created it: its pragmas, its functions, its schema, and no version.
  * The caller fills it, through this connection, and closes it.
  */
 export function legacyStore(file: string): Database {
+  const db = oldConnection(file);
+  db.exec(SCHEMA_0_1_0);
+  return db;
+}
+
+/**
+ * A database as Origin 0.4.0 created it: its pragmas, its functions, its schema, and version 4. The
+ * caller fills it, through this connection, and closes it.
+ */
+export function store040(file: string): Database {
+  const db = oldConnection(file);
+  db.exec(SCHEMA_0_4_0);
+  db.exec('PRAGMA user_version = 4');
+  return db;
+}
+
+function oldConnection(file: string): Database {
   const db = new DatabaseSync(file);
   db.function('origin_cjk', { deterministic: true }, (text, kind) =>
     typeof text === 'string' ? cjkIndexText(text, String(kind)) : null,
@@ -27,7 +50,6 @@ export function legacyStore(file: string): Database {
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA busy_timeout = 10000;');
-  db.exec(SCHEMA_0_1_0);
   return db;
 }
 
@@ -64,6 +86,11 @@ export function schemaOf(db: Database): unknown[] {
 export function downgradeToV1(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    // Version 5: session branches and threads.
+    db.exec('DROP INDEX IF EXISTS session_project');
+    db.exec('ALTER TABLE session DROP COLUMN git_branch');
+    db.exec('DROP TABLE IF EXISTS session_follow');
+    db.exec('DROP TABLE IF EXISTS session_thread');
     db.exec('ALTER TABLE session DROP COLUMN title_manual');
     // Tables and indexes added since 0.1.0 without a migration (created on open, filled from what
     // 0.1.0 kept; see BACKFILL_EFFECTS).

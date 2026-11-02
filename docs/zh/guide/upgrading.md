@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-0c895981
+sourceHash: sha256-98394afd
 ---
 
 # 升级
@@ -69,6 +69,7 @@ docker logs origin-hub     # shows the upgrade of the store, if any
 | 0.2.0 | 3 | 记录格式版本；记录会话名称是否由用户设定；从已归档的行中读取 Claude Code 会话的标题 |
 | 0.3.0 | 4 | 读取中枢在能读懂记忆流之前归档的记忆流（见[原生记忆](../sources.md#native-memories)） |
 | 0.4.0 | 4 | 新增召回记录的表；格式和已存的内容都不变 |
+| 尚未发布 | 5 | 根据已经归档的内容，记录每个会话的 git 分支，并把会话归入线索；召回记录可以指向一条线索 |
 
 格式 2 和 3 都是 0.2.0 引入的。每一步的细节见[架构](../architecture.md#migrations)。
 

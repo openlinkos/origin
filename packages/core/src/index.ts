@@ -44,6 +44,7 @@ export {
   type EntryStatus,
   entriesCiting,
   entriesOfSession,
+  entriesOfThread,
   entryCounts,
   entryHistory,
   entrySources,
@@ -225,7 +226,9 @@ export {
 export {
   AROUND,
   CARD_PROMPTS,
+  CARD_SESSIONS,
   describeSession,
+  describeThread,
   type EventContext,
   eventContext,
   findSession,
@@ -237,6 +240,8 @@ export {
   type SessionPage,
   STUB_CHARS,
   stubText,
+  type ThreadCard,
+  threadLastPrompt,
   turnAt,
 } from './references.js';
 export {
@@ -290,6 +295,7 @@ export {
   listProjects,
   listSessionEvents,
   listSessions,
+  listThreadSessions,
   loadEvent,
   PROMPT_TITLE_MAX,
   promptTitle,
@@ -309,6 +315,22 @@ export {
   stats,
   type TurnStart,
 } from './store.js';
+export {
+  BRANCH_GAP_MS,
+  DEFAULT_BRANCHES,
+  type FollowLink,
+  followLink,
+  isThreadId,
+  isWorkBranch,
+  LINK_ID_RE,
+  rebuildThreads,
+  refreshThreads,
+  THREAD_ID_RE,
+  type ThreadSummary,
+  threadIdOf,
+  threadOf,
+  threadSummary,
+} from './threads.js';
 export { isoLocal, parseTime } from './time.js';
 export {
   createToken,

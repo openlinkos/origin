@@ -21,6 +21,7 @@ import {
 } from './mirror.js';
 import { assertComplete } from './mode.js';
 import { mirrorRelPath, parseRawPath, rawDir, remotePath } from './paths.js';
+import { deriveFollow, refreshThreads } from './threads.js';
 import { NAME_RE } from './tokens.js';
 import type {
   EventInput,
@@ -378,6 +379,8 @@ function appendLines(
       stats.eventsAdded++;
       // A memory event belongs to no conversation: it is counted in no session.
       if (ev.kind !== 'memory') touchedSessions.add(ev.sessionId);
+      // The result of `follow` links its session to the one it continues (see threads.ts).
+      deriveFollow(ctx.db, { ...ev, id: `${adapter.id}:${ev.id}`, source: adapter.id });
     }
     if (parsed.memory) {
       try {
@@ -399,6 +402,10 @@ function appendLines(
     }
   }
   for (const sessionId of touchedSessions) refreshSession(ctx.db, adapter.id, sessionId);
+  refreshThreads(
+    ctx.db,
+    [...touchedSessions].map((sessionId) => ({ source: adapter.id, sessionId })),
+  );
   const st = mirrorState(ctx.db, raw.id) as MirrorState;
   const sealed = appendMirror(ctx.db, ctx.home, st, chunk, ctx.frameBytes ?? FRAME_BYTES);
   ctx.db
@@ -738,8 +745,19 @@ function generatedContent(
 }
 
 /**
- * Recompute a session's aggregate row from its visible (not forgotten) events. The session table is
- * derived and can be rebuilt from event at any time.
+ * A session's branch, as an SQL query of the event `e` given the session's source and id as
+ * conditions (`match`): the git branch most of its visible events record, the latest of those that
+ * tie, or null. Memory events are part of no session.
+ */
+export const sessionBranchQuery = (match: string) => `SELECT e.git_branch FROM event e
+  WHERE ${match} AND e.kind <> 'memory' AND e.git_branch IS NOT NULL AND e.git_branch <> ''
+    AND NOT EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_id = e.id)
+  GROUP BY e.git_branch ORDER BY COUNT(*) DESC, MAX(e.ts) DESC, e.git_branch DESC LIMIT 1`;
+
+/**
+ * Recompute a session's aggregate row from its visible (not forgotten) events: its times, its count,
+ * its project and directory, and its branch (see sessionBranchQuery). The session table is derived
+ * and can be rebuilt from event at any time. Threads follow (see refreshThreads).
  */
 export function refreshSession(db: Database, source: string, sessionId: string): void {
   // Memory events are the versions of an agent's memory files, not part of a conversation.
@@ -758,16 +776,30 @@ export function refreshSession(db: Database, source: string, sessionId: string):
       .get(source, sessionId) as { v: string } | undefined;
     return row?.v ?? null;
   };
+  const branch = db
+    .prepare(sessionBranchQuery('e.source = ? AND e.session_id = ?'))
+    .get(source, sessionId) as { git_branch: string } | undefined;
   db.prepare(
-    `INSERT INTO session (source, session_id, project, cwd, started_at, ended_at, event_count)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO session (source, session_id, project, cwd, started_at, ended_at, event_count,
+                          git_branch)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (source, session_id) DO UPDATE SET
        project = COALESCE(excluded.project, session.project),
        cwd = COALESCE(excluded.cwd, session.cwd),
        started_at = excluded.started_at,
        ended_at = excluded.ended_at,
-       event_count = excluded.event_count`,
-  ).run(source, sessionId, first('project'), first('cwd'), agg.started, agg.ended, agg.n);
+       event_count = excluded.event_count,
+       git_branch = excluded.git_branch`,
+  ).run(
+    source,
+    sessionId,
+    first('project'),
+    first('cwd'),
+    agg.started,
+    agg.ended,
+    agg.n,
+    branch?.git_branch ?? null,
+  );
 }
 
 export function logSync(

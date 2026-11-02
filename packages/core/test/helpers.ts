@@ -2,10 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { type Database, type EventKind, readMirror, type SourceAdapter } from '../src/index.js';
 
-/** Minimal fake source: one {"id","session","ts","role","text"} object per line. */
-export function fakeAdapter(root: string): SourceAdapter {
+/**
+ * Minimal fake source: one {"id","session","ts","role","text"} object per line, with optional
+ * `kind`, `title`, `project`, `cwd`, `branch` (its git branch), and `parent`. Another `id` makes it
+ * a second agent.
+ */
+export function fakeAdapter(root: string, id = 'fake'): SourceAdapter {
   return {
-    id: 'fake',
+    id,
     displayName: 'Fake',
     version: () => '0.0.1',
     async discover() {
@@ -24,6 +28,8 @@ export function fakeAdapter(root: string): SourceAdapter {
         kind?: EventKind;
         title?: string;
         project?: string;
+        cwd?: string;
+        branch?: string;
         /** The id of the event it follows, as Claude Code's `parentUuid`. */
         parent?: string;
       };
@@ -38,6 +44,8 @@ export function fakeAdapter(root: string): SourceAdapter {
             kind: o.kind ?? 'message',
             text: o.text,
             project: o.project ?? 'demo',
+            cwd: o.cwd ?? null,
+            gitBranch: o.branch ?? null,
             parentId: o.parent ?? null,
           },
         ],

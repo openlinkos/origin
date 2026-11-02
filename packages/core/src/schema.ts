@@ -13,7 +13,12 @@
  *   nothing older can follow (see search.ts); derived.
  * - session: aggregate per (source, session_id), derived from its visible events and rebuildable,
  *   plus its title, from the lines that carry one, and whether the user gave it (title_manual,
- *   added in version 2).
+ *   added in version 2). git_branch (version 5) is the most frequent branch of its visible events.
+ * - session_follow: the links agents declared with the MCP tool `follow` (this session continues
+ *   that one), derived from the tool results that carry them (see threads.ts); a link counts while
+ *   its event is visible.
+ * - session_thread: the sessions that are in a thread with others, and the thread's id; derived
+ *   from session and session_follow and rebuildable (see threads.ts, version 5).
  * - event_fts, message_fts, event_cjk: the search indexes, all keyed by seq and filled by
  *   triggers; rebuildSearchIndexes() rebuilds them. event_fts is a trigram index of every event
  *   that records only which events contain each trigram (detail=none), message_fts a full trigram
@@ -40,8 +45,8 @@
  *   forgotten_entry and excluded_event when the database is opened (BACKFILL_EFFECTS).
  * - change_log: append-only sequence of the entries and tombstones this store has received or
  *   written, filled by triggers; replication cursors point into it.
- * - recall / recall_item: each time this store handed an agent entries or sessions unasked (see
- *   recall.ts), and what it handed, by id, with each item's layer, score, and size. Only ids and
+ * - recall / recall_item: each time this store handed an agent entries, sessions, or threads
+ *   unasked (see recall.ts), and what it handed, by id, with each item's layer, score, and size. Only ids and
  *   a hash of the prompt, never text, so that a forget hides nothing a recall could still show.
  *   Append-only: triggers reject updates and deletes.
  * - api_token: hub access tokens (name and SHA-256 hash; the token itself is never stored).
@@ -102,8 +107,29 @@ CREATE TABLE IF NOT EXISTS session (
   ended_at     INTEGER,
   event_count  INTEGER NOT NULL DEFAULT 0,
   title_manual INTEGER NOT NULL DEFAULT 0,
+  git_branch   TEXT,
   PRIMARY KEY (source, session_id)
 );
+CREATE INDEX IF NOT EXISTS session_project ON session (project);
+
+CREATE TABLE IF NOT EXISTS session_follow (
+  source            TEXT NOT NULL,
+  session_id        TEXT NOT NULL,
+  link_id           TEXT NOT NULL,
+  target_source     TEXT NOT NULL,
+  target_session_id TEXT NOT NULL,
+  event_id          TEXT PRIMARY KEY
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_follow_from ON session_follow (source, session_id);
+CREATE INDEX IF NOT EXISTS session_follow_to ON session_follow (target_source, target_session_id);
+
+CREATE TABLE IF NOT EXISTS session_thread (
+  source     TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  thread_id  TEXT NOT NULL,
+  PRIMARY KEY (source, session_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_thread_id ON session_thread (thread_id);
 
 CREATE TABLE IF NOT EXISTS event (
   seq           INTEGER PRIMARY KEY,
@@ -326,7 +352,7 @@ CREATE TABLE IF NOT EXISTS recall_item (
   recall_id TEXT    NOT NULL REFERENCES recall(id),
   rank      INTEGER NOT NULL,
   layer     TEXT    NOT NULL CHECK (layer IN ('cognition', 'project', 'sessions', 'prompt')),
-  kind      TEXT    NOT NULL CHECK (kind IN ('entry', 'session')),
+  kind      TEXT    NOT NULL CHECK (kind IN ('entry', 'session', 'thread')),
   ref       TEXT    NOT NULL,
   score     REAL,
   tokens    INTEGER NOT NULL,

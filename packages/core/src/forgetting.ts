@@ -6,6 +6,7 @@ import { ConflictError, OriginError } from './errors.js';
 import { storeName } from './identity.js';
 import { refreshSession } from './ingest.js';
 import { isRelay } from './mode.js';
+import { refreshThreads } from './threads.js';
 
 /**
  * Forgetting (invariant 2, recorded forgetting; see docs/architecture.md#forgetting). A tombstone
@@ -154,7 +155,11 @@ type Statements = ReturnType<typeof statements>;
 const attribution = (stmt: Statements['forgottenBy'], id: string): string | undefined =>
   (stmt.get(id) as { t: string } | undefined)?.t;
 
-/** Sessions whose visible events changed, re-aggregated once at the end (see refreshSession). */
+/**
+ * Sessions whose visible events changed, re-aggregated once at the end (see refreshSession), with
+ * their threads: a session left with no visible events, or a follow link whose event was hidden,
+ * leaves its thread (invariant 2).
+ */
 class Sessions {
   private readonly seen = new Map<string, { source: string; sessionId: string }>();
   constructor(
@@ -168,6 +173,7 @@ class Sessions {
   }
   refresh(): void {
     for (const s of this.seen.values()) refreshSession(this.db, s.source, s.sessionId);
+    refreshThreads(this.db, this.seen.values());
   }
 }
 

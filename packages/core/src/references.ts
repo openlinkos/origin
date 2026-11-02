@@ -1,5 +1,11 @@
 import type { Database } from './db.js';
-import { currentEntriesCiting, type Entry, entriesOfSession, isEntryId } from './entries.js';
+import {
+  currentEntriesCiting,
+  type Entry,
+  entriesOfSession,
+  entriesOfThread,
+  isEntryId,
+} from './entries.js';
 import { OriginError } from './errors.js';
 import { isRecallId, type RecallRecord, rebuildRecall, sessionRecalls } from './recall.js';
 import {
@@ -8,21 +14,26 @@ import {
   getEvent,
   getSession,
   isEventForgotten,
+  listThreadSessions,
   type RawEventRecord,
+  type SessionPrompt,
+  sessionPrompts,
   sessionSources,
   sessionTurnStarts,
   type TurnStart,
   toEventRow,
   VISIBLE_EVENT,
 } from './store.js';
+import { isThreadId, threadSummary } from './threads.js';
 import type { EventKind, EventRow, SessionRow } from './types.js';
 
 /**
  * Reading along references (see docs/architecture.md#reading-along-references). Every id Origin
  * hands an agent can be opened, and what it opens names what is next to it, one line each, by id:
  * an event's session, its turn, the events around it, the event it follows, and the entries that
- * cite it; a session's turns, the entries written from it, the recalls it was handed, and the
- * sessions before and after it in its project. An agent follows the ids that matter one hop at a
+ * cite it; a session's turns, its thread, the entries written from it, the recalls it was handed,
+ * and the sessions before and after it in its project; a thread's sessions, the entries written
+ * from them, and its last prompt. An agent follows the ids that matter one hop at a
  * time, and reads a long session a turn or a page at a time. Every list is bounded, and nothing
  * hidden is in a list or a count (invariant 2): these queries read visible events and current
  * entries only. No model is called.
@@ -36,6 +47,8 @@ export const NEIGHBOUR_MAX = 10;
 export const AROUND = 2;
 /** How many turn prompts a session's card lists. */
 export const CARD_PROMPTS = 20;
+/** How many sessions a thread's card lists. */
+export const CARD_SESSIONS = 20;
 
 /** Text as a stub shows it: on one line, cut to `max` characters with `…`. */
 export function stubText(text: string, max = STUB_CHARS): string {
@@ -55,19 +68,22 @@ export function stubText(text: string, max = STUB_CHARS): string {
 export type Opened =
   | { kind: 'entry'; id: string }
   | { kind: 'recall'; id: string }
+  | { kind: 'thread'; id: string }
   | { kind: 'event'; id: string }
   | { kind: 'session'; session: SessionRow };
 
 /**
- * What an id opens: `ent_…` an entry, `rcl_…` a recall, an event's id (`<source>:…`), visible or
- * forgotten, the event; any other id a session, written as recalls record one
- * (`<source>:<session id>`) or as its id alone, with `source` when sessions of two sources have that
- * id. Null for an id this store does not know, such as a session whose events were all forgotten.
- * Throws when a session id alone names sessions of more than one source.
+ * What an id opens: `ent_…` an entry, `rcl_…` a recall, `thr_…` a thread, an event's id
+ * (`<source>:…`), visible or forgotten, the event; any other id a session, written as recalls record
+ * one (`<source>:<session id>`) or as its id alone, with `source` when sessions of two sources have
+ * that id. Null for an id this store does not know, such as a session whose events were all
+ * forgotten, or a thread none of whose sessions it has. Throws when a session id alone names
+ * sessions of more than one source.
  */
 export function resolveId(db: Database, id: string, source?: string): Opened | null {
   if (isEntryId(id)) return { kind: 'entry', id };
   if (isRecallId(id)) return { kind: 'recall', id };
+  if (isThreadId(id)) return threadSummary(db, id) ? { kind: 'thread', id } : null;
   const at = id.indexOf(':');
   if (at > 0) {
     if (db.prepare('SELECT 1 FROM event WHERE id = ?').get(id) !== undefined) {
@@ -202,6 +218,8 @@ export interface SessionCard {
   entries: Entry[];
   /** The latest recalls it was handed, newest first, with how many of their items are visible. */
   recalls: Array<{ recall: RecallRecord; items: number }>;
+  /** The thread it is in with other sessions, and how many sessions that thread has; or null. */
+  thread: { id: string; sessions: number } | null;
   /** The sessions just before and after it in its project, of any agent, by when they started. */
   before: SessionRow | null;
   after: SessionRow | null;
@@ -229,9 +247,95 @@ export function describeSession(db: Database, session: SessionRow): SessionCard 
     morePrompts: Math.max(0, starts.length - CARD_PROMPTS),
     entries: entriesOfSession(db, source, sessionId, NEIGHBOUR_MAX),
     recalls,
+    thread: session.thread ? threadCount(db, session.thread) : null,
     before: nextSession(db, session, 'before'),
     after: nextSession(db, session, 'after'),
   };
+}
+
+function threadCount(db: Database, id: string): { id: string; sessions: number } | null {
+  const summary = threadSummary(db, id);
+  return summary ? { id, sessions: summary.sessions } : null;
+}
+
+/** A thread as a card (see describeThread). */
+export interface ThreadCard {
+  id: string;
+  /** Its root: the session that started first, which names it and whose project it is. */
+  root: SessionRow;
+  project: string | null;
+  /** The root's title, or its first prompt. */
+  title: string | null;
+  startedAt: number | null;
+  endedAt: number | null;
+  /** Its first CARD_SESSIONS sessions, oldest first. */
+  sessions: SessionRow[];
+  /** How many sessions it has in all. */
+  count: number;
+  /** The agents (sources) of its sessions, and the work branches they were on, by name. */
+  agents: string[];
+  branches: string[];
+  /** The current entries written from its sessions, newest first, at most NEIGHBOUR_MAX. */
+  entries: Entry[];
+  /** The latest prompt of its most recent session that has one, with that session. */
+  lastPrompt: (SessionPrompt & { source: string; sessionId: string }) | null;
+}
+
+/** How many of a thread's latest sessions are looked at for its last prompt. */
+const LAST_PROMPT_SESSIONS = 5;
+
+/**
+ * A thread and what is next to it: its sessions, the agents and branches they were of, the entries
+ * written from them, and its last prompt. Bounded: CARD_SESSIONS sessions and NEIGHBOUR_MAX
+ * entries. Null for a thread with no visible sessions: a forgotten session leaves its thread
+ * (invariant 2).
+ */
+export function describeThread(db: Database, id: string): ThreadCard | null {
+  const summary = threadSummary(db, id);
+  const sessions = listThreadSessions(db, id, { limit: CARD_SESSIONS });
+  const root = sessions[0];
+  if (!summary || !root) return null;
+  return {
+    id,
+    root,
+    project: root.project,
+    title: root.title ?? root.prompt,
+    startedAt: summary.startedAt,
+    endedAt: summary.endedAt,
+    sessions,
+    count: summary.sessions,
+    agents: summary.agents,
+    branches: summary.branches,
+    entries: entriesOfThread(db, id, NEIGHBOUR_MAX),
+    lastPrompt: threadLastPrompt(db, id),
+  };
+}
+
+/** The latest prompt of a thread: of its most recent session that has one (see describeThread). */
+export function threadLastPrompt(
+  db: Database,
+  id: string,
+  opts: { until?: number } = {},
+): ThreadCard['lastPrompt'] {
+  const latest = db
+    .prepare(
+      `SELECT s.source, s.session_id FROM session_thread t
+         JOIN session s ON s.source = t.source AND s.session_id = t.session_id
+        WHERE t.thread_id = ? AND s.event_count > 0 AND s.started_at <= ?
+        ORDER BY s.ended_at DESC, s.source, s.session_id LIMIT ?`,
+    )
+    .all(id, opts.until ?? Number.MAX_SAFE_INTEGER, LAST_PROMPT_SESSIONS) as unknown as Array<{
+    source: string;
+    session_id: string;
+  }>;
+  for (const s of latest) {
+    const prompts = sessionPrompts(db, s.source, s.session_id);
+    const last = (
+      opts.until === undefined ? prompts : prompts.filter((p) => p.ts <= (opts.until as number))
+    ).at(-1);
+    if (last) return { ...last, source: s.source, sessionId: s.session_id };
+  }
+  return null;
 }
 
 /** The session just before or after one in its project, by when they started, or null. */

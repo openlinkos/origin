@@ -287,6 +287,17 @@ export function entriesOfSession(
   return currentCiting(db, 'e.source = ? AND e.session_id = ?', [source, sessionId], limit);
 }
 
+/** The current entries written from a thread: those that cite its sessions' events, newest first. */
+export function entriesOfThread(db: Database, threadId: string, limit = 10): Entry[] {
+  return currentCiting(
+    db,
+    `(e.source, e.session_id) IN
+       (SELECT t.source, t.session_id FROM session_thread t WHERE t.thread_id = ?)`,
+    [threadId],
+    limit,
+  );
+}
+
 /**
  * The current entries related to an entry: other entries that cite an event this version cites,
  * or another event of a session it cites; newest first. Versions of the entry itself are left out.
