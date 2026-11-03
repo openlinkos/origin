@@ -31,13 +31,18 @@ export interface PluginApi {
   registrationMode?: string;
   /** The Gateway's whole config, as loaded. */
   config?: unknown;
-  /** This plugin's config (`plugins.entries.<id>.config`), validated, SecretRefs resolved. */
+  /**
+   * This plugin's config (`plugins.entries.<id>.config`), validated, SecretRefs resolved at the
+   * Gateway's start; a reload registers the plugin before the Gateway resolves them.
+   */
   pluginConfig?: unknown;
   logger?: PluginLogger;
   runtime?: {
     /** OpenClaw's version. */
     version?: string;
     state?: { resolveStateDir?: (env?: NodeJS.ProcessEnv) => string };
+    /** `current()`: the Gateway's config as it runs now, SecretRefs resolved (its runtime snapshot). */
+    config?: { current?: () => unknown };
     events?: {
       /**
        * Calls `listener`, synchronously, each time OpenClaw persists a message to a session's

@@ -104,7 +104,8 @@ export interface FakeApi {
 
 /**
  * An OpenClaw `api`, as `register` receives it (2026.10.6), that records the hooks and transcript
- * listeners registered.
+ * listeners registered. `current` stands for `api.runtime.config.current()`, which hosts without it
+ * lack.
  */
 export function fakeApi(
   opts: {
@@ -113,6 +114,7 @@ export function fakeApi(
     registrationMode?: string;
     stateDir?: string;
     conversationAccess?: boolean;
+    current?: () => unknown;
     /** False for a host without transcript updates. */
     events?: boolean;
   } = {},
@@ -136,6 +138,7 @@ export function fakeApi(
     runtime: {
       version: '2026.10.6',
       state: { resolveStateDir: () => opts.stateDir ?? path.join(os.tmpdir(), 'unused-openclaw') },
+      ...(opts.current ? { config: { current: opts.current } } : {}),
       ...(opts.events === false
         ? {}
         : {

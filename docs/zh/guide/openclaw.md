@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-a488ee94
+sourceHash: sha256-5aef9024
 ---
 
 # 接入 OpenClaw
@@ -77,7 +77,7 @@ openclaw plugins install npm-pack:/tmp/openlinkos-origin-openclaw-*.tgz --force 
 | `spoolDir` | OpenClaw 状态目录中的 `origin-openclaw/` | 插件保存尚未投递的行以及已发送记录的地方 |
 | `timeoutMs` | `5000` | 一次向中枢投递最多可以花多久，单位为毫秒 |
 
-修改这一段配置后，OpenClaw 会重新加载插件来应用它，不需要重启 Gateway。设置无效的插件什么也不记录，并在 Gateway 的日志中说明原因，只说一次，那一行以 `origin: not recording` 开头；设置有效时，它会记一行以 `origin: recording` 开头的日志。
+修改这一段配置后，OpenClaw 会重新加载插件来应用它，不需要重启 Gateway。重新加载时，OpenClaw 在解析 SecretRef 之前就注册插件，所以插件每次发送时都从 Gateway 正在运行的配置（其中的 SecretRef 已解析）读取中枢令牌：在 Gateway 解析出令牌之前，这些行在暂存区中等待；解析出来时，日志会说一次，那一行以 `origin: the Gateway resolved the hub token` 开头。你在配置中改了令牌，从下一次发送起就用新的令牌。设置无效的插件什么也不记录，并在 Gateway 的日志中说明原因，只说一次，那一行以 `origin: not recording` 开头；设置有效时，它会记一行以 `origin: recording` 开头的日志。
 
 ### 有或没有会话访问权限 {#with-or-without-conversation-access}
 
@@ -94,7 +94,7 @@ openclaw plugins install npm-pack:/tmp/openlinkos-origin-openclaw-*.tgz --force 
 origin token create openclaw-us --agent   # on the hub, or: docker exec origin-hub origin token create openclaw-us --agent
 ```
 
-令牌的名字就是记录这些行时所用的设备：中枢把它们保存为由 `openclaw-us` 发送的来源 `openclaw` 的文件，与你的设备发来的内容放在一起。给每个 Gateway 一个自己的令牌。不要把令牌写进 `openclaw.json`：像上面那样写成 SecretRef，Gateway 加载插件时会从 1Password 解析它；或者把它放进 Gateway 服务的一个环境变量，并写上这个变量的名字：
+令牌的名字就是记录这些行时所用的设备：中枢把它们保存为由 `openclaw-us` 发送的来源 `openclaw` 的文件，与你的设备发来的内容放在一起。给每个 Gateway 一个自己的令牌。不要把令牌写进 `openclaw.json`：像上面那样写成 SecretRef，Gateway 会从 1Password 解析它，插件从 Gateway 的配置中读取解析后的令牌；或者把它放进 Gateway 服务的一个环境变量，并写上这个变量的名字：
 
 ```json
 { "hub": "https://hub.example.com", "tokenEnv": "ORIGIN_HUB_TOKEN" }
@@ -157,6 +157,7 @@ OpenClaw 为一轮对话附加的上下文仍是一行 `meta`，两个字段都�
 | Origin 什么也没收到 | Gateway 的日志：`origin: not recording: …` 说明了配置中要改什么；`openclaw plugins inspect origin --runtime --json` 列出它注册的钩子 |
 | 日志中有 `origin: recording … from the message hooks` | 没有会话访问权限：在插件条目中、与 `config` 并列（而不是在它里面）把 `hooks.allowConversationAccess` 设为 `true` |
 | `cannot deliver to …: the hub answered 401` | 令牌不对或已被吊销：在中枢上创建一个新令牌 |
+| `cannot deliver to …: the Gateway has not resolved the hub token's SecretRef yet` | Gateway 无法解析令牌的 SecretRef，例如它读不到的 1Password 引用：修正它；这些行在暂存区中等待，解析出来后就会发出 |
 | 你自己的消息显示为 `person` | 你书写时用的账号不在 OpenClaw 的 `commands.ownerAllowFrom` 中，插件没有会话访问权限，或者插件没有看到这条消息被保存（见[每条消息是谁写的](#who-wrote-each-message)） |
 | `the hub answered 404` | 中枢运行的 Origin 早于 `/v1/sources/<name>/lines`：升级它；这些行在暂存区中等待 |
 | `… lines wait in …/spool` | 无法连到中枢；它们会随下一轮发出，或者在 Gateway 启动时发出 |

@@ -73,7 +73,7 @@ The plugin's settings go in the Gateway's config, `~/.openclaw/openclaw.json`, u
 | `spoolDir` | `origin-openclaw/` in OpenClaw's state directory | Where the plugin keeps the lines it could not deliver yet, and the record of those it sent |
 | `timeoutMs` | `5000` | How long one delivery to the hub may take, in milliseconds |
 
-OpenClaw applies a change to this block by reloading the plugin; the Gateway need not restart. A plugin whose settings are not valid records nothing and says why, once, in the Gateway's log, in a line that starts with `origin: not recording`; a valid one logs a line that starts with `origin: recording`.
+OpenClaw applies a change to this block by reloading the plugin; the Gateway need not restart. On a reload, OpenClaw registers the plugin before it resolves a SecretRef, so the plugin reads the hub token from the Gateway's config as it runs, SecretRefs resolved, each time it delivers: until the Gateway has resolved the token, the lines wait in the spool, and the log says once when it has, in a line that starts with `origin: the Gateway resolved the hub token`. A token you change in the config is used from the next delivery on. A plugin whose settings are not valid records nothing and says why, once, in the Gateway's log, in a line that starts with `origin: not recording`; a valid one logs a line that starts with `origin: recording`.
 
 ### With or without conversation access
 
@@ -90,7 +90,7 @@ Create an agent's token on the hub, named after the Gateway's host, and give it 
 origin token create openclaw-us --agent   # on the hub, or: docker exec origin-hub origin token create openclaw-us --agent
 ```
 
-The token's name is the device the lines are recorded under: the hub keeps them as files of the source `openclaw` sent by `openclaw-us`, beside what your devices send. Give each Gateway a token of its own. Keep the token out of `openclaw.json`: as a SecretRef, as above, the Gateway resolves it from 1Password when it loads the plugin; or put it in an environment variable of the Gateway's service and name that variable:
+The token's name is the device the lines are recorded under: the hub keeps them as files of the source `openclaw` sent by `openclaw-us`, beside what your devices send. Give each Gateway a token of its own. Keep the token out of `openclaw.json`: as a SecretRef, as above, the Gateway resolves it from 1Password, and the plugin reads it, resolved, from the Gateway's config; or put it in an environment variable of the Gateway's service and name that variable:
 
 ```json
 { "hub": "https://hub.example.com", "tokenEnv": "ORIGIN_HUB_TOKEN" }
@@ -153,6 +153,7 @@ The context OpenClaw adds to a turn stays a `meta` line with neither field, whic
 | Nothing reaches Origin | The Gateway's log: `origin: not recording: …` says what to fix in the config; `openclaw plugins inspect origin --runtime --json` lists the hooks it registered |
 | The log says `origin: recording … from the message hooks` | Conversation access is off: set `hooks.allowConversationAccess` to `true` in the entry, beside `config`, not inside it |
 | `cannot deliver to …: the hub answered 401` | The token is wrong or was revoked: create a new one on the hub |
+| `cannot deliver to …: the Gateway has not resolved the hub token's SecretRef yet` | The Gateway could not resolve the token's SecretRef, such as a 1Password reference it cannot read: fix it; the lines wait in the spool and are sent once it resolves |
 | Your own messages show as `person` | The account you wrote from is not in OpenClaw's `commands.ownerAllowFrom`, the plugin has no conversation access, or it did not see the message persisted (see [Who wrote each message](#who-wrote-each-message)) |
 | `the hub answered 404` | The hub runs an Origin from before `/v1/sources/<name>/lines`: upgrade it; the lines wait in the spool |
 | `… lines wait in …/spool` | The hub could not be reached; they are sent with the next turn, or when the Gateway starts |

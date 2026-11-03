@@ -104,10 +104,15 @@ function answer(
   };
 }
 
-function start(pluginConfig: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = {}) {
+function start(
+  pluginConfig: Record<string, unknown> = {},
+  env: NodeJS.ProcessEnv = {},
+  current?: () => unknown,
+) {
   const fake = fakeApi({
     pluginConfig: { hub: hub.url, token: 'ogn_test_token', ...pluginConfig },
     stateDir: state,
+    current,
   });
   const rec = registerOrigin(fake.api, { now: () => T + 60_000, env });
   if (!rec) throw new Error(JSON.stringify(fake.logs));
@@ -144,11 +149,85 @@ describe('delivery to a hub', () => {
     const { hooks, rec } = start(
       { token: undefined, tokenEnv: 'ORIGIN_HUB_TOKEN_TEST', source: 'openclaw-us' },
       { ORIGIN_HUB_TOKEN_TEST: 'ogn_from_env' },
+      // The Gateway's config holds no token then: the one from the environment is used.
+      () => ({
+        plugins: { entries: { origin: { config: { tokenEnv: 'ORIGIN_HUB_TOKEN_TEST' } } } },
+      }),
     );
     await hooks.get('agent_end')!({ messages: firstTurn(), success: true }, agentCtx());
     await rec.idle();
     expect(hub.requests[0]!.auth).toBe('Bearer ogn_from_env');
     expect(new URL(hub.requests[0]!.url, hub.url).pathname).toBe('/v1/sources/openclaw-us/lines');
+  });
+
+  it('waits for the Gateway to resolve the token, as on a reload, and then delivers what waited', async () => {
+    const ref = {
+      source: 'exec',
+      provider: 'onepassword',
+      id: 'op://OpenClaw/origin-hub/credential',
+    };
+    let token: unknown = ref;
+    const current = () => ({
+      plugins: { entries: { origin: { enabled: true, config: { hub: hub.url, token } } } },
+    });
+    const { hooks, rec, logs } = start({ token: ref }, {}, current);
+    expect(rec.config.target).toMatchObject({ kind: 'hub', token: null });
+    expect(logs.map((l) => l.message)).toEqual([
+      expect.stringMatching(/^origin: recording every agent/),
+      expect.stringContaining("has not resolved the hub token's SecretRef yet"),
+    ]);
+    await hooks.get('agent_end')!({ messages: firstTurn(), success: true }, agentCtx());
+    await rec.idle();
+    expect(hub.requests).toEqual([]);
+    expect(spooled()).toHaveLength(1);
+    expect(logs.filter((l) => l.level === 'warn' && l.message.includes('cannot deliver'))).toEqual([
+      expect.objectContaining({ message: expect.stringContaining('not resolved') }),
+    ]);
+
+    token = 'ogn_resolved';
+    await hooks.get('gateway_start')!({ port: 18789 }, {});
+    await rec.idle();
+    expect(spooled()).toEqual([]);
+    expect(hub.requests.map((r) => r.auth)).toEqual(['Bearer ogn_resolved']);
+    await hooks.get('agent_end')!(
+      { messages: [...firstTurn(), user('And now?', T + 20_000)], success: true },
+      agentCtx({ runId: 'run-2' }),
+    );
+    await rec.idle();
+    expect(hub.delivered()).toHaveLength(6);
+    // Said once, when the token came.
+    expect(
+      logs.filter((l) => l.message.includes('the Gateway resolved the hub token: delivering to')),
+    ).toEqual([expect.objectContaining({ level: 'info' })]);
+  });
+
+  it("reads the token from the Gateway's config at each delivery, else the one it was registered with", async () => {
+    let live: unknown = 'ogn_live_1';
+    const current = () => {
+      if (live === 'fail') throw new Error('no snapshot');
+      return { plugins: { entries: { Origin: { config: { token: live } } } } };
+    };
+    const { hooks, rec } = start({ token: 'ogn_registered' }, {}, current);
+    const turn = async (i: number) => {
+      await hooks.get('agent_end')!(
+        { messages: [user(`Turn ${i}.`, T + i * 1000)], success: true },
+        agentCtx({ runId: `run-${i}` }),
+      );
+      await rec.idle();
+    };
+    await turn(1);
+    live = 'ogn_live_2';
+    await turn(2);
+    live = { source: 'exec', id: 'op://x' };
+    await turn(3);
+    live = 'fail';
+    await turn(4);
+    expect(hub.requests.map((r) => r.auth)).toEqual([
+      'Bearer ogn_live_1',
+      'Bearer ogn_live_2',
+      'Bearer ogn_registered',
+      'Bearer ogn_registered',
+    ]);
   });
 
   it('spools a turn the hub cannot take, and sends it first with the next turn', async () => {

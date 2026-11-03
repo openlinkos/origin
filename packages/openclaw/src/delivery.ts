@@ -108,15 +108,22 @@ export class HubSink implements Sink {
   readonly target: string;
   private warnedParseErrors = false;
 
+  private readonly token: () => string | null;
+
+  /**
+   * `token` is the token, or what gives it at each request: null while there is none yet, as while
+   * the Gateway has not resolved its SecretRef, which keeps the lines in the spool.
+   */
   constructor(
     private readonly url: string,
     private readonly source: string,
-    private readonly token: string,
+    token: string | (() => string | null),
     private readonly timeoutMs: number,
     private readonly log: Log,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {
     this.target = url;
+    this.token = typeof token === 'function' ? token : () => token;
   }
 
   async send(batch: Batch): Promise<SendResult> {
@@ -131,12 +138,20 @@ export class HubSink implements Sink {
 
   private async post(file: string, lines: string[]): Promise<SendResult> {
     const endpoint = `${this.url}/v1/sources/${encodeURIComponent(this.source)}/lines?path=${encodeURIComponent(file)}`;
+    const token = this.token();
+    if (!token) {
+      return {
+        outcome: 'retry',
+        sent: 0,
+        message: "the Gateway has not resolved the hub token's SecretRef yet",
+      };
+    }
     let res: Response;
     try {
       res = await this.fetchImpl(endpoint, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${this.token}`,
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/x-ndjson',
         },
         body: `${lines.join('\n')}\n`,

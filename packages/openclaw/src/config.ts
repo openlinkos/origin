@@ -10,8 +10,12 @@ import path from 'node:path';
 export interface Config {
   /** The source the lines are recorded under, `openclaw` by default. */
   source: string;
-  /** Where the lines go: a directory an Origin device reads, or a hub. */
-  target: { kind: 'dir'; dir: string } | { kind: 'hub'; url: string; token: string };
+  /**
+   * Where the lines go: a directory an Origin device reads, or a hub. A hub's token is null when it
+   * is a SecretRef the Gateway had not resolved when it registered the plugin, as on a reload: the
+   * plugin then reads it from the Gateway's config when it delivers.
+   */
+  target: { kind: 'dir'; dir: string } | { kind: 'hub'; url: string; token: string | null };
   /** Each session's project: its agent's id, or its channel. */
   projectBy: 'agent' | 'channel';
   /** One project for every session, in place of projectBy. */
@@ -34,6 +38,11 @@ export interface ConfigEnv {
   resolvePath?: (input: string) => string;
   /** The default state directory, under OpenClaw's state directory. */
   defaultStateDir: string;
+  /**
+   * Whether the plugin can read the token from the Gateway's config at delivery time, which takes
+   * a SecretRef the Gateway has not resolved yet; otherwise such a token is an error.
+   */
+  tokenLater?: boolean;
 }
 
 export type ConfigResult = { ok: true; config: Config } | { ok: false; error: string };
@@ -125,7 +134,7 @@ function parse(raw: unknown, ctx: ConfigEnv): Config {
     target = {
       kind: 'hub',
       url: hubUrl(hub as string),
-      token: hubToken(tokenValue, tokenEnv, ctx.env),
+      token: hubToken(tokenValue, tokenEnv, ctx),
     };
   }
 
@@ -180,19 +189,21 @@ function hubUrl(value: string): string {
 
 /**
  * The hub token: `token` as the Gateway resolved it (a string, or a SecretRef the Gateway resolved
- * to one), or the value of the environment variable `tokenEnv` names.
+ * to one), or the value of the environment variable `tokenEnv` names. Null for a SecretRef the
+ * Gateway has not resolved yet, when the plugin can read it later (`tokenLater`).
  */
-function hubToken(value: unknown, envName: string | null, env: NodeJS.ProcessEnv): string {
+function hubToken(value: unknown, envName: string | null, ctx: ConfigEnv): string | null {
   if (value !== undefined && value !== null && envName) fail('set "token" or "tokenEnv", not both');
   if (envName) {
     if (!ENV_NAME_RE.test(envName)) fail('"tokenEnv" must be the name of an environment variable');
-    const token = env[envName]?.trim();
+    const token = ctx.env[envName]?.trim();
     if (!token) fail(`the environment variable ${envName} that "tokenEnv" names is not set`);
     return token as string;
   }
   if (value === undefined || value === null) {
     fail('set "token" (a SecretRef, best) or "tokenEnv" for the hub');
   }
+  if (typeof value === 'object' && !Array.isArray(value) && ctx.tokenLater) return null;
   if (typeof value !== 'string') {
     // A SecretRef the Gateway could not resolve stays an object.
     fail('"token" is not a string: the Gateway did not resolve its SecretRef');

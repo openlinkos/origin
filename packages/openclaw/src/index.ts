@@ -36,6 +36,8 @@ export function registerOrigin(api: PluginApi, opts: RegisterOptions = {}): Reco
     env,
     resolvePath: typeof api.resolvePath === 'function' ? api.resolvePath.bind(api) : undefined,
     defaultStateDir: path.join(openclawStateDir(api, env), 'origin-openclaw'),
+    // The token can then be read from the Gateway's config when the plugin delivers (liveToken).
+    tokenLater: typeof api.runtime?.config?.current === 'function',
   });
   if (!parsed.ok) {
     log.error(`not recording: ${parsed.error} (plugins.entries.${api.id ?? PLUGIN_ID}.config)`);
@@ -85,6 +87,11 @@ export function registerOrigin(api: PluginApi, opts: RegisterOptions = {}): Reco
         : 'from the message hooks (no conversation access: set hooks.allowConversationAccess for agent_end)'
     }`,
   );
+  if (config.target.kind === 'hub' && config.target.token === null) {
+    log.info(
+      "the Gateway has not resolved the hub token's SecretRef yet: the plugin reads it from the Gateway's config each time it delivers, and keeps the lines in its spool until then",
+    );
+  }
   return recorder;
 }
 
@@ -164,13 +171,50 @@ function hook(
  * the message hooks.
  */
 export function hasConversationAccess(config: unknown, id: string): boolean {
+  return asRecord(pluginEntry(config, id)?.hooks)?.allowConversationAccess === true;
+}
+
+/** The plugin's entry in a Gateway config, `plugins.entries.<id>`, its id matched as OpenClaw does. */
+function pluginEntry(config: unknown, id: string): Record<string, unknown> | null {
   const entries = asRecord(asRecord(asRecord(config)?.plugins)?.entries);
-  if (!entries) return false;
+  if (!entries) return null;
   const key =
     Object.keys(entries).find((k) => k === id) ??
     Object.keys(entries).find((k) => k.toLowerCase() === id.toLowerCase());
-  const entry = key ? asRecord(entries[key]) : null;
-  return asRecord(entry?.hooks)?.allowConversationAccess === true;
+  return key ? asRecord(entries[key]) : null;
+}
+
+/**
+ * The hub token, read at each delivery: the one in the Gateway's config as it runs now, SecretRefs
+ * resolved (`api.runtime.config.current()`), so that a token changed since the plugin was
+ * registered, or a SecretRef the Gateway resolved after it, as on a reload, is the one used; else
+ * the token the plugin was registered with. Null while there is neither. Says once when there is a
+ * token after there was none.
+ */
+function liveToken(
+  api: PluginApi,
+  registered: string | null,
+  url: string,
+  log: Log,
+): () => string | null {
+  const id = api.id ?? PLUGIN_ID;
+  let had = registered !== null;
+  return () => {
+    let token: string | null = null;
+    try {
+      const config = api.runtime?.config;
+      const current = typeof config?.current === 'function' ? config.current() : undefined;
+      token = str(asRecord(pluginEntry(current, id)?.config)?.token);
+    } catch {
+      token = null;
+    }
+    token ??= registered;
+    if (token && !had) {
+      had = true;
+      log.info(`the Gateway resolved the hub token: delivering to ${url}`);
+    }
+    return token;
+  };
 }
 
 /**
@@ -205,7 +249,7 @@ function sinkFor(config: Config, api: PluginApi, log: Log): Sink {
     return new HubSink(
       config.target.url,
       config.source,
-      config.target.token,
+      liveToken(api, config.target.token, config.target.url, log),
       config.timeoutMs,
       log,
     );
