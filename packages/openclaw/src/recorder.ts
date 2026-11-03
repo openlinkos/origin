@@ -2,19 +2,27 @@ import type { Config } from './config.js';
 import { type Batch, Deliverer, type Sink, Spool } from './delivery.js';
 import { linesPath } from './files.js';
 import {
+  type Authorship,
   agentOfSessionKey,
   asRecord,
+  authorshipOf,
   type Draft,
   draftFromInbound,
   draftFromOutbound,
   draftsFromMessages,
   draftsFromToolCall,
   type EventLine,
+  isRuntimeContext,
+  pairingKey,
   type SessionInfo,
+  saysWho,
+  senderFactsOf,
   str,
+  timeMs,
   titleOf,
 } from './lines.js';
 import type { Log } from './log.js';
+import { SenderMemory } from './senders.js';
 import { SessionStore } from './state.js';
 
 /**
@@ -69,6 +77,8 @@ export class Recorder {
   private readonly sessions: SessionStore;
   private readonly deliverer: Deliverer;
   private readonly buffers = new Map<string, { info: SessionInfo; drafts: Draft[] }>();
+  /** Who wrote the user messages OpenClaw persisted, until their lines are sent. */
+  readonly senders: SenderMemory;
 
   constructor(opts: RecorderOptions) {
     this.config = opts.config;
@@ -78,6 +88,7 @@ export class Recorder {
     this.now = opts.now ?? Date.now;
     this.sessions = new SessionStore(opts.config.stateDir, opts.log);
     this.deliverer = new Deliverer(opts.sink, new Spool(opts.config.stateDir), opts.log);
+    this.senders = new SenderMemory(this.now);
   }
 
   /** The session a hook is about, or null if it is not one to record. */
@@ -149,6 +160,36 @@ export class Recorder {
     if (Array.isArray(messages)) this.send(info, this.build(messages, info));
   }
 
+  /**
+   * A transcript update (`api.runtime.events.onSessionTranscriptUpdate`): OpenClaw has persisted a
+   * message. OpenClaw 2026.10.6 keeps who wrote a user message (`__openclaw`, `provenance`) on the
+   * copy it persists, and leaves it off the copy the run holds, which `agent_end` gives; so this
+   * notes who wrote it, by its session and a hash of its text, for its line to take when it is
+   * sent. OpenClaw calls this on every write, synchronously: it does no I/O and keeps no text.
+   */
+  transcriptUpdate(update: unknown): void {
+    const u = asRecord(update);
+    const m = asRecord(u?.message);
+    if (!u || m?.role !== 'user') return;
+    const target = asRecord(u.target);
+    const sessionKey = str(u.sessionKey) ?? str(target?.sessionKey);
+    if (!sessionKey || isIncognito(sessionKey)) return;
+    const agentId = str(u.agentId) ?? str(target?.agentId) ?? agentOfSessionKey(sessionKey);
+    if (this.config.agents && !(agentId && this.config.agents.includes(agentId))) return;
+    if (isRuntimeContext(m)) return;
+    const facts = senderFactsOf(m);
+    if (!saysWho(facts)) return;
+    const key = pairingKey(m.content);
+    if (!key) return;
+    this.senders.note(sessionKey, key, {
+      facts,
+      sessionId: str(u.sessionId) ?? str(target?.sessionId),
+      idempotencyKey: str(m.idempotencyKey),
+      messageId: str(u.messageId),
+      ts: timeMs(m.timestamp),
+    });
+  }
+
   messageReceived(event: unknown, ctx: unknown): void {
     const info = this.session(ctx, event);
     if (!info || !this.recorded(info.trigger)) return;
@@ -194,6 +235,8 @@ export class Recorder {
       if (Array.isArray(tail?.messages)) this.send(info, this.build(tail.messages, info));
     }
     this.sessions.forget(info.sessionKey);
+    // The key goes on after /new or /reset, in a session of its own: forget only the ended one's.
+    this.senders.forget(info.sessionKey, info.meta.sessionId ?? null);
   }
 
   /** `gateway_start`: send what the spool holds. */
@@ -245,9 +288,26 @@ export class Recorder {
   /** Record that `drafts` are left out, without sending them. */
   private skip(info: SessionInfo, drafts: readonly Draft[]): void {
     const record = this.sessions.get(info.agentId, info.sessionKey);
-    const ids = drafts.map((d) => d.line.id).filter((id) => !record.ids.has(id));
-    for (const id of ids) record.ids.add(id);
+    const ids: string[] = [];
+    for (const d of drafts) {
+      if (record.ids.has(d.line.id)) continue;
+      record.ids.add(d.line.id);
+      ids.push(d.line.id);
+      // Who wrote it is not needed: take it, so that it pairs with no other message.
+      this.paired(info, d);
+    }
     this.sessions.persist(info.agentId, info.sessionKey, ids, false);
+  }
+
+  /**
+   * Who wrote a user line's message, as the persisted copy of the message says, when the run's own
+   * copy does not say; null otherwise. Takes the persisted copy's facts either way, in the order the
+   * lines are sent, so that messages with the same text pair in order.
+   */
+  private paired(info: SessionInfo, d: Draft): Authorship | null {
+    if (!d.pair) return null;
+    const facts = this.senders.take(info.sessionKey, d.pair.key, d.pair.idempotencyKey);
+    return facts && !d.pair.known ? authorshipOf(facts, this.agentNames) : null;
   }
 
   /**
@@ -266,7 +326,11 @@ export class Recorder {
     let titled = false;
     let parent: string | undefined;
     const placed = fresh.map((d) => {
-      const { id, session, time, role, author, speaker, kind, text, project, meta } = d.line;
+      const { id, session, time, role, kind, text, project } = d.line;
+      const by = this.paired(info, d);
+      const author = by ? by.author : d.line.author;
+      const speaker = by ? by.speaker : d.line.speaker;
+      const meta = by?.meta ? { ...d.line.meta, ...by.meta } : d.line.meta;
       const line: EventLine = {
         id,
         session,

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-33247f03
+sourceHash: sha256-a488ee94
 ---
 
 # 接入 OpenClaw
@@ -137,7 +137,9 @@ origin search "migration lock" --source openclaw        # its messages, among ev
 OpenClaw 为一轮对话附加的上下文仍是一行 `meta`，两个字段都没有，事件行把它当作系统写的。任何一行都不带发送者的 id，`speaker` 和 `meta` 中都没有：只是发送者 id 的名字会被略去。
 
 - **所有者由 OpenClaw 认定。** 当发送者与 Gateway 配置中 `commands.ownerAllowFrom` 的某一项相符，例如 `telegram:<your user id>`，或者以具有 `operator.admin` 的操作员身份在 Control UI 中书写时，OpenClaw 把这条消息标为其所有者的。插件对此没有自己的设置。名单之外的你的账号会被记为 `person`：如果名单里只有你的 Discord 账号，你在 Telegram、飞书或微信上的消息就会被记为 `person`，直到你把这些账号加进 `commands.ownerAllowFrom`。把一个账号加进去，也会让它获得 OpenClaw 留给所有者的权限，例如仅限所有者的命令和执行审批。
-- **来自一个内部字段。** 发送者的这些事实，即 OpenClaw 是否认定他为所有者、他的名字、他是不是机器人，来自 `__openclaw`：这是 OpenClaw 为自己保存在每条消息上、没有向插件声明的字段。插件对照 OpenClaw 2026.10.6 写入它的方式核对过，并随它支持的每个 OpenClaw 版本重新核对。没有这个字段的消息会被记为 `person` 写的，不带名字。
+- **来自一个内部字段。** 发送者的这些事实，即 OpenClaw 是否认定他为所有者、他的名字、他是不是机器人，来自 `__openclaw`：这是 OpenClaw 为自己保存在消息上、没有向插件声明的字段；一条消息是否由别的会话转来或由 OpenClaw 生成，来自它的 `provenance`。插件对照 OpenClaw 2026.10.6 写入它们的方式核对过，并随它支持的每个 OpenClaw 版本重新核对。
+- **来自 OpenClaw 保存的那一份。** OpenClaw 2026.10.6 把这些事实写在它保存到会话记录里的那一份用户消息上，而不是写在运行持有的那一份上，`agent_end` 给出的是后者。所以插件监听 OpenClaw 的记录更新（`api.runtime.events.onSessionTranscriptUpdate`，它不是钩子，不改变 OpenClaw 的任何行为），按会话和消息文本的哈希记下每条用户消息是谁写的，并在运行结束时交给这条消息的那一行。同一个会话中文本相同的消息，按它们被保存的顺序配对。它不保存任何文本，最多保存每个会话 50 条消息、200 个会话、两小时；一个会话结束时，它的记录随之清除。一行的 id 与这些都无关。
+- **无法判断时**，插件把消息记为 `person` 写的，不带名字：在插件加载之前保存的消息，例如插件安装后一个会话的第一轮发出的历史；或者一轮的文本与 OpenClaw 保存的任何一条消息都不相同，例如 OpenClaw 把排队的消息合成一个提示时。
 - **没有会话访问权限时**，插件只能看到消息钩子，它们给出发送者的名字，但不说明 OpenClaw 是否认定他为所有者：到达的每条消息都按那个名字记为 `person` 写的，没有任何消息记为所有者的。
 
 ## 限制 {#limits}
@@ -155,7 +157,7 @@ OpenClaw 为一轮对话附加的上下文仍是一行 `meta`，两个字段都�
 | Origin 什么也没收到 | Gateway 的日志：`origin: not recording: …` 说明了配置中要改什么；`openclaw plugins inspect origin --runtime --json` 列出它注册的钩子 |
 | 日志中有 `origin: recording … from the message hooks` | 没有会话访问权限：在插件条目中、与 `config` 并列（而不是在它里面）把 `hooks.allowConversationAccess` 设为 `true` |
 | `cannot deliver to …: the hub answered 401` | 令牌不对或已被吊销：在中枢上创建一个新令牌 |
-| 你自己的消息显示为 `person` | 你书写时用的账号不在 OpenClaw 的 `commands.ownerAllowFrom` 中，或者插件没有会话访问权限（见[每条消息是谁写的](#who-wrote-each-message)） |
+| 你自己的消息显示为 `person` | 你书写时用的账号不在 OpenClaw 的 `commands.ownerAllowFrom` 中，插件没有会话访问权限，或者插件没有看到这条消息被保存（见[每条消息是谁写的](#who-wrote-each-message)） |
 | `the hub answered 404` | 中枢运行的 Origin 早于 `/v1/sources/<name>/lines`：升级它；这些行在暂存区中等待 |
 | `… lines wait in …/spool` | 无法连到中枢；它们会随下一轮发出，或者在 Gateway 启动时发出 |
 | 目录中的行一直没有出现 | 目录名必须是一个来源的名字：2 到 32 个小写字母、数字和连字符，例如 `openclaw`；读取之后，`origin status` 会列出这个来源 |

@@ -38,7 +38,17 @@ export interface PluginApi {
     /** OpenClaw's version. */
     version?: string;
     state?: { resolveStateDir?: (env?: NodeJS.ProcessEnv) => string };
+    events?: {
+      /**
+       * Calls `listener`, synchronously, each time OpenClaw persists a message to a session's
+       * transcript: `{ target: { agentId, sessionId, sessionKey }, sessionKey, agentId, sessionId,
+       * message, messageId, messageSeq, runId }`, the message as persisted. Returns what removes it.
+       */
+      onSessionTranscriptUpdate?: (listener: (update: unknown) => void) => unknown;
+    };
   };
+  /** This instance of the plugin's lifecycle: `onDispose` runs when OpenClaw unloads or replaces it. */
+  lifecycle?: { onDispose?: (dispose: () => void) => unknown };
   /** Resolves a user path, such as `~/…`, as OpenClaw resolves paths in its config. */
   resolvePath?: (input: string) => string;
   on: (hookName: string, handler: HookHandler, opts?: HookOptions) => void;

@@ -41,10 +41,25 @@ export interface SessionInfo {
   meta: Record<string, string>;
 }
 
+/**
+ * How a user line pairs with the copy of its message that OpenClaw persisted, which says who wrote
+ * it when the copy a run's `agent_end` gives does not (see SenderFacts).
+ */
+export interface Pairing {
+  /** A hash of the message's text (pairingKey). */
+  key: string;
+  /** The message's idempotency key, when it carries one, as the persisted copy does. */
+  idempotencyKey: string | null;
+  /** Whether the message itself says who wrote it. */
+  known: boolean;
+}
+
 /** A line before it is placed in its turn (parent, title), with its time in epoch ms. */
 export interface Draft {
   line: EventLine;
   ms: number;
+  /** A user message's line: how it pairs with the persisted copy of its message. */
+  pair?: Pairing;
 }
 
 /** Longest tool call and tool result text, as Origin's adapters keep them. */
@@ -204,36 +219,105 @@ export interface BuildOptions {
   agentNames?: ReadonlyMap<string, string>;
 }
 
-interface Authorship {
+export interface Authorship {
   author: Author;
   speaker: string | null;
   meta?: Record<string, unknown>;
 }
 
 /**
- * Who wrote a user message, from what OpenClaw records with it: its `provenance`, which marks an
- * input routed from another session or one OpenClaw made itself, and for a person's input the
- * sender facts in its internal `__openclaw` field. The owner is the sender OpenClaw itself takes
- * for its owner (`senderIsOwner`, from `commands.ownerAllowFrom`); anyone else is a person, by the
- * name the channel gives. No sender id is kept.
+ * What OpenClaw records of who wrote a user message: its `provenance`, which marks an input routed
+ * from another session or one OpenClaw made itself, and for a person's input the sender facts in
+ * its internal `__openclaw` field. OpenClaw 2026.10.6 keeps these on the copy of a message it
+ * persists, and leaves them off the copy a run holds, which `agent_end` gives: the recorder pairs
+ * the two (see Recorder.transcriptUpdate). A name that is only the sender's id is left out, and no
+ * id is kept.
  */
-function authorshipOf(m: Record<string, unknown>, opts: BuildOptions): Authorship {
+export interface SenderFacts {
+  /** `provenance.kind`: external_user, inter_session, internal_system, or another OpenClaw names. */
+  kind: string | null;
+  /** The agent of the session an inter-session input came from. */
+  sourceAgent: string | null;
+  sourceTool: string | null;
+  /** Whether `__openclaw` holds any sender fact at all. */
+  sender: boolean;
+  /** True only when OpenClaw says so, from `commands.ownerAllowFrom`. */
+  senderIsOwner: boolean;
+  senderName: string | null;
+  senderUsername: string | null;
+  senderKind: string | null;
+}
+
+const SENDER_KEYS = ['senderIsOwner', 'senderId', 'senderName', 'senderUsername', 'senderIdentity'];
+
+export function senderFactsOf(m: Record<string, unknown>): SenderFacts {
   const provenance = asRecord(m.provenance);
-  if (provenance?.kind === 'internal_system') return { author: 'system', speaker: null };
-  if (provenance?.kind === 'inter_session') {
-    const source = str(provenance.sourceSessionKey);
-    const agent = source ? agentOfSessionKey(source) : null;
-    const name = agent ? (opts.agentNames?.get(agent.toLowerCase()) ?? speakerName(agent)) : null;
-    return { author: 'agent', speaker: name ?? speakerName(provenance.sourceTool) };
-  }
-  const sender = asRecord(m.__openclaw) ?? {};
-  const identity = asRecord(sender.senderIdentity);
-  const ids = [sender.senderId, identity?.id];
+  const sender = asRecord(m.__openclaw);
+  const identity = asRecord(sender?.senderIdentity);
+  const ids = [sender?.senderId, identity?.id];
+  const source = str(provenance?.sourceSessionKey);
   return {
-    author: sender.senderIsOwner === true ? 'owner' : 'person',
-    speaker: speakerName(sender.senderName, ids) ?? speakerName(sender.senderUsername, ids),
-    ...(identity?.senderKind === 'bot' ? { meta: { senderKind: 'bot' } } : {}),
+    kind: str(provenance?.kind),
+    sourceAgent: source ? agentOfSessionKey(source) : null,
+    sourceTool: str(provenance?.sourceTool),
+    sender: sender !== null && SENDER_KEYS.some((k) => sender[k] !== undefined),
+    senderIsOwner: sender?.senderIsOwner === true,
+    senderName: speakerName(sender?.senderName, ids),
+    senderUsername: speakerName(sender?.senderUsername, ids),
+    senderKind: str(identity?.senderKind),
   };
+}
+
+/** Whether the facts say who wrote a message: an input routed or made by OpenClaw, or a sender's. */
+export const saysWho = (f: SenderFacts): boolean =>
+  f.kind === 'inter_session' || f.kind === 'internal_system' || f.sender;
+
+/**
+ * Who wrote a user message, from its facts. The owner is the sender OpenClaw itself takes for its
+ * owner (`senderIsOwner`, from `commands.ownerAllowFrom`); anyone else is a person, by the name the
+ * channel gives; a message without facts is a person's, unnamed.
+ */
+export function authorshipOf(f: SenderFacts, agentNames?: ReadonlyMap<string, string>): Authorship {
+  if (f.kind === 'internal_system') return { author: 'system', speaker: null };
+  if (f.kind === 'inter_session') {
+    const agent = f.sourceAgent;
+    const name = agent ? (agentNames?.get(agent.toLowerCase()) ?? speakerName(agent)) : null;
+    return { author: 'agent', speaker: name ?? speakerName(f.sourceTool) };
+  }
+  return {
+    author: f.senderIsOwner ? 'owner' : 'person',
+    speaker: f.senderName ?? f.senderUsername,
+    ...(f.senderKind === 'bot' ? { meta: { senderKind: 'bot' } } : {}),
+  };
+}
+
+/** Whether a user message is the runtime context OpenClaw adds to a turn, which no one said. */
+export function isRuntimeContext(m: Record<string, unknown>, text = textOf(m.content)): boolean {
+  return (
+    asRecord(m.runtimeContext) !== null ||
+    m.runtimeContextCarrier === true ||
+    text.includes(RUNTIME_CONTEXT_MARKER)
+  );
+}
+
+/**
+ * What pairs a user message a run holds with the copy OpenClaw persisted of it, which can differ in
+ * its time and in the shape of its content (a string, or text and image parts): a hash of its text
+ * parts, joined, without whitespace. Null when it has no text.
+ */
+export function pairingKey(content: unknown): string | null {
+  const parts =
+    typeof content === 'string'
+      ? [content]
+      : Array.isArray(content)
+        ? content.map((block) => {
+            if (typeof block === 'string') return block;
+            const b = asRecord(block);
+            return b?.type === 'text' && typeof b.text === 'string' ? b.text : '';
+          })
+        : [];
+  const text = parts.join('').replace(/\s+/g, '');
+  return text ? createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 32) : null;
 }
 
 /**
@@ -242,7 +326,9 @@ function authorshipOf(m: Record<string, unknown>, opts: BuildOptions): Authorshi
  * tool calls and their results, and compaction summaries. Thinking, and messages of kinds it does
  * not know, are left out. A message has no id of its own, so a line's id is a hash of the session,
  * the message's time, its role and kind, and its place in the message (or its tool call's id).
- * A user message's line also says who wrote it (`author`, `speaker`), which is not in its id.
+ * A user message's line also says who wrote it (`author`, `speaker`), which is not in its id, as
+ * far as the message itself tells, and how it pairs with the persisted copy of its message, which
+ * tells it when the message does not (`pair`).
  */
 export function draftsFromMessages(
   messages: readonly unknown[],
@@ -269,24 +355,24 @@ export function draftsFromMessages(
     const key = info.sessionKey;
     if (role === 'user') {
       const text = textOf(m.content);
-      const runtime =
-        asRecord(m.runtimeContext) !== null ||
-        m.runtimeContextCarrier === true ||
-        text.includes(RUNTIME_CONTEXT_MARKER);
+      const runtime = isRuntimeContext(m, text);
       const kind: Kind = runtime ? 'meta' : 'message';
       // The runtime context is no one's input: a meta line, which event lines take as the system's.
-      const by = runtime ? null : authorshipOf(m, opts);
-      push(
-        draft(info, {
-          // Who wrote a message is not part of what identifies it.
-          id: lineId([key, at, 'user', kind, 0]),
-          ms,
-          role: 'user',
-          ...(by ?? {}),
-          kind,
-          text,
-        }),
-      );
+      const facts = runtime ? null : senderFactsOf(m);
+      const d = draft(info, {
+        // Who wrote a message is not part of what identifies it.
+        id: lineId([key, at, 'user', kind, 0]),
+        ms,
+        role: 'user',
+        ...(facts ? authorshipOf(facts, opts.agentNames) : {}),
+        kind,
+        text,
+      });
+      const pairing = facts ? pairingKey(m.content) : null;
+      if (d && facts && pairing) {
+        d.pair = { key: pairing, idempotencyKey: str(m.idempotencyKey), known: saysWho(facts) };
+      }
+      push(d);
     } else if (role === 'assistant') {
       const blocks = Array.isArray(m.content) ? m.content : [];
       const text =

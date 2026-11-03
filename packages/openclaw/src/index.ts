@@ -61,6 +61,7 @@ export function registerOrigin(api: PluginApi, opts: RegisterOptions = {}): Reco
   if (turns === 'agent_end') {
     on('agent_end', (e, c) => recorder.agentEnd(e, c));
     on('before_compaction', (e, c) => recorder.beforeCompaction(e, c));
+    listenToTranscripts(api, log, recorder);
   }
   on('message_received', (e, c) => recorder.messageReceived(e, c));
   on('message_sent', (e, c) => recorder.messageSent(e, c));
@@ -85,6 +86,49 @@ export function registerOrigin(api: PluginApi, opts: RegisterOptions = {}): Reco
     }`,
   );
   return recorder;
+}
+
+/**
+ * Listen to OpenClaw's transcript updates, which carry each message as OpenClaw persisted it, with
+ * who wrote it: on OpenClaw 2026.10.6 the copy of a user message that `agent_end` gives lacks that
+ * (see Recorder.transcriptUpdate). A listener is not a hook, and changes nothing OpenClaw does.
+ * OpenClaw calls it synchronously on every write: it is small, never throws, and says once if it
+ * failed. It is removed when OpenClaw disposes of this instance of the plugin, as on a reload.
+ */
+function listenToTranscripts(api: PluginApi, log: Log, recorder: Recorder): void {
+  const events = api.runtime?.events;
+  const subscribe = events?.onSessionTranscriptUpdate;
+  if (typeof subscribe !== 'function') {
+    log.warn(
+      "this OpenClaw gives no transcript updates: a user message whose copy in agent_end does not say who wrote it is recorded as a person's",
+    );
+    return;
+  }
+  let failed = false;
+  const listener = (update: unknown): void => {
+    try {
+      recorder.transcriptUpdate(update);
+    } catch (err) {
+      if (failed) return;
+      failed = true;
+      log.error(`reading a transcript update failed: ${(err as Error)?.message ?? err}`);
+    }
+  };
+  let off: unknown;
+  try {
+    off = subscribe.call(events, listener);
+  } catch (err) {
+    log.warn(`could not listen to transcript updates: ${(err as Error)?.message ?? err}`);
+    return;
+  }
+  if (typeof off !== 'function') return;
+  try {
+    api.lifecycle?.onDispose?.(() => {
+      (off as () => void)();
+    });
+  } catch {
+    // A host without it: the listener stays until the Gateway stops.
+  }
 }
 
 /** Register a hook whose handler never throws into OpenClaw; errors are logged. */

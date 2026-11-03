@@ -94,9 +94,18 @@ export interface FakeApi {
   api: PluginApi;
   hooks: Map<string, HookHandler>;
   logs: Array<{ level: string; message: string }>;
+  /** The transcript listeners registered (`api.runtime.events.onSessionTranscriptUpdate`). */
+  listeners: Set<(update: unknown) => void>;
+  /** Persist a message, as OpenClaw does: every transcript listener hears of it. */
+  persist: (update: unknown) => void;
+  /** Dispose of this instance of the plugin, as OpenClaw does when it reloads it. */
+  dispose: () => void;
 }
 
-/** An OpenClaw `api`, as `register` receives it, that records the hooks registered. */
+/**
+ * An OpenClaw `api`, as `register` receives it (2026.10.6), that records the hooks and transcript
+ * listeners registered.
+ */
 export function fakeApi(
   opts: {
     pluginConfig?: unknown;
@@ -104,10 +113,14 @@ export function fakeApi(
     registrationMode?: string;
     stateDir?: string;
     conversationAccess?: boolean;
+    /** False for a host without transcript updates. */
+    events?: boolean;
   } = {},
 ): FakeApi {
   const hooks = new Map<string, HookHandler>();
   const logs: FakeApi['logs'] = [];
+  const listeners = new Set<(update: unknown) => void>();
+  const disposers: Array<() => void> = [];
   const log = (level: string) => (message: string) => logs.push({ level, message });
   const access = opts.conversationAccess ?? true;
   const api: PluginApi = {
@@ -123,13 +136,62 @@ export function fakeApi(
     runtime: {
       version: '2026.10.6',
       state: { resolveStateDir: () => opts.stateDir ?? path.join(os.tmpdir(), 'unused-openclaw') },
+      ...(opts.events === false
+        ? {}
+        : {
+            events: {
+              onSessionTranscriptUpdate: (listener: (update: unknown) => void) => {
+                listeners.add(listener);
+                return () => listeners.delete(listener);
+              },
+            },
+          }),
+    },
+    lifecycle: {
+      onDispose: (dispose) => {
+        disposers.push(dispose);
+        return () => undefined;
+      },
     },
     on: (name, handler) => {
       hooks.set(name, handler);
     },
   };
-  return { api, hooks, logs };
+  return {
+    api,
+    hooks,
+    logs,
+    listeners,
+    persist: (update) => {
+      for (const listener of listeners) listener(update);
+    },
+    dispose: () => {
+      for (const dispose of disposers.splice(0)) dispose();
+    },
+  };
 }
+
+/**
+ * What OpenClaw 2026.10.6 gives a transcript listener when it persists a message to a session:
+ * the persisted copy, which carries who wrote a user message (`__openclaw`, `provenance`).
+ */
+export const persisted = (
+  message: unknown,
+  over: { sessionKey?: string; sessionId?: string; agentId?: string; messageId?: string } = {},
+) => {
+  const sessionKey = over.sessionKey ?? SESSION;
+  const agentId = over.agentId ?? sessionKey.split(':')[1] ?? 'xiaohan';
+  const sessionId = over.sessionId ?? 'sess-1';
+  return {
+    target: { agentId, sessionId, sessionKey },
+    sessionKey,
+    agentId,
+    sessionId,
+    message,
+    messageId: over.messageId ?? `entry-${Math.random().toString(16).slice(2)}`,
+    messageSeq: 1,
+  };
+};
 
 export function tmpDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
