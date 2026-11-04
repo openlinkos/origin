@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-7f397f55
+sourceHash: sha256-77f68965
 ---
 
 # 命令参考
@@ -233,6 +233,7 @@ To bring it back: origin restore tmb_2d8f0c1a9e35 --reason <text>
 | `ORIGIN_HUB_TIMEOUT_MS` | `2000` | 已接入中枢的设备上，`origin mcp` 等待中枢多久，超时后不再等待中枢直接作答 |
 | `ORIGIN_DISTILL_COMMAND` | `PATH` 上的 `claude` | `origin distill` 用来代替 `claude` 运行的命令：一个程序，或者用 Node 运行的 `.js` 或 `.mjs` 脚本 |
 | `ORIGIN_WATCH_INTERVAL_MS` | `60000` | Agent 运行期间，`origin mcp` 多久查看一次新的记录行（已接入中枢时一并同步），作为 Agent 的 hook 没有交来的内容的后备；设为 `0` 则关闭 |
+| `ORIGIN_ZCODE_SETTLE_MS` | `3600000` | 未完成的 ZCode 消息要保持多久没有变化，Origin 才把它写出来。设为 `0` 则时间戳已过去时，下次同步就写。Grok 适配器没有这个等待 |
 | `ORIGIN_ADMIN` | `off` | 设为 `on` 时在 `/admin` 下提供管理界面（`origin serve --admin`） |
 | `ORIGIN_ADMIN_LISTEN` | — | 改为在这个 `host:port` 上提供管理界面（`--admin-listen`） |
 | `ORIGIN_PUBLIC_URL` | — | 中枢的公开 https URL（`--public-url`） |

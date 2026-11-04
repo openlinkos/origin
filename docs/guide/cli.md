@@ -228,6 +228,7 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 | `ORIGIN_HUB_TIMEOUT_MS` | `2000` | How long `origin mcp` on a connected device waits for the hub before answering without it |
 | `ORIGIN_DISTILL_COMMAND` | `claude` on the `PATH` | The command `origin distill` runs in place of `claude`: a program, or a `.js` or `.mjs` script run with Node |
 | `ORIGIN_WATCH_INTERVAL_MS` | `60000` | How often `origin mcp` looks for new log lines while an agent runs (and syncs them with the hub when connected), the fallback for what agents' hooks do not hand over; `0` turns it off |
+| `ORIGIN_ZCODE_SETTLE_MS` | `3600000` | How long an unfinished ZCode message must stay unchanged before Origin writes it out. `0` writes it on the next sync once its timestamp is in the past. The Grok adapter has no such wait |
 | `ORIGIN_ADMIN` | `off` | `on` serves the admin UI at `/admin` (`origin serve --admin`) |
 | `ORIGIN_ADMIN_LISTEN` | — | Serve the admin UI on this `host:port` instead (`--admin-listen`) |
 | `ORIGIN_PUBLIC_URL` | — | The hub's public https URL (`--public-url`) |

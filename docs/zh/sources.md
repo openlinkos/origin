@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-f57ef04f
+sourceHash: sha256-15016dc4
 ---
 
 # 会话来源
@@ -79,7 +79,7 @@ sourceHash: sha256-f57ef04f
 
 **Origin 映射：**
 
-- 每个会话是一个[生成的来源](architecture.md#ingestion)，命名为 `<database>#<session-id>`。每条消息在稳定之后写出一次（用户消息在它的部件写入之后，回复在完成或失败之后，任何消息在会话已经越过它、或者一小时没有变化之后），写成一行：消息的行、它所有部件的行，以及会话的 `id`、`parent_id`、`directory`、`title`、`version` 和 `task_type`，每一列都保持存储时的原样。写出之后消息再有变化，不会再镜像。
+- 每个会话是一个[生成的来源](architecture.md#ingestion)，命名为 `<database>#<session-id>`。每条消息在稳定之后写出一次（用户消息在它的部件写入之后，回复在完成或失败之后，任何消息在会话已经越过它、或者已经有 `ORIGIN_ZCODE_SETTLE_MS` 毫秒没有变化之后（默认一小时，`3600000`）），写成一行：消息的行、它所有部件的行，以及会话的 `id`、`parent_id`、`directory`、`title`、`version` 和 `task_type`，每一列都保持存储时的原样。写出之后消息再有变化，不会再镜像。
 - 文本部件变成 `message` 事件；隐藏消息里的文本，或标记为 `synthetic` 的文本，变成 `meta`。文件部件变成 `[image]` 或 `[file]`。
 - **谁写的：** `task_type` 为 `subagent_child` 或 `workflow_child` 的会话，它的每条输入都属于 Agent。其他情况下由用户消息的 `semantics.origin` 决定：`real_user` 属于用户，`agent_runtime` 和 `system` 属于系统；ZCode 隐藏起来的旁聊提示也属于用户，作为 `meta` 事件，只是不算提示。工具部件变成一个 `tool_use` 事件（`<tool> <input>`，最多 2,000 个字符）和一个 `tool_result` 事件（它的输出或错误，最多 4,000 个字符），`status` 不是 `completed` 时会记下。reasoning、步骤标记、时间线通知和压缩标记会被跳过；镜像保留它们。
 - 事件 id：`zcode:<session-id>:<消息 sequence>.<部件 sequence>`，工具的结果加 `#1`。

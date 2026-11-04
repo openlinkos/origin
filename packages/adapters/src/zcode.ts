@@ -49,6 +49,26 @@ export function zcodeHome(): string {
   return path.join(os.homedir(), '.zcode');
 }
 
+/**
+ * How long an unfinished message must be unchanged before it is written out.
+ * `settleMs` wins; otherwise `ORIGIN_ZCODE_SETTLE_MS`; otherwise one hour.
+ * An empty variable keeps the default. Anything else that is not a finite
+ * number of milliseconds, zero or greater, is an error.
+ */
+export function zcodeSettleMs(override?: number, env: NodeJS.ProcessEnv = process.env): number {
+  if (override !== undefined) return requireSettleMs(override, 'settleMs');
+  const raw = env.ORIGIN_ZCODE_SETTLE_MS;
+  if (raw === undefined || raw.trim() === '') return ZCODE_SETTLE_MS;
+  return requireSettleMs(Number(raw.trim()), 'ORIGIN_ZCODE_SETTLE_MS', raw);
+}
+
+function requireSettleMs(value: number, name: string, shown = String(value)): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${name} must be a number of milliseconds, 0 or greater, not "${shown}".`);
+  }
+  return value;
+}
+
 export interface ZCodeAdapterOptions {
   /** Override the ZCode home directory (tests). */
   home?: string;
@@ -56,6 +76,11 @@ export interface ZCodeAdapterOptions {
   now?: () => number;
   /** How long the database stays open after its last use, in ms (tests: 0, closed at once). */
   keepOpenMs?: number;
+  /**
+   * How long an unfinished message must be unchanged before it is written out, in ms.
+   * Default {@link ZCODE_SETTLE_MS}. `ORIGIN_ZCODE_SETTLE_MS` overrides that when this is omitted.
+   */
+  settleMs?: number;
 }
 
 type Row = Record<string, unknown> & { data: string };
@@ -136,6 +161,7 @@ export function createZCodeAdapter(opts: ZCodeAdapterOptions = {}): SourceAdapte
   const dbPath = path.join(home, 'cli', 'db', 'db.sqlite');
   const now = opts.now ?? Date.now;
   const keepOpenMs = opts.keepOpenMs ?? KEEP_OPEN_MS;
+  const settleMs = zcodeSettleMs(opts.settleMs);
   let lastVersion: string | null = null;
 
   // One read-only connection, closed shortly after its last use: a sync asks about every session
@@ -177,7 +203,7 @@ export function createZCodeAdapter(opts: ZCodeAdapterOptions = {}): SourceAdapte
       let bytes = 0;
       for (const [i, message] of messages.entries()) {
         const rows = parts.all(message.id) as unknown as ZCodeLine['parts'];
-        if (!settled(message, rows, i < messages.length - 1, now())) break;
+        if (!settled(message, rows, i < messages.length - 1, now(), settleMs)) break;
         const line = JSON.stringify({ session, message, parts: rows } satisfies ZCodeLine);
         if (out.length > 0 && bytes + line.length > maxBytes) break;
         out.push(line);
@@ -219,7 +245,9 @@ export function createZCodeAdapter(opts: ZCodeAdapterOptions = {}): SourceAdapte
           relPath: `sessions/${s.id}.jsonl`,
           generated: {
             // New messages, a message that changed, or one that has now settled by waiting.
-            token: `${s.messages}:${s.maxSequence}:${s.lastUpdated}:${t - s.lastUpdated > ZCODE_SETTLE_MS ? 'idle' : 'active'}`,
+            token: `${s.messages}:${s.maxSequence}:${s.lastUpdated}:${
+              t - s.lastUpdated > settleMs ? 'idle' : 'active'
+            }`,
             mtimeMs: s.lastUpdated,
             next: (last: string | null, maxBytes: number) => next(s.id, last, maxBytes),
           },
@@ -288,15 +316,16 @@ function memoryProject(name: string): string | null {
 /**
  * Whether a message will not change any more, so that it can be written out: a user message once
  * its parts are there, a reply once it has completed or failed, and any message once the session
- * has moved past it or it has not changed for an hour.
+ * has moved past it or it has not changed for `settleMs` (one hour by default).
  */
 function settled(
   message: ZCodeLine['message'],
   parts: ZCodeLine['parts'],
   hasLater: boolean,
   now: number,
+  settleMs: number,
 ): boolean {
-  if (now - message.time_updated > ZCODE_SETTLE_MS) return true;
+  if (now - message.time_updated > settleMs) return true;
   const data = JSON.parse(message.data) as MessageData;
   if (data.role === 'assistant') return Boolean(data.time?.completed || data.error);
   return parts.length > 0 || hasLater;
