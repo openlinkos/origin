@@ -236,6 +236,47 @@ describe('zcode adapter', () => {
     origin.close();
   });
 
+  it('writes an unfinished reply after the configured settle time, not only after an hour', async () => {
+    conversation.add(user(), [{ type: 'text', text: 'Hello?' }]);
+    conversation.add(reply(false), [{ type: 'text', text: 'Interrupted' }]);
+    const settleMs = 5_000;
+    const local = () =>
+      createZCodeAdapter({ home: zcodeHome, now: () => now, keepOpenMs: 0, settleMs });
+    const origin = openMemoryDatabase();
+    const replyAt = T0 + 1000;
+    now = replyAt + settleMs;
+    await syncSource({ db: origin, home: originHome }, local());
+    expect(listEvents(origin, { sessionId: SESSION }).map((e) => e.text)).toEqual(['Hello?']);
+    now = replyAt + settleMs + 1;
+    await syncSource({ db: origin, home: originHome }, local());
+    expect(listEvents(origin, { sessionId: SESSION }).at(-1)?.text).toBe('Interrupted');
+    origin.close();
+  });
+
+  it('reads ORIGIN_ZCODE_SETTLE_MS and rejects a value that is not a duration', async () => {
+    const prev = process.env.ORIGIN_ZCODE_SETTLE_MS;
+    process.env.ORIGIN_ZCODE_SETTLE_MS = '0';
+    try {
+      conversation.add(reply(false), [{ type: 'text', text: 'Interrupted' }]);
+      now = T0 + 1;
+      const origin = openMemoryDatabase();
+      await syncSource(
+        { db: origin, home: originHome },
+        createZCodeAdapter({ home: zcodeHome, now: () => now, keepOpenMs: 0 }),
+      );
+      expect(listEvents(origin, { sessionId: SESSION }).at(-1)?.text).toBe('Interrupted');
+      origin.close();
+      process.env.ORIGIN_ZCODE_SETTLE_MS = '   ';
+      expect(() => createZCodeAdapter({ home: zcodeHome })).not.toThrow();
+      process.env.ORIGIN_ZCODE_SETTLE_MS = 'soon';
+      expect(() => createZCodeAdapter({ home: zcodeHome })).toThrow(/ORIGIN_ZCODE_SETTLE_MS/);
+      expect(() => createZCodeAdapter({ settleMs: -1 })).toThrow(/settleMs/);
+    } finally {
+      if (prev === undefined) delete process.env.ORIGIN_ZCODE_SETTLE_MS;
+      else process.env.ORIGIN_ZCODE_SETTLE_MS = prev;
+    }
+  });
+
   it('gives a hub the same events from the pushed mirror', async () => {
     seed(conversation);
     const device = openMemoryDatabase();
