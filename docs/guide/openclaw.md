@@ -18,13 +18,13 @@ The plugin was checked against OpenClaw 2026.10.6: its hooks and their payloads,
 
 ## Install
 
-Once the package is on npm, install it on the Gateway's host with OpenClaw's command; `--pin` records the version it installs, and `npm:@openlinkos/origin-openclaw@<version>` picks one, such as your Origin's:
+Install it on the Gateway's host with OpenClaw's command; `--pin` records the version it installs, and `npm:@openlinkos/origin-openclaw@<version>` picks one, such as your Origin's:
 
 ```bash
 openclaw plugins install npm:@openlinkos/origin-openclaw --pin --force --accept-capabilities
 ```
 
-Before then, or to try a change, build it from a checkout of Origin and install the tarball; build it anywhere and copy the file to the Gateway's host:
+To try a change before it is released, build it from a checkout of Origin and install the tarball; build it anywhere and copy the file to the Gateway's host:
 
 ```bash
 git clone https://github.com/openlinkos/origin.git && cd origin

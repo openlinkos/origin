@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-5aef9024
+sourceHash: sha256-5148f873
 ---
 
 # 接入 OpenClaw
@@ -22,13 +22,13 @@ sourceHash: sha256-5aef9024
 
 ## 安装 {#install}
 
-这个包发布到 npm 之后，在 Gateway 所在的主机上用 OpenClaw 的命令安装它；`--pin` 记下安装的版本，`npm:@openlinkos/origin-openclaw@<version>` 可以选定一个版本，例如与你的 Origin 相同的版本：
+在 Gateway 所在的主机上用 OpenClaw 的命令安装它；`--pin` 记下安装的版本，`npm:@openlinkos/origin-openclaw@<version>` 可以选定一个版本，例如与你的 Origin 相同的版本：
 
 ```bash
 openclaw plugins install npm:@openlinkos/origin-openclaw --pin --force --accept-capabilities
 ```
 
-在那之前，或者要试一个改动，可以从 Origin 的代码检出构建它并安装打出的包；可以在任何地方构建，再把文件复制到 Gateway 的主机上：
+要在发布之前试一个改动，可以从 Origin 的代码检出构建它并安装打出的包；可以在任何地方构建，再把文件复制到 Gateway 的主机上：
 
 ```bash
 git clone https://github.com/openlinkos/origin.git && cd origin

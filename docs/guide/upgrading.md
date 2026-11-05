@@ -28,7 +28,7 @@ origin --version
 origin status          # opens the store, upgrading it if needed
 ```
 
-Then restart your agents, or their sessions, so that each one starts the new `origin mcp`. An `origin mcp` already running keeps the version it started with until its agent restarts. Restart each agent's Origin MCP after this upgrade: a process that started on 0.4.0 keeps writing, and it does not know to stop. From the next release on, a process that finds the store was upgraded by a newer Origin refuses to write and tells you to restart this process. `origin mcp` exits, and its client starts it again.
+Then restart your agents, or their sessions, so that each one starts the new `origin mcp`. An `origin mcp` already running keeps the version it started with until its agent restarts. Restart each agent's Origin MCP after this upgrade: a process that started on 0.4.0 keeps writing, and it does not know to stop. From 0.5.0 on, a process that finds the store was upgraded by a newer Origin refuses to write and tells you to restart this process. `origin mcp` exits, and its client starts it again.
 
 Origin needs Node.js 22.16 or later; a release may raise that minimum, and says so in its upgrading note.
 
@@ -38,23 +38,23 @@ The hub's image is `ghcr.io/openlinkos/origin`, with these tags:
 
 | Tag | Points to |
 |---|---|
-| `0.4.0` | That release, unchanged |
-| `0.4` | The latest patch release of 0.4 |
+| `0.5.0` | That release, unchanged |
+| `0.5` | The latest patch release of 0.5 |
 | `latest` | The latest release |
 | `edge` | The latest commit on `master`, unreleased |
 
-Pin a minor version, such as `0.4`, and change it when you choose to upgrade; `latest` moves to a new minor version, which may upgrade your store, as soon as it is released. To upgrade a hub run with Docker:
+Pin a minor version, such as `0.5`, and change it when you choose to upgrade; `latest` moves to a new minor version, which may upgrade your store, as soon as it is released. To upgrade a hub run with Docker:
 
 ```bash
-docker pull ghcr.io/openlinkos/origin:0.4
+docker pull ghcr.io/openlinkos/origin:0.5
 docker rm -f origin-hub
-docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data ghcr.io/openlinkos/origin:0.4
+docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data ghcr.io/openlinkos/origin:0.5
 docker logs origin-hub     # shows the upgrade of the store, if any
 ```
 
 Keep the same `/data` volume and the same environment (admin UI, bucket, client IP header). A hub installed with npm upgrades like a device; restart `origin serve` afterwards.
 
-**Upgrade the hub before its devices.** A newer device may send what an older hub cannot read yet, such as the memory streams added in 0.3: the hub keeps them, and reads them once it is upgraded, but meanwhile corrections of what it has not read wait for it. A hub of 0.3 refuses the recalls added in 0.4, and a device keeps them until the hub is upgraded; a hub of 0.4 refuses, the same way, the recalls that list a thread, added since. A hub of a newer version serves devices of an older one without trouble.
+**Upgrade the hub before its devices.** A newer device may send what an older hub cannot read yet, such as the memory streams added in 0.3: the hub keeps them, and reads them once it is upgraded, but meanwhile corrections of what it has not read wait for it. A hub of 0.3 refuses the recalls added in 0.4, and a device keeps them until the hub is upgraded; a hub of 0.4 refuses, the same way, the recalls that list a thread and the files of your own sources, both added in 0.5, and answers `404` to the event lines that the OpenClaw plugin and other writers post to `/v1/sources/<name>/lines`. A hub of a newer version serves devices of an older one without trouble.
 
 ## Your store
 
@@ -66,10 +66,9 @@ A store records the version of its format. When a newer Origin opens an older st
 | 0.2.0 | 3 | Records the format version; adds whether the user named a session; reads the titles of Claude Code sessions from the lines already archived |
 | 0.3.0 | 4 | Reads the memory streams a hub archived before it could (see [Native memories](../sources.md#native-memories)) |
 | 0.4.0 | 4 | Adds the tables of recalls; the format, and what is stored, are unchanged |
-| Unreleased | 9 | Records the git branch of each session, and groups sessions into threads, from what is already archived; recall records can name a thread; finds the entries agents proposed in the tool results already archived; on a hub, makes each token a device's or an agent's; reads who wrote each message, you, someone else, an agent, or a program, from the lines already archived, and adds the messages an agent's log held that Origin did not read before; adds empty `project_root` (one row per device), `session_place`, and `place_head` tables so a work tree can be read as its main project (see [Projects](../architecture.md#projects)). That step writes no rows and reads no files |
-| Unreleased | 10 | Records which session is a child of another from those same lines, without opening an agent's database (see [Parent sessions](../architecture.md#parent-sessions)). After that table exists, reads `places.jsonl` lines mirrored before the project tables existed. A line whose version this Origin does not know stays in the mirror, is skipped, and a warning is logged |
+| 0.5.0 | 10 | Records the git branch of each session, and groups sessions into threads, from what is already archived; recall records can name a thread; finds the entries agents proposed in the tool results already archived; on a hub, makes each token a device's or an agent's; reads who wrote each message, you, someone else, an agent, or a program, from the lines already archived, and adds the messages an agent's log held that Origin did not read before; adds empty `project_root` (one row per device), `session_place`, and `place_head` tables so a work tree can be read as its main project (see [Projects](../architecture.md#projects)). That step writes no rows and reads no files. Records which session is a child of another from the lines already archived, without opening an agent's database (see [Parent sessions](../architecture.md#parent-sessions)). After that table exists, reads `places.jsonl` lines mirrored before the project tables existed. A line whose version this Origin does not know stays in the mirror, is skipped, and a warning is logged |
 
-Formats 2 and 3 were both introduced by 0.2.0, and formats 5 to 10 come with the next release. The details of each step are in [Architecture](../architecture.md#migrations). Reading who wrote each message, and which session is a child, parses the archived logs again, so on a large store the first command after the upgrade, or the hub as it starts, can take a minute or more; it says how far it is as it goes. It does not open ZCode's database or Grok Build's session directory. `origin sessions parents` fills workflow run names, and Grok parents that only a summary names, when you run it (see [Parent sessions](./cli.md#parent-sessions)). `project_root` and `session_place` stay empty until a work tree is resolved, a `places.jsonl` line is ingested, or the upgrade to format 10 reads lines mirrored before the tables existed. A work-tree session already in the mirror before this upgrade keeps the directory's name: Origin does not walk every session during the upgrade. Run `origin sessions reproject` on the device that holds the sessions; a second run appends nothing. Do not run it on a hub, which keeps each device's conclusion. A session an older process ingested after the upgrade has no place, and may be missing its parent. `origin sessions repair` resolves a project for each session that has no place, and reads parent facts already in the mirror again, such as Grok's `subagent_spawned`, to fill the parent links that are missing. `--dry-run` only reports what it would change. A second run changes nothing. A hub can run it to re-read mirrored `places.jsonl` parent lines; it does not resolve another device's sessions. A line whose version this Origin does not know stays in the mirror and a warning is logged. The format that first understands that version reads it again.
+Formats 2 and 3 were both introduced by 0.2.0, and formats 5 to 10 by 0.5.0. The details of each step are in [Architecture](../architecture.md#migrations). Reading who wrote each message, and which session is a child, parses the archived logs again, so on a large store the first command after the upgrade, or the hub as it starts, can take a minute or more; it says how far it is as it goes. It does not open ZCode's database or Grok Build's session directory. `origin sessions parents` fills workflow run names, and Grok parents that only a summary names, when you run it (see [Parent sessions](./cli.md#parent-sessions)). `project_root` and `session_place` stay empty until a work tree is resolved, a `places.jsonl` line is ingested, or the upgrade to format 10 reads lines mirrored before the tables existed. A work-tree session already in the mirror before this upgrade keeps the directory's name: Origin does not walk every session during the upgrade. Run `origin sessions reproject` on the device that holds the sessions; a second run appends nothing. Do not run it on a hub, which keeps each device's conclusion. A session an older process ingested after the upgrade has no place, and may be missing its parent. `origin sessions repair` resolves a project for each session that has no place, and reads parent facts already in the mirror again, such as Grok's `subagent_spawned`, to fill the parent links that are missing. `--dry-run` only reports what it would change. A second run changes nothing. A hub can run it to re-read mirrored `places.jsonl` parent lines; it does not resolve another device's sessions. A line whose version this Origin does not know stays in the mirror and a warning is logged. The format that first understands that version reads it again.
 
 - **Back up first.** An upgrade is careful, but a backup costs one command: `origin backup <dir>` (see [Backing up](./privacy.md#backing-up)). On a hub, run it inside the container before you replace it, for example `docker exec origin-hub origin backup /data/backup-0.2`.
 - **There is no downgrade.** An Origin that finds a store of a newer format refuses to open it and says to upgrade, without changing anything. To go back to an older version, restore the backup you made before upgrading; what was written since is lost.
@@ -81,13 +80,13 @@ The npm packages carry provenance that ties each one to the GitHub Actions run t
 
 ```bash
 npm audit signatures            # in a project that depends on @openlinkos/origin
-npm view @openlinkos/origin@0.4.0 dist.attestations
+npm view @openlinkos/origin@0.5.0 dist.attestations
 ```
 
 The images are built with provenance and an SBOM, both attached to the image:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/openlinkos/origin:0.4.0 --format '{{json .Provenance}}'
+docker buildx imagetools inspect ghcr.io/openlinkos/origin:0.5.0 --format '{{json .Provenance}}'
 ```
 
 Each release also has a page on [GitHub](https://github.com/openlinkos/origin/releases), with the notes from the changelog.

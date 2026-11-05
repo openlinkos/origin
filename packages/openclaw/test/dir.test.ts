@@ -60,7 +60,10 @@ describe('delivery to a directory', () => {
     const adapter = createLinesAdapter({ id: 'openclaw', dir: sources });
     const listed = await adapter.discover();
     expect(listed.map((f) => f.relPath)).toEqual([file]);
-    expect(adapter.version()).toBe('OpenClaw 2026.10.6 (origin-openclaw 0.4.0)');
+    const plugin = JSON.parse(
+      fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { version: string };
+    expect(adapter.version()).toBe(`OpenClaw 2026.10.6 (origin-openclaw ${plugin.version})`);
     const events = text
       .trimEnd()
       .split('\n')

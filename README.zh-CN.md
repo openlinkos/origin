@@ -11,7 +11,7 @@
 
 各个 AI Agent 本来就会把会话写在你的磁盘上。Origin 把这些会话归档进同一个本地库：已支持 Claude Code、Codex、Cursor、Grok Build 与 ZCode，其他任何东西也可以把会话写成事件行（一种任何脚本都能写的格式）带进来。通过同一个 [MCP](https://modelcontextprotocol.io) server，Origin 让所有 Agent 共享这份记忆：无论打开哪个工具，它都能查到你上周决定了什么、为什么，能追溯到原始记录的具体一行，并把学到的东西沉淀下来供下次使用。如果你在多台机器上工作，或者使用云端 Agent，可以用自托管的**个人中枢**把它们接入同一份记忆。
 
-> **状态：早期版本（0.4）。** Claude Code、Codex、Cursor、Grok Build 与 ZCode 会话的采集，Claude Code、ZCode 与 Grok Build 自身记忆的导入，会话开始时和每个提示的召回，MCP server、CLI、`origin ui`，以及个人中枢（含管理界面、中继和存储桶）已经端到端可用。1.0 之前，次版本可能改变存储格式；库会就地升级，[升级](https://origin.openlinkos.com/zh/guide/upgrading)和[更新日志](https://origin.openlinkos.com/zh/changelog)会说明需要怎么做。
+> **状态：早期版本（0.5）。** Claude Code、Codex、Cursor、Grok Build 与 ZCode 会话的采集（Claude Code 和 Codex 经由 hook 实时采集），经插件采集 OpenClaw 的会话，以事件行接入你自己的来源；Claude Code、ZCode 与 Grok Build 自身记忆的导入；会话开始时和每个提示的召回；线索、变更流和由你审阅的提议；MCP server、CLI、`origin ui`，以及个人中枢（含管理界面、中继和存储桶）都已经端到端可用。1.0 之前，次版本可能改变存储格式；库会就地升级，[升级](https://origin.openlinkos.com/zh/guide/upgrading)和[更新日志](https://origin.openlinkos.com/zh/changelog)会说明需要怎么做。
 
 ## 为什么
 
@@ -131,7 +131,7 @@ Agent 会话记录里常有源代码、命令输出，以及你在提示词里�
 **当前已知限制：**
 
 - 很多会话没有标题，因为 Claude Code 只为部分会话写 `summary` 行。
-- 项目名取自工作目录的最后一段，而不是由 git remote 推导。
+- 项目以主 git 检出所在的目录命名（链接的工作树和子目录都归入它），而不是由 git remote 推导。
 - 遗忘只是隐藏，不会从原始镜像文件中物理删除。
 - 对把会话存在数据库里的 Agent（ZCode、Cursor 编辑器），每条消息在稳定后归档一次，之后的修改不会再归档。
 - Origin 不会自行监听文件。Claude Code 和 Codex 通过它们的 hook（由 `origin agents connect` 设置）把每一轮新增的行交给 Origin；对其他 Agent，Agent 运行期间，它的 MCP server 每分钟检查一次新内容，Agent 退出时再检查一次；其他时候请运行 `origin sync`，它也会与你的中枢同步。
