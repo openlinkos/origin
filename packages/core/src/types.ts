@@ -154,6 +154,12 @@ export interface ParsedLine {
    * spawns. Kept apart from the events and combined when they are read.
    */
   sessionParents?: SessionParentFact[];
+  /**
+   * This line was skipped. Ingestion logs it as a warning and keeps the bytes. A `places.jsonl`
+   * line that is not the JSON object its type requires sets this and yields nothing, so one bad
+   * line does not stop the file, another source, or opening the store.
+   */
+  warning?: string;
 }
 
 /** One `project_root` row a `places.jsonl` `root` line names. */

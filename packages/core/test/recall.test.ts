@@ -33,6 +33,7 @@ import {
   termWeights,
   usedRefs,
 } from '../src/index.js';
+import { fakeAdapter } from './helpers.js';
 
 let home: string;
 let logs: string;
@@ -294,6 +295,60 @@ describe('a brief', () => {
     expect(text).toContain('Latest sessions in origin');
     expect(text).not.toContain(elsewhere);
     expect(text).not.toContain(theirs);
+  });
+
+  it("adds a parent's children on its brief line", async () => {
+    const now = Date.now();
+    const dir = path.join(logs, 'children');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(
+      path.join(dir, 's.jsonl'),
+      `${[
+        JSON.stringify({
+          id: 'r1',
+          session: 'parent-1',
+          ts: now - 2000,
+          role: 'user',
+          text: 'Start the cache work',
+          project: 'demo',
+        }),
+        JSON.stringify({
+          id: 'r2',
+          session: 'parent-1',
+          ts: now - 1000,
+          role: 'user',
+          text: 'Keep going on the cache',
+          project: 'demo',
+        }),
+        JSON.stringify({ session: 'parent-1', title: 'Cache the retries' }),
+        JSON.stringify({
+          id: 'c1',
+          session: 'child-1',
+          ts: now,
+          role: 'user',
+          text: 'zebraparentlink step',
+          project: 'demo',
+          parents: [
+            {
+              session: 'child-1',
+              parent: 'parent-1',
+              via: 'workflow',
+              signal: 'dwf_run',
+              group: 'run-1',
+              name: 'Ship',
+            },
+          ],
+        }),
+      ].join('\n')}\n`,
+    );
+    await syncSource({ db, home }, fakeAdapter(dir));
+    const text = recallText(
+      planRecall(db, { occasion: 'start', project: 'demo', now, onDisk: false }),
+      'rcl_000000000001',
+    );
+    expect(text).toContain('parent-1');
+    expect(text).toContain(' · 1 child (Ship)');
+    expect(text).not.toContain('child-1');
   });
 
   it('tells two checkouts of the same name apart by their directories', async () => {

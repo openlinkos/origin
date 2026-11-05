@@ -177,6 +177,43 @@ describe('the change feed', () => {
     expect(() => changesSince(db, { thread: 'thr_000000000000' })).toThrow(/Unknown thread/);
   });
 
+  it('leaves a child session out of the feed unless asked for that session', async () => {
+    write('parent.jsonl', [
+      { id: 'p1', session: 'parent-1', ts: NOW - 2 * HOUR },
+      { id: 'p2', session: 'parent-1', ts: NOW - HOUR },
+    ]);
+    fs.appendFileSync(
+      path.join(logs, 'child.jsonl'),
+      `${JSON.stringify({
+        id: 'c1',
+        session: 'child-1',
+        ts: NOW - 30 * 60_000,
+        role: 'user',
+        text: 'zebraparentlink step',
+        parents: [
+          {
+            session: 'child-1',
+            parent: 'parent-1',
+            via: 'workflow',
+            signal: 'dwf_run',
+            group: 'run-1',
+            name: 'Ship',
+          },
+        ],
+      })}\n`,
+    );
+    await sync();
+    const feed = changesSince(db, { now: NOW });
+    expect(feed.sessions.map((s) => s.session.sessionId)).toEqual(['parent-1']);
+    expect(ids(feed.events)).toContain('fake:c1');
+    const asked = changesSince(db, {
+      now: NOW,
+      session: { source: 'fake', sessionId: 'child-1' },
+    });
+    expect(asked.sessions.map((s) => s.session.sessionId)).toEqual(['child-1']);
+    expect(ids(asked.events)).toEqual(['fake:c1']);
+  });
+
   it('refuses a malformed cursor', () => {
     expect(parseFeedCursor(encodeFeedCursor({ event: 3, change: 4 }))).toEqual({
       event: 3,

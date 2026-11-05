@@ -302,6 +302,11 @@ export function reparseAuthorship(ctx: MigrationContext): void {
           return;
         }
         if (!parsed) return;
+        if (parsed.warning) {
+          counts.errors++;
+          ctx.log(`warning ${relPath}:${lineNo}: ${parsed.warning}`);
+          return;
+        }
         for (const ev of parsed.events) {
           const id = `${f.source}:${ev.id}`;
           const row = stored.get(id) as
@@ -348,7 +353,7 @@ export function reparseAuthorship(ctx: MigrationContext): void {
       ctx.log(`Skipped the mirror ${f.mirror}: ${err.message}`);
     }
   }
-  reparsePlaces(db, ctx.home);
+  reparsePlaces(db, ctx.home, ctx.log);
   for (const s of touched.values()) refreshSession(db, s.source, s.sessionId);
   // A device that dropped its hub's forget of one of these events, which it did not have then,
   // pulls the hub's tombstones again.
@@ -434,6 +439,11 @@ export function reparseParents(ctx: MigrationContext): void {
             return;
           }
           if (!parsed) return;
+          if (parsed.warning) {
+            errors++;
+            ctx.log(`warning ${relPath}:${lineNo}: ${parsed.warning}`);
+            return;
+          }
           for (const fact of parsed.sessionParents ?? []) {
             if (recordSessionParent(db, f.source, fact)) parents++;
           }

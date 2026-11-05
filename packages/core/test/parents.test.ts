@@ -72,7 +72,7 @@ describe('parsePlaceLine', () => {
       events: [],
       places: [{ sessionId: 's', project: 'demo-app', root: null, signal: 'git' }],
     });
-    expect(() => parsePlaceLine('not json')).toThrow(/JSON/);
+    expect(parsePlaceLine('not json')).toEqual({ events: [], warning: 'places.jsonl: not JSON' });
     expect(parsePlaceLine(JSON.stringify({ v: 1, type: 'parent', session: 'c' }))).toEqual({
       events: [],
     });

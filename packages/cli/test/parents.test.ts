@@ -12,6 +12,7 @@ import {
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fakeAdapter } from '../../core/test/helpers.js';
 import { main } from '../src/main.js';
 
 const T0 = Date.parse('2026-10-20T01:00:00Z');
@@ -221,5 +222,84 @@ describe('origin sessions parents', () => {
     expect(out.join('\n')).toContain('Grok sessions directory not found; skipped.');
     expect(fs.existsSync(missingDb)).toBe(false);
     expect(fs.existsSync(missingGrok)).toBe(false);
+  });
+});
+
+describe('origin timeline --children', () => {
+  it('lists a child session only with --children', async () => {
+    const grok = path.join(tmp, 'grok');
+    const zcode = path.join(tmp, 'zcode');
+    fs.mkdirSync(grok);
+    fs.mkdirSync(zcode);
+    const prev = {
+      GROK_HOME: process.env.GROK_HOME,
+      ZCODE_HOME: process.env.ZCODE_HOME,
+      ORIGIN_ZCODE_HOME: process.env.ORIGIN_ZCODE_HOME,
+    };
+    process.env.GROK_HOME = grok;
+    process.env.ZCODE_HOME = zcode;
+    delete process.env.ORIGIN_ZCODE_HOME;
+    try {
+      const logs = path.join(tmp, 'logs');
+      fs.mkdirSync(logs);
+      const now = Date.now();
+      fs.writeFileSync(
+        path.join(logs, 's.jsonl'),
+        `${[
+          JSON.stringify({
+            id: 'r1',
+            session: 'parent-1',
+            ts: now - 2000,
+            role: 'user',
+            text: 'Start the cache work',
+            project: 'demo',
+          }),
+          JSON.stringify({
+            id: 'r2',
+            session: 'parent-1',
+            ts: now - 1000,
+            role: 'user',
+            text: 'Keep going on the cache',
+            project: 'demo',
+          }),
+          JSON.stringify({ session: 'parent-1', title: 'Cache the retries' }),
+          JSON.stringify({
+            id: 'c1',
+            session: 'child-1',
+            ts: now,
+            role: 'user',
+            text: 'zebraparentlink step',
+            project: 'demo',
+            parents: [
+              {
+                session: 'child-1',
+                parent: 'parent-1',
+                via: 'workflow',
+                signal: 'dwf_run',
+                group: 'run-1',
+                name: 'Ship',
+              },
+            ],
+          }),
+        ].join('\n')}\n`,
+      );
+      const db = openDatabase(dbPath(home));
+      await syncSource({ db, home }, fakeAdapter(logs));
+      db.close();
+      out.length = 0;
+      expect(await main(['timeline', '--since', '1970-01-01'])).toBe(0);
+      const plain = out.join('\n');
+      expect(plain).toContain('parent-1');
+      expect(plain).toContain('· 1 child (Ship)');
+      expect(plain).not.toContain('child-1');
+      out.length = 0;
+      expect(await main(['timeline', '--since', '1970-01-01', '--children'])).toBe(0);
+      expect(out.join('\n')).toContain('child-1');
+    } finally {
+      for (const [key, value] of Object.entries(prev)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });

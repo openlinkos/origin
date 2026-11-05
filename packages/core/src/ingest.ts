@@ -102,18 +102,14 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
       result.filesChanged++;
     }
   }
-  // A resolved work tree, appended as places.jsonl. Its own counts stay out of this result, so a
-  // sync that only mirrored events still reports those. A missing path appends nothing.
+  // A resolved work tree, appended as places.jsonl. Event counts stay out of this result, so a
+  // sync that only mirrored events still reports those. A bad line's warning is kept: one broken
+  // places line must show up, and must not be the only record of it. A missing path appends nothing.
   const places = placesSourceFile(ctx.db, ctx.home, adapter.id);
   if (places) {
-    await ingestSourceFile(
-      ctx,
-      adapter,
-      places,
-      agentVersion,
-      emptySyncResult(adapter.id),
-      breathe,
-    );
+    const placesResult = emptySyncResult(adapter.id);
+    await ingestSourceFile(ctx, adapter, places, agentVersion, placesResult, breathe);
+    result.parseErrors += placesResult.parseErrors;
   }
   // Files that stopped growing an hour ago are likely finished: store their last lines compressed.
   sealIdleMirrors(ctx.db, ctx.home, {
@@ -509,6 +505,12 @@ function appendLines(
       continue;
     }
     if (!parsed) continue;
+    // A places line that is not the object its type requires. The bytes stay; the line changes nothing.
+    if (parsed.warning) {
+      stats.parseErrors++;
+      ctx.log?.(`warning ${parse.relPath}:${lineNo}: ${parsed.warning}`);
+      continue;
+    }
     const added = insert(lineNo, parsed.events);
     if (parsed.events.length > 0 && added.length === 0) stats.duplicates++;
     for (const ev of added) {
@@ -952,7 +954,7 @@ function fileContent(file: string): Content {
 }
 
 function openContent(ctx: IngestContext, file: SourceFile, raw: RawFileRow | null): Content | null {
-  if (file.generated) return generatedContent(ctx, file.generated, raw);
+  if (file.generated) return generatedContent(ctx, file, raw);
   let st: fs.Stats;
   try {
     st = fs.statSync(file.absPath);
@@ -971,13 +973,11 @@ function openContent(ctx: IngestContext, file: SourceFile, raw: RawFileRow | nul
 /**
  * The next lines of a generated source, after those already ingested, as content that continues
  * the mirror. Nothing below `bytes_ingested` is ever read from it, since generated content is not
- * checked for a rewrite.
+ * checked for a rewrite. A mirror that does not end with a newline — a line left half-written —
+ * is closed with one before the new lines, and that newline is part of the bytes a hub parses.
  */
-function generatedContent(
-  ctx: IngestContext,
-  source: GeneratedSource,
-  raw: RawFileRow | null,
-): Content {
+function generatedContent(ctx: IngestContext, file: SourceFile, raw: RawFileRow | null): Content {
+  const source = file.generated as GeneratedSource;
   const start = raw?.bytes_ingested ?? 0;
   const last =
     raw && raw.lines_ingested > 0
@@ -987,7 +987,15 @@ function generatedContent(
   if (lines.some((line) => line.includes('\n'))) {
     throw new OriginError('A generated line contains a line break.');
   }
-  const data = Buffer.from(lines.length > 0 ? `${lines.join('\n')}\n` : '');
+  let body = lines.length > 0 ? `${lines.join('\n')}\n` : '';
+  if (body.length > 0 && start > 0 && raw) {
+    const prev = readMirror(ctx.db, ctx.home, raw.id, start - 1, start);
+    if (prev.length === 1 && prev[0] !== 0x0a) {
+      body = `\n${body}`;
+      ctx.log?.(`warning ${file.relPath}: closed a line that did not end with a newline`);
+    }
+  }
+  const data = Buffer.from(body);
   return {
     size: start + data.length,
     mtimeMs: source.mtimeMs,

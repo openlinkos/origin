@@ -343,10 +343,20 @@ function requireString(obj: Record<string, unknown>, key: string): string {
 
 /**
  * One line of `places.jsonl`. A `root` or `place` line is a project fact, a complete `parent`
- * line is a parent fact (`fromAgent: false`), and an incomplete parent records nothing. Malformed
- * JSON throws, so ingestion counts a parse error. No message events.
+ * line is a parent fact (`fromAgent: false`), and an incomplete parent records nothing. A line
+ * that is not the JSON object its type requires sets `warning` and yields nothing: it is skipped,
+ * not thrown, so one bad line cannot stop a sync or an upgrade. No message events.
  */
 export function parsePlaceLine(line: string): ParsedLine {
+  try {
+    return parsePlaceObject(line);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'places.jsonl: not JSON';
+    return { events: [], warning: message };
+  }
+}
+
+function parsePlaceObject(line: string): ParsedLine {
   let value: unknown;
   try {
     value = JSON.parse(line);
@@ -578,8 +588,11 @@ export function placesSourceFile(
   };
 }
 
-/** Apply `places.jsonl` mirrors again, so a rebuild agrees with the bytes. No-op without the tables. */
-export function reparsePlaces(db: Database, home: string): void {
+/**
+ * Apply `places.jsonl` mirrors again, so a rebuild agrees with the bytes. A line that does not
+ * parse is skipped and, when `log` is set, logged as a warning. No-op without the tables.
+ */
+export function reparsePlaces(db: Database, home: string, log?: (message: string) => void): void {
   if (!hasTable(db, 'session_place')) return;
   const files = db
     .prepare(
@@ -600,14 +613,17 @@ export function reparsePlaces(db: Database, home: string): void {
     } catch {
       continue;
     }
+    let lineNo = 0;
     for (const raw of text.split('\n')) {
+      lineNo++;
       const line = raw.replace(/\r$/, '');
       if (line.length === 0) continue;
-      try {
-        applyPlaceFacts(db, file.source, parsePlaceLine(line));
-      } catch {
-        // A line that does not parse stays in the mirror and changes nothing.
+      const parsed = parsePlaceLine(line);
+      if (parsed.warning) {
+        log?.(`warning ${mirrorRelPath(file)}:${lineNo}: ${parsed.warning}`);
+        continue;
       }
+      applyPlaceFacts(db, file.source, parsed);
     }
   }
 }

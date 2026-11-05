@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-63e38b63
+sourceHash: sha256-620c62a2
 ---
 
 # 架构
@@ -486,7 +486,7 @@ Agent 的行里已经有的事实，在设备和中枢上相同：
 - **Codex。** `session_meta` 的 `source.subagent.thread_spawn.parent_thread_id` 在它是非空字符串时：`via` 为 `subagent`，信号为 `parent_thread_id`，父会话的来源是 `codex`。`source.subagent` 只是一个字符串时，仍然把会话标为子会话，但不指明父会话。
 - **Claude Code 和 Cursor** 不记录会话的父会话。Claude Code 的子 Agent 记录保持原样，不会从中添加父会话行。Cursor 的记录文本和编辑器对话也不指明父会话。
 
-Agent 自己的记录没有写明的父会话，或稍后补上的运行分组，是该来源 `places.jsonl` 中的一行，一份设备可以推送的生成镜像。父会话行是一个 JSON 对象，`{"v":1,"type":"parent","session","parent","via","signal"}`，已知时带有 `group` 和 `name`。`parsePlaceLine` 不产生消息事件。`root` 行记下 `project_root`，`place` 行记下 `session_place`，`parent` 行记下 `session_parent`。采集根据父会话行更新 `session_parent`。Agent 自己的行已经写明的父会话，在后来的一行写了另一个父会话时仍然保留；缺失的分组和名称仍会补上，已经存下的分组或名称从不清除或替换。早先的行不被改写。
+Agent 自己的记录没有写明的父会话，或稍后补上的运行分组，是该来源 `places.jsonl` 中的一行，一份设备可以推送的生成镜像。父会话行是一个 JSON 对象，`{"v":1,"type":"parent","session","parent","via","signal"}`，已知时带有 `group` 和 `name`。`parsePlaceLine` 不产生消息事件。`root` 行记下 `project_root`，`place` 行记下 `session_place`，`parent` 行记下 `session_parent`。采集根据父会话行更新 `session_parent`。Agent 自己的行已经写明的父会话，在后来的一行写了另一个父会话时仍然保留；缺失的分组和名称仍会补上，已经存下的分组或名称从不清除或替换。早先的行不被改写。不是其类型所要求的 JSON 对象的一行会被跳过，并记一条警告。同一文件里的其他行，以及其他来源，仍照常读取，打开库也不会失败。追加之前，不以换行符结尾的镜像会先补一个换行符，这样写到一半的行不会和下一行连在一起。中枢解析的是同样的字节。
 
 版本 10 建立这张表，并像版本 8 重新解析作者那样，重新解析可能写明父会话的镜像行。它不打开 ZCode 的数据库，也不打开 Grok Build 的会话目录。其余的事由 `origin sessions parents` 在你运行它时完成，并且只读：它读取 `dwf_run` 和 `dwf_actor`，不读取 `workflow_run`，并读取 Grok 的 `summary.json` 字段 `parent_session_id`；当镜像还没有记录这个父会话，或工作流子会话的分组或名称仍然缺失时，它追加一行父会话。`--dry-run` 打印它会追加多少行，什么也不写。不存在的数据库或会话目录会被跳过，命令以 0 退出。在不保存会话的中继上，它说明这一点并退出，不打开这些目录。
 

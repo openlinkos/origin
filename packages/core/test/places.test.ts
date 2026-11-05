@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   activeProjects,
+  appendRemote,
   changesSince,
   comparePath,
   type Database,
@@ -23,6 +24,7 @@ import {
   recallScope,
   recallText,
   remember,
+  reparsePlaces,
   reproject,
   resolvePlace,
   type SourceAdapter,
@@ -31,7 +33,8 @@ import {
   syncSource,
   workTree,
 } from '../src/index.js';
-import { fakeAdapter, mirrorText } from './helpers.js';
+import { tailPath } from '../src/mirror.js';
+import { fakeAdapter, line, mirrorText } from './helpers.js';
 
 const temps: string[] = [];
 
@@ -434,7 +437,9 @@ describe('places.jsonl', () => {
     );
     expect(place.places?.[0]).toMatchObject({ sessionId: 's1', root: null, signal: 'agent' });
     expect(parsePlaceLine('{"v":1,"type":"other"}')).toEqual({ events: [] });
-    expect(() => parsePlaceLine('not json')).toThrow(/JSON/);
+    expect(parsePlaceLine('not json')).toEqual({ events: [], warning: 'places.jsonl: not JSON' });
+    expect(parsePlaceLine('[]').warning).toMatch(/JSON object/);
+    expect(parsePlaceLine('{"v":2}').warning).toMatch(/"v" must be 1/);
   });
 
   it('does not let a place line replace an explicit name', async () => {
@@ -489,4 +494,132 @@ describe('places.jsonl', () => {
       db.close();
     }
   });
+
+  it('skips a bad line, warns, and keeps the other lines and sources', async () => {
+    const base = tempDir('origin-place-bad-');
+    const home = path.join(base, 'home');
+    const logs = path.join(base, 'logs');
+    const other = path.join(base, 'other');
+    fs.mkdirSync(logs);
+    fs.mkdirSync(other);
+    const first = placeJson('s1', 'demo-app');
+    const second = placeJson('s2', 'other-app');
+    fs.writeFileSync(path.join(logs, 'places.jsonl'), `${first}\nnot json\n${second}\n`);
+    fs.writeFileSync(path.join(logs, 'e.jsonl'), line('e1', 's', 1, 'user', 'kept'));
+    fs.writeFileSync(path.join(other, 'e.jsonl'), line('o1', 's', 2, 'user', 'other source'));
+    const warnings: string[] = [];
+    const db = open(home);
+    try {
+      const synced = await syncSource(
+        { db, home, log: (m) => warnings.push(m) },
+        fakeAdapter(logs),
+      );
+      expect(synced.parseErrors).toBe(1);
+      expect(synced.eventsAdded).toBe(1);
+      expect(placeOf(db, 's1')).toMatchObject({ project: 'demo-app', signal: 'git' });
+      expect(placeOf(db, 's2')).toMatchObject({ project: 'other-app', signal: 'git' });
+      expect(getEvent(db, 'fake:e1')?.text).toBe('kept');
+      expect(warnings.some((m) => m.includes('warning') && m.includes('not JSON'))).toBe(true);
+      await syncSource({ db, home }, fakeAdapter(other, 'other'));
+      expect(getEvent(db, 'other:o1')?.text).toBe('other source');
+    } finally {
+      db.close();
+    }
+    const again = open(home);
+    try {
+      const againLogs: string[] = [];
+      reparsePlaces(again, home, (m) => againLogs.push(m));
+      expect(placeOf(again, 's1')?.project).toBe('demo-app');
+      expect(placeOf(again, 's2')?.project).toBe('other-app');
+      expect(againLogs.some((m) => m.includes('warning') && m.includes('not JSON'))).toBe(true);
+    } finally {
+      again.close();
+    }
+  });
+
+  it('reads a line appended after a truncated one', async () => {
+    const base = tempDir('origin-place-trunc-');
+    const home = path.join(base, 'home');
+    const db = open(home);
+    const first = placeJson('s1', 'demo-app');
+    const second = placeJson('s2', 'other-app');
+    const warnings: string[] = [];
+    let batch = [first];
+    const file = {
+      absPath: 'places.jsonl',
+      relPath: 'places.jsonl',
+      generated: {
+        token: 't1',
+        mtimeMs: 1,
+        next() {
+          const out = batch;
+          batch = [];
+          return out;
+        },
+      },
+    };
+    try {
+      await ingestPlacesFile({ db, home }, 'fake', file);
+      expect(placeOf(db, 's1')?.project).toBe('demo-app');
+      const row = db
+        .prepare(
+          `SELECT id, mirror, bytes_ingested AS bytes FROM raw_file WHERE path = 'places.jsonl'`,
+        )
+        .get() as { id: number; mirror: string; bytes: number };
+      const fragment = Buffer.from('{"trunc');
+      fs.appendFileSync(tailPath(home, row.mirror), fragment);
+      db.prepare('UPDATE raw_file SET bytes_ingested = ? WHERE id = ?').run(
+        row.bytes + fragment.length,
+        row.id,
+      );
+      batch = [second];
+      file.generated.token = 't2';
+      await ingestPlacesFile({ db, home, log: (m) => warnings.push(m) }, 'fake', file);
+      expect(placeOf(db, 's2')).toMatchObject({ project: 'other-app', signal: 'git' });
+      const text = mirrorText(db, home, row.id);
+      expect(text).toBe(`${first}\n{"trunc\n${second}\n`);
+      expect(warnings.some((m) => m.includes('closed a line that did not end'))).toBe(true);
+
+      const hubHome = path.join(base, 'hub');
+      const hub = open(hubHome);
+      const hubLogs: string[] = [];
+      try {
+        fs.mkdirSync(path.join(base, 'empty'));
+        const pushed = appendRemote(
+          { db: hub, home: hubHome, log: (m) => hubLogs.push(m) },
+          fakeAdapter(path.join(base, 'empty')),
+          {
+            device: 'laptop',
+            source: 'fake',
+            path: '/tmp/demo/places.jsonl',
+            relPath: 'places.jsonl',
+            generation: 1,
+            offset: 0,
+            data: Buffer.from(text),
+          },
+        );
+        expect(pushed).toMatchObject({ ok: true, parseErrors: 1 });
+        expect(placeOf(hub, 's1')?.project).toBe('demo-app');
+        expect(placeOf(hub, 's2')?.project).toBe('other-app');
+        expect(hubLogs.some((m) => m.includes('warning') && m.includes('not JSON'))).toBe(true);
+      } finally {
+        hub.close();
+      }
+    } finally {
+      db.close();
+    }
+    const again = open(home);
+    try {
+      const againLogs: string[] = [];
+      reparsePlaces(again, home, (m) => againLogs.push(m));
+      expect(placeOf(again, 's2')?.project).toBe('other-app');
+      expect(againLogs.some((m) => m.includes('warning') && m.includes('not JSON'))).toBe(true);
+    } finally {
+      again.close();
+    }
+  });
 });
+
+function placeJson(session: string, project: string): string {
+  return JSON.stringify({ v: 1, type: 'place', session, project, root: null, signal: 'git' });
+}
