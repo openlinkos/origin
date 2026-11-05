@@ -160,7 +160,8 @@ export const MIGRATIONS: Migration[] = [
   {
     // Where a session belongs, apart from the label on its first event. Empty until a place line
     // or a later resolution fills it. Does not read the filesystem and does not reparse mirrors.
-    // The original tables, keyed by path: version 11 adds one row per device and reads the lines.
+    // The SQL is written here, the same shape schema.ts creates for a new store (one project root
+    // per device, and place_head). This file does not import that shape; the two must stay in step.
     version: 9,
     name: 'where a session belongs, apart from the label on its line',
     up: (ctx) => {
@@ -168,30 +169,18 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
-    // Parent sessions (see parents.ts): derived from the lines already archived, which are parsed
-    // again for a parent they already name. A run's group is filled only when the line carries it.
-    // Threads again, since a child joins its parent's thread and is never the root. Does not open
-    // an agent's database or session directory.
+    // Parent sessions (see parents.ts), then places.jsonl lines mirrored before those tables
+    // existed: a later sync skips bytes it already has, so they are applied here, after
+    // session_parent exists. A places line whose version this Origin does not know stays in the
+    // mirror, is skipped, and is logged as a warning; the format that understands it calls
+    // reparsePlaces again. Threads again, so a child joins its parent and a linked work tree joins
+    // the main checkout. Does not open an agent's database or session directory. The parent-table
+    // SQL is written below, not imported from schema.ts.
     version: 10,
-    name: 'parent sessions from the lines already archived',
+    name: 'parent sessions, and places already mirrored',
     up: (ctx) => {
       ctx.db.exec(PARENT_TABLES);
       reparseParents(ctx);
-      deriveThreads(ctx.db);
-    },
-  },
-  {
-    // Lines of places.jsonl mirrored before the tables existed never reached them: a later sync
-    // skips bytes it already has. Read them now. A project root is one row per device, so two
-    // devices that share a path do not overwrite each other. Threads again, because version 10
-    // derived them before a place could move a session onto its work tree's project.
-    version: 11,
-    name: 'places already mirrored, and one project root per device',
-    up: (ctx) => {
-      if (hasTable(ctx.db, 'project_root') && !hasColumn(ctx.db, 'project_root', 'device')) {
-        ctx.db.exec(PROJECT_ROOT_V11);
-      }
-      ctx.db.exec(PLACE_HEAD_V11);
       reparsePlaces(ctx.db, ctx.home, ctx.log);
       deriveThreads(ctx.db);
     },
@@ -199,17 +188,20 @@ export const MIGRATIONS: Migration[] = [
 ];
 
 /**
- * Version 9: where a session belongs. A new store is created from schema.ts instead, which has
- * the version 11 shape (one project root per device, and `place_head`).
+ * Version 9: where a session belongs. Written here, not imported from schema.ts. A new store is
+ * created from schema.ts with this same shape; keep the two the same. This step fills nothing.
+ * Version 10 reads the places already mirrored. A line whose version this Origin does not know
+ * stays in the mirror; the format that understands it calls reparsePlaces again.
  */
 const PLACE_TABLES_V9 = `
 CREATE TABLE IF NOT EXISTS project_root (
+  device  TEXT NOT NULL DEFAULT '',
   path    TEXT NOT NULL,
   project TEXT NOT NULL,
   root    TEXT NOT NULL,
   signal  TEXT NOT NULL,
   seen_at INTEGER NOT NULL,
-  PRIMARY KEY (path)
+  PRIMARY KEY (device, path)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS session_place (
   source     TEXT NOT NULL,
@@ -220,27 +212,6 @@ CREATE TABLE IF NOT EXISTS session_place (
   PRIMARY KEY (source, session_id)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS session_place_project ON session_place (project);
-`;
-
-/** `project_root` again, with one row per device. Rows kept from version 9 are this device's. */
-const PROJECT_ROOT_V11 = `
-CREATE TABLE project_root_v11 (
-  device  TEXT NOT NULL DEFAULT '',
-  path    TEXT NOT NULL,
-  project TEXT NOT NULL,
-  root    TEXT NOT NULL,
-  signal  TEXT NOT NULL,
-  seen_at INTEGER NOT NULL,
-  PRIMARY KEY (device, path)
-) WITHOUT ROWID;
-INSERT INTO project_root_v11 (device, path, project, root, signal, seen_at)
-  SELECT '', path, project, root, signal, seen_at FROM project_root;
-DROP TABLE project_root;
-ALTER TABLE project_root_v11 RENAME TO project_root;
-`;
-
-/** The latest places line of each key, so a sync does not read the whole mirror to know it. */
-const PLACE_HEAD_V11 = `
 CREATE TABLE IF NOT EXISTS place_head (
   source TEXT NOT NULL,
   device TEXT NOT NULL DEFAULT '',
@@ -311,7 +282,7 @@ CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log BEGI
 END;
 `;
 
-/** The parent-session table, as version 10 created it. */
+/** Version 10's parent-session table, written here rather than imported from schema.ts. */
 const PARENT_TABLES = `
 CREATE TABLE IF NOT EXISTS session_parent (
   source            TEXT NOT NULL,

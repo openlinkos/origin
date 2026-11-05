@@ -119,8 +119,8 @@ describe('places that were mirrored before the tables existed', () => {
       const logged: string[] = [];
       const upgraded = openDatabase(path.join(home, 'origin.db'), { log: (m) => logged.push(m) });
       try {
-        expect(upgraded.prepare('PRAGMA user_version').get()).toEqual({ user_version: 11 });
-        expect(logged.join('\n')).toMatch(/version 11/);
+        expect(upgraded.prepare('PRAGMA user_version').get()).toEqual({ user_version: 10 });
+        expect(logged.join('\n')).toMatch(/version 10/);
         expect(placeOf(upgraded, 's1')).toMatchObject({ project: 'demo-app', signal: 'git' });
         const roots = upgraded.prepare('SELECT project FROM project_root').all() as Array<{
           project: string;
@@ -128,6 +128,7 @@ describe('places that were mirrored before the tables existed', () => {
         expect(roots.map((r) => r.project)).toEqual(['demo-app']);
         const raw = upgraded.prepare('SELECT id FROM raw_file').get() as { id: number };
         expect(mirrorText(upgraded, home, raw.id)).toContain(later);
+        expect(logged.join('\n')).toMatch(/version 2 is not read by this Origin/);
         expect(logged.join('\n')).not.toMatch(/"v" must be 1/);
       } finally {
         upgraded.close();
@@ -603,7 +604,8 @@ describe('place lines that must not lock or steal a file', () => {
       '{"v":1,"type":"place","session":"s1","project":"locked","root":null,"signal":"explicit"}';
     try {
       expect(parsePlaceLine(bad).warning).toMatch(/signal/);
-      expect(parsePlaceLine('{"v":2}')).toEqual({ events: [] });
+      expect(parsePlaceLine('{"v":2}').warning).toMatch(/version 2 is not read/);
+      expect(parsePlaceLine('{"v":2}').events).toEqual([]);
       let pending = [bad];
       const file = {
         absPath: 'places.jsonl',

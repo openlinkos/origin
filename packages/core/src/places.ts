@@ -438,8 +438,16 @@ function parsePlaceObject(line: string): ParsedLine {
     throw new Error('places.jsonl: not a JSON object');
   }
   const obj = value as Record<string, unknown>;
-  // A later format stays in the mirror, unread, until a newer Origin knows it. Not a bad line.
-  if (obj.v !== 1) return { events: [] };
+  // Only version 1 is applied. Any other `v` (none, or a future `"v":2`) stays in the mirror
+  // byte for byte: skip it and warn. The format that understands it calls `reparsePlaces` again.
+  if (obj.v !== 1) {
+    const shown =
+      typeof obj.v === 'number' || typeof obj.v === 'string' ? String(obj.v) : 'missing';
+    return {
+      events: [],
+      warning: `places.jsonl: version ${shown} is not read by this Origin; the line is kept`,
+    };
+  }
   if (obj.type === 'parent') {
     const fact = parentPlaceFact(obj);
     return fact ? { events: [], sessionParents: [fact] } : { events: [] };
@@ -821,7 +829,9 @@ export function placesSourceFile(
 
 /**
  * Apply `places.jsonl` mirrors again, so a rebuild agrees with the bytes. A line that does not
- * parse is skipped and, when `log` is set, logged as a warning. No-op without the tables.
+ * parse, and a line whose version this Origin does not know, is skipped and, when `log` is set,
+ * logged as a warning. The bytes stay in the mirror. The format that understands an unknown
+ * version calls this again in its migration. No-op without the tables.
  */
 export function reparsePlaces(
   db: Database,

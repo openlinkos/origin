@@ -447,7 +447,10 @@ describe('places.jsonl', () => {
     expect(parsePlaceLine('{"v":1,"type":"other"}')).toEqual({ events: [] });
     expect(parsePlaceLine('not json')).toEqual({ events: [], warning: 'places.jsonl: not JSON' });
     expect(parsePlaceLine('[]').warning).toMatch(/JSON object/);
-    expect(parsePlaceLine('{"v":2}')).toEqual({ events: [] });
+    expect(parsePlaceLine('{"v":2}')).toEqual({
+      events: [],
+      warning: 'places.jsonl: version 2 is not read by this Origin; the line is kept',
+    });
   });
 
   it('does not let a place line replace an explicit name', async () => {
@@ -484,17 +487,18 @@ describe('places.jsonl', () => {
     }
   });
 
-  it('is store format 11 and starts empty', () => {
-    expect(STORE_VERSION).toBe(11);
+  it('is store format 10 and starts empty', () => {
+    expect(STORE_VERSION).toBe(10);
     const db = open(tempDir('origin-place-ver-'));
     try {
-      expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 11 });
+      expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 10 });
       expect((db.prepare('SELECT COUNT(*) AS n FROM session_place').get() as { n: number }).n).toBe(
         0,
       );
       expect((db.prepare('SELECT COUNT(*) AS n FROM project_root').get() as { n: number }).n).toBe(
         0,
       );
+      expect((db.prepare('SELECT COUNT(*) AS n FROM place_head').get() as { n: number }).n).toBe(0);
       expect(
         (db.prepare('SELECT COUNT(*) AS n FROM session_parent').get() as { n: number }).n,
       ).toBe(0);

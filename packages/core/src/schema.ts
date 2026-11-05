@@ -90,9 +90,9 @@
  * and a new one end up the same (see docs/architecture.md#migrations).
  */
 /**
- * Where a session belongs (version 9, with one row per device since version 11). The version 9
- * migration creates the original tables and fills nothing; version 11 adds `device` and reads the
- * places already mirrored. A new store is created with this shape.
+ * Where a session belongs (version 9). The version 9 migration creates these tables and fills
+ * nothing; version 10 reads the places already mirrored. A new store is created with this shape.
+ * The migration copies this SQL rather than importing it, so the two must stay the same.
  */
 export const PLACE_TABLES = `
 CREATE TABLE IF NOT EXISTS project_root (

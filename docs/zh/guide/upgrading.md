@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-22c6c732
+sourceHash: sha256-0fbd85dc
 ---
 
 # 升级
@@ -70,10 +70,10 @@ docker logs origin-hub     # shows the upgrade of the store, if any
 | 0.2.0 | 3 | 记录格式版本；记录会话名称是否由用户设定；从已归档的行中读取 Claude Code 会话的标题 |
 | 0.3.0 | 4 | 读取中枢在能读懂记忆流之前归档的记忆流（见[原生记忆](../sources.md#native-memories)） |
 | 0.4.0 | 4 | 新增召回记录的表；格式和已存的内容都不变 |
-| 尚未发布 | 9 | 根据已经归档的内容，记录每个会话的 git 分支，并把会话归入线索；召回记录可以指向一条线索；从已经归档的工具结果中找出 Agent 提议的条目；在中枢上，把每个令牌标为设备的或 Agent 的；从已经归档的行中读出每条消息是谁写的（你、别人、某个 Agent 还是某个程序），并补上 Agent 日志中以前没有读取的消息；新增空的 `project_root` 和 `session_place` 表，使工作树可以按它的主项目来读（见[项目](../architecture.md#projects)）。这一步不写入任何行，也不读取文件 |
-| 尚未发布 | 10 | 根据同样的这些行记录哪个会话是另一个会话的子会话，而不打开 Agent 的数据库（见[父会话](../architecture.md#parent-sessions)） |
+| 尚未发布 | 9 | 根据已经归档的内容，记录每个会话的 git 分支，并把会话归入线索；召回记录可以指向一条线索；从已经归档的工具结果中找出 Agent 提议的条目；在中枢上，把每个令牌标为设备的或 Agent 的；从已经归档的行中读出每条消息是谁写的（你、别人、某个 Agent 还是某个程序），并补上 Agent 日志中以前没有读取的消息；新增空的 `project_root`（每个设备一行）、`session_place` 和 `place_head` 表，使工作树可以按它的主项目来读（见[项目](../architecture.md#projects)）。这一步不写入任何行，也不读取文件 |
+| 尚未发布 | 10 | 根据同样的这些行记录哪个会话是另一个会话的子会话，而不打开 Agent 的数据库（见[父会话](../architecture.md#parent-sessions)）。这张表建好之后，读取在项目表出现之前就已经镜像的 `places.jsonl` 行。本 Origin 不认识的版本原样留在镜像里，解析时跳过并记一条警告 |
 
-格式 2 和 3 都是 0.2.0 引入的，格式 5 到 10 随下一个版本发布。每一步的细节见[架构](../architecture.md#migrations)。读出每条消息是谁写的、以及哪个会话是子会话，都需要重新解析已归档的日志，所以在较大的库上，升级后的第一条命令或启动时的中枢可能要花一分钟甚至更久；它会边做边报告进度。它不打开 ZCode 的数据库，也不打开 Grok Build 的会话目录。`origin sessions parents` 在你运行它时补上工作流运行的名称，以及只有摘要写明的 Grok 父会话（见[父会话](./cli.md#parent-sessions)）。`project_root` 和 `session_place` 在解析工作树或运行 `origin sessions reproject` 之前保持为空。
+格式 2 和 3 都是 0.2.0 引入的，格式 5 到 10 随下一个版本发布。每一步的细节见[架构](../architecture.md#migrations)。读出每条消息是谁写的、以及哪个会话是子会话，都需要重新解析已归档的日志，所以在较大的库上，升级后的第一条命令或启动时的中枢可能要花一分钟甚至更久；它会边做边报告进度。它不打开 ZCode 的数据库，也不打开 Grok Build 的会话目录。`origin sessions parents` 在你运行它时补上工作流运行的名称，以及只有摘要写明的 Grok 父会话（见[父会话](./cli.md#parent-sessions)）。`project_root` 和 `session_place` 在解析工作树、采集到 `places.jsonl` 的一行，或升级到格式 10 时读到表出现之前就已经镜像的行之前，保持为空。本 Origin 不认识的版本原样留在镜像里，并记一条警告。以后哪个格式开始认识它，就再读一次。
 
 - **先备份。** 升级是谨慎的，而备份只需一条命令：`origin backup <dir>`（见[备份](./privacy.md#backing-up)）。在中枢上，请在替换容器之前在容器内运行，比如 `docker exec origin-hub origin backup /data/backup-0.2`。
 - **不能降级。** Origin 发现库的格式比自己新时，会拒绝打开并提示升级，不做任何改动。要回到旧版本，请恢复升级前做的备份；在那之后写入的内容会丢失。
