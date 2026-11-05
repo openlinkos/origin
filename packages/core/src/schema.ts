@@ -90,17 +90,20 @@
  * and a new one end up the same (see docs/architecture.md#migrations).
  */
 /**
- * Where a session belongs (version 9). The same statements are in the migration, so a new store
- * and an upgraded one match. The migration creates them and fills nothing.
+ * Where a session belongs (version 9, with one row per device since version 11). The version 9
+ * migration creates the original tables and fills nothing; version 11 adds `device` and reads the
+ * places already mirrored. A new store is created with this shape.
  */
 export const PLACE_TABLES = `
 CREATE TABLE IF NOT EXISTS project_root (
-  path    TEXT PRIMARY KEY,
+  device  TEXT NOT NULL DEFAULT '',
+  path    TEXT NOT NULL,
   project TEXT NOT NULL,
   root    TEXT NOT NULL,
   signal  TEXT NOT NULL,
-  seen_at INTEGER NOT NULL
-);
+  seen_at INTEGER NOT NULL,
+  PRIMARY KEY (device, path)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS session_place (
   source     TEXT NOT NULL,
   session_id TEXT NOT NULL,
@@ -110,6 +113,13 @@ CREATE TABLE IF NOT EXISTS session_place (
   PRIMARY KEY (source, session_id)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS session_place_project ON session_place (project);
+CREATE TABLE IF NOT EXISTS place_head (
+  source TEXT NOT NULL,
+  device TEXT NOT NULL DEFAULT '',
+  key    TEXT NOT NULL,
+  line   TEXT NOT NULL,
+  PRIMARY KEY (source, device, key)
+) WITHOUT ROWID;
 `;
 
 export const SCHEMA = `

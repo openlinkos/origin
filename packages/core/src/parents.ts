@@ -157,6 +157,13 @@ export function getSessionParent(
   };
 }
 
+/** A child counts when it has a visible event that is not a memory. Forgotten sessions do not. */
+const VISIBLE_CHILD = `EXISTS (
+  SELECT 1 FROM event e
+   WHERE e.source = session_parent.source AND e.session_id = session_parent.session_id
+     AND e.kind <> 'memory'
+     AND NOT EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_id = e.id))`;
+
 /** How many children a session has, and the distinct workflow names among them. */
 export function sessionFold(
   db: Database,
@@ -165,7 +172,8 @@ export function sessionFold(
 ): { children: number; workflows: string[] } {
   const rows = db
     .prepare(
-      `SELECT run_name FROM session_parent WHERE parent_source = ? AND parent_session_id = ?`,
+      `SELECT run_name FROM session_parent
+        WHERE parent_source = ? AND parent_session_id = ? AND ${VISIBLE_CHILD}`,
     )
     .all(source, sessionId) as Array<{ run_name: string | null }>;
   const workflows = [
@@ -179,7 +187,7 @@ export function childSessions(db: Database, source: string, sessionId: string): 
   const rows = db
     .prepare(
       `SELECT source, session_id, parent_source, parent_session_id, via, run_group, run_name, signal
-         FROM session_parent WHERE parent_source = ? AND parent_session_id = ?
+         FROM session_parent WHERE parent_source = ? AND parent_session_id = ? AND ${VISIBLE_CHILD}
         ORDER BY COALESCE(run_group, ''), source, session_id`,
     )
     .all(source, sessionId) as Array<{
@@ -205,32 +213,51 @@ export function childSessions(db: Database, source: string, sessionId: string): 
 }
 
 /**
- * Whether a session is folded out of a top-level list: it has a parent, or a line says it is a
- * child and names no parent.
+ * Whether a session is folded out of a top-level list: a parent chain from it ends at a visible
+ * parent, and the chain is not a cycle.
  */
 export function isFoldedChild(db: Database, source: string, sessionId: string): boolean {
   return (
     db
       .prepare(
-        `SELECT 1 WHERE EXISTS (
-           SELECT 1 FROM session_parent p WHERE p.source = ? AND p.session_id = ?)
-         OR EXISTS (
-           SELECT 1 FROM session_kind k
-            WHERE k.source = ? AND k.session_id = ? AND k.kind = 'child')`,
+        `SELECT 1 FROM session WHERE source = ? AND session_id = ? AND NOT (${TOP_LEVEL_SESSION})`,
       )
-      .get(source, sessionId, source, sessionId) !== undefined
+      .get(source, sessionId) !== undefined
   );
 }
 
 /**
- * Sessions with no parent row and no child kind, as a condition on the `session` table. A timeline
- * lists these unless it is asked for children too.
+ * Sessions that are not folded under a visible parent, as a condition on the `session` table.
+ * A child is folded only when walking its parents reaches one that has a visible, non-memory
+ * event and no further parent. A missing parent, a forgotten parent, a child kind with no parent
+ * row, and a cycle (nothing in it is such an end) all stay listed.
  */
 export const TOP_LEVEL_SESSION = `NOT EXISTS (
-  SELECT 1 FROM session_parent p WHERE p.source = session.source AND p.session_id = session.session_id)
-AND NOT EXISTS (
-  SELECT 1 FROM session_kind k
-   WHERE k.source = session.source AND k.session_id = session.session_id AND k.kind = 'child')`;
+  WITH RECURSIVE chain(source, session_id, seen, depth) AS (
+    SELECT p.parent_source, p.parent_session_id,
+           char(31) || session.source || char(31) || session.session_id || char(31)
+             || p.parent_source || char(31) || p.parent_session_id || char(31),
+           1
+      FROM session_parent p
+     WHERE p.source = session.source AND p.session_id = session.session_id
+    UNION ALL
+    SELECT p.parent_source, p.parent_session_id,
+           chain.seen || p.parent_source || char(31) || p.parent_session_id || char(31),
+           chain.depth + 1
+      FROM chain
+      JOIN session_parent p ON p.source = chain.source AND p.session_id = chain.session_id
+     WHERE chain.depth < 32
+       AND instr(chain.seen, char(31) || p.parent_source || char(31) || p.parent_session_id || char(31)) = 0
+  )
+  SELECT 1 FROM chain
+   WHERE NOT EXISTS (
+           SELECT 1 FROM session_parent p
+            WHERE p.source = chain.source AND p.session_id = chain.session_id)
+     AND EXISTS (
+           SELECT 1 FROM event e
+            WHERE e.source = chain.source AND e.session_id = chain.session_id
+              AND e.kind <> 'memory'
+              AND NOT EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_id = e.id)))`;
 
 /**
  * The name a workflow child is shown under: `{run_name} · actor#N@M` when the run has a name and

@@ -9,7 +9,6 @@ import type { MigrationContext } from './migrations.js';
 import { readMirrorLine, scanMirrorLines } from './mirror.js';
 import { recordSessionParent } from './parents.js';
 import { mirrorRelPath, parseRawPath, rawDir } from './paths.js';
-import { applyPlaceFacts, recordExplicitPlace, reparsePlaces } from './places.js';
 import { deriveProposal } from './proposals.js';
 import { PULL_TOMBSTONES_AGAIN, setSetting } from './settings.js';
 import { recordedAgentVersion } from './store.js';
@@ -180,9 +179,9 @@ const MEMORY_STREAM_SOURCES = new Set(['claude-code', 'zcode', 'grok']);
  * Cursor write a session's facts on each of its lines, and a person's own sources are small).
  */
 const AUTHOR_NEEDLES: Record<string, string[]> = {
-  'claude-code': ['"user"', '"queued_command"', '"type":"parent"'],
-  codex: ['"user"', '"session_meta"', '"type":"parent"'],
-  grok: ['"user_message_chunk"', '"subagent_spawned"', '"session_kind"', '"type":"parent"'],
+  'claude-code': ['"user"', '"queued_command"'],
+  codex: ['"user"', '"session_meta"'],
+  grok: ['"user_message_chunk"', '"subagent_spawned"', '"session_kind"'],
 };
 
 /**
@@ -252,11 +251,6 @@ export function reparseAuthorship(ctx: MigrationContext): void {
   const touched = new Map<string, { source: string; sessionId: string }>();
   const skipped = new Set<string>();
   const counts = { inputs: 0, added: 0, kinds: 0, errors: 0 };
-  // Versions 5 and 8 derive threads, and version 8 reparses lines, before session_parent exists.
-  const parentsReady =
-    db
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_parent'")
-      .get() !== undefined;
   const started = Date.now();
   let told = started;
   for (const [i, f] of todo.entries()) {
@@ -302,11 +296,6 @@ export function reparseAuthorship(ctx: MigrationContext): void {
           return;
         }
         if (!parsed) return;
-        if (parsed.warning) {
-          counts.errors++;
-          ctx.log(`warning ${relPath}:${lineNo}: ${parsed.warning}`);
-          return;
-        }
         for (const ev of parsed.events) {
           const id = `${f.source}:${ev.id}`;
           const row = stored.get(id) as
@@ -337,23 +326,12 @@ export function reparseAuthorship(ctx: MigrationContext): void {
         for (const fact of parsed.sessionKinds ?? []) {
           if (recordSessionKind(db, f.source, fact)) counts.kinds++;
         }
-        applyPlaceFacts(db, f.source, parsed);
-        for (const ev of parsed.events) {
-          if (ev.projectSignal === 'explicit' && ev.project) {
-            recordExplicitPlace(db, f.source, ev.sessionId, ev.project);
-          }
-        }
-        // Version 8 derives authorship before session_parent exists. Do not query it then.
-        if (parentsReady) {
-          for (const fact of parsed.sessionParents ?? []) recordSessionParent(db, f.source, fact);
-        }
       });
     } catch (err) {
       if (!(err instanceof OriginError)) throw err;
       ctx.log(`Skipped the mirror ${f.mirror}: ${err.message}`);
     }
   }
-  reparsePlaces(db, ctx.home, ctx.log);
   for (const s of touched.values()) refreshSession(db, s.source, s.sessionId);
   // A device that dropped its hub's forget of one of these events, which it did not have then,
   // pulls the hub's tombstones again.

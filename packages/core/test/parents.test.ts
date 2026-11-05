@@ -134,7 +134,8 @@ describe('session_parent', () => {
       runName: 'Ship',
       signal: 'parent_id',
     });
-    expect(sessionFold(db, 'zcode', 'agent-parent')).toEqual({ children: 1, workflows: ['Ship'] });
+    // A child with no visible event is not folded in: that would publish a session id nothing shows.
+    expect(sessionFold(db, 'zcode', 'agent-parent')).toEqual({ children: 0, workflows: [] });
   });
 
   it('ingests places.jsonl without message events, and a later line fills the group', async () => {
@@ -196,7 +197,7 @@ describe('session_parent', () => {
     });
     const raw = db.prepare('SELECT id FROM raw_file').get() as { id: number };
     expect(mirrorText(db, home, raw.id)).toBe(`${child}\n`);
-    expect(listSessions(db, { topLevel: true }).map((s) => s.sessionId)).toEqual([]);
+    expect(listSessions(db, { topLevel: true }).map((s) => s.sessionId)).toEqual(['child']);
     expect(listSessions(db).map((s) => s.sessionId)).toEqual(['child']);
   });
 });

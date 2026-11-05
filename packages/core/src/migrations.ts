@@ -2,9 +2,10 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { OriginError } from './errors.js';
 import { sessionBranchQuery } from './ingest.js';
+import { reparsePlaces } from './places.js';
 import { deriveProposals } from './proposals.js';
 import { reparseAuthorship, reparseMemories, reparseParents, reparseTitles } from './reparse.js';
-import { PLACE_TABLES, SCHEMA } from './schema.js';
+import { SCHEMA } from './schema.js';
 import { deriveThreads } from './threads.js';
 import type { SourceAdapter } from './types.js';
 
@@ -159,10 +160,11 @@ export const MIGRATIONS: Migration[] = [
   {
     // Where a session belongs, apart from the label on its first event. Empty until a place line
     // or a later resolution fills it. Does not read the filesystem and does not reparse mirrors.
+    // The original tables, keyed by path: version 11 adds one row per device and reads the lines.
     version: 9,
     name: 'where a session belongs, apart from the label on its line',
     up: (ctx) => {
-      ctx.db.exec(PLACE_TABLES);
+      ctx.db.exec(PLACE_TABLES_V9);
     },
   },
   {
@@ -178,7 +180,75 @@ export const MIGRATIONS: Migration[] = [
       deriveThreads(ctx.db);
     },
   },
+  {
+    // Lines of places.jsonl mirrored before the tables existed never reached them: a later sync
+    // skips bytes it already has. Read them now. A project root is one row per device, so two
+    // devices that share a path do not overwrite each other. Threads again, because version 10
+    // derived them before a place could move a session onto its work tree's project.
+    version: 11,
+    name: 'places already mirrored, and one project root per device',
+    up: (ctx) => {
+      if (hasTable(ctx.db, 'project_root') && !hasColumn(ctx.db, 'project_root', 'device')) {
+        ctx.db.exec(PROJECT_ROOT_V11);
+      }
+      ctx.db.exec(PLACE_HEAD_V11);
+      reparsePlaces(ctx.db, ctx.home, ctx.log);
+      deriveThreads(ctx.db);
+    },
+  },
 ];
+
+/**
+ * Version 9: where a session belongs. A new store is created from schema.ts instead, which has
+ * the version 11 shape (one project root per device, and `place_head`).
+ */
+const PLACE_TABLES_V9 = `
+CREATE TABLE IF NOT EXISTS project_root (
+  path    TEXT NOT NULL,
+  project TEXT NOT NULL,
+  root    TEXT NOT NULL,
+  signal  TEXT NOT NULL,
+  seen_at INTEGER NOT NULL,
+  PRIMARY KEY (path)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS session_place (
+  source     TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  project    TEXT NOT NULL,
+  root       TEXT,
+  signal     TEXT NOT NULL,
+  PRIMARY KEY (source, session_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_place_project ON session_place (project);
+`;
+
+/** `project_root` again, with one row per device. Rows kept from version 9 are this device's. */
+const PROJECT_ROOT_V11 = `
+CREATE TABLE project_root_v11 (
+  device  TEXT NOT NULL DEFAULT '',
+  path    TEXT NOT NULL,
+  project TEXT NOT NULL,
+  root    TEXT NOT NULL,
+  signal  TEXT NOT NULL,
+  seen_at INTEGER NOT NULL,
+  PRIMARY KEY (device, path)
+) WITHOUT ROWID;
+INSERT INTO project_root_v11 (device, path, project, root, signal, seen_at)
+  SELECT '', path, project, root, signal, seen_at FROM project_root;
+DROP TABLE project_root;
+ALTER TABLE project_root_v11 RENAME TO project_root;
+`;
+
+/** The latest places line of each key, so a sync does not read the whole mirror to know it. */
+const PLACE_HEAD_V11 = `
+CREATE TABLE IF NOT EXISTS place_head (
+  source TEXT NOT NULL,
+  device TEXT NOT NULL DEFAULT '',
+  key    TEXT NOT NULL,
+  line   TEXT NOT NULL,
+  PRIMARY KEY (source, device, key)
+) WITHOUT ROWID;
+`;
 
 /**
  * Version 7: a token is a device's when the hub holds what only a device sends under its name (a

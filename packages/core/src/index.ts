@@ -287,6 +287,7 @@ export {
   type ProjectMove,
   parsePlaceLine,
   placesSourceFile,
+  projectEventSql,
   type ReprojectReport,
   type ReprojectResult,
   recordExplicitPlace,

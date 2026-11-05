@@ -1116,12 +1116,14 @@ export function briefIn(
     );
   }
   const at = author.lastIndexOf('@');
+  const device = at < 0 ? '' : author.slice(at + 1);
   const plan = planRecall(db, {
     occasion: 'request',
     source: sourceOfAgent(at < 0 ? author : author.slice(0, at)),
     prompt: args.about ?? null,
     onDisk: here !== null,
-    ...recallScope(dir, { onDisk: here !== null, db }),
+    device,
+    ...recallScope(dir, { onDisk: here !== null, db, device }),
   });
   const recall = recordRecall(db, plan, { origin: at < 0 ? undefined : author.slice(at + 1) });
   const where = plan.project ? `project ${plan.project}` : 'this directory';

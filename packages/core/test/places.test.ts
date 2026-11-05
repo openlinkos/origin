@@ -245,13 +245,17 @@ describe('git work trees', () => {
     fs.mkdirSync(path.join(bare, '.git'), { recursive: true });
     fs.writeFileSync(path.join(bare, '.git', 'config'), '[core]\nbare = true\n');
     expect(resolvePlace(bare)).toMatchObject({
-      signal: 'segment',
+      signal: 'git',
       project: 'bare-app',
-      rootPath: null,
+      rootPath: path.resolve(bare),
     });
     const broken = path.join(base, 'broken-app');
     fs.mkdirSync(path.join(broken, '.git', 'config'), { recursive: true });
-    expect(resolvePlace(broken).signal).toBe('segment');
+    expect(resolvePlace(broken)).toMatchObject({
+      signal: 'git',
+      project: 'broken-app',
+      rootPath: path.resolve(broken),
+    });
   });
 
   it('does not take a symlink .git', () => {
@@ -263,7 +267,11 @@ describe('git work trees', () => {
     } catch {
       return;
     }
-    expect(resolvePlace(dir).signal).toBe('segment');
+    expect(resolvePlace(dir)).toMatchObject({
+      signal: 'git',
+      project: 'link-app',
+      rootPath: path.resolve(dir),
+    });
   });
 });
 
@@ -439,7 +447,7 @@ describe('places.jsonl', () => {
     expect(parsePlaceLine('{"v":1,"type":"other"}')).toEqual({ events: [] });
     expect(parsePlaceLine('not json')).toEqual({ events: [], warning: 'places.jsonl: not JSON' });
     expect(parsePlaceLine('[]').warning).toMatch(/JSON object/);
-    expect(parsePlaceLine('{"v":2}').warning).toMatch(/"v" must be 1/);
+    expect(parsePlaceLine('{"v":2}')).toEqual({ events: [] });
   });
 
   it('does not let a place line replace an explicit name', async () => {
@@ -476,11 +484,11 @@ describe('places.jsonl', () => {
     }
   });
 
-  it('is store format 10 and starts empty', () => {
-    expect(STORE_VERSION).toBe(10);
+  it('is store format 11 and starts empty', () => {
+    expect(STORE_VERSION).toBe(11);
     const db = open(tempDir('origin-place-ver-'));
     try {
-      expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 10 });
+      expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 11 });
       expect((db.prepare('SELECT COUNT(*) AS n FROM session_place').get() as { n: number }).n).toBe(
         0,
       );

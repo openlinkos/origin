@@ -437,6 +437,32 @@ describe('the workbench lists', () => {
     expect(child?.title).toBe('actor#2@5 do the step');
     expect(child?.runName).toBe('Ship');
     expect(child?.via).toBe('workflow');
+    expect(child?.children).toEqual([]);
+  });
+
+  it('finds a child and a grandchild by name', async () => {
+    write([
+      { id: 'p1', session: 'parent', ts: NOW - 3000, project: 'demo-app', text: 'Run the job' },
+      { id: 'c1', session: 'child', ts: NOW - 2000, project: 'demo-app', text: 'Do the step' },
+      {
+        id: 'g1',
+        session: 'grand',
+        ts: NOW - 1000,
+        project: 'demo-app',
+        text: 'zebragrand finishes the step',
+      },
+    ]);
+    await sync();
+    db.prepare(
+      `INSERT INTO session_parent
+         (source, session_id, parent_source, parent_session_id, via, run_group, run_name, signal)
+       VALUES ('fake', 'child', 'fake', 'parent', 'workflow', 'run-1', 'Ship', 'dwf_run'),
+              ('fake', 'grand', 'fake', 'child', 'subagent', 'run-1', NULL, 'parent_id')`,
+    ).run();
+    const listed = service.sessionBoard({ ...board, q: 'zebragrand' }, NOW);
+    expect(listed.rows.map((r) => r.sessionId)).toEqual(['parent']);
+    expect(listed.rows[0]?.children.map((c) => c.sessionId)).toEqual(['child']);
+    expect(listed.rows[0]?.children[0]?.children.map((c) => c.sessionId)).toEqual(['grand']);
   });
 
   it('show a session as a trace: every turn with its calls and failures, the latest in full', async () => {

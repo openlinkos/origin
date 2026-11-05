@@ -44,6 +44,11 @@ import {
 /** The projects the filters list before folding the rest away; the chosen ones always show. */
 const RAIL_PROJECTS = 8;
 
+/** A session and every nested child, so a grandchild is a row of the table too. */
+function sessionRows(ctx: Ctx, s: SessionBoardRow | SessionBoardChild, child: boolean): SafeHtml[] {
+  return [sessionCells(ctx, s, child), ...s.children.flatMap((c) => sessionRows(ctx, c, true))];
+}
+
 /** One sessions-table row. A child is named by its display title; the row keeps the stored title. */
 function sessionCells(ctx: Ctx, s: SessionBoardRow | SessionBoardChild, child: boolean): SafeHtml {
   const t = ctx.t;
@@ -152,7 +157,7 @@ export function sessionsPage(ctx: Ctx, b: SessionBoard & { filter: SessionBoardF
           })
       : html`<div class="ol-table-wrap"><table class="ol-table ol-table-compact ol-table-stack">
       <thead><tr><th>${t('sessions.titleColumn')}</th><th>${t('facet.agent')}</th><th>${t('filter.project')}</th><th class="ol-num">${t('sessions.turns')}</th><th class="ol-num">${t('overview.events')}</th><th class="ol-num">${t('sessions.duration')}</th><th class="ol-num">${t('nav.recalls')}</th><th class="ol-num">${t('sessions.lastActive')}</th></tr></thead>
-      <tbody>${b.rows.flatMap((s) => [sessionCells(ctx, s, false), ...s.children.map((c) => sessionCells(ctx, c, true))])}</tbody></table></div>`;
+      <tbody>${b.rows.flatMap((s) => sessionRows(ctx, s, false))}</tbody></table></div>`;
   renderPage(ctx, 200, {
     title: t('nav.sessions'),
     nav: 'sessions',

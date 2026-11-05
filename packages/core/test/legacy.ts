@@ -131,6 +131,7 @@ function dropPlaces(db: DatabaseSync): void {
   db.exec('DROP INDEX IF EXISTS session_place_project');
   db.exec('DROP TABLE IF EXISTS session_place');
   db.exec('DROP TABLE IF EXISTS project_root');
+  db.exec('DROP TABLE IF EXISTS place_head');
 }
 
 /** The tables version 8 added: who wrote each input, and the kinds of sessions. */

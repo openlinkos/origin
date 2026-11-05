@@ -10,7 +10,7 @@ import type { Database } from './db.js';
 import { readMirrorLine } from './mirror.js';
 import { TOP_LEVEL_SESSION } from './parents.js';
 import { parseRawPath, rawDir } from './paths.js';
-import { resolvedProjectSql } from './places.js';
+import { projectEventSql, resolvedProjectSql } from './places.js';
 import { PROMPT_TITLE_MAX, promptTitle } from './prompt.js';
 import type { Author, EventKind, EventRow, Role, SessionRow } from './types.js';
 
@@ -106,8 +106,8 @@ function whereClause(f: EventFilter, params: unknown[]): string {
     params.push(f.source);
   }
   if (f.project) {
-    parts.push(`${resolvedProjectSql('e.source', 'e.session_id', 'e.project')} = ?`);
-    params.push(f.project);
+    parts.push(projectEventSql('e'));
+    params.push(f.project, f.project);
   }
   if (f.sessionId) {
     parts.push('e.session_id = ?');
@@ -139,8 +139,8 @@ export function listSessions(
   filter: Pick<EventFilter, 'source' | 'project' | 'since' | 'until' | 'limit' | 'offset'> & {
     match?: string;
     /**
-     * Only sessions with no parent and no child kind. Timelines ask for this; other callers list
-     * every session, children included.
+     * Only sessions that are not folded under a visible parent. Timelines ask for this; other
+     * callers list every session, children included.
      */
     topLevel?: boolean;
   } = {},

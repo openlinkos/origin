@@ -378,7 +378,7 @@ describe('a store of version 5', () => {
 
     db = openDatabase(file);
     expect(userVersion(db)).toBe(STORE_VERSION);
-    expect(STORE_VERSION).toBe(10);
+    expect(STORE_VERSION).toBe(11);
     expect({
       proposals: db.prepare('SELECT * FROM proposal').all(),
       sources: db.prepare('SELECT * FROM proposal_source').all(),

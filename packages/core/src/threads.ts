@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
+import { resolvedProjectSql } from './places.js';
 import { isOwnerConversation, type SessionPrompt, sessionPrompts } from './store.js';
 
 /**
@@ -127,7 +128,19 @@ interface Node {
   ended_at: number;
 }
 
-const NODE_COLUMNS = 'source, session_id, project, git_branch, started_at, ended_at';
+/**
+ * The project a thread sees. `session_place` arrives in version 9; a migration that derives threads
+ * before then uses the label on the session.
+ */
+function projectExpr(db: Database): string {
+  return hasTable(db, 'session_place')
+    ? resolvedProjectSql('source', 'session_id', 'project')
+    : 'project';
+}
+
+function nodeColumns(db: Database): string {
+  return `source, session_id, ${projectExpr(db)} AS project, git_branch, started_at, ended_at`;
+}
 /** Sessions with visible events: only they take part. */
 const VISIBLE_SESSION = 'event_count > 0 AND started_at IS NOT NULL';
 
@@ -239,7 +252,7 @@ function attachChildren(db: Database, nodes: Map<string, Node>, groups: Groups):
       ORDER BY source, session_id`,
   );
   const load = db.prepare(
-    `SELECT ${NODE_COLUMNS} FROM session WHERE source = ? AND session_id = ? AND ${VISIBLE_SESSION}`,
+    `SELECT ${nodeColumns(db)} FROM session WHERE source = ? AND session_id = ? AND ${VISIBLE_SESSION}`,
   );
   const queue = [...anchored].sort();
   const seen = new Set<string>(anchored);
@@ -349,15 +362,15 @@ export function refreshThreads(
 ): void {
   const q = {
     node: db.prepare(
-      `SELECT ${NODE_COLUMNS} FROM session WHERE source = ? AND session_id = ? AND ${VISIBLE_SESSION}`,
+      `SELECT ${nodeColumns(db)} FROM session WHERE source = ? AND session_id = ? AND ${VISIBLE_SESSION}`,
     ),
     threadOf: db.prepare(
       'SELECT thread_id FROM session_thread WHERE source = ? AND session_id = ?',
     ),
     members: db.prepare('SELECT source, session_id FROM session_thread WHERE thread_id = ?'),
     branch: db.prepare(
-      `SELECT ${NODE_COLUMNS} FROM session
-        WHERE project = ? AND git_branch = ? AND ${VISIBLE_SESSION}`,
+      `SELECT ${nodeColumns(db)} FROM session
+        WHERE ${projectExpr(db)} = ? AND git_branch = ? AND ${VISIBLE_SESSION}`,
     ),
     follows: db.prepare(
       `SELECT f.target_source AS source, f.target_session_id AS session_id FROM session_follow f
@@ -482,7 +495,7 @@ export function deriveThreads(db: Database, opts: { anySession?: boolean } = {})
 
   const nodes = new Map<string, Node>();
   for (const n of db
-    .prepare(`SELECT ${NODE_COLUMNS} FROM session WHERE ${VISIBLE_SESSION}`)
+    .prepare(`SELECT ${nodeColumns(db)} FROM session WHERE ${VISIBLE_SESSION}`)
     .all() as unknown as Node[]) {
     nodes.set(keyOf(n.source, n.session_id), n);
   }

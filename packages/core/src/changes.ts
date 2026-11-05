@@ -2,8 +2,8 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { CURRENT_VERSION, type Entry, getEntry } from './entries.js';
 import { OriginError } from './errors.js';
-import { isFoldedChild } from './parents.js';
-import { entryProjectMatchSql, resolvedProjectSql } from './places.js';
+import { getSessionParent, isFoldedChild } from './parents.js';
+import { entryProjectMatchSql, projectEventSql, resolvedProjectSql } from './places.js';
 import { getProposal, type Proposal, VISIBLE_PROPOSAL } from './proposals.js';
 import {
   EVENT_COLUMNS,
@@ -172,8 +172,8 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
     const where = [f.includeTools ? "e.kind <> 'memory'" : "e.kind = 'message'", 'e.seq <= ?'];
     const params: unknown[] = [ends.event];
     if (f.project !== undefined) {
-      where.push(`${resolvedProjectSql('e.source', 'e.session_id', 'e.project')} = ?`);
-      params.push(f.project);
+      where.push(projectEventSql('e'));
+      params.push(f.project, f.project);
     }
     const inSessions = sessionScope(f, 'e');
     where.push(...inSessions.parts);
@@ -315,11 +315,29 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
       const asked =
         (f.session?.source === r.source && f.session.sessionId === r.session_id) ||
         f.thread !== undefined;
-      if (!asked && isFoldedChild(db, r.source, r.session_id)) continue;
+      let source = r.source;
+      let sessionId = r.session_id;
+      let shown = session;
+      if (!asked && isFoldedChild(db, source, sessionId)) {
+        // The feed names the parent, walking up to one that is itself listed.
+        for (let depth = 0; depth < 32 && isFoldedChild(db, source, sessionId); depth++) {
+          const parent = getSessionParent(db, source, sessionId);
+          if (!parent) break;
+          source = parent.parentSource;
+          sessionId = parent.parentSessionId;
+        }
+        const parentSession = getSession(db, source, sessionId);
+        if (!parentSession || `${source}\n${sessionId}` === `${r.source}\n${r.session_id}`)
+          continue;
+        const pkey = `${source}\n${sessionId}`;
+        if (keys.has(pkey)) continue;
+        keys.add(pkey);
+        shown = parentSession;
+      }
       const started = after
-        ? before.get(r.source, r.session_id, after.event) === undefined
-        : session.startedAt !== null && session.startedAt >= since;
-      sessions.push({ session, started });
+        ? before.get(source, sessionId, after.event) === undefined
+        : shown.startedAt !== null && shown.startedAt >= since;
+      sessions.push({ session: shown, started });
     }
 
     return {

@@ -4,7 +4,8 @@ import path from 'node:path';
 import { type Database, transaction } from './db.js';
 import { readMirror } from './mirror.js';
 import { parentPlaceFact } from './parents.js';
-import { mirrorRelPath } from './paths.js';
+import { mirrorRelPath, parseRawPath, remotePath } from './paths.js';
+import { refreshThreads } from './threads.js';
 import type { ParsedLine, ProjectRootFact, SessionPlaceFact, SourceFile } from './types.js';
 
 /**
@@ -59,9 +60,29 @@ export function entryProjectMatchSql(entryId: string): string {
     WHERE es.entry_id = ${entryId} AND sp.project = ?))`;
 }
 
-/** A mirror path that carries place lines. */
+/**
+ * An event is in a project when it has no place and its own label says so, or its session's place
+ * says so. Either way the caller binds the project once per branch, twice in all. The unplaced
+ * branch can use `event_project`.
+ */
+export function projectEventSql(alias = 'e'): string {
+  // A union, not an OR: the unplaced branch can use `event_project`. The caller binds the project
+  // once per branch.
+  return `${alias}.seq IN (
+    SELECT ${alias}.seq FROM event ${alias}
+     WHERE ${alias}.project = ? AND NOT EXISTS (
+       SELECT 1 FROM session_place sp
+        WHERE sp.source = ${alias}.source AND sp.session_id = ${alias}.session_id)
+    UNION ALL
+    SELECT ${alias}.seq FROM event ${alias}
+      JOIN session_place sp
+        ON sp.source = ${alias}.source AND sp.session_id = ${alias}.session_id
+     WHERE sp.project = ?)`;
+}
+
+/** The generated places mirror, and not a file of that name inside a source. */
 export function isPlacesRel(relPath: string): boolean {
-  return relPath === PLACES_FILE || relPath.endsWith(`/${PLACES_FILE}`);
+  return relPath === PLACES_FILE;
 }
 
 /**
@@ -241,13 +262,13 @@ interface RootRow {
   signal: string;
 }
 
-/** The longest `project_root` path that contains `cwd`, under `comparePath`. */
-export function longestRoot(db: Database, cwd: string): RootRow | null {
+/** The longest `project_root` path that contains `cwd`, for one device, under `comparePath`. */
+export function longestRoot(db: Database, cwd: string, device = ''): RootRow | null {
   if (!hasTable(db, 'project_root')) return null;
   const key = comparePath(cwd);
   const rows = db
-    .prepare('SELECT path, project, root, signal FROM project_root')
-    .all() as unknown as RootRow[];
+    .prepare('SELECT path, project, root, signal FROM project_root WHERE device = ?')
+    .all(device) as unknown as RootRow[];
   let best: RootRow | null = null;
   for (const row of rows) {
     if (key !== row.path && !key.startsWith(`${row.path}/`)) continue;
@@ -282,54 +303,93 @@ function fromSegment(cwd: string): PlaceResolution {
 }
 
 /**
- * The project of a working directory. Does not write. Git only when the path exists and `onDisk`
- * is not false. Agent facts only when the path is gone. Then the longest learned root, then the
- * last segment of `cwd`.
+ * The first directory at or above `start` that contains `.git`, without following a symlink.
+ * Null when there is none. Used when git is there but its work tree cannot be read.
+ */
+function gitHolder(start: string): string | null {
+  let at = path.resolve(start);
+  try {
+    if (fs.statSync(at).isFile()) at = path.dirname(at);
+  } catch {
+    return null;
+  }
+  for (;;) {
+    try {
+      fs.lstatSync(path.join(at, '.git'));
+      return at;
+    } catch {
+      const up = path.dirname(at);
+      if (up === at) return null;
+      at = up;
+    }
+  }
+}
+
+/** A directory that holds `.git` when the work tree itself cannot be read. Emitted, so a hub agrees. */
+function fromHolder(holder: string): PlaceResolution {
+  const project = lastSegment(holder);
+  const root = comparePath(holder);
+  const aliases: PlaceAlias[] = [];
+  if (project && root.length > 0) aliases.push({ path: root, project, root, signal: 'git' });
+  return { project, root, rootPath: holder, signal: 'git', emitSignal: 'git', aliases };
+}
+
+/**
+ * The project of a working directory. Does not write. When the path exists and `onDisk` is not
+ * false: git, or, when git is there but cannot be read, the directory that holds `.git`, or the
+ * last segment. A learned root applies only when the path is gone (or this is a hub). Agent facts
+ * apply only then too. `device` selects that device's roots; this store's own are `''`.
  */
 export function resolvePlace(
   cwd: string,
-  opts: { db?: Database; onDisk?: boolean; agentFacts?: AgentFacts | null } = {},
+  opts: { db?: Database; onDisk?: boolean; agentFacts?: AgentFacts | null; device?: string } = {},
 ): PlaceResolution {
-  if (opts.onDisk !== false) {
-    if (exists(cwd)) {
-      const git = tryGit(cwd);
-      if (git === 'fail') {
-        // A bare repo, a symlink, or an unreadable git dir: do not ask the agent.
-      } else if (git) {
-        return fromGit(git, 'git');
-      }
-    } else if (opts.agentFacts) {
-      const facts = opts.agentFacts;
-      if (facts.gitRoot && exists(facts.gitRoot)) {
-        const git = tryGit(facts.gitRoot);
-        if (git && git !== 'fail') return fromGit(git, 'agent');
-      }
-      if (facts.project) {
-        return {
-          project: facts.project,
-          root: null,
-          rootPath: null,
-          signal: 'agent',
-          emitSignal: 'agent',
-          aliases: [],
-        };
-      }
+  const device = opts.device ?? '';
+  if (opts.onDisk !== false && exists(cwd)) {
+    const git = tryGit(cwd);
+    if (git === 'fail') {
+      const holder = gitHolder(cwd);
+      return holder ? fromHolder(holder) : fromSegment(cwd);
+    }
+    if (git) return fromGit(git, 'git');
+    return fromSegment(cwd);
+  }
+  if (opts.onDisk !== false && !exists(cwd) && opts.agentFacts) {
+    const facts = opts.agentFacts;
+    if (facts.gitRoot && exists(facts.gitRoot)) {
+      const git = tryGit(facts.gitRoot);
+      if (git && git !== 'fail') return fromGit(git, 'agent');
+    }
+    if (facts.project) {
+      return {
+        project: facts.project,
+        root: null,
+        rootPath: null,
+        signal: 'agent',
+        emitSignal: 'agent',
+        aliases: [],
+      };
     }
   }
   if (opts.db) {
-    const learned = longestRoot(opts.db, cwd);
+    const learned = longestRoot(opts.db, cwd, device);
     if (learned) return fromLearned(learned);
   }
   return fromSegment(cwd);
 }
 
-/** Whether `home` lies on a `project_root` alias of `project`. */
-export function underProjectAlias(db: Database, home: string, project: string): boolean {
+/** Whether `home` lies on a `project_root` alias of `project` for one device. */
+export function underProjectAlias(
+  db: Database,
+  home: string,
+  project: string,
+  device = '',
+): boolean {
   if (!hasTable(db, 'project_root')) return false;
   const key = comparePath(home);
-  const rows = db.prepare('SELECT path FROM project_root WHERE project = ?').all(project) as Array<{
-    path: string;
-  }>;
+  const rows = db
+    .prepare('SELECT path FROM project_root WHERE device = ? AND project = ?')
+    .all(device, project) as Array<{ path: string }>;
   return rows.some((row) => key === row.path || key.startsWith(`${row.path}/`));
 }
 
@@ -339,6 +399,17 @@ function requireString(obj: Record<string, unknown>, key: string): string {
     throw new Error(`places.jsonl: "${key}" must be a non-empty string`);
   }
   return value;
+}
+
+/** A root or place line may record git, agent, or learned. Anything else would lock the session. */
+const PLACE_LINE_SIGNALS = new Set(['git', 'agent', 'learned']);
+
+function requirePlaceSignal(obj: Record<string, unknown>): string {
+  const signal = requireString(obj, 'signal');
+  if (!PLACE_LINE_SIGNALS.has(signal)) {
+    throw new Error('places.jsonl: "signal" must be git, agent, or learned');
+  }
+  return signal;
 }
 
 /**
@@ -367,7 +438,8 @@ function parsePlaceObject(line: string): ParsedLine {
     throw new Error('places.jsonl: not a JSON object');
   }
   const obj = value as Record<string, unknown>;
-  if (obj.v !== 1) throw new Error('places.jsonl: "v" must be 1');
+  // A later format stays in the mirror, unread, until a newer Origin knows it. Not a bad line.
+  if (obj.v !== 1) return { events: [] };
   if (obj.type === 'parent') {
     const fact = parentPlaceFact(obj);
     return fact ? { events: [], sessionParents: [fact] } : { events: [] };
@@ -377,7 +449,7 @@ function parsePlaceObject(line: string): ParsedLine {
       path: requireString(obj, 'path'),
       project: requireString(obj, 'project'),
       root: requireString(obj, 'root'),
-      signal: requireString(obj, 'signal'),
+      signal: requirePlaceSignal(obj),
     };
     return { events: [], roots: [fact] };
   }
@@ -389,7 +461,7 @@ function parsePlaceObject(line: string): ParsedLine {
       sessionId: requireString(obj, 'session'),
       project: requireString(obj, 'project'),
       root: obj.root === null ? null : obj.root,
-      signal: requireString(obj, 'signal'),
+      signal: requirePlaceSignal(obj),
     };
     return { events: [], places: [fact] };
   }
@@ -400,15 +472,16 @@ function upsertRoot(
   db: Database,
   row: { path: string; project: string; root: string; signal: string },
   seenAt: number,
+  device = '',
 ): void {
   db.prepare(
-    `INSERT INTO project_root (path, project, root, signal, seen_at) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(path) DO UPDATE SET
+    `INSERT INTO project_root (device, path, project, root, signal, seen_at) VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(device, path) DO UPDATE SET
        project = excluded.project, root = excluded.root, signal = excluded.signal, seen_at = excluded.seen_at`,
-  ).run(row.path, row.project, row.root, row.signal, seenAt);
+  ).run(device, row.path, row.project, row.root, row.signal, seenAt);
 }
 
-/** A place line. Does not replace `explicit` or `manual`. */
+/** A place line. Does not replace `explicit` or `manual`. True when the row changed. */
 function upsertPlaceLine(
   db: Database,
   source: string,
@@ -416,13 +489,17 @@ function upsertPlaceLine(
   project: string,
   root: string | null,
   signal: string,
-): void {
-  db.prepare(
-    `INSERT INTO session_place (source, session_id, project, root, signal) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(source, session_id) DO UPDATE SET
-       project = excluded.project, root = excluded.root, signal = excluded.signal
-     WHERE session_place.signal NOT IN ('explicit', 'manual')`,
-  ).run(source, sessionId, project, root, signal);
+): boolean {
+  return (
+    db
+      .prepare(
+        `INSERT INTO session_place (source, session_id, project, root, signal) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(source, session_id) DO UPDATE SET
+           project = excluded.project, root = excluded.root, signal = excluded.signal
+         WHERE session_place.signal NOT IN ('explicit', 'manual')`,
+      )
+      .run(source, sessionId, project, root, signal).changes > 0
+  );
 }
 
 /** The line named the project. Replaces a resolution, and not a `manual` row. */
@@ -441,18 +518,26 @@ export function recordExplicitPlace(
   ).run(source, sessionId, project);
 }
 
-/** Apply the roots and places of one parsed line. No-op until the tables exist. */
+/**
+ * Apply the roots and places of one parsed line. No-op until the tables exist. `device` is `''`
+ * on this store and the sending device's name on a hub. Returns the sessions whose place changed.
+ */
 export function applyPlaceFacts(
   db: Database,
   source: string,
   parsed: ParsedLine,
   seenAt = Date.now(),
-): void {
-  if (!hasTable(db, 'session_place')) return;
-  for (const root of parsed.roots ?? []) upsertRoot(db, root, seenAt);
+  device = '',
+): string[] {
+  if (!hasTable(db, 'session_place')) return [];
+  const changed: string[] = [];
+  for (const root of parsed.roots ?? []) upsertRoot(db, root, seenAt, device);
   for (const place of parsed.places ?? []) {
-    upsertPlaceLine(db, source, place.sessionId, place.project, place.root, place.signal);
+    if (upsertPlaceLine(db, source, place.sessionId, place.project, place.root, place.signal)) {
+      changed.push(place.sessionId);
+    }
   }
+  return changed;
 }
 
 export function rootLine(row: PlaceAlias): string {
@@ -484,12 +569,13 @@ interface SessionWork {
   cwd: string | null;
   signal: string | null;
   placed: string | null;
+  event_count: number;
 }
 
 function sessionsOf(db: Database, source: string): SessionWork[] {
   return db
     .prepare(
-      `SELECT s.session_id, s.project, s.cwd, sp.signal AS signal, sp.project AS placed
+      `SELECT s.session_id, s.project, s.cwd, s.event_count, sp.signal AS signal, sp.project AS placed
          FROM session s
          LEFT JOIN session_place sp ON sp.source = s.source AND sp.session_id = s.session_id
         WHERE s.source = ? AND s.event_count > 0`,
@@ -513,12 +599,16 @@ export function chosenProject(row: {
   return row.project !== null && row.project !== lastSegment(row.cwd);
 }
 
-function mirrorPlaceLines(db: Database, home: string, source: string): string[] {
+function placesPath(device: string): string {
+  return device ? remotePath(device, PLACES_FILE) : PLACES_FILE;
+}
+
+function mirrorPlaceLines(db: Database, home: string, source: string, device = ''): string[] {
   const row = db
     .prepare(
       `SELECT id FROM raw_file WHERE source = ? AND path = ? ORDER BY generation DESC LIMIT 1`,
     )
-    .get(source, PLACES_FILE) as { id: number } | undefined;
+    .get(source, placesPath(device)) as { id: number } | undefined;
   if (!row) return [];
   const text = readMirror(db, home, row.id, 0, Number.MAX_SAFE_INTEGER).toString('utf8');
   return text
@@ -527,9 +617,157 @@ function mirrorPlaceLines(db: Database, home: string, source: string): string[] 
     .filter((line) => line.length > 0);
 }
 
+/** The key under which the latest line of a session or path is kept. The tip is `\\0`. */
+const PLACE_TIP = '\0';
+
+function placeLineKey(line: string): string | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const obj = value as Record<string, unknown>;
+  if (obj.type === 'root' && typeof obj.path === 'string' && obj.path.length > 0) {
+    return `root\0${obj.path}`;
+  }
+  if (obj.type === 'place' && typeof obj.session === 'string' && obj.session.length > 0) {
+    return `place\0${obj.session}`;
+  }
+  if (obj.type === 'parent' && typeof obj.session === 'string' && obj.session.length > 0) {
+    return `parent\0${obj.session}`;
+  }
+  return null;
+}
+
 /**
- * Lines not already mirrored for sessions whose cwd resolves by git, agent, or a learned root.
- * Nothing for a segment fallback, a missing path, or a name the agent chose. Reads only.
+ * Record one mirrored places line as the latest of its key, and always as the tip. A warning is
+ * the tip only: its bytes stay, and it does not become the conclusion. No-op without the table.
+ */
+export function rememberPlaceHead(
+  db: Database,
+  source: string,
+  device: string,
+  line: string,
+  tipOnly = false,
+): void {
+  if (!hasTable(db, 'place_head')) return;
+  const put = db.prepare(
+    `INSERT INTO place_head (source, device, key, line) VALUES (?, ?, ?, ?)
+     ON CONFLICT(source, device, key) DO UPDATE SET line = excluded.line`,
+  );
+  put.run(source, device, PLACE_TIP, line);
+  if (tipOnly) return;
+  const key = placeLineKey(line);
+  if (key) put.run(source, device, key, line);
+}
+
+function loadPlaceHead(db: Database, source: string, device: string): Map<string, string> {
+  if (!hasTable(db, 'place_head')) return new Map();
+  const rows = db
+    .prepare('SELECT key, line FROM place_head WHERE source = ? AND device = ?')
+    .all(source, device) as Array<{ key: string; line: string }>;
+  return new Map(rows.map((row) => [row.key, row.line]));
+}
+
+function rescanPlaceHead(
+  db: Database,
+  home: string,
+  source: string,
+  device: string,
+): Map<string, string> {
+  if (hasTable(db, 'place_head')) {
+    db.prepare('DELETE FROM place_head WHERE source = ? AND device = ?').run(source, device);
+  }
+  for (const line of mirrorPlaceLines(db, home, source, device)) {
+    rememberPlaceHead(db, source, device, line, Boolean(parsePlaceLine(line).warning));
+  }
+  return loadPlaceHead(db, source, device);
+}
+
+function mirrorHasPlaces(db: Database, source: string, device: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT bytes_ingested AS n FROM raw_file
+        WHERE source = ? AND path = ? ORDER BY generation DESC LIMIT 1`,
+    )
+    .get(source, placesPath(device)) as { n: number } | undefined;
+  return (row?.n ?? 0) > 0;
+}
+
+/**
+ * The latest line of each key. When the mirror has bytes and the head is empty, or `last` is not
+ * the tip, the mirror is read once and the head filled again. Must run inside the write lock.
+ */
+function placeHead(
+  db: Database,
+  home: string,
+  source: string,
+  device: string,
+  last: string | null,
+): Map<string, string> {
+  const head = loadPlaceHead(db, source, device);
+  const tip = head.get(PLACE_TIP) ?? '';
+  const stale =
+    (mirrorHasPlaces(db, source, device) && head.size === 0) || (last !== null && tip !== last);
+  return stale ? rescanPlaceHead(db, home, source, device) : head;
+}
+
+function consideredSessions(
+  db: Database,
+  source: string,
+  touched: ReadonlySet<string> | undefined,
+): SessionWork[] {
+  return sessionsOf(db, source).filter((row) => {
+    if (touched && !touched.has(row.session_id)) return false;
+    if (chosenProject(row) || !row.cwd) return false;
+    return true;
+  });
+}
+
+/**
+ * The lines a resolution would append now: one root line per alias and one place line per session.
+ * Compared later with the latest line of that key, not with every line the file has ever held.
+ */
+function desiredPlaceLines(
+  db: Database,
+  sessions: SessionWork[],
+  opts: { agentFacts?: (sessionId: string) => AgentFacts | null; device?: string },
+): string[] {
+  const device = opts.device ?? '';
+  const roots = new Map<string, PlaceAlias>();
+  const places: string[] = [];
+  for (const row of sessions) {
+    if (!row.cwd) continue;
+    const gone = !exists(row.cwd);
+    const place = resolvePlace(row.cwd, {
+      db,
+      onDisk: true,
+      device,
+      agentFacts: gone ? (opts.agentFacts?.(row.session_id) ?? null) : null,
+    });
+    if (!place.emitSignal) continue;
+    for (const alias of place.aliases) roots.set(alias.path, alias);
+    const line = placeLine(row.session_id, place);
+    if (line) places.push(line);
+  }
+  return [...[...roots.values()].map(rootLine), ...places];
+}
+
+function freshPlaceLines(lines: string[], head: Map<string, string>): string[] {
+  return lines.filter((line) => {
+    const key = placeLineKey(line);
+    return key !== null && head.get(key) !== line;
+  });
+}
+
+/**
+ * Lines to append for sessions whose cwd resolves by git, agent, or a learned root. Nothing for a
+ * segment fallback, a missing path, or a name the agent chose. `touchedSessions` limits the walk
+ * to sessions this sync added or changed; omit it to resolve every session. An empty set resolves
+ * nothing. The lines themselves are chosen inside `next`, under the write lock, against the latest
+ * line of each session or path, so a conclusion that returns to an earlier project is appended again.
  */
 export function placesSourceFile(
   db: Database,
@@ -538,40 +776,33 @@ export function placesSourceFile(
   opts: {
     agentFacts?: (sessionId: string) => AgentFacts | null;
     now?: number;
+    touchedSessions?: ReadonlySet<string>;
+    device?: string;
   } = {},
 ): SourceFile | null {
   if (!hasTable(db, 'session_place')) return null;
-  const have = new Set(mirrorPlaceLines(db, home, source));
-  const roots = new Map<string, PlaceAlias>();
-  const places: string[] = [];
-  for (const row of sessionsOf(db, source)) {
-    if (chosenProject(row)) continue;
-    if (!row.cwd) continue;
-    const gone = !exists(row.cwd);
-    const place = resolvePlace(row.cwd, {
-      db,
-      onDisk: true,
-      agentFacts: gone ? (opts.agentFacts?.(row.session_id) ?? null) : null,
-    });
-    if (!place.emitSignal) continue;
-    for (const alias of place.aliases) roots.set(alias.path, alias);
-    const line = placeLine(row.session_id, place);
-    if (line && !have.has(line)) places.push(line);
-  }
-  const fresh = [...roots.values()].map(rootLine).filter((line) => !have.has(line));
-  const lines = [...fresh, ...places];
-  if (lines.length === 0) return null;
-  const pending = [...lines];
+  if (opts.touchedSessions && opts.touchedSessions.size === 0) return null;
+  const device = opts.device ?? '';
+  const sessions = consideredSessions(db, source, opts.touchedSessions);
+  if (sessions.length === 0) return null;
+  if (desiredPlaceLines(db, sessions, opts).length === 0) return null;
   const token = createHash('sha256')
-    .update(`${[...have, ...lines].join('\n')}\n`)
+    .update(
+      sessions
+        .map((s) => `${s.session_id}\0${s.cwd ?? ''}\0${s.project ?? ''}\0${s.event_count}`)
+        .join('\n'),
+    )
     .digest('hex');
   return {
-    absPath: PLACES_FILE,
+    absPath: placesPath(device),
     relPath: PLACES_FILE,
     generated: {
       token,
       mtimeMs: opts.now ?? Date.now(),
-      next(_last, maxBytes) {
+      next(last, maxBytes) {
+        const current = consideredSessions(db, source, opts.touchedSessions);
+        const head = placeHead(db, home, source, device, last);
+        const pending = freshPlaceLines(desiredPlaceLines(db, current, opts), head);
         const out: string[] = [];
         let bytes = 0;
         while (pending.length > 0) {
@@ -592,8 +823,13 @@ export function placesSourceFile(
  * Apply `places.jsonl` mirrors again, so a rebuild agrees with the bytes. A line that does not
  * parse is skipped and, when `log` is set, logged as a warning. No-op without the tables.
  */
-export function reparsePlaces(db: Database, home: string, log?: (message: string) => void): void {
-  if (!hasTable(db, 'session_place')) return;
+export function reparsePlaces(
+  db: Database,
+  home: string,
+  log?: (message: string) => void,
+): Array<{ source: string; sessionId: string }> {
+  const changed: Array<{ source: string; sessionId: string }> = [];
+  if (!hasTable(db, 'session_place')) return changed;
   const files = db
     .prepare(
       `SELECT id, source, path, generation, mirror FROM raw_file WHERE lines_ingested > 0 ORDER BY id`,
@@ -607,6 +843,7 @@ export function reparsePlaces(db: Database, home: string, log?: (message: string
   }>;
   for (const file of files) {
     if (!isPlacesRel(mirrorRelPath(file))) continue;
+    const device = parseRawPath(file.path).device ?? '';
     let text = '';
     try {
       text = readMirror(db, home, file.id, 0, Number.MAX_SAFE_INTEGER).toString('utf8');
@@ -619,13 +856,17 @@ export function reparsePlaces(db: Database, home: string, log?: (message: string
       const line = raw.replace(/\r$/, '');
       if (line.length === 0) continue;
       const parsed = parsePlaceLine(line);
+      rememberPlaceHead(db, file.source, device, line, Boolean(parsed.warning));
       if (parsed.warning) {
         log?.(`warning ${mirrorRelPath(file)}:${lineNo}: ${parsed.warning}`);
         continue;
       }
-      applyPlaceFacts(db, file.source, parsed);
+      for (const sessionId of applyPlaceFacts(db, file.source, parsed, Date.now(), device)) {
+        changed.push({ source: file.source, sessionId });
+      }
     }
   }
+  return changed;
 }
 
 export interface ProjectMove {
@@ -681,9 +922,11 @@ function reportText(report: Omit<ReprojectReport, 'text'>): string {
 }
 
 /**
- * Resolve every session that does not already carry a chosen name. `--dry-run` writes nothing.
- * Otherwise upserts rows and returns the `places.jsonl` files still to append. Does not rename
- * entries. Child counts stay 0 while `session_parent` is absent.
+ * Resolve every session that does not already carry a chosen name. `--dry-run` writes nothing,
+ * and does not read places lines again. Otherwise the lines already mirrored are applied first,
+ * and what still differs is returned as `places.jsonl` to append: the tables change only when
+ * those lines are ingested. Does not rename entries. Child counts stay 0 while `session_parent`
+ * is absent.
  */
 export function reproject(
   db: Database,
@@ -696,9 +939,11 @@ export function reproject(
 ): ReprojectResult {
   const now = opts.now ?? Date.now();
   const before = sessionShape(db);
+  const reparsed = !opts.dryRun && opts.home ? reparsePlaces(db, opts.home) : [];
   const rows = db
     .prepare(
-      `SELECT s.source, s.session_id, s.project, s.cwd, sp.signal AS signal, sp.project AS placed
+      `SELECT s.source, s.session_id, s.project, s.cwd, s.event_count,
+              sp.signal AS signal, sp.project AS placed
          FROM session s
          LEFT JOIN session_place sp ON sp.source = s.source AND sp.session_id = s.session_id
         WHERE s.event_count > 0
@@ -706,7 +951,6 @@ export function reproject(
     )
     .all() as unknown as Array<SessionWork & { source: string }>;
   const moves = new Map<string, ProjectMove>();
-  const writes: Array<{ source: string; sessionId: string; place: PlaceResolution }> = [];
   for (const row of rows) {
     if (chosenProject(row)) continue;
     if (!row.cwd) continue;
@@ -724,7 +968,6 @@ export function reproject(
       move.sessions += 1;
       moves.set(key, move);
     }
-    writes.push({ source: row.source, sessionId: row.session_id, place });
   }
   const names = [...new Set([...moves.values()].map((m) => m.from))];
   const entriesLeft =
@@ -739,29 +982,9 @@ export function reproject(
             )
             .get(...names) as { n: number }
         ).n;
-  if (!opts.dryRun) {
-    transaction(
-      db,
-      () => {
-        for (const write of writes) {
-          for (const alias of write.place.aliases) upsertRoot(db, alias, now);
-          if (!write.place.project || !write.place.emitSignal) continue;
-          upsertPlaceLine(
-            db,
-            write.source,
-            write.sessionId,
-            write.place.project,
-            write.place.root,
-            write.place.emitSignal,
-          );
-        }
-      },
-      { immediate: true },
-    );
-  }
   const files: Array<{ source: string; file: SourceFile }> = [];
   if (!opts.dryRun && opts.home) {
-    const sources = [...new Set(writes.map((w) => w.source))];
+    const sources = [...new Set(rows.map((row) => row.source))];
     for (const source of sources) {
       const file = placesSourceFile(db, opts.home, source, {
         now,
@@ -769,6 +992,9 @@ export function reproject(
       });
       if (file) files.push({ source, file });
     }
+  }
+  if (!opts.dryRun && reparsed.length > 0) {
+    transaction(db, () => refreshThreads(db, reparsed), { immediate: true });
   }
   const after = opts.dryRun ? before : sessionShape(db);
   const listed = [...moves.values()].sort(

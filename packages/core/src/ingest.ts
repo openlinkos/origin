@@ -29,6 +29,7 @@ import {
   parsePlaceLine,
   placesSourceFile,
   recordExplicitPlace,
+  rememberPlaceHead,
 } from './places.js';
 import { deriveProposal } from './proposals.js';
 import { deriveFollow, refreshThreads } from './threads.js';
@@ -68,6 +69,11 @@ export interface IngestContext {
   log?: (message: string) => void;
   /** Size at which a mirror's open tail is sealed into zstd frames (default FRAME_BYTES; tests). */
   frameBytes?: number;
+  /**
+   * Sessions whose events, title, or place changed during this sync. A places file is built only
+   * for these. The caller that sets it owns the set; syncSource uses one of its own.
+   */
+  touchedSessions?: Set<string>;
 }
 
 /** Counters shared by local syncs and remote appends. */
@@ -95,20 +101,24 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
   result.filesSeen = files.length;
   const agentVersion = adapter.version();
   const breathe = breather();
+  // Only sessions this sync added or changed are resolved. The set is not left on the caller's ctx.
+  const touchedSessions = new Set<string>();
+  const scoped: IngestContext = { ...ctx, touchedSessions };
 
   for (const file of files) {
     await breathe();
-    if (await ingestSourceFile(ctx, adapter, file, agentVersion, result, breathe)) {
+    if (await ingestSourceFile(scoped, adapter, file, agentVersion, result, breathe)) {
       result.filesChanged++;
     }
   }
   // A resolved work tree, appended as places.jsonl. Event counts stay out of this result, so a
   // sync that only mirrored events still reports those. A bad line's warning is kept: one broken
   // places line must show up, and must not be the only record of it. A missing path appends nothing.
-  const places = placesSourceFile(ctx.db, ctx.home, adapter.id);
+  // Nothing new this sync: no git walks and no read of the places mirror.
+  const places = placesSourceFile(ctx.db, ctx.home, adapter.id, { touchedSessions });
   if (places) {
     const placesResult = emptySyncResult(adapter.id);
-    await ingestSourceFile(ctx, adapter, places, agentVersion, placesResult, breathe);
+    await ingestSourceFile(scoped, adapter, places, agentVersion, placesResult, breathe);
     result.parseErrors += placesResult.parseErrors;
   }
   // Files that stopped growing an hour ago are likely finished: store their last lines compressed.
@@ -505,7 +515,11 @@ function appendLines(
       continue;
     }
     if (!parsed) continue;
-    // A places line that is not the object its type requires. The bytes stay; the line changes nothing.
+    // A places line that is not the object its type requires. The bytes stay; the line changes
+    // nothing, and it is recorded as the tip only so a later line is still the latest.
+    if (isPlacesRel(parse.relPath)) {
+      rememberPlaceHead(ctx.db, adapter.id, parse.device ?? '', line, Boolean(parsed.warning));
+    }
     if (parsed.warning) {
       stats.parseErrors++;
       ctx.log?.(`warning ${parse.relPath}:${lineNo}: ${parsed.warning}`);
@@ -546,7 +560,15 @@ function appendLines(
     for (const fact of parsed.sessionKinds ?? []) {
       if (recordSessionKind(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
     }
-    applyPlaceFacts(ctx.db, adapter.id, parsed);
+    for (const sessionId of applyPlaceFacts(
+      ctx.db,
+      adapter.id,
+      parsed,
+      Date.now(),
+      parse.device ?? '',
+    )) {
+      touchedSessions.add(sessionId);
+    }
     for (const ev of parsed.events) {
       if (ev.projectSignal === 'explicit' && ev.project) {
         recordExplicitPlace(ctx.db, adapter.id, ev.sessionId, ev.project);
@@ -557,6 +579,9 @@ function appendLines(
     for (const fact of parsed.sessionParents ?? []) {
       if (recordSessionParent(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
     }
+  }
+  if (ctx.touchedSessions) {
+    for (const sessionId of touchedSessions) ctx.touchedSessions.add(sessionId);
   }
   for (const sessionId of touchedSessions) refreshSession(ctx.db, adapter.id, sessionId);
   refreshThreads(

@@ -80,6 +80,8 @@ export interface RecallInput {
    * When false, do not read the filesystem (a hub). Not stored on the recall. Defaults to true.
    */
   onDisk?: boolean;
+  /** The device the recall is for, when this store answers for one. This store's own is `''`. */
+  device?: string;
 }
 
 /** What a recall item is: an entry, a session, or a thread of sessions. */
@@ -113,6 +115,8 @@ export interface RecallPlan {
   items: RecallItem[];
   /** Not stored. False on a hub, which does not read `.git`. */
   onDisk?: boolean;
+  /** The device this recall is for. This store's own roots are `''`. Not stored. */
+  device?: string;
 }
 
 /** Where CJK and full-width characters start (CJK Radicals Supplement). */
@@ -357,7 +361,7 @@ interface Candidate {
   author: string;
   createdAt: number;
   imported: boolean;
-  /** For an imported entry, the directory of the memory file's project, when known. */
+  /** The directory of an imported memory file, when known. Other entries have none. */
   home: string | null;
 }
 
@@ -367,13 +371,9 @@ function candidates(db: Database, now: number): Candidate[] {
     .prepare(
       `SELECT en.id, en.kind, en.text, en.project, en.author, en.created_at,
          EXISTS (SELECT 1 FROM imported_entry i WHERE i.entry_id = en.id) AS imported,
-         COALESCE(
-           (SELECT e.cwd FROM imported_entry i JOIN entry_source s ON s.entry_id = i.entry_id
-              JOIN event e ON e.id = s.event_id
-            WHERE i.entry_id = en.id AND e.kind = 'memory' AND e.cwd IS NOT NULL LIMIT 1),
-           (SELECT e.cwd FROM entry_source s JOIN event e ON e.id = s.event_id
-            WHERE s.entry_id = en.id AND e.cwd IS NOT NULL ORDER BY e.ts LIMIT 1)
-         ) AS home
+         (SELECT e.cwd FROM imported_entry i JOIN entry_source s ON s.entry_id = i.entry_id
+            JOIN event e ON e.id = s.event_id
+          WHERE i.entry_id = en.id AND e.kind = 'memory' LIMIT 1) AS home
        FROM entry en
        WHERE NOT EXISTS (SELECT 1 FROM forgotten_entry fe WHERE fe.entry_id = en.id)
          AND ${CURRENT_VERSION}
@@ -416,6 +416,7 @@ function inProject(
   plan: RecallPlan,
   home: string | null,
   project: string | null,
+  entryId?: string,
 ): boolean {
   if (home && (plan.root || plan.cwd)) {
     const h = comparePath(home);
@@ -423,20 +424,57 @@ function inProject(
       const root = comparePath(plan.root);
       if (h === root || h.startsWith(`${root}/`)) return true;
     }
-    if (plan.project && underProjectAlias(db, home, plan.project)) return true;
+    if (plan.project && underProjectAlias(db, home, plan.project, plan.device ?? '')) return true;
     if (plan.onDisk !== false && plan.root) {
-      const resolved = resolvePlace(home, { db, onDisk: true });
+      const resolved = resolvePlace(home, { db, onDisk: true, device: plan.device ?? '' });
       const got = resolved.rootPath ?? (resolved.signal === 'learned' ? resolved.root : null);
       if (got && comparePath(got) === comparePath(plan.root)) return true;
     }
     return plan.cwd !== null && h === comparePath(plan.cwd);
   }
-  return sameProject(project, plan.project);
+  if (sameProject(project, plan.project)) return true;
+  // An entry filed under a work tree's own directory name still belongs to the main project.
+  // The session's resolved place decides that, not the cited event's directory.
+  return (
+    entryId !== undefined &&
+    project !== null &&
+    plan.project !== null &&
+    filedUnderPlacedSession(db, entryId, project, plan.project)
+  );
+}
+
+/**
+ * True when the entry names the raw label of a session it cites, and that session's place is
+ * `project`. A preference keeps the project it was given: citing a session in another tree does
+ * not move it.
+ */
+function filedUnderPlacedSession(
+  db: Database,
+  entryId: string,
+  entryProject: string,
+  project: string,
+): boolean {
+  const table = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_place'")
+    .get();
+  if (!table) return false;
+  return (
+    db
+      .prepare(
+        `SELECT 1 FROM entry_source es
+           JOIN event c ON c.id = es.event_id
+           JOIN session s ON s.source = c.source AND s.session_id = c.session_id
+           JOIN session_place sp ON sp.source = s.source AND sp.session_id = s.session_id
+          WHERE es.entry_id = ? AND lower(sp.project) = lower(?) AND lower(s.project) = lower(?)
+          LIMIT 1`,
+      )
+      .get(entryId, project, entryProject) !== undefined
+  );
 }
 
 /** Whether recall may hand the entry to this agent in this project at all. */
 function inScope(db: Database, c: Candidate, plan: RecallPlan): boolean {
-  const own = inProject(db, plan, c.home, c.project);
+  const own = inProject(db, plan, c.home, c.project, c.id);
   if (c.imported && plan.source && c.author.startsWith(`${plan.source}@`) && own) return false;
   return c.kind === 'cognition' || c.project === null || own;
 }
@@ -486,7 +524,7 @@ function entryLine(db: Database, c: Candidate, layer: RecallLayer, plan: RecallP
   const tags: string[] = [];
   if (layer === 'prompt') {
     tags.push(c.kind);
-    if (c.project && !inProject(db, plan, c.home, c.project)) tags.push(c.project);
+    if (c.project && !inProject(db, plan, c.home, c.project, c.id)) tags.push(c.project);
   }
   if (layer !== 'cognition') tags.push(day(c.createdAt));
   return `- ${c.id}${tags.length > 0 ? ` (${tags.join(', ')})` : ''} ${entrySummary(c.text)}`;
@@ -605,7 +643,7 @@ function recentSessions(db: Database, plan: RecallPlan): Draft[] {
  * matches it: an agent's memory file of one project rarely says whether it holds everywhere.
  */
 function briefEntries(db: Database, all: Candidate[], plan: RecallPlan): Draft[] {
-  const own = (c: Candidate) => c.project !== null && inProject(db, plan, c.home, c.project);
+  const own = (c: Candidate) => c.project !== null && inProject(db, plan, c.home, c.project, c.id);
   const cognition = [
     ...all.filter((c) => c.kind === 'cognition' && own(c)),
     ...all.filter((c) => c.kind === 'cognition' && c.project === null),
@@ -665,6 +703,7 @@ export function planRecall(db: Database, input: RecallInput): RecallPlan {
     tokens: 0,
     items: [],
     onDisk: input.onDisk !== false,
+    device: input.device ?? '',
   };
   const all = candidates(db, at).filter((c) => inScope(db, c, plan));
   const drafts: Draft[] = [];
@@ -753,13 +792,9 @@ export function rebuildRecall(
   const entry = db.prepare(
     `SELECT en.id, en.kind, en.text, en.project, en.author, en.created_at,
        EXISTS (SELECT 1 FROM imported_entry i WHERE i.entry_id = en.id) AS imported,
-       COALESCE(
-         (SELECT e.cwd FROM imported_entry i JOIN entry_source s ON s.entry_id = i.entry_id
-            JOIN event e ON e.id = s.event_id
-          WHERE i.entry_id = en.id AND e.kind = 'memory' AND e.cwd IS NOT NULL LIMIT 1),
-         (SELECT e.cwd FROM entry_source s JOIN event e ON e.id = s.event_id
-          WHERE s.entry_id = en.id AND e.cwd IS NOT NULL ORDER BY e.ts LIMIT 1)
-       ) AS home
+       (SELECT e.cwd FROM imported_entry i JOIN entry_source s ON s.entry_id = i.entry_id
+          JOIN event e ON e.id = s.event_id
+        WHERE i.entry_id = en.id AND e.kind = 'memory' LIMIT 1) AS home
      FROM entry en
      WHERE en.id = ? AND NOT EXISTS (SELECT 1 FROM forgotten_entry fe WHERE fe.entry_id = en.id)`,
   );
@@ -1138,7 +1173,8 @@ export function recallPrompt(db: Database, recall: RecallRecord): EventRow | nul
 
 /**
  * The main work tree that holds `dir`, or null. A `.git` directory is that checkout. A linked work
- * tree's `.git` file resolves to the checkout it was made from. A bare repo or a symlink does not.
+ * tree's `.git` file resolves to the checkout it was made from. When git is there but cannot be
+ * read, the directory that holds `.git` is the root.
  */
 export function workTree(dir: string): string | null {
   return resolvePlace(dir, { onDisk: true }).rootPath;
@@ -1151,10 +1187,11 @@ export function workTree(dir: string): string | null {
  */
 export function recallScope(
   cwd: string,
-  opts: { onDisk?: boolean; db?: Database } = {},
+  opts: { onDisk?: boolean; db?: Database; device?: string } = {},
 ): Pick<RecallInput, 'cwd' | 'root' | 'project'> {
+  const device = opts.device ?? '';
   if (opts.onDisk === false) {
-    const place = resolvePlace(cwd, { onDisk: false, db: opts.db });
+    const place = resolvePlace(cwd, { onDisk: false, db: opts.db, device });
     return {
       cwd,
       root: place.signal === 'segment' ? null : place.root,
@@ -1162,7 +1199,7 @@ export function recallScope(
     };
   }
   const dir = path.resolve(cwd);
-  const place = resolvePlace(dir, { onDisk: true, db: opts.db });
+  const place = resolvePlace(dir, { onDisk: true, db: opts.db, device });
   return {
     cwd: dir,
     root: place.rootPath ?? (place.signal === 'learned' ? place.root : null),

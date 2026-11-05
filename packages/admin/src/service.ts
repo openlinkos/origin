@@ -98,6 +98,7 @@ import {
   storeName,
   storeUsage,
   type ThreadCard,
+  TOP_LEVEL_SESSION,
   type TokenInfo,
   type TombstoneSummary,
   type TurnStart,
@@ -197,6 +198,8 @@ export interface SessionBoardChild extends SessionListRow {
   recalls: number;
   via: 'subagent' | 'workflow';
   runName: string | null;
+  /** Its own children, so a grandchild stays on the page under the parent. */
+  children: SessionBoardChild[];
 }
 
 /** The time ranges of the sessions page, by the last activity of a session. */
@@ -1396,9 +1399,8 @@ export class AdminService {
       (
         this.db
           .prepare(
-            `SELECT source, session_id FROM session_parent
-             UNION
-             SELECT source, session_id FROM session_kind WHERE kind = 'child'`,
+            `SELECT source, session_id FROM session
+              WHERE event_count > 0 AND NOT (${TOP_LEVEL_SESSION})`,
           )
           .all() as unknown as Array<{ source: string; session_id: string }>
       ).map((r) => `${r.source}:${r.session_id}`),
@@ -1465,7 +1467,42 @@ export class AdminService {
       recall: (r: Row) => !f.recalled || recalls.has(r.key),
       name: (r: Row) => f.name === 'any' || (f.name === 'titled') === (r.title !== null),
       range: (r: Row) => since === null || (r.ended_at ?? 0) >= since,
-      q: (r: Row) => named === null || named.has(r.key),
+      q: (r: Row) =>
+        named === null || named.has(r.key) || descendantKeys(r.key).some((k) => named.has(k)),
+    };
+    const descendantKeys = (key: string): string[] => {
+      const out: string[] = [];
+      const seen = new Set<string>([key]);
+      const walk = (parent: string) => {
+        for (const child of byParent.get(parent) ?? []) {
+          const childKey = `${child.source}:${child.session_id}`;
+          if (seen.has(childKey)) continue;
+          seen.add(childKey);
+          out.push(childKey);
+          walk(childKey);
+        }
+      };
+      walk(key);
+      return out;
+    };
+    const nest = (parentKey: string, seen: Set<string>): SessionBoardChild[] => {
+      const out: SessionBoardChild[] = [];
+      for (const fact of byParent.get(parentKey) ?? []) {
+        const key = `${fact.source}:${fact.session_id}`;
+        if (seen.has(key) || !folded.has(key)) continue;
+        const session = getSession(this.db, fact.source, fact.session_id);
+        if (!session || session.eventCount <= 0) continue;
+        seen.add(key);
+        out.push({
+          ...session,
+          turns: sessionTurnStarts(this.db, fact.source, fact.session_id).length,
+          recalls: recalls.get(key) ?? 0,
+          via: fact.via,
+          runName: fact.run_name,
+          children: nest(key, seen),
+        });
+      }
+      return out;
     };
     const passing = (skip?: keyof typeof tests) =>
       all.filter((r) =>
@@ -1501,18 +1538,7 @@ export class AdminService {
         ...(getSession(this.db, r.source, r.session_id) as SessionRow),
         turns: sessionTurnStarts(this.db, r.source, r.session_id).length,
         recalls: recalls.get(r.key) ?? 0,
-        children: (byParent.get(r.key) ?? []).flatMap((c) => {
-          const session = getSession(this.db, c.source, c.session_id);
-          if (!session || session.eventCount <= 0) return [];
-          const child: SessionBoardChild = {
-            ...session,
-            turns: sessionTurnStarts(this.db, c.source, c.session_id).length,
-            recalls: recalls.get(`${c.source}:${c.session_id}`) ?? 0,
-            via: c.via,
-            runName: c.run_name,
-          };
-          return [child];
-        }),
+        children: nest(r.key, new Set([r.key])),
       })),
       total: matching.length,
       page,

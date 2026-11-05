@@ -1,7 +1,7 @@
 import { CJK_MESSAGE_TOKEN, cjkTermQuery, isCjkTerm } from './cjk.js';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
-import { resolvedProjectSql } from './places.js';
+import { projectEventSql, resolvedProjectSql } from './places.js';
 import {
   EVENT_COLUMNS,
   type EventFilter,
@@ -231,8 +231,8 @@ function candidateFilters(
     params.push(f.source);
   }
   if (f.project && withProject) {
-    parts.push(`${resolvedProjectSql('e.source', 'e.session_id', 'e.project')} = ?`);
-    params.push(f.project);
+    parts.push(projectEventSql('e'));
+    params.push(f.project, f.project);
   }
   if (f.sessionId) {
     parts.push('e.session_id = ?');
