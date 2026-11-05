@@ -2,6 +2,7 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { CURRENT_VERSION, type Entry, getEntry } from './entries.js';
 import { OriginError } from './errors.js';
+import { entryProjectMatchSql, resolvedProjectSql } from './places.js';
 import { getProposal, type Proposal, VISIBLE_PROPOSAL } from './proposals.js';
 import {
   EVENT_COLUMNS,
@@ -170,7 +171,7 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
     const where = [f.includeTools ? "e.kind <> 'memory'" : "e.kind = 'message'", 'e.seq <= ?'];
     const params: unknown[] = [ends.event];
     if (f.project !== undefined) {
-      where.push('e.project = ?');
+      where.push(`${resolvedProjectSql('e.source', 'e.session_id', 'e.project')} = ?`);
       params.push(f.project);
     }
     const inSessions = sessionScope(f, 'e');
@@ -207,7 +208,9 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
       proposalParams.push(since);
     }
     if (f.project !== undefined) {
-      proposalWhere.push('COALESCE(p.project, e.project) = ?');
+      proposalWhere.push(
+        `COALESCE(p.project, ${resolvedProjectSql('e.source', 'e.session_id', 'e.project')}) = ?`,
+      );
       proposalParams.push(f.project);
     }
     const proposalScope = sessionScope(f, 'e');
@@ -244,8 +247,8 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
     ];
     const entryParams: unknown[] = [now];
     if (f.project !== undefined) {
-      entryWhere.push('en.project = ?');
-      entryParams.push(f.project);
+      entryWhere.push(entryProjectMatchSql('en.id'));
+      entryParams.push(f.project, f.project);
     }
     // Written from a session or thread: citing one of its visible events.
     const cited = sessionScope(f, 'c');

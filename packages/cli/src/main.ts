@@ -29,6 +29,7 @@ import {
   getRecall,
   getSession,
   HUB_STORE_NAME,
+  ingestPlacesFile,
   initStoreName,
   isEntryForgotten,
   isEntryId,
@@ -64,6 +65,7 @@ import {
   recallSession,
   recordAudit,
   relayPending,
+  reproject,
   resolveId,
   revokeGrant,
   revokeToken,
@@ -105,6 +107,7 @@ import {
   threadResult,
   WATCH_INTERVAL_MS,
 } from '@openlinkos/origin-mcp';
+import { agentFacts } from './agent-facts.js';
 import { cmdAgents } from './agents.js';
 import { ARGS, checkArgs, isStoreCommand } from './args.js';
 import { cmdDistill } from './distill.js';
@@ -164,6 +167,7 @@ Usage:
   origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   What an agent would be handed there; --hook <agent> answers its hooks
   origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   What agents were handed, newest first
   origin projects                                        Known project names
+  origin sessions  reproject [--dry-run]                 Resolve each session to its main project
   origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
   origin mcp                                             Run the MCP server over stdio (forwards to the hub when connected)
   origin agents    [connect | disconnect] [<agent>...] [--yes]   Register Origin, and its hooks, with the agents here
@@ -310,6 +314,8 @@ export async function main(argv: string[]): Promise<number> {
         );
       case 'projects':
         return cmdProjects(ctx);
+      case 'sessions':
+        return await cmdSessions(ctx, rest);
       case 'backup':
         return await cmdBackup(ctx, rest);
       case 'mcp':
@@ -1372,6 +1378,28 @@ function forgettingCtx(ctx: Ctx): ForgettingCtx {
     relayHub: () => relayHub(ctx),
     afterChange: () => syncAfterChange(ctx),
   };
+}
+
+async function cmdSessions(ctx: Ctx, args: string[]): Promise<number> {
+  if (isRelay(ctx.db)) {
+    throw new OriginError(
+      'This store is a relay and keeps no sessions of its own; run origin sessions reproject on the hub, or open its admin UI.',
+    );
+  }
+  const { values } = parseArgs({
+    args: args.slice(1),
+    options: ARGS.sessions.sub.reproject.options,
+  });
+  const result = reproject(ctx.db, {
+    dryRun: values['dry-run'] === true,
+    home: ctx.home,
+    agentFacts,
+  });
+  for (const { source, file } of result.files) {
+    await ingestPlacesFile({ db: ctx.db, home: ctx.home }, source, file);
+  }
+  console.log(result.report.text);
+  return 0;
 }
 
 function cmdProjects(ctx: Ctx): number {

@@ -21,6 +21,7 @@ origin distill   [--project <name> | --thread <thr_…>] [--day <YYYY-MM-DD> | -
 origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   What an agent would be handed there; --hook <agent> answers its hooks
 origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   What agents were handed, newest first
 origin projects                                        Known project names
+origin sessions  reproject [--dry-run]                 Resolve each session to its main project
 origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
 origin mcp                                             Run the MCP server over stdio (adds the hub's answers when connected)
 origin agents    [connect | disconnect] [<agent>...] [--yes]   Register Origin, and its hooks, with the agents here

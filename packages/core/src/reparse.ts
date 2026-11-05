@@ -8,6 +8,7 @@ import { importMemory } from './memories.js';
 import type { MigrationContext } from './migrations.js';
 import { readMirrorLine, scanMirrorLines } from './mirror.js';
 import { mirrorRelPath, parseRawPath, rawDir } from './paths.js';
+import { applyPlaceFacts, recordExplicitPlace, reparsePlaces } from './places.js';
 import { deriveProposal } from './proposals.js';
 import { PULL_TOMBSTONES_AGAIN, setSetting } from './settings.js';
 import { recordedAgentVersion } from './store.js';
@@ -312,12 +313,19 @@ export function reparseAuthorship(ctx: MigrationContext): void {
         for (const fact of parsed.sessionKinds ?? []) {
           if (recordSessionKind(db, f.source, fact)) counts.kinds++;
         }
+        applyPlaceFacts(db, f.source, parsed);
+        for (const ev of parsed.events) {
+          if (ev.projectSignal === 'explicit' && ev.project) {
+            recordExplicitPlace(db, f.source, ev.sessionId, ev.project);
+          }
+        }
       });
     } catch (err) {
       if (!(err instanceof OriginError)) throw err;
       ctx.log(`Skipped the mirror ${f.mirror}: ${err.message}`);
     }
   }
+  reparsePlaces(db, ctx.home);
   for (const s of touched.values()) refreshSession(db, s.source, s.sessionId);
   // A device that dropped its hub's forget of one of these events, which it did not have then,
   // pulls the hub's tombstones again.

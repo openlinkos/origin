@@ -11,6 +11,8 @@ Every supported agent (Claude Code, Codex, Cursor, Grok Build, ZCode) already wr
 
 That pointer is **provenance**: any answer Origin gives can be expanded down to the original text, with `origin show <id>`, the MCP `sources` tool, or the event's page in the [admin UI](./admin.md). Origin never summarizes or rewrites what was said, and it never calls a model to do so.
 
+A session belongs to a project. The name is the one the line gave, otherwise the main git work tree (a linked work tree is that project, not its own directory name), otherwise a root this store has already learned, otherwise the last segment of the working directory. The event keeps the label the line wrote. Listings use the resolved name. See [Projects](../architecture.md#projects).
+
 ## Threads
 
 One piece of work often takes several sessions: you go on the next day, after the agent compacted its context, or with another agent. Origin groups such sessions into a **thread**, without a model, by two rules:

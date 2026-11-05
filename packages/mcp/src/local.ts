@@ -695,14 +695,14 @@ export function changesIn(db: Database, args: ToolArgs<'changes'>): ChangesResul
 }
 
 /** The scope `follow` checks against: the project of `cwd`, or of the directory the server runs in. */
-export function followScope(args: ToolArgs<'follow'>, here: string | null) {
+export function followScope(args: ToolArgs<'follow'>, here: string | null, db?: Database) {
   const dir = args.cwd?.trim() || here;
   if (!dir) {
     throw new OriginError(
       'Pass `cwd`, your working directory: the hub cannot tell which project you work in.',
     );
   }
-  return recallScope(dir, { onDisk: here !== null });
+  return recallScope(dir, { onDisk: here !== null, db });
 }
 
 /**
@@ -716,7 +716,7 @@ export function followIn(
   args: ToolArgs<'follow'>,
   here: string | null,
 ): FollowResult | null {
-  const scope = followScope(args, here);
+  const scope = followScope(args, here, db);
   const target = followTarget(db, args.id, {
     project: scope.project ?? null,
     root: scope.root ?? null,
@@ -1042,7 +1042,8 @@ export function briefIn(
     occasion: 'request',
     source: sourceOfAgent(at < 0 ? author : author.slice(0, at)),
     prompt: args.about ?? null,
-    ...recallScope(dir, { onDisk: here !== null }),
+    onDisk: here !== null,
+    ...recallScope(dir, { onDisk: here !== null, db }),
   });
   const recall = recordRecall(db, plan, { origin: at < 0 ? undefined : author.slice(at + 1) });
   const where = plan.project ? `project ${plan.project}` : 'this directory';

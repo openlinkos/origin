@@ -160,6 +160,7 @@ describe('the arguments table', () => {
         'restore',
         'search',
         'serve',
+        'sessions',
         'show',
         'status',
         'sync',

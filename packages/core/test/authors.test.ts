@@ -240,7 +240,7 @@ describe('a store of an earlier version', () => {
         log: (m) => logged.push(m),
       });
       expect(userVersion(db)).toBe(STORE_VERSION);
-      expect(STORE_VERSION).toBe(8);
+      expect(STORE_VERSION).toBe(9);
       expect(logged.join('\n')).toMatch(/Upgrading the store to version 8/);
       if (from === 6) expect(logged.join('\n')).toMatch(/Upgrading the store to version 7/);
       expect(authors()).toEqual(authors(fresh));

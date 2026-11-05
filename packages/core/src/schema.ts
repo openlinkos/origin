@@ -14,6 +14,11 @@
  * - session: aggregate per (source, session_id), derived from its visible events and rebuildable,
  *   plus its title, from the lines that carry one, and whether the user gave it (title_manual,
  *   added in version 2). git_branch (version 5) is the most frequent branch of its visible events.
+ *   `project` stays the label of the first event. The name reads use is `session_place` when a row
+ *   exists (version 9).
+ * - project_root / session_place: the main work tree a directory belongs to, and the project a
+ *   session resolves to (version 9). Filled from `places.jsonl` and from resolution on this
+ *   machine, never by rewriting events. `session_place` of signal `explicit` or `manual` is kept.
  * - session_follow: the links agents declared with the MCP tool `follow` (this session continues
  *   that one), derived from the tool results that carry them (see threads.ts); a link counts while
  *   its event is visible.
@@ -80,6 +85,29 @@
  * one), needs a migration in migrations.ts as well as the change here, so that an upgraded store
  * and a new one end up the same (see docs/architecture.md#migrations).
  */
+/**
+ * Where a session belongs (version 9). The same statements are in the migration, so a new store
+ * and an upgraded one match. The migration creates them and fills nothing.
+ */
+export const PLACE_TABLES = `
+CREATE TABLE IF NOT EXISTS project_root (
+  path    TEXT PRIMARY KEY,
+  project TEXT NOT NULL,
+  root    TEXT NOT NULL,
+  signal  TEXT NOT NULL,
+  seen_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_place (
+  source     TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  project    TEXT NOT NULL,
+  root       TEXT,
+  signal     TEXT NOT NULL,
+  PRIMARY KEY (source, session_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_place_project ON session_place (project);
+`;
+
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS raw_file (
   id             INTEGER PRIMARY KEY,
@@ -132,6 +160,7 @@ CREATE TABLE IF NOT EXISTS session (
 );
 CREATE INDEX IF NOT EXISTS session_project ON session (project);
 
+${PLACE_TABLES}
 CREATE TABLE IF NOT EXISTS session_follow (
   source            TEXT NOT NULL,
   session_id        TEXT NOT NULL,

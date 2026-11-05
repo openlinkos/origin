@@ -59,6 +59,11 @@ export interface EventInput {
    * an agent's display name): 1 to 200 characters, never an opaque id. Ignored on other events.
    */
   speaker?: string | null;
+  /**
+   * The line named `project` itself (`explicit`). Absent when the name is only the last segment of
+   * `cwd`. Ingestion records it and will not replace it with a resolved work tree.
+   */
+  projectSignal?: 'explicit';
 }
 
 /** A stored event row. */
@@ -120,6 +125,28 @@ export interface ParsedLine {
    * are read, so that the order lines arrive in does not matter.
    */
   sessionKinds?: SessionKindFact[];
+  /**
+   * A `places.jsonl` line's roots and places (see places.ts). No message events. A `parent` line
+   * yields neither: that table belongs to a later format.
+   */
+  roots?: ProjectRootFact[];
+  places?: SessionPlaceFact[];
+}
+
+/** One `project_root` row a `places.jsonl` `root` line names. */
+export interface ProjectRootFact {
+  path: string;
+  project: string;
+  root: string;
+  signal: string;
+}
+
+/** One `session_place` row a `places.jsonl` `place` line names. */
+export interface SessionPlaceFact {
+  sessionId: string;
+  project: string;
+  root: string | null;
+  signal: string;
 }
 
 /**

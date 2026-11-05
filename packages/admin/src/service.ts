@@ -82,6 +82,7 @@ import {
   recordAudit,
   rejectProposal,
   remember,
+  resolvedProjectSql,
   restore,
   revokeGrant,
   revokeToken,
@@ -1385,7 +1386,9 @@ export class AdminService {
     const all = (
       this.db
         .prepare(
-          `SELECT source, session_id, project, title, started_at, ended_at, event_count
+          `SELECT source, session_id,
+                  ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} AS project,
+                  title, started_at, ended_at, event_count
            FROM session WHERE event_count > 0`,
         )
         .all() as unknown as BoardSession[]
@@ -1695,10 +1698,30 @@ export class AdminService {
     );
     const q = f.q.toLowerCase();
     const since = rangeStart(f.range, now);
+    const cited = new Map<string, Set<string>>();
+    for (const row of this.db
+      .prepare(
+        `SELECT es.entry_id, sp.project AS project FROM entry_source es
+         JOIN event c ON c.id = es.event_id
+         JOIN session_place sp ON sp.source = c.source AND sp.session_id = c.session_id`,
+      )
+      .all() as unknown as Array<{ entry_id: string; project: string }>) {
+      const names = cited.get(row.entry_id) ?? new Set<string>();
+      names.add(row.project);
+      cited.set(row.entry_id, names);
+    }
+    // The stored name stays. A facet or a filter also matches a cited session's resolved project,
+    // and an entry is counted once for each distinct name.
+    const projectNames = (e: Entry): string[] => {
+      const names = new Set<string>();
+      if (e.project !== null) names.add(e.project);
+      for (const name of cited.get(e.id) ?? []) names.add(name);
+      return [...names];
+    };
     const tests = {
       kind: (e: Entry) => f.kinds.length === 0 || f.kinds.includes(e.kind),
       project: (e: Entry) =>
-        f.projects.length === 0 || (e.project !== null && f.projects.includes(e.project)),
+        f.projects.length === 0 || projectNames(e).some((name) => f.projects.includes(name)),
       author: (e: Entry) => f.authors.length === 0 || f.authors.includes(authorOf(e)),
       origin: (e: Entry) => f.origin === 'any' || (f.origin === 'imported') === e.imported,
       recalled: (e: Entry) => !f.recalled || recalled.has(e.id),
@@ -1739,7 +1762,15 @@ export class AdminService {
       ) as Record<SessionRange, number>,
       facets: {
         kinds: counted(passing('kind'), (e) => e.kind),
-        projects: counted(passing('project'), (e) => e.project),
+        projects: (() => {
+          const n = new Map<string, number>();
+          for (const e of passing('project')) {
+            for (const name of projectNames(e)) n.set(name, (n.get(name) ?? 0) + 1);
+          }
+          return [...n]
+            .map(([value, count]) => ({ value, count }))
+            .sort((a, b) => b.count - a.count || (a.value < b.value ? -1 : 1));
+        })(),
         authors: counted(passing('author'), authorOf),
         imported: byOrigin.filter((e) => e.imported).length,
         written: byOrigin.filter((e) => !e.imported).length,

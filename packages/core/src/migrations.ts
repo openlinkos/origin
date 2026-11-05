@@ -4,7 +4,7 @@ import { OriginError } from './errors.js';
 import { sessionBranchQuery } from './ingest.js';
 import { deriveProposals } from './proposals.js';
 import { reparseAuthorship, reparseMemories, reparseTitles } from './reparse.js';
-import { SCHEMA } from './schema.js';
+import { PLACE_TABLES, SCHEMA } from './schema.js';
 import { deriveThreads } from './threads.js';
 import type { SourceAdapter } from './types.js';
 
@@ -154,6 +154,15 @@ export const MIGRATIONS: Migration[] = [
       ctx.db.exec(AUTHOR_TABLES_V8);
       reparseAuthorship(ctx);
       deriveThreads(ctx.db);
+    },
+  },
+  {
+    // Where a session belongs, apart from the label on its first event. Empty until a place line
+    // or a later resolution fills it. Does not read the filesystem and does not reparse mirrors.
+    version: 9,
+    name: 'where a session belongs, apart from the label on its line',
+    up: (ctx) => {
+      ctx.db.exec(PLACE_TABLES);
     },
   },
 ];

@@ -5,7 +5,9 @@ import {
   type Author,
   type EventInput,
   type EventKind,
+  isPlacesRel,
   type ParsedLine,
+  parsePlaceLine,
   type Role,
   type SourceAdapter,
   type SourceFile,
@@ -112,7 +114,8 @@ export function createLinesAdapter(opts: LinesAdapterOptions): SourceAdapter {
       if (segments.some((s) => s.startsWith('.'))) return null;
       return { absPath: path.join(root, ...segments), relPath: rel };
     },
-    parseLine: (line: string) => parseEventLine(line),
+    parseLine: (line: string, ctx) =>
+      isPlacesRel(ctx.relPath) ? parsePlaceLine(line) : parseEventLine(line),
   };
 }
 
@@ -294,7 +297,8 @@ export function parseEventLine(line: string): ParsedLine {
   }
   if (typeof obj.text !== 'string') return fail('"text" must be a string');
   const cwd = optionalString(obj, 'cwd');
-  const project = optionalString(obj, 'project') ?? projectFromCwd(cwd ?? undefined);
+  const namedProject = optionalString(obj, 'project');
+  const project = namedProject ?? projectFromCwd(cwd ?? undefined);
   const branch = optionalString(obj, 'branch');
   const parent = obj.parent === undefined || obj.parent === null ? null : idField(obj, 'parent');
   const meta = obj.meta;
@@ -334,6 +338,7 @@ export function parseEventLine(line: string): ParsedLine {
         ? (meta as Record<string, unknown>)
         : null,
   };
+  if (namedProject !== null) event.projectSignal = 'explicit';
   // Who wrote an input: the line says so, or else a message is a person's, not known to be the
   // owner's, and a meta event the system's. A source states `owner` itself.
   if (role === 'user' && (kind === 'message' || kind === 'meta')) {

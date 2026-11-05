@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-15016dc4
+sourceHash: sha256-0445f46f
 ---
 
 # 会话来源
@@ -168,7 +168,7 @@ Split unrelated changes into separate commits.
 | `role` | 是 | `user`、`assistant` 或 `system` |
 | `kind` | 是 | `message`、`tool_use`、`tool_result`、`meta` 或 `system`。`memory` 会被拒绝：它留给 Agent 为自己保存的记忆文件 |
 | `text` | 是 | 事件的文本，一个字符串，按原样保存 |
-| `project` | 否 | 项目名，与简报和过滤条件中的项目名一致；没有时取 `cwd` 的最后一段 |
+| `project` | 否 | 项目名。写了它就保留这个名字，工作树不会替换它。没有时取 `cwd` 的最后一段；这台机器能看到工作树时，则取主工作树（见[项目](architecture.md#projects)） |
 | `cwd` | 否 | 工作目录，召回据此区分两个同名的检出 |
 | `branch` | 否 | git 分支，同一项目的会话据此加入同一条线索（见[线索](architecture.md#threads)） |
 | `parent` | 否 | 这一行所接续的那一行的 `id`，`get` 会显示它 |

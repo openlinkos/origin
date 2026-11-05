@@ -3,6 +3,7 @@ import type { Database } from './db.js';
 import { frameBucket, framesPath } from './frames.js';
 import { mirrorUsage } from './mirror.js';
 import { dbPath, remotePath } from './paths.js';
+import { resolvedProjectSql } from './places.js';
 
 /** Disk usage of a store (see docs/architecture.md#storage). */
 export interface StoreUsage {
@@ -129,7 +130,9 @@ export function eventActivity(
   const params = [size, size, o.since, o.since, o.until];
   const all = db
     .prepare(
-      `SELECT s.source AS source, s.project AS project, CAST(e.ts / ? AS INTEGER) * ? AS start,
+      `SELECT s.source AS source,
+              ${resolvedProjectSql('s.source', 's.session_id', 's.project')} AS project,
+              CAST(e.ts / ? AS INTEGER) * ? AS start,
               COUNT(*) AS n
        FROM session s CROSS JOIN event e INDEXED BY event_session
          ON e.source = s.source AND e.session_id = s.session_id
@@ -144,7 +147,9 @@ export function eventActivity(
   }>;
   const hidden = db
     .prepare(
-      `SELECT s.source AS source, s.project AS project, CAST(e.ts / ? AS INTEGER) * ? AS start,
+      `SELECT s.source AS source,
+              ${resolvedProjectSql('s.source', 's.session_id', 's.project')} AS project,
+              CAST(e.ts / ? AS INTEGER) * ? AS start,
               COUNT(*) AS n
        FROM excluded_event x CROSS JOIN event e ON e.id = x.event_id
        CROSS JOIN session s ON s.source = e.source AND s.session_id = e.session_id
@@ -178,9 +183,11 @@ export function activeProjects(
 ): Array<{ project: string; sessions: number; lastAt: number }> {
   return db
     .prepare(
-      `SELECT project, COUNT(*) AS sessions, MAX(ended_at) AS lastAt FROM session
-       WHERE project IS NOT NULL AND event_count > 0 AND ended_at >= ?
-       GROUP BY project ORDER BY sessions DESC, lastAt DESC`,
+      `SELECT ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} AS project,
+              COUNT(*) AS sessions, MAX(ended_at) AS lastAt FROM session
+       WHERE ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} IS NOT NULL
+         AND event_count > 0 AND ended_at >= ?
+       GROUP BY 1 ORDER BY sessions DESC, lastAt DESC`,
     )
     .all(o.since) as unknown as Array<{ project: string; sessions: number; lastAt: number }>;
 }

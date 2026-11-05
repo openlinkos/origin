@@ -14,6 +14,7 @@ import {
 } from './entries.js';
 import { OriginError } from './errors.js';
 import { checkReason, type ForgetResult, forgetInTransaction, IN_EFFECT } from './forgetting.js';
+import { resolvedProjectSql } from './places.js';
 import { getEvent, getSession } from './store.js';
 import { isoLocal } from './time.js';
 import type { EventRow, SessionRow } from './types.js';
@@ -377,11 +378,13 @@ const ACCEPTED = `EXISTS (SELECT 1 FROM entry_source es WHERE es.event_id = p.ev
 const REJECTED = `EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_id = p.event_id)
   AND EXISTS (SELECT 1 FROM tombstone t WHERE t.target = p.event_id AND ${IN_EFFECT})`;
 
-/** The project a proposal belongs to: the one it names, or its session's. */
-const PROJECT = 'COALESCE(p.project, e.project)';
+/** The project a proposal belongs to: the one it names, or its session's resolved name. */
+const PROJECT = `COALESCE(p.project, ${resolvedProjectSql('e.source', 'e.session_id', 'e.project')})`;
 
 const COLUMNS = `p.id, p.source, p.session_id, p.event_id, p.kind, p.text, p.confidence, p.project,
-  p.valid_from, p.valid_to, p.note, p.at, e.project AS session_project, ${ACCEPTED} AS accepted`;
+  p.valid_from, p.valid_to, p.note, p.at,
+  ${resolvedProjectSql('e.source', 'e.session_id', 'e.project')} AS session_project,
+  ${ACCEPTED} AS accepted`;
 
 interface ProposalRow {
   id: string;

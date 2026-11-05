@@ -4,6 +4,7 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { OriginError } from './errors.js';
 import { storeName } from './identity.js';
+import { entryProjectMatchSql } from './places.js';
 import { findNewest, parseQuery, phraseQuery, type QueryTerm, termCheck } from './search.js';
 import { getEvent, VISIBLE_EVENT } from './store.js';
 import type { Author, EventRow } from './types.js';
@@ -198,8 +199,8 @@ function entryWhere(f: EntryFilter, params: unknown[]): string {
     params.push(f.kind);
   }
   if (f.project) {
-    parts.push('en.project = ?');
-    params.push(f.project);
+    parts.push(entryProjectMatchSql('en.id'));
+    params.push(f.project, f.project);
   }
   if (f.since !== undefined) {
     parts.push('en.created_at >= ?');

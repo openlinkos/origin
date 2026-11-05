@@ -148,6 +148,15 @@ export const ARGS = {
       'Usage: origin distill [--project <name> | --thread <thr_…>] [--day <YYYY-MM-DD> | --since <t>] [--max 10] [--dry-run]',
   },
   projects: { options: {}, usage: 'Usage: origin projects' },
+  sessions: {
+    sub: {
+      reproject: {
+        options: { 'dry-run': { type: 'boolean', default: false } },
+        usage: 'Usage: origin sessions reproject [--dry-run]',
+      },
+    },
+    usage: 'Usage: origin sessions reproject [--dry-run]',
+  },
   backup: { options: {}, positionals: [1, 1], usage: 'Usage: origin backup <dir>' },
   mcp: { options: {}, usage: 'Usage: origin mcp' },
   ui: {

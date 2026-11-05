@@ -164,7 +164,7 @@ A file of event lines is UTF-8 JSONL: one JSON object per line, one event each, 
 | `role` | yes | `user`, `assistant`, or `system` |
 | `kind` | yes | `message`, `tool_use`, `tool_result`, `meta`, or `system`. `memory` is refused: it is reserved for the memory files agents keep for themselves |
 | `text` | yes | The event's text, a string, kept as written |
-| `project` | no | The project, by name, as briefs and filters name projects; without one, the last segment of `cwd` |
+| `project` | no | The project, by name. Naming it keeps that name, and a work tree does not replace it. Without one, the last segment of `cwd`, or the main work tree when this machine can see it (see [Projects](architecture.md#projects)) |
 | `cwd` | no | The working directory, by which recall tells two checkouts with the same name apart |
 | `branch` | no | The git branch, by which sessions of a project join a thread (see [Threads](architecture.md#threads)) |
 | `parent` | no | The `id` of the line this one follows, as `get` shows it |

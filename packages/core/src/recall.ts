@@ -1,11 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
-import fs from 'node:fs';
 import path from 'node:path';
 import { AUTHOR_SQL, isOwnerPrompt } from './authors.js';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { CURRENT_VERSION, type EntryKind } from './entries.js';
 import { storeName } from './identity.js';
+import { comparePath, resolvedProjectSql, resolvePlace, underProjectAlias } from './places.js';
 import { findNewest, searchEvents } from './search.js';
 import {
   getEvent,
@@ -75,6 +75,10 @@ export interface RecallInput {
   /** Token budget; RECALL_BUDGET by default. */
   budget?: number;
   now?: number;
+  /**
+   * When false, do not read the filesystem (a hub). Not stored on the recall. Defaults to true.
+   */
+  onDisk?: boolean;
 }
 
 /** What a recall item is: an entry, a session, or a thread of sessions. */
@@ -106,6 +110,8 @@ export interface RecallPlan {
   /** The estimated tokens of the whole text, header included; 0 when there is nothing to hand. */
   tokens: number;
   items: RecallItem[];
+  /** Not stored. False on a hub, which does not read `.git`. */
+  onDisk?: boolean;
 }
 
 /** Where CJK and full-width characters start (CJK Radicals Supplement). */
@@ -360,9 +366,13 @@ function candidates(db: Database, now: number): Candidate[] {
     .prepare(
       `SELECT en.id, en.kind, en.text, en.project, en.author, en.created_at,
          EXISTS (SELECT 1 FROM imported_entry i WHERE i.entry_id = en.id) AS imported,
-         (SELECT e.cwd FROM imported_entry i JOIN entry_source s ON s.entry_id = i.entry_id
-            JOIN event e ON e.id = s.event_id
-          WHERE i.entry_id = en.id AND e.kind = 'memory' LIMIT 1) AS home
+         COALESCE(
+           (SELECT e.cwd FROM imported_entry i JOIN entry_source s ON s.entry_id = i.entry_id
+              JOIN event e ON e.id = s.event_id
+            WHERE i.entry_id = en.id AND e.kind = 'memory' AND e.cwd IS NOT NULL LIMIT 1),
+           (SELECT e.cwd FROM entry_source s JOIN event e ON e.id = s.event_id
+            WHERE s.entry_id = en.id AND e.cwd IS NOT NULL ORDER BY e.ts LIMIT 1)
+         ) AS home
        FROM entry en
        WHERE NOT EXISTS (SELECT 1 FROM forgotten_entry fe WHERE fe.entry_id = en.id)
          AND ${CURRENT_VERSION}
@@ -394,32 +404,38 @@ function candidates(db: Database, now: number): Candidate[] {
 const sameProject = (a: string | null, b: string | null) =>
   a !== null && b !== null && a.toLowerCase() === b.toLowerCase();
 
-/** A path compared across sources: forward slashes, no trailing slash, lowercase. */
-function normPath(p: string): string {
-  return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-}
-
 /**
  * Whether something of a directory (`home`) or, failing that, of a project name belongs to the
- * recall's project: a directory in its work tree, or its very working directory when it has no
- * work tree; else the same name. Two checkouts with the same name are told apart by their
- * directories, and a directory above (a home directory, say) is not the project.
+ * recall's project: under its work tree, under an alias of that project, or on a directory that
+ * resolves to the same work tree (a linked work tree beside the checkout). Else the same name.
+ * A directory above the project is not the project. `onDisk` false never reads `.git`.
  */
-function inProject(plan: RecallPlan, home: string | null, project: string | null): boolean {
+function inProject(
+  db: Database,
+  plan: RecallPlan,
+  home: string | null,
+  project: string | null,
+): boolean {
   if (home && (plan.root || plan.cwd)) {
-    const h = normPath(home);
+    const h = comparePath(home);
     if (plan.root) {
-      const root = normPath(plan.root);
+      const root = comparePath(plan.root);
       if (h === root || h.startsWith(`${root}/`)) return true;
     }
-    return plan.cwd !== null && h === normPath(plan.cwd);
+    if (plan.project && underProjectAlias(db, home, plan.project)) return true;
+    if (plan.onDisk !== false && plan.root) {
+      const resolved = resolvePlace(home, { db, onDisk: true });
+      const got = resolved.rootPath ?? (resolved.signal === 'learned' ? resolved.root : null);
+      if (got && comparePath(got) === comparePath(plan.root)) return true;
+    }
+    return plan.cwd !== null && h === comparePath(plan.cwd);
   }
   return sameProject(project, plan.project);
 }
 
 /** Whether recall may hand the entry to this agent in this project at all. */
-function inScope(c: Candidate, plan: RecallPlan): boolean {
-  const own = inProject(plan, c.home, c.project);
+function inScope(db: Database, c: Candidate, plan: RecallPlan): boolean {
+  const own = inProject(db, plan, c.home, c.project);
   if (c.imported && plan.source && c.author.startsWith(`${plan.source}@`) && own) return false;
   return c.kind === 'cognition' || c.project === null || own;
 }
@@ -465,11 +481,11 @@ interface Draft {
   line: string;
 }
 
-function entryLine(c: Candidate, layer: RecallLayer, plan: RecallPlan): string {
+function entryLine(db: Database, c: Candidate, layer: RecallLayer, plan: RecallPlan): string {
   const tags: string[] = [];
   if (layer === 'prompt') {
     tags.push(c.kind);
-    if (c.project && !inProject(plan, c.home, c.project)) tags.push(c.project);
+    if (c.project && !inProject(db, plan, c.home, c.project)) tags.push(c.project);
   }
   if (layer !== 'cognition') tags.push(day(c.createdAt));
   return `- ${c.id}${tags.length > 0 ? ` (${tags.join(', ')})` : ''} ${entrySummary(c.text)}`;
@@ -519,7 +535,9 @@ function recentSessions(db: Database, plan: RecallPlan): Draft[] {
   if (!plan.project && !plan.root) return [];
   const rows = db
     .prepare(
-      `SELECT source, session_id, project, cwd, title, ended_at FROM session
+      `SELECT source, session_id,
+              ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} AS project,
+              cwd, title, ended_at FROM session
        WHERE event_count >= 2 AND ended_at >= ? AND NOT (source = ? AND session_id = ?)
        ORDER BY ended_at DESC`,
     )
@@ -535,7 +553,7 @@ function recentSessions(db: Database, plan: RecallPlan): Draft[] {
   const threads = new Set<string>();
   for (const r of rows) {
     if (drafts.length >= LAYER_MAX.sessions) break;
-    if (!inProject(plan, r.cwd, r.project)) continue;
+    if (!inProject(db, plan, r.cwd, r.project)) continue;
     if (!isOwnerConversation(db, r.source, r.session_id)) continue;
     const thread = threadOf(db, r.source, r.session_id);
     if (thread) {
@@ -566,26 +584,27 @@ function recentSessions(db: Database, plan: RecallPlan): Draft[] {
  * this project's memory and knowledge. Cognition of other projects comes only when a prompt
  * matches it: an agent's memory file of one project rarely says whether it holds everywhere.
  */
-function briefEntries(all: Candidate[], plan: RecallPlan): Draft[] {
-  const own = (c: Candidate) => c.project !== null && inProject(plan, c.home, c.project);
+function briefEntries(db: Database, all: Candidate[], plan: RecallPlan): Draft[] {
+  const own = (c: Candidate) => c.project !== null && inProject(db, plan, c.home, c.project);
   const cognition = [
     ...all.filter((c) => c.kind === 'cognition' && own(c)),
     ...all.filter((c) => c.kind === 'cognition' && c.project === null),
   ].slice(0, LAYER_MAX.cognition);
   const project = all.filter((c) => c.kind !== 'cognition' && own(c)).slice(0, LAYER_MAX.project);
   return [
-    ...cognition.map((c) => draftOf(c, 'cognition', plan)),
-    ...project.map((c) => draftOf(c, 'project', plan)),
+    ...cognition.map((c) => draftOf(db, c, 'cognition', plan)),
+    ...project.map((c) => draftOf(db, c, 'project', plan)),
   ];
 }
 
 function draftOf(
+  db: Database,
   c: Candidate,
   layer: RecallLayer,
   plan: RecallPlan,
   score: number | null = null,
 ): Draft {
-  return { layer, kind: 'entry', ref: c.id, score, line: entryLine(c, layer, plan) };
+  return { layer, kind: 'entry', ref: c.id, score, line: entryLine(db, c, layer, plan) };
 }
 
 /** Placeholder for the id in the header, as long as a real one, to estimate the header's size. */
@@ -625,11 +644,12 @@ export function planRecall(db: Database, input: RecallInput): RecallPlan {
     budget: input.budget ?? RECALL_BUDGET[input.occasion],
     tokens: 0,
     items: [],
+    onDisk: input.onDisk !== false,
   };
-  const all = candidates(db, at).filter((c) => inScope(c, plan));
+  const all = candidates(db, at).filter((c) => inScope(db, c, plan));
   const drafts: Draft[] = [];
   if (plan.occasion !== 'prompt') {
-    drafts.push(...briefEntries(all, plan));
+    drafts.push(...briefEntries(db, all, plan));
     drafts.push(...recentSessions(db, plan));
   }
   if (plan.prompt) {
@@ -650,7 +670,7 @@ export function planRecall(db: Database, input: RecallInput): RecallPlan {
       plan.project ? [plan.project] : [],
     ).slice(0, LAYER_MAX.prompt);
     for (const m of matches) {
-      drafts.push(draftOf(pool[m.index] as Candidate, 'prompt', plan, m.score));
+      drafts.push(draftOf(db, pool[m.index] as Candidate, 'prompt', plan, m.score));
     }
   }
   fit(plan, drafts);
@@ -713,9 +733,13 @@ export function rebuildRecall(
   const entry = db.prepare(
     `SELECT en.id, en.kind, en.text, en.project, en.author, en.created_at,
        EXISTS (SELECT 1 FROM imported_entry i WHERE i.entry_id = en.id) AS imported,
-       (SELECT e.cwd FROM imported_entry i JOIN entry_source s ON s.entry_id = i.entry_id
-          JOIN event e ON e.id = s.event_id
-        WHERE i.entry_id = en.id AND e.kind = 'memory' LIMIT 1) AS home
+       COALESCE(
+         (SELECT e.cwd FROM imported_entry i JOIN entry_source s ON s.entry_id = i.entry_id
+            JOIN event e ON e.id = s.event_id
+          WHERE i.entry_id = en.id AND e.kind = 'memory' AND e.cwd IS NOT NULL LIMIT 1),
+         (SELECT e.cwd FROM entry_source s JOIN event e ON e.id = s.event_id
+          WHERE s.entry_id = en.id AND e.cwd IS NOT NULL ORDER BY e.ts LIMIT 1)
+       ) AS home
      FROM entry en
      WHERE en.id = ? AND NOT EXISTS (SELECT 1 FROM forgotten_entry fe WHERE fe.entry_id = en.id)`,
   );
@@ -754,7 +778,7 @@ export function rebuildRecall(
         imported: r.imported === 1,
         home: r.home,
       };
-      lines.set(item.ref, entryLine(c, item.layer, plan));
+      lines.set(item.ref, entryLine(db, c, item.layer, plan));
       continue;
     }
     if (item.kind === 'thread') {
@@ -1082,34 +1106,38 @@ export function recallPrompt(db: Database, recall: RecallRecord): EventRow | nul
   return hit ? getEvent(db, hit.id) : null;
 }
 
-/** The top of the git work tree that holds `dir`, or null. */
+/**
+ * The main work tree that holds `dir`, or null. A `.git` directory is that checkout. A linked work
+ * tree's `.git` file resolves to the checkout it was made from. A bare repo or a symlink does not.
+ */
 export function workTree(dir: string): string | null {
-  let at = path.resolve(dir);
-  for (;;) {
-    if (fs.existsSync(path.join(at, '.git'))) return at;
-    const up = path.dirname(at);
-    if (up === at) return null;
-    at = up;
-  }
+  return resolvePlace(dir, { onDisk: true }).rootPath;
 }
 
 /**
- * The scope of a recall made in a working directory: the directory, the work tree that holds it,
- * and the project's name, the last segment of either, as adapters name projects. Only a process on
- * the agent's machine can look for the work tree (`onDisk`); a hub takes the directory as it is.
+ * The scope of a recall made in a working directory. On this machine, a linked work tree is the
+ * main checkout's project. A hub (`onDisk: false`) does not read `.git`; a `project_root` alias
+ * still names the project, and without one the directory string is the project and the root is null.
  */
 export function recallScope(
   cwd: string,
-  opts: { onDisk?: boolean } = {},
+  opts: { onDisk?: boolean; db?: Database } = {},
 ): Pick<RecallInput, 'cwd' | 'root' | 'project'> {
-  const dir = opts.onDisk === false ? cwd : path.resolve(cwd);
-  const root = opts.onDisk === false ? null : workTree(dir);
-  const project =
-    (root ?? dir)
-      .split(/[\\/]+/)
-      .filter((p) => p.length > 0)
-      .at(-1) ?? null;
-  return { cwd: dir, root, project };
+  if (opts.onDisk === false) {
+    const place = resolvePlace(cwd, { onDisk: false, db: opts.db });
+    return {
+      cwd,
+      root: place.signal === 'segment' ? null : place.root,
+      project: place.project,
+    };
+  }
+  const dir = path.resolve(cwd);
+  const place = resolvePlace(dir, { onDisk: true, db: opts.db });
+  return {
+    cwd: dir,
+    root: place.rootPath ?? (place.signal === 'learned' ? place.root : null),
+    project: place.project,
+  };
 }
 
 /**

@@ -135,6 +135,7 @@ export {
   appendRemoteLines,
   fingerprintSources,
   type IngestContext,
+  ingestPlacesFile,
   listDevices,
   localRawFiles,
   type RemoteChunk,
@@ -264,6 +265,27 @@ export {
   verifyAdminPasswordHash,
 } from './password.js';
 export { dbPath, originHome, parseRawPath, rawDir, remotePath, sourcesDir } from './paths.js';
+export {
+  type AgentFacts,
+  comparePath,
+  entryProjectMatchSql,
+  isPlacesRel,
+  lastSegment,
+  longestRoot,
+  type PlaceResolution,
+  type ProjectMove,
+  parsePlaceLine,
+  placesSourceFile,
+  type ReprojectReport,
+  type ReprojectResult,
+  recordExplicitPlace,
+  reparsePlaces,
+  reproject,
+  resolvedProjectSql,
+  resolvePlace,
+  sessionShape,
+  underProjectAlias,
+} from './places.js';
 export {
   acceptProposal,
   countProposals,

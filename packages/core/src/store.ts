@@ -9,6 +9,7 @@ import {
 import type { Database } from './db.js';
 import { readMirrorLine } from './mirror.js';
 import { parseRawPath, rawDir } from './paths.js';
+import { resolvedProjectSql } from './places.js';
 import { PROMPT_TITLE_MAX, promptTitle } from './prompt.js';
 import type { Author, EventKind, EventRow, Role, SessionRow } from './types.js';
 
@@ -44,7 +45,8 @@ export interface SearchHit extends EventRow {
  * The columns of an event `e` as EventRow has them, its authorship included: who wrote an input, as
  * derived and combined with its session's kind (see authors.ts).
  */
-export const EVENT_COLUMNS = `e.id, e.source, e.session_id, e.parent_id, e.ts, e.project, e.cwd, e.git_branch,
+export const EVENT_COLUMNS = `e.id, e.source, e.session_id, e.parent_id, e.ts,
+  ${resolvedProjectSql('e.source', 'e.session_id', 'e.project')} AS project, e.cwd, e.git_branch,
   e.role, e.kind, e.text, e.raw_file_id, e.raw_line, e.agent_version, e.meta,
   (${AUTHOR_SQL}) AS author, (${AUTHOR_SIGNAL_SQL}) AS author_signal, (${SPEAKER_SQL}) AS speaker`;
 
@@ -103,7 +105,7 @@ function whereClause(f: EventFilter, params: unknown[]): string {
     params.push(f.source);
   }
   if (f.project) {
-    parts.push('e.project = ?');
+    parts.push(`${resolvedProjectSql('e.source', 'e.session_id', 'e.project')} = ?`);
     params.push(f.project);
   }
   if (f.sessionId) {
@@ -144,7 +146,9 @@ export function listSessions(
     params.push(filter.source);
   }
   if (filter.project) {
-    parts.push('project = ?');
+    parts.push(
+      `${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} = ?`,
+    );
     params.push(filter.project);
   }
   if (filter.since !== undefined) {
@@ -416,7 +420,9 @@ export function latestAgentVersions(db: Database): Map<string, string> {
   return out;
 }
 
-const SESSION_COLUMNS = `source, session_id, project, cwd, title, started_at, ended_at, event_count,
+const SESSION_COLUMNS = `source, session_id,
+  ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} AS project,
+  cwd, title, started_at, ended_at, event_count,
   (SELECT t.thread_id FROM session_thread t
     WHERE t.source = session.source AND t.session_id = session.session_id) AS thread_id`;
 
@@ -685,8 +691,11 @@ export function listProjects(
 ): Array<{ project: string; sessions: number; events: number }> {
   return db
     .prepare(
-      `SELECT project, COUNT(*) AS sessions, SUM(event_count) AS events FROM session
-       WHERE project IS NOT NULL AND event_count > 0 GROUP BY project ORDER BY sessions DESC, events DESC LIMIT ?`,
+      `SELECT ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} AS project,
+              COUNT(*) AS sessions, SUM(event_count) AS events FROM session
+       WHERE ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} IS NOT NULL
+         AND event_count > 0
+       GROUP BY 1 ORDER BY sessions DESC, events DESC LIMIT ?`,
     )
     .all(limit) as unknown as Array<{ project: string; sessions: number; events: number }>;
 }

@@ -266,11 +266,22 @@ describe('matching a prompt', () => {
 describe('a brief', () => {
   it("hands this project's cognition, memory, and knowledge, and nothing of other projects", async () => {
     await seed();
+    // Another project's entry cites an event outside this tree. A cited cwd inside the
+    // tree would belong to this brief even when the entry's own name differs.
+    say('claude', {
+      id: 'm1',
+      session: 'm',
+      ts: NOW - DAY,
+      role: 'user',
+      text: 'Mirror the site',
+      cwd: '/work/other/mirrors',
+    });
+    await sync('claude');
     const pref = note('Approve releases only when the user asks', 'origin');
     const global = note('The user writes in Chinese', null);
-    const elsewhere = note('Mirror sites keep both variants', 'mirrors');
+    const elsewhere = note('Mirror sites keep both variants', 'mirrors', 'cognition', 'claude:m1');
     const fact = note('Releases publish with provenance', 'origin', 'knowledge');
-    const theirs = note('The mirror relay runs on port 8080', 'mirrors', 'knowledge');
+    const theirs = note('The mirror relay runs on port 8080', 'mirrors', 'knowledge', 'claude:m1');
     expect(refs(inRepo())).toEqual([
       `cognition:${pref}`,
       `cognition:${global}`,
@@ -394,10 +405,21 @@ describe('a brief', () => {
 describe('recall with a prompt', () => {
   it('hands the matching entries once per brief, and records each recall', async () => {
     await seed();
+    say('claude', {
+      id: 'm1',
+      session: 'm',
+      ts: NOW - DAY,
+      role: 'user',
+      text: 'Mirror the site',
+      cwd: '/work/other/mirrors',
+    });
+    await sync('claude');
     // Cognition of another project: never in this brief, but handed when a prompt matches it.
     const caddy = note(
       'Keep both mirror repositories: the caching one and the Caddy one',
       'mirrors',
+      'cognition',
+      'claude:m1',
     );
     note('The user prefers short answers', null);
     const prompt = 'Should we archive one of the Caddy mirror repositories?';

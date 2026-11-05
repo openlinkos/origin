@@ -7,6 +7,7 @@ import {
   isEntryId,
 } from './entries.js';
 import { OriginError } from './errors.js';
+import { resolvedProjectSql } from './places.js';
 import { isProposalId } from './proposals.js';
 import { isRecallId, type RecallRecord, rebuildRecall, sessionRecalls } from './recall.js';
 import {
@@ -383,7 +384,8 @@ function nextSession(db: Database, s: SessionRow, side: 'before' | 'after'): Ses
   const row = db
     .prepare(
       `SELECT source, session_id FROM session
-        WHERE project = ? AND event_count > 0 AND started_at IS NOT NULL
+        WHERE ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} = ?
+          AND event_count > 0 AND started_at IS NOT NULL
           AND (started_at ${cmp} ? OR (started_at = ? AND (source, session_id) ${cmp} (?, ?)))
         ORDER BY started_at ${order}, source ${order}, session_id ${order} LIMIT 1`,
     )

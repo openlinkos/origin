@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-77f68965
+sourceHash: sha256-dfbb2f02
 ---
 
 # 命令参考
@@ -25,6 +25,7 @@ origin distill   [--project <name> | --thread <thr_…>] [--day <YYYY-MM-DD> | -
 origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   Agent 在该目录会拿到什么；--hook <agent> 用于回应它的 hook
 origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   Agent 拿到过什么，从新到旧
 origin projects                                        已知的项目名
+origin sessions  reproject [--dry-run]                 把每个会话解析到它的主项目
 origin backup    <dir>                                 把数据库和原始镜像备份到 <dir>（增量）
 origin mcp                                             以 stdio 运行 MCP server（接入中枢后补充中枢的回答）
 origin agents    [connect | disconnect] [<agent>...] [--yes]   把 Origin 及其 hook 接入本机的 Agent

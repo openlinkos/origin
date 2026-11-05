@@ -22,6 +22,13 @@ import {
 } from './mirror.js';
 import { assertComplete } from './mode.js';
 import { distinctRelPath, mirrorRelPath, parseRawPath, rawDir, remotePath } from './paths.js';
+import {
+  applyPlaceFacts,
+  isPlacesRel,
+  parsePlaceLine,
+  placesSourceFile,
+  recordExplicitPlace,
+} from './places.js';
 import { deriveProposal } from './proposals.js';
 import { deriveFollow, refreshThreads } from './threads.js';
 import { NAME_RE } from './tokens.js';
@@ -94,6 +101,19 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
       result.filesChanged++;
     }
   }
+  // A resolved work tree, appended as places.jsonl. Its own counts stay out of this result, so a
+  // sync that only mirrored events still reports those. A missing path appends nothing.
+  const places = placesSourceFile(ctx.db, ctx.home, adapter.id);
+  if (places) {
+    await ingestSourceFile(
+      ctx,
+      adapter,
+      places,
+      agentVersion,
+      emptySyncResult(adapter.id),
+      breathe,
+    );
+  }
   // Files that stopped growing an hour ago are likely finished: store their last lines compressed.
   sealIdleMirrors(ctx.db, ctx.home, {
     before: Date.now() - IDLE_SEAL_MS,
@@ -112,6 +132,27 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
     note: result.newGenerations > 0 ? `new generations: ${result.newGenerations}` : null,
   });
   return result;
+}
+
+/**
+ * Append one generated `places.jsonl`. Its counts are not merged into a sync: callers that only
+ * want the mirror use this after `reproject`.
+ */
+export async function ingestPlacesFile(
+  ctx: IngestContext,
+  source: string,
+  file: SourceFile,
+): Promise<void> {
+  const adapter: SourceAdapter = {
+    id: source,
+    displayName: source,
+    version: () => null,
+    async discover() {
+      return [];
+    },
+    parseLine: (line) => parsePlaceLine(line),
+  };
+  await ingestSourceFile(ctx, adapter, file, null, emptySyncResult(source), breather());
 }
 
 /**
@@ -450,13 +491,17 @@ function appendLines(
     stats.linesRead++;
     let parsed: ReturnType<SourceAdapter['parseLine']>;
     try {
-      parsed = adapter.parseLine(line, {
-        absPath: parse.absPath,
-        relPath: parse.relPath,
-        lineNo,
-        fileMtimeMs: parse.fileMtimeMs,
-        readLine,
-      });
+      // places.jsonl is parsed here, so a source whose adapter does not know the file still
+      // applies it. The adapter's own parseLine stays free of git.
+      parsed = isPlacesRel(parse.relPath)
+        ? parsePlaceLine(line)
+        : adapter.parseLine(line, {
+            absPath: parse.absPath,
+            relPath: parse.relPath,
+            lineNo,
+            fileMtimeMs: parse.fileMtimeMs,
+            readLine,
+          });
     } catch (err) {
       stats.parseErrors++;
       ctx.log?.(`parse error ${parse.relPath}:${lineNo}: ${(err as Error).message}`);
@@ -497,6 +542,12 @@ function appendLines(
     // it whether it is the owner's conversation, so its threads are looked at again.
     for (const fact of parsed.sessionKinds ?? []) {
       if (recordSessionKind(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
+    }
+    applyPlaceFacts(ctx.db, adapter.id, parsed);
+    for (const ev of parsed.events) {
+      if (ev.projectSignal === 'explicit' && ev.project) {
+        recordExplicitPlace(ctx.db, adapter.id, ev.sessionId, ev.project);
+      }
     }
   }
   for (const sessionId of touchedSessions) refreshSession(ctx.db, adapter.id, sessionId);
