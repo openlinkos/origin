@@ -18,6 +18,7 @@ import {
  * says; without them, ingestion decides by kind and text. A line with `kinds`, a list of
  * `{ session, kind, signal }`, says which sessions are children or headless runs. A line with
  * `parents`, a list of `{ session, parent, via, signal, group, name, source }`, names a parent.
+ * `meta` is kept as the event's meta (a tool call's `toolName`, say).
  * `places.jsonl` is parsed as place lines. A line with
  * `learnt` yields its event only once the adapter has learnt to read it (`learnt: true`), as a
  * newer adapter does with a line an older one skipped.
@@ -73,6 +74,7 @@ export function fakeAdapter(
           source?: string;
         }>;
         learnt?: boolean;
+        meta?: Record<string, unknown>;
       };
       if (o.title) return { events: [], sessionTitle: o.title, sessionId: o.session };
       const sessionKinds = o.kinds?.map((k) => ({
@@ -106,6 +108,7 @@ export function fakeAdapter(
             parentId: o.parent ?? null,
             ...(o.author ? { author: o.author, authorSignal: o.signal ?? 'fake' } : {}),
             ...(o.speaker ? { speaker: o.speaker } : {}),
+            ...(o.meta ? { meta: o.meta } : {}),
           },
         ],
         sessionKinds,

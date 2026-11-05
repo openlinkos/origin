@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-bdef0e3b
+sourceHash: sha256-f014b8b8
 ---
 
 # 会话来源
@@ -150,6 +150,20 @@ Split unrelated changes into separate commits.
 - **第 1 版**（`memory/`）把记忆本身保存在 `MEMORY.md` 中：一个全局的，每个工作区各一个。每个都是一个 `knowledge` 条目，正文是去掉 HTML 注释后的文本，置信度为 0.9；只有标题和引用说明的文件除外，例如 Grok 写入的模板。工作区的工作目录取自它的标题 `# Project Memory — <path>`。
 
 **Codex** 启用记忆后，把记忆保存在 `~/.codex/memories/` 下，形式是它自己合并的摘要；Origin 尚未读取它们。**Cursor** 已不再在磁盘上保存记忆。
+
+## 编辑过的文件 {#files-edited}
+
+[每日摘要](architecture.md#daily-digest)列出每个会话在这一天里改动过的文件。没有哪个 Agent 直接记录这一点，所以 Origin 从 Agent 的工具调用中读取，尽力而为、结果确定：取自下面这些工具的调用，即它们输入中的路径。Origin 用模式匹配而不是解析器，从 `tool_use` 事件的文本（`<tool> <input>`，截到 2,000 个字符）中读取路径，所以被截断的输入仍能给出截断之前的路径，而截断处所在的那条路径会被略去。位于会话工作目录之下的路径显示为相对于它的路径，用 `/` 分隔；其他路径按原样显示。一次调用中写到的每条路径各计一次。
+
+| 来源 id | 算作编辑文件的工具 | 路径取自 | 失败的调用 |
+|---|---|---|---|
+| `claude-code` | `Edit`、`MultiEdit`、`Write`、`NotebookEdit` | `file_path`；`NotebookEdit` 为 `notebook_path` | 当天的结果带有 `is_error` 时略去 |
+| `codex` | `apply_patch`：自定义工具调用的补丁，或函数调用参数中 JSON 的 `input` | 补丁中的 `*** Add File:`、`*** Update File:`、`*** Delete File:` 和 `*** Move to:` 行 | 计入：输出中没有 Origin 能读出的失败标记 |
+| `grok` | `search_replace` | `file_path` | 当天的结果带有 `completed` 以外的 `status` 时略去 |
+| `cursor` | `StrReplace`，在 transcript 中 | `path` | 计入：transcript 中没有结果 |
+| `zcode`、Cursor 编辑器中的对话、你自己的来源 | 无 | | |
+
+从不解析 shell 命令，所以命令改动过的文件不会列出，其他工具写过的文件也不会。Origin 核对过的 ZCode 和 Cursor 编辑器的格式中，没有它能够依靠的编辑工具；事件行中也没有 Origin 认识的工具名称。无论是什么工具，每次工具调用都计入摘要的工具计数。
 
 如何为每个 Agent 注册 Origin，见[接入 Agent](guide/connect-agents.md)。
 

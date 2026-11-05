@@ -55,6 +55,26 @@ export {
   transaction,
 } from './db.js';
 export {
+  DIGEST_FILES,
+  DIGEST_LIMIT,
+  DIGEST_LIMIT_MAX,
+  DIGEST_PROMPT_CHARS,
+  DIGEST_PROMPTS,
+  DIGEST_TOOLS,
+  type Digest,
+  type DigestCounts,
+  type DigestDay,
+  type DigestForget,
+  type DigestOptions,
+  type DigestPrompt,
+  type DigestSession,
+  digest,
+  digestDay,
+  editedFiles,
+  isoIn,
+  localTimeZone,
+} from './digest.js';
+export {
   type CorrectInput,
   CURRENT_VERSION,
   checkCognitionSources,

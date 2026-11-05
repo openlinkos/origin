@@ -457,6 +457,8 @@ export interface ProposalFilter {
   project?: string;
   /** The session that made it. */
   session?: { source: string; sessionId: string };
+  /** The agent whose session made it. */
+  source?: string;
   /** epoch ms, inclusive, on when it was made. */
   since?: number;
   until?: number;
@@ -475,6 +477,10 @@ function filterWhere(f: ProposalFilter, params: unknown[]): string[] {
   if (f.session) {
     where.push('p.source = ? AND p.session_id = ?');
     params.push(f.session.source, f.session.sessionId);
+  }
+  if (f.source !== undefined) {
+    where.push('p.source = ?');
+    params.push(f.source);
   }
   if (f.since !== undefined) {
     where.push('p.at >= ?');

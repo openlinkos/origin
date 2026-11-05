@@ -147,6 +147,20 @@ Split unrelated changes into separate commits.
 
 **Codex** keeps memories under `~/.codex/memories/` when they are enabled, as summaries it merges itself; Origin does not read them yet. **Cursor** no longer keeps memories on disk.
 
+## Files edited
+
+A [daily digest](architecture.md#daily-digest) lists the files each session changed that day. No agent records that as such, so Origin reads it from the agent's tool calls, best effort and deterministically: from the calls of the tools below, the paths in their input. It reads them from the `tool_use` event's text (`<tool> <input>`, cut at 2,000 characters) with a pattern rather than a parser, so that a cut input still gives the paths before the cut, and a path the cut ends in is left out. A path under the session's working directory is shown relative to it, with `/` separators; any other as written. A call counts once for each path it names.
+
+| Source id | Tools counted as file edits | Paths from | Failed calls |
+|---|---|---|---|
+| `claude-code` | `Edit`, `MultiEdit`, `Write`, `NotebookEdit` | `file_path`; `notebook_path` for `NotebookEdit` | Left out when their result that day has `is_error` |
+| `codex` | `apply_patch`: a custom tool call's patch, or the JSON `input` of a function call's arguments | The patch's `*** Add File:`, `*** Update File:`, `*** Delete File:`, and `*** Move to:` lines | Counted: an output records no failure Origin can read |
+| `grok` | `search_replace` | `file_path` | Left out when their result that day has a `status` other than `completed` |
+| `cursor` | `StrReplace`, in transcripts | `path` | Counted: transcripts hold no results |
+| `zcode`, Cursor's editor conversations, your own sources | None | | |
+
+Shell commands are never parsed, so a file a command changed is not listed, nor is a file another tool wrote. The ZCode and Cursor editor formats Origin was checked against show no edit tool it can rely on, and event lines name no tools Origin knows. Every tool call counts in the digest's tool counts, whatever its tool.
+
 To register Origin with each agent, see [Connect your agents](guide/connect-agents.md).
 
 ## Your own sources: event lines
