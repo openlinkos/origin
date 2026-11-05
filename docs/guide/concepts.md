@@ -7,7 +7,7 @@ This page explains how Origin remembers: what it keeps, how what agents learn be
 Every supported agent (Claude Code, Codex, Cursor, Grok Build, ZCode) already writes its conversations to disk, and anything else can write its own as event lines (see [Bring your own source](./sources.md)). Origin reads them and keeps two things:
 
 - **Raw mirrors**: append-only copies of the original logs, stored compressed under `~/.origin/raw/`. They outlive the agent's own cleanup, and they are never rewritten.
-- **Events**: each message, tool call, and tool result, normalized across agents, grouped into **sessions**, and indexed for search. Every event points to the line of the mirror it came from.
+- **Events**: each message, tool call, and tool result, normalized across agents, grouped into **sessions**, and indexed for search. Every event points to the line of the mirror it came from. A sub-agent or a workflow step is a session of its own, listed under its parent; its stored title is kept, and a workflow step is shown as `{run name} · actor#N@M` when that title contains the `actor#N@M` token (see [Parent sessions](../architecture.md#parent-sessions)).
 
 That pointer is **provenance**: any answer Origin gives can be expanded down to the original text, with `origin show <id>`, the MCP `sources` tool, or the event's page in the [admin UI](./admin.md). Origin never summarizes or rewrites what was said, and it never calls a model to do so.
 
@@ -20,7 +20,7 @@ One piece of work often takes several sessions: you go on the next day, after th
 - **Follow links.** When you take up work from an earlier session, the agent calls `follow` with that session's id, and Origin reads the link from the agent's own log, on every machine that archives it (see [MCP tools](./mcp.md#follow)).
 - **Branches.** Your conversations of a project on the same git branch, other than a default branch such as `main` or `master`, within 30 days of each other; a sub-agent's session or a headless run on the branch joins none this way. Of the agents Origin reads, Claude Code records the branch, and your own sources can give one.
 
-A thread has an id (`thr_…`), and the name and project of its first session. Agents see threads in the brief, where a thread of several sessions takes one line, in `timeline`, and with `get`, which lists a thread's sessions, agents, branches, and the entries written from it; you see them with `origin timeline` and `origin show thr_…`. Nothing about a thread is written by hand: forgetting the event of a link, or every event of a session, takes the session out of its thread. See [Threads](../architecture.md#threads) in the architecture for the exact rules.
+A thread has an id (`thr_…`), and the name and project of its first session that is not a child. A sub-agent or a workflow step joins its parent's thread when that parent already has one; it never becomes the root, and a parent with only its children is not a thread of its own. Agents see threads in the brief, where a thread of several sessions takes one line, in `timeline`, and with `get`, which lists a thread's sessions, agents, branches, and the entries written from it; you see them with `origin timeline` and `origin show thr_…`. Nothing about a thread is written by hand: forgetting the event of a link, or every event of a session, takes the session out of its thread. See [Threads](../architecture.md#threads) and [Parent sessions](../architecture.md#parent-sessions) in the architecture for the exact rules.
 
 ## Entries
 

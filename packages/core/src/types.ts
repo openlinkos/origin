@@ -30,6 +30,24 @@ export interface SessionKindFact {
   signal: string;
 }
 
+/**
+ * A line's statement that a session of its source has a parent (see parents.ts). `fromAgent` is
+ * the agent's own line; a `parent` line of `places.jsonl` sets it false.
+ */
+export interface SessionParentFact {
+  sessionId: string;
+  parentSessionId: string;
+  /** The parent's source; the line's own source when omitted. */
+  parentSource?: string;
+  via: 'subagent' | 'workflow';
+  runGroup?: string | null;
+  runName?: string | null;
+  /** The field that says so (`parent_id`, `subagent_spawned`, `dwf_run`, …). */
+  signal: string;
+  /** The agent's own line, rather than a `parent` line of `places.jsonl`. Not stored. */
+  fromAgent?: boolean;
+}
+
 /** An event produced by an adapter (not yet stored; no source or raw locator). */
 export interface EventInput {
   /** Stable id, unique within the source (usually the source's own message uuid; block-level events append `#i`). */
@@ -126,11 +144,16 @@ export interface ParsedLine {
    */
   sessionKinds?: SessionKindFact[];
   /**
-   * A `places.jsonl` line's roots and places (see places.ts). No message events. A `parent` line
-   * yields neither: that table belongs to a later format.
+   * A `places.jsonl` line's roots and places (see places.ts). No message events.
    */
   roots?: ProjectRootFact[];
   places?: SessionPlaceFact[];
+  /**
+   * Sessions of this source that this line says have a parent (see SessionParentFact): its own, as
+   * a ZCode line's `parent_id` says, or another, as a Grok Build parent names the sub-agent it
+   * spawns. Kept apart from the events and combined when they are read.
+   */
+  sessionParents?: SessionParentFact[];
 }
 
 /** One `project_root` row a `places.jsonl` `root` line names. */

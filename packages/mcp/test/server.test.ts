@@ -134,6 +134,8 @@ describe('origin MCP server', () => {
       ended: expect.any(String),
       events: 3,
       thread: null,
+      children: 0,
+      workflows: [],
     });
   });
 

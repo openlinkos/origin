@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { type Database, transaction } from './db.js';
 import { readMirror } from './mirror.js';
+import { parentPlaceFact } from './parents.js';
 import { mirrorRelPath } from './paths.js';
 import type { ParsedLine, ProjectRootFact, SessionPlaceFact, SourceFile } from './types.js';
 
@@ -341,8 +342,9 @@ function requireString(obj: Record<string, unknown>, key: string): string {
 }
 
 /**
- * One line of `places.jsonl`. A `parent` line is not a place and is not an error. Malformed JSON
- * throws, so ingestion counts a parse error. No message events.
+ * One line of `places.jsonl`. A `root` or `place` line is a project fact, a complete `parent`
+ * line is a parent fact (`fromAgent: false`), and an incomplete parent records nothing. Malformed
+ * JSON throws, so ingestion counts a parse error. No message events.
  */
 export function parsePlaceLine(line: string): ParsedLine {
   let value: unknown;
@@ -356,7 +358,10 @@ export function parsePlaceLine(line: string): ParsedLine {
   }
   const obj = value as Record<string, unknown>;
   if (obj.v !== 1) throw new Error('places.jsonl: "v" must be 1');
-  if (obj.type === 'parent') return { events: [] };
+  if (obj.type === 'parent') {
+    const fact = parentPlaceFact(obj);
+    return fact ? { events: [], sessionParents: [fact] } : { events: [] };
+  }
   if (obj.type === 'root') {
     const fact: ProjectRootFact = {
       path: requireString(obj, 'path'),

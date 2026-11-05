@@ -21,6 +21,7 @@ import {
   settleMirror,
 } from './mirror.js';
 import { assertComplete } from './mode.js';
+import { recordSessionParent } from './parents.js';
 import { distinctRelPath, mirrorRelPath, parseRawPath, rawDir, remotePath } from './paths.js';
 import {
   applyPlaceFacts,
@@ -548,6 +549,11 @@ function appendLines(
       if (ev.projectSignal === 'explicit' && ev.project) {
         recordExplicitPlace(ctx.db, adapter.id, ev.sessionId, ev.project);
       }
+    }
+    // A session this line says has a parent: it joins that session's thread, and leaves a
+    // top-level list.
+    for (const fact of parsed.sessionParents ?? []) {
+      if (recordSessionParent(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
     }
   }
   for (const sessionId of touchedSessions) refreshSession(ctx.db, adapter.id, sessionId);

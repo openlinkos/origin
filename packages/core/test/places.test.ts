@@ -410,7 +410,20 @@ describe('places.jsonl', () => {
       parsePlaceLine(
         '{"v":1,"type":"parent","session":"s1","parent":"p1","via":"workflow","signal":"dwf_run"}',
       ),
-    ).toEqual({ events: [] });
+    ).toEqual({
+      events: [],
+      sessionParents: [
+        {
+          sessionId: 's1',
+          parentSessionId: 'p1',
+          via: 'workflow',
+          runGroup: null,
+          runName: null,
+          signal: 'dwf_run',
+          fromAgent: false,
+        },
+      ],
+    });
     const root = parsePlaceLine(
       '{"v":1,"type":"root","path":"d:/wt","project":"demo-app","root":"d:/demo-app","signal":"git"}',
     );
@@ -451,24 +464,27 @@ describe('places.jsonl', () => {
       await ingestPlacesFile({ db, home }, 'fake', file);
       expect(placeOf(db, 's1')).toMatchObject({ project: 'chosen-app', signal: 'explicit' });
       expect(
-        db.prepare(`SELECT name FROM sqlite_master WHERE name = 'session_parent'`).get(),
-      ).toBeUndefined();
+        (db.prepare('SELECT COUNT(*) AS n FROM session_parent').get() as { n: number }).n,
+      ).toBe(0);
     } finally {
       db.close();
     }
   });
 
-  it('is store format 9 and starts empty', () => {
-    expect(STORE_VERSION).toBe(9);
+  it('is store format 10 and starts empty', () => {
+    expect(STORE_VERSION).toBe(10);
     const db = open(tempDir('origin-place-ver-'));
     try {
-      expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+      expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 10 });
       expect((db.prepare('SELECT COUNT(*) AS n FROM session_place').get() as { n: number }).n).toBe(
         0,
       );
       expect((db.prepare('SELECT COUNT(*) AS n FROM project_root').get() as { n: number }).n).toBe(
         0,
       );
+      expect(
+        (db.prepare('SELECT COUNT(*) AS n FROM session_parent').get() as { n: number }).n,
+      ).toBe(0);
     } finally {
       db.close();
     }

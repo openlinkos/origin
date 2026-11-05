@@ -44,7 +44,7 @@ export const TOOL_SPECS = {
   brief: {
     title: 'Brief',
     description:
-      "What the user's memory holds for where you work, one line per item: their preferences and boundaries, the project's latest decisions and facts, and its latest sessions with any agent; with `about`, also the entries that match it. Call it when you start a task, unless you were already given an Origin recall.",
+      "What the user's memory holds for where you work, one line per item: their preferences and boundaries, the project's latest decisions and facts, and its latest sessions with any agent (a parent line adds its child count and workflow names); with `about`, also the entries that match it. Call it when you start a task, unless you were already given an Origin recall.",
     inputSchema: {
       cwd: z
         .string()
@@ -57,7 +57,7 @@ export const TOOL_SPECS = {
   search: {
     title: 'Search memory',
     description:
-      'Full-text search over entries and archived session events, best match first. Without a query, lists the most recent entries.',
+      'Full-text search over entries and archived session events, best match first. A hit on a child session includes `parent` (`source:id`) and `parent_title`. Without a query, lists the most recent entries.',
     inputSchema: {
       query: z.string().optional().describe('Words or phrases to find (any language)'),
       scope: z.enum(['all', 'entries', 'events']).default('all'),
@@ -74,7 +74,7 @@ export const TOOL_SPECS = {
   timeline: {
     title: 'Timeline',
     description:
-      'Sessions in a time range (newest first), each with its title or, when it has none, its first prompt; or, with `session`, the events of one session in order, a page at a time: `turn` reads one turn, `after` goes on after the last event of a page, and `more` says how many follow.',
+      'Sessions in a time range (newest first), top-level ones unless `include_children` is set: no parent, and not a child session that names none. Each row has its title (a workflow step is shown as `{run name} · actor#N@M` when its stored title has that token), or its first prompt, plus `children` (how many) and `workflows` (their run names). With `session`, the events of one session in order, a page at a time: `turn` reads one turn, `after` goes on after the last event of a page, and `more` says how many follow.',
     inputSchema: {
       since: time.describe('Start of the range (default 7d)'),
       until: time,
@@ -94,6 +94,10 @@ export const TOOL_SPECS = {
         .optional()
         .describe('With session: continue after this event id, the last of the previous page'),
       include_tools: z.boolean().default(false),
+      include_children: z
+        .boolean()
+        .default(false)
+        .describe('Also list child sessions. By default a timeline lists top-level sessions only'),
       limit: z.number().int().min(1).max(500).default(50),
     },
     annotations: readOnly,
@@ -101,7 +105,7 @@ export const TOOL_SPECS = {
   changes: {
     title: 'Changes',
     description:
-      'What reached the store since a cursor, oldest first: the sessions active in that time (with their threads), their events, the entries written, the entries proposed, and what was forgotten (by id only), with `next` to read on and `more` when there is more. Without `after`, the last 24 hours. Pass the `next` of your last call to learn what changed since you looked.',
+      'What reached the store since a cursor, oldest first: the top-level sessions active in that time (child sessions stay under their parent, unless `session` or `thread` asks for them), with their threads, their events, the entries written, the entries proposed, and what was forgotten (by id only), with `next` to read on and `more` when there is more. Without `after`, the last 24 hours. Pass the `next` of your last call to learn what changed since you looked.',
     inputSchema: {
       after: z
         .string()
@@ -121,7 +125,7 @@ export const TOOL_SPECS = {
   get: {
     title: 'Get by id',
     description:
-      'Open any id Origin hands you, with what is next to it, one line each by id: an entry (sources, version history, related entries), an event (its text, session, turn, the events around it, and the entries citing it), a session (its turns, its thread, the entries written from it, its recalls, and the sessions before and after it), a thread (its sessions, agents, branches, the entries written from it, and its last prompt), a recall (what it handed over), or a proposal (its fields, status, sources, session, and the entry it became once accepted).',
+      'Open any id Origin hands you, with what is next to it, one line each by id: an entry (sources, version history, related entries), an event (its text, session, turn, the events around it, and the entries citing it), a session (its turns, its thread, the entries written from it, its recalls, the sessions before and after it, its parent when it is a child, and its children grouped by run when it is a parent), a thread (its sessions, agents, branches, the entries written from it, and its last prompt), a recall (what it handed over), or a proposal (its fields, status, sources, session, and the entry it became once accepted).',
     inputSchema: {
       id: z
         .string()

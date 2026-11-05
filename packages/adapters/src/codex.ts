@@ -11,6 +11,7 @@ import type {
   SourceAdapter,
   SourceFile,
 } from '@openlinkos/origin-core';
+import { parseWithPlaces } from './places.js';
 import { projectFromCwd, relativeUnder, truncate } from './util.js';
 
 /**
@@ -110,6 +111,9 @@ export function createCodexAdapter(opts: CodexAdapterOptions = {}): SourceAdapte
       return rolloutFile(path.join(home, ...segments), rel, name);
     },
     parseLine(line: string, ctx: ParseContext): ParsedLine | null {
+      if (ctx.relPath === 'places.jsonl' || ctx.relPath.endsWith('/places.jsonl')) {
+        return parseWithPlaces(line, ctx, () => null);
+      }
       const obj = JSON.parse(line) as CodexLine;
       if (obj.type === 'session_meta') {
         const info = sessionInfoFrom(obj);
@@ -231,7 +235,30 @@ function sessionKindOf(obj: CodexLine, ctx: ParseContext): ParsedLine | null {
     return { events: [], sessionKinds: [{ sessionId, kind: 'headless', signal: 'source' }] };
   }
   if (typeof source === 'object' && source !== null && Object.hasOwn(source, 'subagent')) {
-    return { events: [], sessionKinds: [{ sessionId, kind: 'child', signal: 'source' }] };
+    const sub = (source as { subagent?: unknown }).subagent;
+    const spawn =
+      sub && typeof sub === 'object'
+        ? (sub as { thread_spawn?: { parent_thread_id?: unknown } }).thread_spawn
+        : undefined;
+    const parent = spawn?.parent_thread_id;
+    const named =
+      typeof parent === 'string' && parent.length > 0 && parent !== sessionId
+        ? [
+            {
+              sessionId,
+              parentSessionId: parent,
+              parentSource: 'codex',
+              via: 'subagent' as const,
+              signal: 'parent_thread_id',
+              fromAgent: true,
+            },
+          ]
+        : undefined;
+    return {
+      events: [],
+      sessionKinds: [{ sessionId, kind: 'child', signal: 'source' }],
+      ...(named ? { sessionParents: named } : {}),
+    };
   }
   return null;
 }

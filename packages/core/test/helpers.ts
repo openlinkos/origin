@@ -4,6 +4,7 @@ import {
   type Author,
   type Database,
   type EventKind,
+  parsePlaceLine,
   readMirror,
   type SessionKind,
   type SourceAdapter,
@@ -16,6 +17,8 @@ import {
  * Who wrote an input: `author`, `signal`, and `speaker` on a line, as an adapter that reads them
  * says; without them, ingestion decides by kind and text. A line with `kinds`, a list of
  * `{ session, kind, signal }`, says which sessions are children or headless runs. A line with
+ * `parents`, a list of `{ session, parent, via, signal, group, name, source }`, names a parent.
+ * `places.jsonl` is parsed as place lines. A line with
  * `learnt` yields its event only once the adapter has learnt to read it (`learnt: true`), as a
  * newer adapter does with a line an older one skipped.
  */
@@ -39,7 +42,10 @@ export function fakeAdapter(
       if (rel.includes(path.sep) || rel.startsWith('..') || !rel.endsWith('.jsonl')) return null;
       return { absPath: path.join(root, rel), relPath: rel };
     },
-    parseLine(line) {
+    parseLine(line, ctx) {
+      if (ctx?.relPath === 'places.jsonl' || ctx?.relPath.endsWith('/places.jsonl')) {
+        return parsePlaceLine(line);
+      }
       const o = JSON.parse(line) as {
         id: string;
         session: string;
@@ -57,6 +63,15 @@ export function fakeAdapter(
         signal?: string;
         speaker?: string;
         kinds?: Array<{ session: string; kind: SessionKind; signal: string }>;
+        parents?: Array<{
+          session: string;
+          parent: string;
+          via?: 'subagent' | 'workflow';
+          signal?: string;
+          group?: string;
+          name?: string;
+          source?: string;
+        }>;
         learnt?: boolean;
       };
       if (o.title) return { events: [], sessionTitle: o.title, sessionId: o.session };
@@ -65,7 +80,17 @@ export function fakeAdapter(
         kind: k.kind,
         signal: k.signal,
       }));
-      if (!o.id || (o.learnt && !opts.learnt)) return { events: [], sessionKinds };
+      const sessionParents = o.parents?.map((p) => ({
+        sessionId: p.session,
+        parentSessionId: p.parent,
+        parentSource: p.source,
+        via: p.via ?? 'subagent',
+        signal: p.signal ?? 'parent_id',
+        runGroup: p.group,
+        runName: p.name,
+        fromAgent: true as const,
+      }));
+      if (!o.id || (o.learnt && !opts.learnt)) return { events: [], sessionKinds, sessionParents };
       return {
         events: [
           {
@@ -84,6 +109,7 @@ export function fakeAdapter(
           },
         ],
         sessionKinds,
+        sessionParents,
       };
     },
   };

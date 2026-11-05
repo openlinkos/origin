@@ -5,9 +5,7 @@ import {
   type Author,
   type EventInput,
   type EventKind,
-  isPlacesRel,
   type ParsedLine,
-  parsePlaceLine,
   type Role,
   type SourceAdapter,
   type SourceFile,
@@ -17,6 +15,7 @@ import { CLAUDE_CODE_SOURCE_ID } from './claude-code.js';
 import { CODEX_SOURCE_ID } from './codex.js';
 import { CURSOR_SOURCE_ID } from './cursor.js';
 import { GROK_SOURCE_ID } from './grok.js';
+import { parseWithPlaces } from './places.js';
 import { projectFromCwd, relativeUnder } from './util.js';
 import { ZCODE_SOURCE_ID } from './zcode.js';
 
@@ -114,8 +113,7 @@ export function createLinesAdapter(opts: LinesAdapterOptions): SourceAdapter {
       if (segments.some((s) => s.startsWith('.'))) return null;
       return { absPath: path.join(root, ...segments), relPath: rel };
     },
-    parseLine: (line: string, ctx) =>
-      isPlacesRel(ctx.relPath) ? parsePlaceLine(line) : parseEventLine(line),
+    parseLine: (line, ctx) => parseWithPlaces(line, ctx, (row) => parseEventLine(row)),
   };
 }
 

@@ -192,6 +192,13 @@ export interface SessionListRow extends SessionRow {
   turns: number;
 }
 
+/** A child session nested under its parent on the sessions page. `title` stays the stored one. */
+export interface SessionBoardChild extends SessionListRow {
+  recalls: number;
+  via: 'subagent' | 'workflow';
+  runName: string | null;
+}
+
 /** The time ranges of the sessions page, by the last activity of a session. */
 export const SESSION_RANGES = ['today', '7d', '30d', 'all'] as const;
 export type SessionRange = (typeof SESSION_RANGES)[number];
@@ -221,6 +228,8 @@ export interface FacetValue {
 export interface SessionBoardRow extends SessionListRow {
   /** How many recalls handed this session something. */
   recalls: number;
+  /** Its child sessions that have events, in run-group order. Not counted in `total`. */
+  children: SessionBoardChild[];
 }
 
 /** A day of the sessions histogram: sessions by agent, each on the day of its last activity. */
@@ -1383,6 +1392,39 @@ export class AdminService {
    * for the rows shown, and for a name filter.
    */
   sessionBoard(f: SessionBoardFilter, now: number): SessionBoard {
+    const folded = new Set(
+      (
+        this.db
+          .prepare(
+            `SELECT source, session_id FROM session_parent
+             UNION
+             SELECT source, session_id FROM session_kind WHERE kind = 'child'`,
+          )
+          .all() as unknown as Array<{ source: string; session_id: string }>
+      ).map((r) => `${r.source}:${r.session_id}`),
+    );
+    const childFacts = this.db
+      .prepare(
+        `SELECT source, session_id, parent_source, parent_session_id, via, run_name
+           FROM session_parent
+          ORDER BY COALESCE(run_group, ''), source, session_id`,
+      )
+      .all() as unknown as Array<{
+      source: string;
+      session_id: string;
+      parent_source: string;
+      parent_session_id: string;
+      via: 'subagent' | 'workflow';
+      run_name: string | null;
+    }>;
+    const byParent = new Map<string, typeof childFacts>();
+    for (const fact of childFacts) {
+      const key = `${fact.parent_source}:${fact.parent_session_id}`;
+      const list = byParent.get(key);
+      if (list) list.push(fact);
+      else byParent.set(key, [fact]);
+    }
+    // Top-level sessions only: a child is nested under its parent and takes no page slot.
     const all = (
       this.db
         .prepare(
@@ -1392,7 +1434,9 @@ export class AdminService {
            FROM session WHERE event_count > 0`,
         )
         .all() as unknown as BoardSession[]
-    ).map((r) => ({ ...r, key: `${r.source}:${r.session_id}` }));
+    )
+      .map((r) => ({ ...r, key: `${r.source}:${r.session_id}` }))
+      .filter((r) => !folded.has(r.key));
     const recalls = new Map(
       (
         this.db
@@ -1457,6 +1501,18 @@ export class AdminService {
         ...(getSession(this.db, r.source, r.session_id) as SessionRow),
         turns: sessionTurnStarts(this.db, r.source, r.session_id).length,
         recalls: recalls.get(r.key) ?? 0,
+        children: (byParent.get(r.key) ?? []).flatMap((c) => {
+          const session = getSession(this.db, c.source, c.session_id);
+          if (!session || session.eventCount <= 0) return [];
+          const child: SessionBoardChild = {
+            ...session,
+            turns: sessionTurnStarts(this.db, c.source, c.session_id).length,
+            recalls: recalls.get(`${c.source}:${c.session_id}`) ?? 0,
+            via: c.via,
+            runName: c.run_name,
+          };
+          return [child];
+        }),
       })),
       total: matching.length,
       page,

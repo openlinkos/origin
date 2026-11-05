@@ -69,11 +69,12 @@ export {
  */
 /** `places.jsonl` is parsed by core. An adapter's own `parseLine` stays free of git. */
 function withPlaces(adapter: SourceAdapter): SourceAdapter {
+  const parseLine = adapter.parseLine.bind(adapter);
   return {
     ...adapter,
     parseLine(line, ctx) {
       if (isPlacesRel(ctx.relPath)) return parsePlaceLine(line);
-      return adapter.parseLine(line, ctx);
+      return parseLine(line, ctx);
     },
   };
 }

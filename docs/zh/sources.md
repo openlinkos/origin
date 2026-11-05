@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-0445f46f
+sourceHash: sha256-bdef0e3b
 ---
 
 # 会话来源
@@ -21,7 +21,7 @@ sourceHash: sha256-0445f46f
 
 核对版本：v2.1.x（2026 年 10 月）。文档：[记忆](https://code.claude.com/docs/en/memory)、[`.claude` 目录](https://code.claude.com/docs/en/claude-directory)。
 
-- **位置：** `~/.claude/projects/<cwd-slug>/<session-id>.jsonl`（`CLAUDE_CONFIG_DIR` 可覆盖 `~/.claude`）。子 Agent 记录位于 `<session-id>/subagents/agent-*.jsonl`，较大的工具输出位于 `tool-results/`。
+- **位置：** `~/.claude/projects/<cwd-slug>/<session-id>.jsonl`（`CLAUDE_CONFIG_DIR` 可覆盖 `~/.claude`）。子 Agent 记录位于 `<session-id>/subagents/agent-*.jsonl`，较大的工具输出位于 `tool-results/`。这些记录不指明父会话，Origin 也不会从中记录父会话（见[父会话](architecture.md#parent-sessions)）。
 - **格式：** 每行一个 JSON 对象。`type` 是 `user`、`assistant`、`ai-title`、`custom-title`、`agent-name`、`last-prompt`、`summary`、`system`、`mode`、`permission-mode`、`file-history-snapshot`、`attachment` 等之一。消息行带有 `uuid`、`parentUuid`、`timestamp`、`cwd`、`gitBranch`、`sessionId`、`version` 和 `message { role, content }`；`content` 是一个字符串，或由 `text` / `tool_use` / `tool_result` / `thinking` / `image` 块组成的数组。
 - **标题：** `{ type: "ai-title", aiTitle, sessionId }` 是 Claude Code 生成的标题，大约每一轮都会再写一次，并随着对话的进行而改变；最新的一行就是当前的标题。用户给出的名称（`/rename`、`--name`、hook 的 `sessionTitle`、Agent SDK 的 `renameSession()`）是一行 `{ type: "custom-title", customTitle, sessionId }`，同样会被再次写入，并且优先于 AI 生成的标题，即使它后面还有 `ai-title` 行。`{ type: "agent-name", agentName, sessionId }` 是会话在 Claude Code 的 Agent 视图中的名称；它出现在会话自己的记录中，而不只是子 Agent 的记录中，并且重复 AI 生成的标题或自定义标题。`{ type: "last-prompt", lastPrompt, leafUuid, sessionId }` 记录最近的一条提示。2.1 之前的版本写入的则是 `{ type: "summary", summary, leafUuid }` 行。
 - **谁写的**（按 2.1.303 核对，2026 年 11 月）：user 行在 `origin.kind` 中说明是谁发出的：`human` 表示用户输入的内容，`task-notification` 表示后台任务的通知，`peer` 或 `coordinator` 表示另一个 Agent 的消息，那个 Agent 的名字在 `origin.name` 中，id 在 `origin.from` 中。`promptSource` 说明提示是怎样输入的（`typed`、`queued`、`system`、`sdk`）。压缩写下的摘要是一条标有 `isCompactSummary` 的用户消息。子 Agent 的行标有 `isSidechain`，位于 `subagents/` 下的记录中；无界面运行（`claude -p`、Agent SDK）的每一行都记录 `sdk-cli` 或其他 `sdk-*` 形式的 `entrypoint`（否则是 `cli`）。更早的版本既不记录 `origin`，也不记录 `promptSource`。
@@ -46,6 +46,7 @@ sourceHash: sha256-0445f46f
 
 - 用户和助手消息变成 `message` 事件；注入的用户消息变成 `meta`。developer 消息、reasoning、compaction 以及 `event_msg` 行会被跳过；原始镜像保留它们。
 - **谁写的：** `session_meta` 指明是子 Agent（`source` 为 `{ "subagent": … }`）的会话是子会话，它的输入全部属于 Agent；`codex exec` 的会话是无界面运行，它的输入全部属于系统。其他情况下，`content_item_kinds` 含有 `user.text` 的用户消息属于用户，不含的属于系统；没有这个字段的 rollout 交由消息的类型和正文决定（见[作者](architecture.md#authors)）。其他 source（`cli`、`vscode`、`mcp` 等）不会让会话成为子会话或无界面运行。
+- **它的父会话：** 当 `source.subagent` 是对象，且 `thread_spawn.parent_thread_id` 是非空字符串时，这个 id 就是父会话，`via` 为 `subagent`，信号为 `parent_thread_id`，父会话的来源是 `codex`（见[父会话](architecture.md#parent-sessions)）。`source.subagent` 只是一个字符串时，仍然把会话标为子会话，但不指明父会话。
 - 工具调用（`function_call`、`custom_tool_call`、`local_shell_call`、`web_search_call`）变成 `tool_use` 事件（`<name> <input>`，最多 2,000 个字符）。它们的输出变成 `tool_result` 事件（最多 4,000 个字符）。
 - 事件 id：`codex:<session-id>:o<ordinal>`；对于没有 ordinal 的 rollout，先退回使用 item id，再退回使用行号。
 - cwd、项目和 Agent 版本来自 `session_meta`。对于在之后某次同步中才采集的行，适配器会重新读取该 rollout 的第一行。
@@ -68,6 +69,7 @@ sourceHash: sha256-0445f46f
 - 对话在编辑器数据库里的对话记录会被跳过：保留编辑器的记录，它带有工具结果和准确的时间。其他对话记录作为文件采集：文本块变成 `message` 事件（用户消息取 `<user_query>` 里的文本），`tool_use` 块变成 `tool_use` 事件。用户消息的时间是它的 `<timestamp>`，回复的时间取它之前那条提示。事件 id 为 `cursor:<uuid>:L<line>-<hash>`，由行号和该行 SHA-256 的前 8 个十六进制字符组成，工具调用再加 `#<block>`。对话记录没有 cwd，它们的项目是 slug。
 - 行里不带 Cursor 的版本，所以事件记录的是已安装编辑器的版本。
 - **谁写的：** 编辑器标有 `isSimulatedMsg` 的用户消息属于系统。其他用户消息，无论来自编辑器还是对话记录，都没有更多说明，交由它们的正文决定（见[作者](architecture.md#authors)）。
+- **没有父会话。** 对话记录和编辑器对话都不指明会话是从哪个会话开始的，Origin 也不记录（见[父会话](architecture.md#parent-sessions)）。
 
 ## ZCode {#zcode}
 
@@ -79,7 +81,8 @@ sourceHash: sha256-0445f46f
 
 **Origin 映射：**
 
-- 每个会话是一个[生成的来源](architecture.md#ingestion)，命名为 `<database>#<session-id>`。每条消息在稳定之后写出一次（用户消息在它的部件写入之后，回复在完成或失败之后，任何消息在会话已经越过它、或者已经有 `ORIGIN_ZCODE_SETTLE_MS` 毫秒没有变化之后（默认一小时，`3600000`）），写成一行：消息的行、它所有部件的行，以及会话的 `id`、`parent_id`、`directory`、`title`、`version` 和 `task_type`，每一列都保持存储时的原样。写出之后消息再有变化，不会再镜像。
+- 每个会话是一个[生成的来源](architecture.md#ingestion)，命名为 `<database>#<session-id>`。每条消息在稳定之后写出一次（用户消息在它的部件写入之后，回复在完成或失败之后，任何消息在会话已经越过它、或者已经有 `ORIGIN_ZCODE_SETTLE_MS` 毫秒没有变化之后（默认一小时，`3600000`）），写成一行：消息的行、它所有部件的行，以及会话的 `id`、`parent_id`、`directory`、`title`、`version` 和 `task_type`，每一列都保持存储时的原样。当 `dwf_actor` 指明这个会话时，这一行还带有 `workflow`：该 actor 的 `dwf_run`（`id`、`name`、`resumed_from`）以及 `group`，即 `resumed_from` 链的根，在写出这一行时沿链走完。不读取 `workflow_run`。数据库仍以只读方式打开。写出之后消息再有变化，不会再镜像。
+- **它的父会话：** 非空且不是会话自身的 `parent_id`。`workflow_child` 的 `via` 是 `workflow`，`subagent_child` 的是 `subagent`；信号是 `parent_id`，除非这一行带有 `workflow`，那时信号是 `dwf_run`，运行的名称被保留，分组在设置了 `workflow.group` 时用它，在 `resumed_from` 为 null 时用 `workflow.id`（见[父会话](architecture.md#parent-sessions)）。行里没有的分组留空，直到 `origin sessions parents` 再次只读地读取 `dwf_run` 并把它追加进去。
 - 文本部件变成 `message` 事件；隐藏消息里的文本，或标记为 `synthetic` 的文本，变成 `meta`。文件部件变成 `[image]` 或 `[file]`。
 - **谁写的：** `task_type` 为 `subagent_child` 或 `workflow_child` 的会话，它的每条输入都属于 Agent。其他情况下由用户消息的 `semantics.origin` 决定：`real_user` 属于用户，`agent_runtime` 和 `system` 属于系统；ZCode 隐藏起来的旁聊提示也属于用户，作为 `meta` 事件，只是不算提示。工具部件变成一个 `tool_use` 事件（`<tool> <input>`，最多 2,000 个字符）和一个 `tool_result` 事件（它的输出或错误，最多 4,000 个字符），`status` 不是 `completed` 时会记下。reasoning、步骤标记、时间线通知和压缩标记会被跳过；镜像保留它们。
 - 事件 id：`zcode:<session-id>:<消息 sequence>.<部件 sequence>`，工具的结果加 `#1`。
@@ -102,7 +105,7 @@ sourceHash: sha256-0445f46f
 **Origin 映射：**
 
 - 会话的标题来自它的 `summary.json`，通过一个以该文件命名、镜像为 `sessions/<group>/<session-id>/title.jsonl` 的[生成的来源](architecture.md#ingestion)读取：每当 Grok 显示的标题（`generated_title`，为空时是 `session_summary`）或会话的 `session_kind` 与上一次写出的那一行不同，就写出一行，按原样保存该文件的 `info`、`generated_title`、`session_summary`、`title_is_manual`、`updated_at` 和 `session_kind`。它的令牌是文件的大小和修改时间，所以标题没有变化的一轮什么也不会写出；读到 Grok 正在重写的文件时，会在它再次改变后重新读取；在行中还不含 `session_kind` 时写出的流会再读取一次，好让子 Agent 的行说明它是什么。最新一行的标题就是会话的标题，因为 Grok 自己保留改名后的标题。中枢从镜像中得到同样的标题。
-- 在其他文件中，只读取 `updates.jsonl`。用户和 Agent 的消息块变成 `message` 事件；Grok 在对话记录里隐藏的用户消息（`hideFromScrollback`，例如目标的后续提示）变成 `meta`。思考、计划，以及轮次、任务和目标的通知会被跳过；原始镜像保留它们。`subagent_spawned` 更新不产生事件，只带来它对子 Agent 会话的说明。
+- 在其他文件中，只读取 `updates.jsonl`。用户和 Agent 的消息块变成 `message` 事件；Grok 在对话记录里隐藏的用户消息（`hideFromScrollback`，例如目标的后续提示）变成 `meta`。思考、计划，以及轮次、任务和目标的通知会被跳过；原始镜像保留它们。`subagent_spawned` 更新不产生事件。当 `child_session_id` 和 `parent_session_id` 都非空且彼此不同时，它把这个子会话记录为该父会话的子 Agent（信号 `subagent_spawned`；见[父会话](architecture.md#parent-sessions)）。标题行的 `session_kind` 说明某个会话是子 Agent，并不指明父会话。只有 `summary.json` 的 `parent_session_id` 记录的父会话，要等 `origin sessions parents` 只读地读取这个文件并追加之后，才会进入镜像。
 - **谁写的：** 子 Agent 会话的每条输入都属于 Agent，无论是父会话的 `subagent_spawned` 更新还是它自己标题行的 `session_kind` 先说明这一点；无界面运行的输入属于系统。其他情况下依次为：Grok 隐藏的消息（`hideFromScrollback`）属于系统，`hostTurn` 的消息也属于系统，即使它们可能带有 `promptIndex`；带有 `promptIndex` 或 `interjection` 的消息属于用户；其余的交由正文决定（见[作者](architecture.md#authors)）。
 - `tool_call` 变成 `tool_use` 事件（`<name> <input>`，最多 2,000 个字符），名称取自 `_meta["x.ai/tool"]`，服务端搜索命名为 `web_search`。带有 `rawOutput` 的 `tool_call_update` 变成它的 `tool_result`（Grok 显示的文本、图片和 diff，没有时用原始输出；最多 4,000 个字符），`status` 不是 `completed` 时会记下。其他 `tool_call_update` 行只是在细化这次调用，会被跳过。
 - 事件 id：`eventId` 形如 `<session-id>-<n>` 时为 `grok:<session-id>:e<n>`，否则为 `grok:<session-id>:<eventId>`，没有时退回使用行号。

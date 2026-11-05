@@ -86,6 +86,7 @@ export function schemaOf(db: Database): unknown[] {
 export function downgradeToV1(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    dropParents(db);
     dropPlaces(db);
     // Version 8: authorship.
     dropAuthorship(db);
@@ -120,6 +121,11 @@ export function downgradeToV1(file: string): void {
   }
 }
 
+/** The table version 10 added: parent sessions. Dropping it drops its index. */
+function dropParents(db: DatabaseSync): void {
+  db.exec('DROP TABLE IF EXISTS session_parent');
+}
+
 /** The tables version 9 added: resolved project names. */
 function dropPlaces(db: DatabaseSync): void {
   db.exec('DROP INDEX IF EXISTS session_place_project');
@@ -141,6 +147,7 @@ function dropAuthorship(db: DatabaseSync): void {
 export function downgradeToV7(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    dropParents(db);
     dropPlaces(db);
     dropAuthorship(db);
     db.exec('PRAGMA user_version = 7');
@@ -157,6 +164,7 @@ export function downgradeToV7(file: string): void {
 export function downgradeToV5(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    dropParents(db);
     dropPlaces(db);
     dropAuthorship(db);
     undoV7(db);
@@ -215,6 +223,7 @@ END;`);
 export function downgradeToV6(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    dropParents(db);
     dropPlaces(db);
     dropAuthorship(db);
     undoV7(db);
