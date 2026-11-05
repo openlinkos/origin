@@ -69,7 +69,9 @@ import {
   recordAudit,
   relayPending,
   repairSessions,
+  repairText,
   reproject,
+  reprojectText,
   resolveId,
   revokeGrant,
   revokeToken,
@@ -78,6 +80,7 @@ import {
   searchEntries,
   searchEvents,
   sessionFold,
+  sessionShape,
   setAdminPassword,
   setAdminUsername,
   setStoreName,
@@ -1481,7 +1484,7 @@ async function cmdSessions(ctx: Ctx, args: string[]): Promise<number> {
     for (const { source, file } of result.files) {
       await ingestPlacesFile({ db: ctx.db, home: ctx.home }, source, file);
     }
-    console.log(result.report.text);
+    console.log(reprojectText({ ...result.report, after: sessionShape(ctx.db) }));
     return 0;
   }
   if (action === 'parents') {
@@ -1510,7 +1513,7 @@ async function cmdSessions(ctx: Ctx, args: string[]): Promise<number> {
     for (const { source, file } of result.files) {
       await ingestPlacesFile({ db: ctx.db, home: ctx.home }, source, file);
     }
-    console.log(result.report.text);
+    console.log(repairText({ ...result.report, after: sessionShape(ctx.db) }));
     return 0;
   }
   console.error(`origin sessions: Unknown subcommand "${action ?? ''}".\n${ARGS.sessions.usage}`);

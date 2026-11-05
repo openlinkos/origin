@@ -7,6 +7,9 @@ import {
   type ReprojectResult,
   reparsePlaces,
   reproject,
+  reprojectText,
+  type SessionShape,
+  sessionShape,
 } from './places.js';
 import { type ParentReparse, reparseParents } from './reparse.js';
 import { refreshThreads } from './threads.js';
@@ -66,15 +69,24 @@ function context(
   };
 }
 
-function reportOf(parents: number, repro: ReprojectResult): RepairReport {
-  return {
+/**
+ * The report as text. `after` is counted when the report is made, before the returned files are
+ * ingested: a caller that ingests them counts it again with `sessionShape` first.
+ */
+export function repairText(report: Omit<RepairReport, 'text'>): string {
+  return [`parent links filled: ${report.parents}`, reprojectText(report)].join('\n');
+}
+
+/** `before` is counted before any parent link is filled, so that the report shows what changed. */
+function reportOf(parents: number, repro: ReprojectResult, before: SessionShape): RepairReport {
+  const body = {
     moves: repro.report.moves,
     entriesLeft: repro.report.entriesLeft,
-    before: repro.report.before,
+    before,
     after: repro.report.after,
     parents,
-    text: [`parent links filled: ${parents}`, repro.report.text].join('\n'),
   };
+  return { ...body, text: repairText(body) };
 }
 
 /**
@@ -103,6 +115,7 @@ function previewParents(
 export function repairSessions(db: Database, opts: RepairOptions): RepairResult {
   const log = opts.log ?? (() => {});
   const ctx = context(db, opts.home, opts.adapters, log);
+  const before = sessionShape(db);
   const placeOpts = {
     home: opts.home,
     unplacedOnly: true,
@@ -112,7 +125,7 @@ export function repairSessions(db: Database, opts: RepairOptions): RepairResult 
   if (opts.dryRun) {
     const parents = previewParents(db, ctx, opts.home, log);
     const repro = reproject(db, { ...placeOpts, dryRun: true });
-    return { report: reportOf(parents, repro), files: [] };
+    return { report: reportOf(parents, repro, before), files: [] };
   }
   const fromMirrors = transaction(db, () => reparseParents(ctx), { immediate: true });
   const repro = reproject(db, placeOpts);
@@ -120,7 +133,7 @@ export function repairSessions(db: Database, opts: RepairOptions): RepairResult 
     transaction(db, () => refreshThreads(db, fromMirrors.sessions), { immediate: true });
   }
   return {
-    report: reportOf(fromMirrors.parents + repro.parents, repro),
+    report: reportOf(fromMirrors.parents + repro.parents, repro, before),
     files: repro.files,
   };
 }

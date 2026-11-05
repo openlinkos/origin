@@ -294,6 +294,7 @@ export {
   recordExplicitPlace,
   reparsePlaces,
   reproject,
+  reprojectText,
   resolvedProjectSql,
   resolvePlace,
   sessionShape,
@@ -409,7 +410,7 @@ export {
   relaySource,
   saveRelayCursor,
 } from './relay.js';
-export { type RepairReport, type RepairResult, repairSessions } from './repair.js';
+export { type RepairReport, type RepairResult, repairSessions, repairText } from './repair.js';
 export {
   exportEntry,
   type OwnChange,

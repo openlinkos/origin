@@ -1039,7 +1039,11 @@ export function sessionShape(db: Database): SessionShape {
   return { top: total - children, children };
 }
 
-function reportText(report: Omit<ReprojectReport, 'text'>): string {
+/**
+ * The report as text. `after` is counted when the report is made, before the returned files are
+ * ingested: a caller that ingests them counts it again with `sessionShape` first.
+ */
+export function reprojectText(report: Omit<ReprojectReport, 'text'>): string {
   const lines = report.moves.map((m) => `${m.from} → ${m.to}  ${m.sessions} sessions`);
   lines.push(`entries still named an old project: ${report.entriesLeft}`);
   lines.push(
@@ -1151,5 +1155,5 @@ export function reproject(
     (a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to),
   );
   const body = { moves: listed, entriesLeft, before, after };
-  return { report: { ...body, text: reportText(body) }, files, parents: reparsed.parents };
+  return { report: { ...body, text: reprojectText(body) }, files, parents: reparsed.parents };
 }

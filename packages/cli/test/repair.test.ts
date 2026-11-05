@@ -97,6 +97,7 @@ describe('origin sessions repair', () => {
           parent_session_id: MAIN,
         }),
     );
+    writeGrok(grokHome, encodeURIComponent(work), CHILD, prompt(CHILD));
     writeGrok(grokHome, encodeURIComponent(other), KEPT, prompt(KEPT));
 
     const db = openDatabase(dbPath(home));
@@ -118,6 +119,7 @@ describe('origin sessions repair', () => {
     expect(await main(['sessions', 'repair', '--dry-run'])).toBe(0);
     expect(out.join('\n')).toContain('parent links filled: 1');
     expect(out.join('\n')).toContain('w1-storage → demo-app');
+    expect(out.join('\n')).toContain('sessions: 3 top-level, 0 children → 3 top-level, 0 children');
     let check = openDatabase(dbPath(home));
     expect(getSessionParent(check, 'grok', CHILD)).toBeNull();
     expect(
@@ -133,6 +135,8 @@ describe('origin sessions repair', () => {
     expect(await main(['sessions', 'repair'])).toBe(0);
     expect(out.join('\n')).toContain('parent links filled: 1');
     expect(out.join('\n')).toContain('w1-storage → demo-app');
+    // Counted before the parent link is filled, and after the places lines are ingested.
+    expect(out.join('\n')).toContain('sessions: 3 top-level, 0 children → 2 top-level, 1 children');
     check = openDatabase(dbPath(home));
     expect(getSessionParent(check, 'grok', CHILD)).toMatchObject({
       parentSessionId: MAIN,
@@ -152,6 +156,7 @@ describe('origin sessions repair', () => {
     expect(await main(['sessions', 'repair'])).toBe(0);
     expect(out.join('\n')).toContain('parent links filled: 0');
     expect(out.join('\n')).not.toContain('w1-storage → demo-app');
+    expect(out.join('\n')).toContain('sessions: 2 top-level, 1 children → 2 top-level, 1 children');
     check = openDatabase(dbPath(home));
     expect(placesBytes(check, home)).toBe(filled);
     expect(getSessionParent(check, 'grok', CHILD)?.parentSessionId).toBe(MAIN);
