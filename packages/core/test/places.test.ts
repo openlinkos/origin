@@ -516,17 +516,30 @@ describe('places.jsonl', () => {
     fs.mkdirSync(other);
     const first = placeJson('s1', 'demo-app');
     const second = placeJson('s2', 'other-app');
-    fs.writeFileSync(path.join(logs, 'places.jsonl'), `${first}\nnot json\n${second}\n`);
     fs.writeFileSync(path.join(logs, 'e.jsonl'), line('e1', 's', 1, 'user', 'kept'));
     fs.writeFileSync(path.join(other, 'e.jsonl'), line('o1', 's', 2, 'user', 'other source'));
     const warnings: string[] = [];
     const db = open(home);
+    let pending: string[] | null = [first, 'not json', second];
+    const file = {
+      absPath: 'places.jsonl',
+      relPath: 'places.jsonl',
+      generated: {
+        token: 'bad-lines',
+        mtimeMs: 1,
+        next() {
+          const out = pending ?? [];
+          pending = null;
+          return out;
+        },
+      },
+    };
     try {
+      await ingestPlacesFile({ db, home, log: (m) => warnings.push(m) }, 'fake', file);
       const synced = await syncSource(
         { db, home, log: (m) => warnings.push(m) },
         fakeAdapter(logs),
       );
-      expect(synced.parseErrors).toBe(1);
       expect(synced.eventsAdded).toBe(1);
       expect(placeOf(db, 's1')).toMatchObject({ project: 'demo-app', signal: 'git' });
       expect(placeOf(db, 's2')).toMatchObject({ project: 'other-app', signal: 'git' });
@@ -603,7 +616,7 @@ describe('places.jsonl', () => {
           {
             device: 'laptop',
             source: 'fake',
-            path: '/tmp/demo/places.jsonl',
+            path: 'places.jsonl',
             relPath: 'places.jsonl',
             generation: 1,
             offset: 0,

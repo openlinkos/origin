@@ -73,7 +73,7 @@ function withPlaces(adapter: SourceAdapter): SourceAdapter {
   return {
     ...adapter,
     parseLine(line, ctx) {
-      if (isPlacesRel(ctx.relPath)) return parsePlaceLine(line);
+      if (ctx.generated && isPlacesRel(ctx.relPath)) return parsePlaceLine(line);
       return parseLine(line, ctx);
     },
   };

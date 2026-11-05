@@ -193,6 +193,7 @@ describe('origin sessions reproject', () => {
     err = [];
     expect(await main(['sessions', 'reproject', '--dry-run'])).toBe(1);
     expect(err.join('\n')).toContain('relay');
+    expect(err.join('\n')).not.toContain('on the hub');
     const relayDb = openDatabase(dbPath(relayHome));
     expect(relayDb.prepare('SELECT COUNT(*) AS n FROM session_place').get()).toEqual({ n: 0 });
     expect(

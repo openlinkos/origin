@@ -754,15 +754,28 @@ export function changesIn(db: Database, args: ToolArgs<'changes'>): ChangesResul
   };
 }
 
+/**
+ * Which device's `project_root` rows to read. This store's own roots are `''`. A hub (`here` null)
+ * uses the device named by the caller.
+ */
+export function placeDevice(here: string | null, named = ''): string {
+  return here !== null ? '' : named;
+}
+
 /** The scope `follow` checks against: the project of `cwd`, or of the directory the server runs in. */
-export function followScope(args: ToolArgs<'follow'>, here: string | null, db?: Database) {
+export function followScope(
+  args: ToolArgs<'follow'>,
+  here: string | null,
+  db?: Database,
+  device?: string,
+) {
   const dir = args.cwd?.trim() || here;
   if (!dir) {
     throw new OriginError(
       'Pass `cwd`, your working directory: the hub cannot tell which project you work in.',
     );
   }
-  return recallScope(dir, { onDisk: here !== null, db });
+  return recallScope(dir, { onDisk: here !== null, db, device: placeDevice(here, device) });
 }
 
 /**
@@ -775,8 +788,9 @@ export function followIn(
   db: Database,
   args: ToolArgs<'follow'>,
   here: string | null,
+  device?: string,
 ): FollowResult | null {
-  const scope = followScope(args, here, db);
+  const scope = followScope(args, here, db, device);
   const target = followTarget(db, args.id, {
     project: scope.project ?? null,
     root: scope.root ?? null,
@@ -796,8 +810,9 @@ export function followHere(
   db: Database,
   args: ToolArgs<'follow'>,
   here: string | null,
+  device?: string,
 ): FollowResult {
-  const result = followIn(db, args, here);
+  const result = followIn(db, args, here, device);
   if (!result) {
     if (isForgotten(db, args.id)) throw new OriginError(`${args.id} has been forgotten.`);
     throw new OriginError(`Unknown session or thread ${args.id}.`);
@@ -1116,7 +1131,8 @@ export function briefIn(
     );
   }
   const at = author.lastIndexOf('@');
-  const device = at < 0 ? '' : author.slice(at + 1);
+  const named = at < 0 ? '' : author.slice(at + 1);
+  const device = placeDevice(here, named);
   const plan = planRecall(db, {
     occasion: 'request',
     source: sourceOfAgent(at < 0 ? author : author.slice(0, at)),
@@ -1125,7 +1141,7 @@ export function briefIn(
     device,
     ...recallScope(dir, { onDisk: here !== null, db, device }),
   });
-  const recall = recordRecall(db, plan, { origin: at < 0 ? undefined : author.slice(at + 1) });
+  const recall = recordRecall(db, plan, { origin: at < 0 ? undefined : named });
   const where = plan.project ? `project ${plan.project}` : 'this directory';
   return {
     recall,

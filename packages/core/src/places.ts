@@ -48,16 +48,46 @@ export function resolvedProjectSql(source: string, session: string, fallback: st
   return `COALESCE((SELECT sp.project FROM session_place sp WHERE sp.source = ${source} AND sp.session_id = ${session}), ${fallback})`;
 }
 
+/** An imported memory file's directory: the brief matches that by directory, not by name. */
+function importedHomeSql(entryId: string): string {
+  return `EXISTS (
+    SELECT 1 FROM imported_entry ie
+    JOIN entry_source hs ON hs.entry_id = ie.entry_id
+    JOIN event hm ON hm.id = hs.event_id
+    WHERE ie.entry_id = ${entryId} AND hm.kind = 'memory' AND hm.cwd IS NOT NULL)`;
+}
+
 /**
- * An entry matches a project when it is named that, or when a session it cites resolves to that.
- * The caller binds the project twice.
+ * An entry matches a project by the same rule as the brief. The caller binds the project three
+ * times, the same value: the entry's own name (unless an imported memory names a directory), a
+ * `project_root` of this store that contains that directory, or a cited session whose raw label is
+ * the entry's project and whose place is the requested project. A cited session's place alone does
+ * not move the entry.
  */
 export function entryProjectMatchSql(entryId: string): string {
-  return `(en.project = ? OR EXISTS (
-    SELECT 1 FROM entry_source es
-    JOIN event c ON c.id = es.event_id
-    JOIN session_place sp ON sp.source = c.source AND sp.session_id = c.session_id
-    WHERE es.entry_id = ${entryId} AND sp.project = ?))`;
+  return `(
+    (lower(en.project) = lower(?) AND NOT ${importedHomeSql(entryId)})
+    OR EXISTS (
+      SELECT 1 FROM imported_entry ie
+      JOIN entry_source hs ON hs.entry_id = ie.entry_id
+      JOIN event hm ON hm.id = hs.event_id
+      JOIN project_root pr ON pr.device = ''
+      WHERE ie.entry_id = ${entryId}
+        AND hm.kind = 'memory' AND hm.cwd IS NOT NULL
+        AND lower(pr.project) = lower(?)
+        AND (
+          origin_path(hm.cwd) = pr.path
+          OR substr(origin_path(hm.cwd), 1, length(pr.path) + 1) = pr.path || '/'))
+    OR (
+      NOT ${importedHomeSql(entryId)}
+      AND EXISTS (
+        SELECT 1 FROM entry_source es
+        JOIN event c ON c.id = es.event_id
+        JOIN session s ON s.source = c.source AND s.session_id = c.session_id
+        JOIN session_place sp ON sp.source = s.source AND sp.session_id = s.session_id
+        WHERE es.entry_id = ${entryId}
+          AND lower(sp.project) = lower(?)
+          AND lower(s.project) = lower(en.project))))`;
 }
 
 /**
@@ -83,6 +113,18 @@ export function projectEventSql(alias = 'e'): string {
 /** The generated places mirror, and not a file of that name inside a source. */
 export function isPlacesRel(relPath: string): boolean {
   return relPath === PLACES_FILE;
+}
+
+/**
+ * Origin's places file. A generated file is one. On a hub, a device's file is one when its raw
+ * path is exactly `places.jsonl` (`@device:places.jsonl`). A person's file, at the top of a source
+ * or nested under it, is not: its raw path is a filesystem path.
+ */
+export function isOriginPlacesFile(relPath: string, rawPath: string, generated?: boolean): boolean {
+  return (
+    isPlacesRel(relPath) &&
+    (generated === true || parseRawPath(rawPath).originalPath === PLACES_FILE)
+  );
 }
 
 /**
@@ -833,50 +875,97 @@ export function placesSourceFile(
  * logged as a warning. The bytes stay in the mirror. The format that understands an unknown
  * version calls this again in its migration. No-op without the tables.
  */
+/**
+ * Run `fn` under the write lock. A caller that already holds one (a migration's `underLock`) runs
+ * `fn` inside that transaction; starting another fails, and any other failure still throws.
+ */
+function withWriteLock<T>(db: Database, fn: () => T): T {
+  try {
+    db.exec('BEGIN IMMEDIATE');
+  } catch (err) {
+    const message = (err as Error).message;
+    if (!/transaction/i.test(message)) throw err;
+    return fn();
+  }
+  try {
+    const out = fn();
+    db.exec('COMMIT');
+    return out;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+interface PlacesMirror {
+  id: number;
+  source: string;
+  path: string;
+  generation: number;
+  mirror: string;
+}
+
+function readPlacesText(db: Database, home: string, id: number): string | null {
+  try {
+    return readMirror(db, home, id, 0, Number.MAX_SAFE_INTEGER).toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
 export function reparsePlaces(
   db: Database,
   home: string,
   log?: (message: string) => void,
 ): Array<{ source: string; sessionId: string }> {
-  const changed: Array<{ source: string; sessionId: string }> = [];
-  if (!hasTable(db, 'session_place')) return changed;
-  const files = db
-    .prepare(
-      `SELECT id, source, path, generation, mirror FROM raw_file WHERE lines_ingested > 0 ORDER BY id`,
-    )
-    .all() as Array<{
-    id: number;
-    source: string;
-    path: string;
-    generation: number;
-    mirror: string;
-  }>;
-  for (const file of files) {
-    if (!isPlacesRel(mirrorRelPath(file))) continue;
-    const device = parseRawPath(file.path).device ?? '';
-    let text = '';
-    try {
-      text = readMirror(db, home, file.id, 0, Number.MAX_SAFE_INTEGER).toString('utf8');
-    } catch {
-      continue;
-    }
-    let lineNo = 0;
-    for (const raw of text.split('\n')) {
-      lineNo++;
-      const line = raw.replace(/\r$/, '');
-      if (line.length === 0) continue;
-      const parsed = parsePlaceLine(line);
-      rememberPlaceHead(db, file.source, device, line, Boolean(parsed.warning));
-      if (parsed.warning) {
-        log?.(`warning ${mirrorRelPath(file)}:${lineNo}: ${parsed.warning}`);
-        continue;
-      }
-      for (const sessionId of applyPlaceFacts(db, file.source, parsed, Date.now(), device)) {
-        changed.push({ source: file.source, sessionId });
+  if (!hasTable(db, 'session_place')) return [];
+  return withWriteLock(db, () => {
+    const changed: Array<{ source: string; sessionId: string }> = [];
+    const files = db
+      .prepare(
+        `SELECT id, source, path, generation, mirror FROM raw_file
+          WHERE lines_ingested > 0 ORDER BY id`,
+      )
+      .all() as unknown as PlacesMirror[];
+    const mirrors: PlacesMirror[] = [];
+    for (const file of files) {
+      if (!isPlacesRel(mirrorRelPath(file))) continue;
+      const text = readPlacesText(db, home, file.id);
+      if (text === null) continue;
+      mirrors.push(file);
+      // Warnings are logged from this read. The lines applied are read again, still under the
+      // lock, so a line appended while the warning was logged is the one that counts.
+      let lineNo = 0;
+      for (const raw of text.split('\n')) {
+        lineNo++;
+        const line = raw.replace(/\r$/, '');
+        if (line.length === 0) continue;
+        const parsed = parsePlaceLine(line);
+        if (parsed.warning) log?.(`warning ${mirrorRelPath(file)}:${lineNo}: ${parsed.warning}`);
       }
     }
-  }
-  return changed;
+    for (const file of mirrors) {
+      const text = readPlacesText(db, home, file.id);
+      if (text === null) continue;
+      const device = parseRawPath(file.path).device ?? '';
+      const latest = new Map<string, ReturnType<typeof parsePlaceLine>>();
+      for (const raw of text.split('\n')) {
+        const line = raw.replace(/\r$/, '');
+        if (line.length === 0) continue;
+        const parsed = parsePlaceLine(line);
+        rememberPlaceHead(db, file.source, device, line, Boolean(parsed.warning));
+        if (parsed.warning) continue;
+        const key = placeLineKey(line);
+        if (key) latest.set(key, parsed);
+      }
+      for (const parsed of latest.values()) {
+        for (const sessionId of applyPlaceFacts(db, file.source, parsed, Date.now(), device)) {
+          changed.push({ source: file.source, sessionId });
+        }
+      }
+    }
+    return changed;
+  });
 }
 
 export interface ProjectMove {
@@ -931,10 +1020,23 @@ function reportText(report: Omit<ReprojectReport, 'text'>): string {
   return lines.join('\n');
 }
 
+/** Sessions whose events arrived from another device (`@device:path`). This store does not resolve them. */
+function remoteSessionKeys(db: Database): Set<string> {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT e.source AS source, e.session_id AS session_id
+         FROM event e JOIN raw_file r ON r.id = e.raw_file_id
+        WHERE r.path LIKE '@%:%'`,
+    )
+    .all() as Array<{ source: string; session_id: string }>;
+  return new Set(rows.map((row) => `${row.source}\0${row.session_id}`));
+}
+
 /**
- * Resolve every session that does not already carry a chosen name. `--dry-run` writes nothing,
- * and does not read places lines again. Otherwise the lines already mirrored are applied first,
- * and what still differs is returned as `places.jsonl` to append: the tables change only when
+ * Resolve every session of this store that does not already carry a chosen name. A session replicated
+ * from another device keeps that device's conclusion: this disk is not its. `--dry-run` writes
+ * nothing, and does not read places lines again. Otherwise the lines already mirrored are applied
+ * first, and what still differs is returned as `places.jsonl` to append: the tables change only when
  * those lines are ingested. Does not rename entries. Child counts stay 0 while `session_parent`
  * is absent.
  */
@@ -960,8 +1062,10 @@ export function reproject(
         ORDER BY s.source, s.session_id`,
     )
     .all() as unknown as Array<SessionWork & { source: string }>;
+  const remote = remoteSessionKeys(db);
+  const local = rows.filter((row) => !remote.has(`${row.source}\0${row.session_id}`));
   const moves = new Map<string, ProjectMove>();
-  for (const row of rows) {
+  for (const row of local) {
     if (chosenProject(row)) continue;
     if (!row.cwd) continue;
     const gone = !exists(row.cwd);
@@ -994,10 +1098,14 @@ export function reproject(
         ).n;
   const files: Array<{ source: string; file: SourceFile }> = [];
   if (!opts.dryRun && opts.home) {
-    const sources = [...new Set(rows.map((row) => row.source))];
+    const sources = [...new Set(local.map((row) => row.source))];
     for (const source of sources) {
+      const touchedSessions = new Set(
+        local.filter((row) => row.source === source).map((row) => row.session_id),
+      );
       const file = placesSourceFile(db, opts.home, source, {
         now,
+        touchedSessions,
         agentFacts: opts.agentFacts ? (id) => opts.agentFacts?.(source, id) ?? null : undefined,
       });
       if (file) files.push({ source, file });

@@ -1467,7 +1467,7 @@ async function cmdSessions(ctx: Ctx, args: string[]): Promise<number> {
   if (action === 'reproject') {
     if (isRelay(ctx.db)) {
       throw new OriginError(
-        'This store is a relay and keeps no sessions of its own; run origin sessions reproject on the hub, or open its admin UI.',
+        "This store is a relay and keeps no sessions of its own. Run origin sessions reproject on the device that holds the sessions. A hub keeps each device's conclusion.",
       );
     }
     const { values } = parseArgs({ args: rest, options: ARGS.sessions.sub.reproject.options });

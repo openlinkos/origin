@@ -43,7 +43,7 @@ export function fakeAdapter(
       return { absPath: path.join(root, rel), relPath: rel };
     },
     parseLine(line, ctx) {
-      if (ctx?.relPath === 'places.jsonl') {
+      if (ctx?.generated && ctx.relPath === 'places.jsonl') {
         return parsePlaceLine(line);
       }
       const o = JSON.parse(line) as {

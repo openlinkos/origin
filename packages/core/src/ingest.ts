@@ -25,7 +25,7 @@ import { recordSessionParent } from './parents.js';
 import { distinctRelPath, mirrorRelPath, parseRawPath, rawDir, remotePath } from './paths.js';
 import {
   applyPlaceFacts,
-  isPlacesRel,
+  isOriginPlacesFile,
   parsePlaceLine,
   placesSourceFile,
   recordExplicitPlace,
@@ -180,13 +180,23 @@ export async function syncFile(
   assertComplete(ctx.db, "ingest its agents' logs");
   const startedAt = Date.now();
   const result = emptySyncResult(adapter.id);
+  // The hook path resolves the sessions this file touched, the same way a full sync does. The next
+  // sync sees the file unchanged and would otherwise leave the session without a project.
+  const touchedSessions = new Set<string>();
+  const scoped: IngestContext = { ...ctx, touchedSessions };
   const file = adapter.locate?.(absPath) ?? null;
+  const agentVersion = adapter.version();
   if (file && !file.generated && isFile(file.absPath)) {
     result.filesSeen = 1;
-    const agentVersion = adapter.version();
-    if (await ingestSourceFile(ctx, adapter, file, agentVersion, result, breather())) {
+    if (await ingestSourceFile(scoped, adapter, file, agentVersion, result, breather())) {
       result.filesChanged = 1;
     }
+  }
+  const places = placesSourceFile(ctx.db, ctx.home, adapter.id, { touchedSessions });
+  if (places) {
+    const placesResult = emptySyncResult(adapter.id);
+    await ingestSourceFile(scoped, adapter, places, agentVersion, placesResult, breather());
+    result.parseErrors += placesResult.parseErrors;
   }
   result.durationMs = Date.now() - startedAt;
   if (result.linesRead > 0) {
@@ -421,7 +431,13 @@ function ingestFile(
     adapter,
     raw,
     chunk,
-    { absPath: file.absPath, relPath: file.relPath, fileMtimeMs: content.mtimeMs, agentVersion },
+    {
+      absPath: file.absPath,
+      relPath: file.relPath,
+      fileMtimeMs: content.mtimeMs,
+      agentVersion,
+      generated: file.generated !== undefined,
+    },
     file.generated
       ? content.more
         ? ''
@@ -471,6 +487,8 @@ function appendLines(
     agentVersion: string | null;
     /** On a hub, the device that sent the file; unset for this store's own files. */
     device?: string;
+    /** This chunk is Origin's generated places file, not a file a person wrote. */
+    generated?: boolean;
   },
   newTailHash: string,
   stats: AppendStats,
@@ -497,10 +515,13 @@ function appendLines(
     if (line.trim().length === 0) continue;
     stats.linesRead++;
     let parsed: ReturnType<SourceAdapter['parseLine']>;
+    // Origin's places file: generated locally, or a device file whose raw path is `places.jsonl`
+    // (`@device:places.jsonl` on a hub). A person's file of that name is parsed by the adapter.
+    const originPlaces = isOriginPlacesFile(parse.relPath, raw.path, parse.generated);
     try {
       // places.jsonl is parsed here, so a source whose adapter does not know the file still
       // applies it. The adapter's own parseLine stays free of git.
-      parsed = isPlacesRel(parse.relPath)
+      parsed = originPlaces
         ? parsePlaceLine(line)
         : adapter.parseLine(line, {
             absPath: parse.absPath,
@@ -508,6 +529,7 @@ function appendLines(
             lineNo,
             fileMtimeMs: parse.fileMtimeMs,
             readLine,
+            generated: false,
           });
     } catch (err) {
       stats.parseErrors++;
@@ -517,7 +539,7 @@ function appendLines(
     if (!parsed) continue;
     // A places line that is not the object its type requires. The bytes stay; the line changes
     // nothing, and it is recorded as the tip only so a later line is still the latest.
-    if (isPlacesRel(parse.relPath)) {
+    if (originPlaces) {
       rememberPlaceHead(ctx.db, adapter.id, parse.device ?? '', line, Boolean(parsed.warning));
     }
     if (parsed.warning) {
@@ -560,14 +582,16 @@ function appendLines(
     for (const fact of parsed.sessionKinds ?? []) {
       if (recordSessionKind(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
     }
-    for (const sessionId of applyPlaceFacts(
-      ctx.db,
-      adapter.id,
-      parsed,
-      Date.now(),
-      parse.device ?? '',
-    )) {
-      touchedSessions.add(sessionId);
+    if (originPlaces) {
+      for (const sessionId of applyPlaceFacts(
+        ctx.db,
+        adapter.id,
+        parsed,
+        Date.now(),
+        parse.device ?? '',
+      )) {
+        touchedSessions.add(sessionId);
+      }
     }
     for (const ev of parsed.events) {
       if (ev.projectSignal === 'explicit' && ev.project) {
@@ -575,8 +599,10 @@ function appendLines(
       }
     }
     // A session this line says has a parent: it joins that session's thread, and leaves a
-    // top-level list.
+    // top-level list. A parent carried by a places line counts only from Origin's places file.
+    // An agent's own line (fromAgent) still counts from the session file.
     for (const fact of parsed.sessionParents ?? []) {
+      if (!originPlaces && !fact.fromAgent) continue;
       if (recordSessionParent(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
     }
   }

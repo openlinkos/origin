@@ -1,8 +1,11 @@
 import { type ParseContext, type ParsedLine, parsePlaceLine } from '@openlinkos/origin-core';
 
-/** `places.jsonl` on a source: parent lines (and the root and place lines p1 owns). */
-export function isPlacesPath(relPath: string): boolean {
-  return relPath === 'places.jsonl' || relPath.endsWith('/places.jsonl');
+/**
+ * Origin's generated `places.jsonl`, and not a file of that name a person wrote. `generated` is
+ * set only for that file (see ParseContext).
+ */
+export function isPlacesPath(ctx: { relPath: string; generated?: boolean }): boolean {
+  return ctx.generated === true && ctx.relPath === 'places.jsonl';
 }
 
 /**
@@ -14,6 +17,6 @@ export function parseWithPlaces(
   ctx: ParseContext,
   parse: (line: string, ctx: ParseContext) => ParsedLine | null,
 ): ParsedLine | null {
-  if (isPlacesPath(ctx.relPath)) return parsePlaceLine(line);
+  if (isPlacesPath(ctx)) return parsePlaceLine(line);
   return parse(line, ctx);
 }

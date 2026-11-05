@@ -245,6 +245,11 @@ export interface ParseContext {
    * readable file.
    */
   readLine?: (lineNo: number) => string | null;
+  /**
+   * Set only for Origin's own `places.jsonl`: a generated file, or a device's file whose raw path
+   * is exactly `places.jsonl`. A file a person wrote, even under that name, is an ordinary source.
+   */
+  generated?: boolean;
 }
 
 /** A session source adapter for one agent (Source, see docs/architecture.md). Parsing must be deterministic and LLM-free. */

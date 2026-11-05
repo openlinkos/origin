@@ -249,7 +249,7 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
     const entryParams: unknown[] = [now];
     if (f.project !== undefined) {
       entryWhere.push(entryProjectMatchSql('en.id'));
-      entryParams.push(f.project, f.project);
+      entryParams.push(f.project, f.project, f.project);
     }
     // Written from a session or thread: citing one of its visible events.
     const cited = sessionScope(f, 'c');

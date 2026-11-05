@@ -632,7 +632,13 @@ describe('zcode adapter', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'zcode-none-'));
     try {
       const adapter = createZCodeAdapter({ home });
-      const ctx = { absPath: 'places.jsonl', relPath: 'places.jsonl', lineNo: 1, fileMtimeMs: 0 };
+      const ctx = {
+        absPath: 'places.jsonl',
+        relPath: 'places.jsonl',
+        lineNo: 1,
+        fileMtimeMs: 0,
+        generated: true,
+      };
       expect(
         adapter.parseLine(
           JSON.stringify({

@@ -200,7 +200,7 @@ function entryWhere(f: EntryFilter, params: unknown[]): string {
   }
   if (f.project) {
     parts.push(entryProjectMatchSql('en.id'));
-    params.push(f.project, f.project);
+    params.push(f.project, f.project, f.project);
   }
   if (f.since !== undefined) {
     parts.push('en.created_at >= ?');

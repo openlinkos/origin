@@ -6,6 +6,7 @@ import {
   type Database,
   displayTitle,
   getSessionParent,
+  ingestPlacesFile,
   listSessions,
   openDatabase,
   parsePlaceLine,
@@ -142,13 +143,41 @@ describe('session_parent', () => {
     const logs = path.join(tmp, 'logs');
     fs.mkdirSync(logs);
     fs.writeFileSync(path.join(logs, 's.jsonl'), line('e1', 'root', 1000, 'user', 'Start'));
-    fs.writeFileSync(
-      path.join(logs, 'places.jsonl'),
-      `${JSON.stringify({ v: 1, type: 'root', path: '/tmp/demo', project: 'demo-app', root: '/tmp/demo', signal: 'git' })}\n${JSON.stringify({ v: 1, type: 'place', session: 'root', project: 'demo-app', root: null, signal: 'git' })}\n${PARENT}\n`,
-    );
     const result = await syncSource({ db, home }, fakeAdapter(logs));
     expect(result.parseErrors).toBe(0);
     expect(result.eventsAdded).toBe(1);
+    let pending: string[] | null = [
+      JSON.stringify({
+        v: 1,
+        type: 'root',
+        path: '/tmp/demo',
+        project: 'demo-app',
+        root: '/tmp/demo',
+        signal: 'git',
+      }),
+      JSON.stringify({
+        v: 1,
+        type: 'place',
+        session: 'root',
+        project: 'demo-app',
+        root: null,
+        signal: 'git',
+      }),
+      PARENT,
+    ];
+    await ingestPlacesFile({ db, home }, 'fake', {
+      absPath: 'places.jsonl',
+      relPath: 'places.jsonl',
+      generated: {
+        token: 'parents',
+        mtimeMs: 1,
+        next() {
+          const out = pending ?? [];
+          pending = null;
+          return out;
+        },
+      },
+    });
     expect(getSessionParent(db, 'fake', 'child')).toMatchObject({
       parentSessionId: 'root',
       runGroup: 'run-root',

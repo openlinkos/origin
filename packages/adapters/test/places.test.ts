@@ -14,18 +14,47 @@ describe('places.jsonl', () => {
         relPath: 'places.jsonl',
         lineNo: 1,
         fileMtimeMs: 0,
+        generated: true,
       });
-      expect(parsed.events).toEqual([]);
-      expect(parsed.places?.[0]).toMatchObject({ sessionId: 's1', project: 'demo-app' });
+      expect(parsed?.events).toEqual([]);
+      expect(parsed?.places?.[0]).toMatchObject({ sessionId: 's1', project: 'demo-app' });
       expect(
         adapter.parseLine(parent, {
           absPath: 'places.jsonl',
-          relPath: 'nested/places.jsonl',
+          relPath: 'places.jsonl',
           lineNo: 2,
           fileMtimeMs: 0,
-        }).events,
+          generated: true,
+        })?.events,
       ).toEqual([]);
     }
+  });
+
+  it("claims a generated places.jsonl and leaves a person's file alone", () => {
+    const placeLine =
+      '{"v":1,"type":"place","session":"s1","project":"demo-app","root":null,"signal":"git"}';
+    const event =
+      '{"id":"m1","session":"s1","time":"2026-11-02T09:30:00Z","role":"user","kind":"message","text":"kept","project":"demo-app"}';
+    const ctx = { absPath: 'D:/notes/places.jsonl', lineNo: 1, fileMtimeMs: 0 };
+    const lines = createLinesAdapter({ id: 'chat-ops', dir: 'D:\\demo' });
+    const claimed = (adapter: typeof lines, relPath: string, generated?: boolean) => {
+      try {
+        return adapter.parseLine(placeLine, { ...ctx, relPath, generated })?.places;
+      } catch {
+        return undefined;
+      }
+    };
+    for (const adapter of [...allAdapters(), lines]) {
+      expect(claimed(adapter, 'notes/places.jsonl')).toBeUndefined();
+      expect(claimed(adapter, 'places.jsonl')).toBeUndefined();
+      expect(claimed(adapter, 'places.jsonl', true)?.[0]).toMatchObject({ project: 'demo-app' });
+    }
+    expect(lines.parseLine(event, { ...ctx, relPath: 'notes/places.jsonl' })?.events[0]?.text).toBe(
+      'kept',
+    );
+    expect(lines.parseLine(event, { ...ctx, relPath: 'places.jsonl' })?.events[0]?.text).toBe(
+      'kept',
+    );
   });
 
   it('is parsed by a lines source, and a named project is explicit', () => {
@@ -35,6 +64,7 @@ describe('places.jsonl', () => {
       relPath: 'places.jsonl',
       lineNo: 1,
       fileMtimeMs: 0,
+      generated: true,
     });
     expect(parsed.events).toEqual([]);
     const event = parseEventLine(

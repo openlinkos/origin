@@ -5,6 +5,7 @@ import {
   type AuditRecord,
   acceptProposal,
   activeProjects,
+  childSessions,
   createToken as coreCreateToken,
   correct,
   countProposals,
@@ -1485,21 +1486,23 @@ export class AdminService {
       walk(key);
       return out;
     };
-    const nest = (parentKey: string, seen: Set<string>): SessionBoardChild[] => {
+    const nest = (source: string, sessionId: string, seen: Set<string>): SessionBoardChild[] => {
       const out: SessionBoardChild[] = [];
-      for (const fact of byParent.get(parentKey) ?? []) {
-        const key = `${fact.source}:${fact.session_id}`;
-        if (seen.has(key) || !folded.has(key)) continue;
-        const session = getSession(this.db, fact.source, fact.session_id);
+      // childSessions skips a forgotten session in the middle and hangs the child on the nearest
+      // visible ancestor. The direct links above stay, so a name search can still walk through one.
+      for (const fact of childSessions(this.db, source, sessionId)) {
+        const key = `${fact.source}:${fact.sessionId}`;
+        if (seen.has(key)) continue;
+        const session = getSession(this.db, fact.source, fact.sessionId);
         if (!session || session.eventCount <= 0) continue;
         seen.add(key);
         out.push({
           ...session,
-          turns: sessionTurnStarts(this.db, fact.source, fact.session_id).length,
+          turns: sessionTurnStarts(this.db, fact.source, fact.sessionId).length,
           recalls: recalls.get(key) ?? 0,
           via: fact.via,
-          runName: fact.run_name,
-          children: nest(key, seen),
+          runName: fact.runName,
+          children: nest(fact.source, fact.sessionId, seen),
         });
       }
       return out;
@@ -1538,7 +1541,7 @@ export class AdminService {
         ...(getSession(this.db, r.source, r.session_id) as SessionRow),
         turns: sessionTurnStarts(this.db, r.source, r.session_id).length,
         recalls: recalls.get(r.key) ?? 0,
-        children: nest(r.key, new Set([r.key])),
+        children: nest(r.source, r.session_id, new Set([r.key])),
       })),
       total: matching.length,
       page,
@@ -1781,22 +1784,54 @@ export class AdminService {
     const q = f.q.toLowerCase();
     const since = rangeStart(f.range, now);
     const cited = new Map<string, Set<string>>();
+    const homes = new Set(
+      (
+        this.db
+          .prepare(
+            `SELECT ie.entry_id FROM imported_entry ie
+              JOIN entry_source hs ON hs.entry_id = ie.entry_id
+              JOIN event hm ON hm.id = hs.event_id
+             WHERE hm.kind = 'memory' AND hm.cwd IS NOT NULL`,
+          )
+          .all() as unknown as Array<{ entry_id: string }>
+      ).map((row) => row.entry_id),
+    );
+    // Same rule as the brief: a cited place counts when the session's raw label is the entry's
+    // project. An imported memory with a directory matches that directory only.
     for (const row of this.db
       .prepare(
         `SELECT es.entry_id, sp.project AS project FROM entry_source es
+         JOIN entry en ON en.id = es.entry_id
          JOIN event c ON c.id = es.event_id
-         JOIN session_place sp ON sp.source = c.source AND sp.session_id = c.session_id`,
+         JOIN session s ON s.source = c.source AND s.session_id = c.session_id
+         JOIN session_place sp ON sp.source = s.source AND sp.session_id = s.session_id
+        WHERE lower(s.project) = lower(en.project)`,
+      )
+      .all() as unknown as Array<{ entry_id: string; project: string }>) {
+      if (homes.has(row.entry_id)) continue;
+      const names = cited.get(row.entry_id) ?? new Set<string>();
+      names.add(row.project);
+      cited.set(row.entry_id, names);
+    }
+    for (const row of this.db
+      .prepare(
+        `SELECT ie.entry_id, pr.project AS project FROM imported_entry ie
+          JOIN entry_source hs ON hs.entry_id = ie.entry_id
+          JOIN event hm ON hm.id = hs.event_id
+          JOIN project_root pr ON pr.device = ''
+         WHERE hm.kind = 'memory' AND hm.cwd IS NOT NULL
+           AND (
+             origin_path(hm.cwd) = pr.path
+             OR substr(origin_path(hm.cwd), 1, length(pr.path) + 1) = pr.path || '/')`,
       )
       .all() as unknown as Array<{ entry_id: string; project: string }>) {
       const names = cited.get(row.entry_id) ?? new Set<string>();
       names.add(row.project);
       cited.set(row.entry_id, names);
     }
-    // The stored name stays. A facet or a filter also matches a cited session's resolved project,
-    // and an entry is counted once for each distinct name.
     const projectNames = (e: Entry): string[] => {
       const names = new Set<string>();
-      if (e.project !== null) names.add(e.project);
+      if (e.project !== null && !homes.has(e.id)) names.add(e.project);
       for (const name of cited.get(e.id) ?? []) names.add(name);
       return [...names];
     };
