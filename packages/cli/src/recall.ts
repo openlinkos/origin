@@ -61,7 +61,7 @@ interface HookEvent {
 export function hookInput(db: Database, agent: HookAgent, event: HookEvent): RecallInput | null {
   const sessionId = event.session_id?.toLowerCase() ?? null;
   if (!event.cwd) return null;
-  const scope = { source: agent, sessionId, ...recallScope(event.cwd) };
+  const scope = { source: agent, sessionId, ...recallScope(event.cwd, { db }) };
   if (event.hook_event_name === 'SessionStart') {
     if (event.source === 'resume' && sessionId && hasRecalled(db, agent, sessionId)) return null;
     return { occasion: 'start', ...scope };
@@ -177,7 +177,7 @@ export async function main(argv: string[]): Promise<number> {
       occasion: prompt ? 'prompt' : 'start',
       source: values.agent ?? null,
       prompt,
-      ...recallScope(values.cwd ?? process.cwd()),
+      ...recallScope(values.cwd ?? process.cwd(), { db }),
     });
     printPreview(plan);
     return 0;

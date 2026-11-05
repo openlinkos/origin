@@ -1,4 +1,4 @@
-import type { SourceAdapter } from '@openlinkos/origin-core';
+import { isPlacesRel, parsePlaceLine, type SourceAdapter } from '@openlinkos/origin-core';
 import { CLAUDE_CODE_SOURCE_ID, createClaudeCodeAdapter } from './claude-code.js';
 import { CODEX_SOURCE_ID, createCodexAdapter } from './codex.js';
 import { CURSOR_SOURCE_ID, createCursorAdapter } from './cursor.js';
@@ -67,6 +67,18 @@ export {
  * The built-in adapters, one per agent Origin reads. A person's own sources, read with the lines
  * adapter, are listed by linesSources.
  */
+/** `places.jsonl` is parsed by core. An adapter's own `parseLine` stays free of git. */
+function withPlaces(adapter: SourceAdapter): SourceAdapter {
+  const parseLine = adapter.parseLine.bind(adapter);
+  return {
+    ...adapter,
+    parseLine(line, ctx) {
+      if (ctx.generated && isPlacesRel(ctx.relPath)) return parsePlaceLine(line);
+      return parseLine(line, ctx);
+    },
+  };
+}
+
 export function allAdapters(): SourceAdapter[] {
   return [
     createClaudeCodeAdapter(),
@@ -74,7 +86,7 @@ export function allAdapters(): SourceAdapter[] {
     createGrokAdapter(),
     createZCodeAdapter(),
     createCursorAdapter(),
-  ];
+  ].map(withPlaces);
 }
 
 /** A built-in adapter by its id. */

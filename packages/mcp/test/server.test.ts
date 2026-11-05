@@ -51,6 +51,51 @@ afterEach(async () => {
   fs.rmSync(src, { recursive: true, force: true });
 });
 
+/** A parent session with a title, and one workflow child linked to it. */
+function writeChildSession(dir: string): void {
+  const now = Date.now();
+  fs.writeFileSync(
+    path.join(dir, 'family.jsonl'),
+    `${[
+      JSON.stringify({
+        id: 'r1',
+        session: 'parent-1',
+        ts: now - 2000,
+        role: 'user',
+        text: 'Start the cache work',
+        project: 'demo',
+      }),
+      JSON.stringify({
+        id: 'r2',
+        session: 'parent-1',
+        ts: now - 1000,
+        role: 'user',
+        text: 'Keep going on the cache',
+        project: 'demo',
+      }),
+      JSON.stringify({ session: 'parent-1', title: 'Cache the retries' }),
+      JSON.stringify({
+        id: 'c1',
+        session: 'child-1',
+        ts: now,
+        role: 'user',
+        text: 'zebraparentlink step',
+        project: 'demo',
+        parents: [
+          {
+            session: 'child-1',
+            parent: 'parent-1',
+            via: 'workflow',
+            signal: 'dwf_run',
+            group: 'run-1',
+            name: 'Ship',
+          },
+        ],
+      }),
+    ].join('\n')}\n`,
+  );
+}
+
 async function call(name: string, args: Record<string, unknown>) {
   const r = (await client.callTool({ name, arguments: args })) as {
     content: Array<{ type: string; text: string }>;
@@ -115,6 +160,37 @@ describe('origin MCP server', () => {
     expect(sourceOfAgent('claude-ai')).toBe('claude-ai');
   });
 
+  it('lists a child session only when include_children is set', async () => {
+    writeChildSession(src);
+    const hidden = await call('timeline', { since: '1970-01-01' });
+    const sessions = hidden.json.sessions as Array<{
+      session: string;
+      children?: number;
+      workflows?: string[];
+      title?: string | null;
+    }>;
+    expect(sessions.map((s) => s.session)).not.toContain('child-1');
+    expect(sessions.find((s) => s.session === 'parent-1')).toMatchObject({
+      children: 1,
+      workflows: ['Ship'],
+      title: 'Cache the retries',
+    });
+    const shown = await call('timeline', { since: '1970-01-01', include_children: true });
+    expect(shown.json.sessions.map((s: { session: string }) => s.session)).toEqual(
+      expect.arrayContaining(['parent-1', 'child-1']),
+    );
+  });
+
+  it("names a child hit's parent and that parent's title", async () => {
+    writeChildSession(src);
+    const r = await call('search', { query: 'zebraparentlink' });
+    expect(r.json.events).toHaveLength(1);
+    expect(r.json.events[0]).toMatchObject({
+      parent: 'fake:parent-1',
+      parent_title: 'Cache the retries',
+    });
+  });
+
   it('syncs before reading, so new session lines are searchable', async () => {
     fs.appendFileSync(
       path.join(src, 's1.jsonl'),
@@ -134,6 +210,8 @@ describe('origin MCP server', () => {
       ended: expect.any(String),
       events: 3,
       thread: null,
+      children: 0,
+      workflows: [],
     });
   });
 

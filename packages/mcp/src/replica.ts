@@ -320,7 +320,7 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
         if (isForgotten(db, args.id)) return toolError(`${args.id} has been forgotten.`);
         // A session or thread this device does not hold: the hub checks it against its store, for
         // the work tree this agent runs in (it cannot see this disk).
-        const scope = followScope(args, here);
+        const scope = followScope(args, here, db);
         await upTo(sync(), Date.now() + hubTimeout);
         const hub = await askHub('follow', { ...args, cwd: scope.root ?? scope.cwd }, writeTimeout);
         if (!hub.ok) {

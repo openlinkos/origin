@@ -126,7 +126,10 @@ function localHandlers(
     follow: (args) =>
       run(async () => {
         await refresh();
-        return toolResult(followHere(db, args, here));
+        const name = author();
+        const at = name.lastIndexOf('@');
+        const named = at < 0 ? '' : name.slice(at + 1);
+        return toolResult(followHere(db, args, here, named));
       }),
     get: (args) => run(() => toolResult(getById(db, args))),
     sources: (args) => run(() => toolResult(sourcesOf(db, home, args.id))),

@@ -12,6 +12,7 @@ import type {
   SourceAdapter,
   SourceFile,
 } from '@openlinkos/origin-core';
+import { parseWithPlaces } from './places.js';
 import { projectFromCwd, truncate } from './util.js';
 
 /**
@@ -269,6 +270,9 @@ export function createCursorAdapter(opts: CursorAdapterOptions = {}): SourceAdap
       return out;
     },
     parseLine(line: string, ctx: ParseContext): ParsedLine | null {
+      if (ctx.relPath === 'places.jsonl' || ctx.relPath.endsWith('/places.jsonl')) {
+        return parseWithPlaces(line, ctx, () => null);
+      }
       if (ctx.relPath.startsWith('editor/')) return parseCursorEditorLine(line);
       return parseTranscript(line, ctx, userTimes);
     },

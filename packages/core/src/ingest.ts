@@ -21,7 +21,16 @@ import {
   settleMirror,
 } from './mirror.js';
 import { assertComplete } from './mode.js';
+import { recordSessionParent } from './parents.js';
 import { distinctRelPath, mirrorRelPath, parseRawPath, rawDir, remotePath } from './paths.js';
+import {
+  applyPlaceFacts,
+  isOriginPlacesFile,
+  parsePlaceLine,
+  placesSourceFile,
+  recordExplicitPlace,
+  rememberPlaceHead,
+} from './places.js';
 import { deriveProposal } from './proposals.js';
 import { deriveFollow, refreshThreads } from './threads.js';
 import { NAME_RE } from './tokens.js';
@@ -60,6 +69,11 @@ export interface IngestContext {
   log?: (message: string) => void;
   /** Size at which a mirror's open tail is sealed into zstd frames (default FRAME_BYTES; tests). */
   frameBytes?: number;
+  /**
+   * Sessions whose events, title, or place changed during this sync. A places file is built only
+   * for these. The caller that sets it owns the set; syncSource uses one of its own.
+   */
+  touchedSessions?: Set<string>;
 }
 
 /** Counters shared by local syncs and remote appends. */
@@ -87,12 +101,25 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
   result.filesSeen = files.length;
   const agentVersion = adapter.version();
   const breathe = breather();
+  // Only sessions this sync added or changed are resolved. The set is not left on the caller's ctx.
+  const touchedSessions = new Set<string>();
+  const scoped: IngestContext = { ...ctx, touchedSessions };
 
   for (const file of files) {
     await breathe();
-    if (await ingestSourceFile(ctx, adapter, file, agentVersion, result, breathe)) {
+    if (await ingestSourceFile(scoped, adapter, file, agentVersion, result, breathe)) {
       result.filesChanged++;
     }
+  }
+  // A resolved work tree, appended as places.jsonl. Event counts stay out of this result, so a
+  // sync that only mirrored events still reports those. A bad line's warning is kept: one broken
+  // places line must show up, and must not be the only record of it. A missing path appends nothing.
+  // Nothing new this sync: no git walks and no read of the places mirror.
+  const places = placesSourceFile(ctx.db, ctx.home, adapter.id, { touchedSessions });
+  if (places) {
+    const placesResult = emptySyncResult(adapter.id);
+    await ingestSourceFile(scoped, adapter, places, agentVersion, placesResult, breathe);
+    result.parseErrors += placesResult.parseErrors;
   }
   // Files that stopped growing an hour ago are likely finished: store their last lines compressed.
   sealIdleMirrors(ctx.db, ctx.home, {
@@ -115,6 +142,27 @@ export async function syncSource(ctx: IngestContext, adapter: SourceAdapter): Pr
 }
 
 /**
+ * Append one generated `places.jsonl`. Its counts are not merged into a sync: callers that only
+ * want the mirror use this after `reproject`.
+ */
+export async function ingestPlacesFile(
+  ctx: IngestContext,
+  source: string,
+  file: SourceFile,
+): Promise<void> {
+  const adapter: SourceAdapter = {
+    id: source,
+    displayName: source,
+    version: () => null,
+    async discover() {
+      return [];
+    },
+    parseLine: (line) => parsePlaceLine(line),
+  };
+  await ingestSourceFile(ctx, adapter, file, null, emptySyncResult(source), breather());
+}
+
+/**
  * Ingest one file of a source, as syncSource ingests each file it discovers: the file the adapter
  * locates at `absPath` (see SourceAdapter.locate), read from its cursor, its new complete lines
  * mirrored and parsed, with rewrite detection, sealing, titles, native memories, threads, and
@@ -132,13 +180,23 @@ export async function syncFile(
   assertComplete(ctx.db, "ingest its agents' logs");
   const startedAt = Date.now();
   const result = emptySyncResult(adapter.id);
+  // The hook path resolves the sessions this file touched, the same way a full sync does. The next
+  // sync sees the file unchanged and would otherwise leave the session without a project.
+  const touchedSessions = new Set<string>();
+  const scoped: IngestContext = { ...ctx, touchedSessions };
   const file = adapter.locate?.(absPath) ?? null;
+  const agentVersion = adapter.version();
   if (file && !file.generated && isFile(file.absPath)) {
     result.filesSeen = 1;
-    const agentVersion = adapter.version();
-    if (await ingestSourceFile(ctx, adapter, file, agentVersion, result, breather())) {
+    if (await ingestSourceFile(scoped, adapter, file, agentVersion, result, breather())) {
       result.filesChanged = 1;
     }
+  }
+  const places = placesSourceFile(ctx.db, ctx.home, adapter.id, { touchedSessions });
+  if (places) {
+    const placesResult = emptySyncResult(adapter.id);
+    await ingestSourceFile(scoped, adapter, places, agentVersion, placesResult, breather());
+    result.parseErrors += placesResult.parseErrors;
   }
   result.durationMs = Date.now() - startedAt;
   if (result.linesRead > 0) {
@@ -373,7 +431,13 @@ function ingestFile(
     adapter,
     raw,
     chunk,
-    { absPath: file.absPath, relPath: file.relPath, fileMtimeMs: content.mtimeMs, agentVersion },
+    {
+      absPath: file.absPath,
+      relPath: file.relPath,
+      fileMtimeMs: content.mtimeMs,
+      agentVersion,
+      generated: file.generated !== undefined,
+    },
     file.generated
       ? content.more
         ? ''
@@ -423,6 +487,8 @@ function appendLines(
     agentVersion: string | null;
     /** On a hub, the device that sent the file; unset for this store's own files. */
     device?: string;
+    /** This chunk is Origin's generated places file, not a file a person wrote. */
+    generated?: boolean;
   },
   newTailHash: string,
   stats: AppendStats,
@@ -449,20 +515,38 @@ function appendLines(
     if (line.trim().length === 0) continue;
     stats.linesRead++;
     let parsed: ReturnType<SourceAdapter['parseLine']>;
+    // Origin's places file: generated locally, or a device file whose raw path is `places.jsonl`
+    // (`@device:places.jsonl` on a hub). A person's file of that name is parsed by the adapter.
+    const originPlaces = isOriginPlacesFile(parse.relPath, raw.path, parse.generated);
     try {
-      parsed = adapter.parseLine(line, {
-        absPath: parse.absPath,
-        relPath: parse.relPath,
-        lineNo,
-        fileMtimeMs: parse.fileMtimeMs,
-        readLine,
-      });
+      // places.jsonl is parsed here, so a source whose adapter does not know the file still
+      // applies it. The adapter's own parseLine stays free of git.
+      parsed = originPlaces
+        ? parsePlaceLine(line)
+        : adapter.parseLine(line, {
+            absPath: parse.absPath,
+            relPath: parse.relPath,
+            lineNo,
+            fileMtimeMs: parse.fileMtimeMs,
+            readLine,
+            generated: false,
+          });
     } catch (err) {
       stats.parseErrors++;
       ctx.log?.(`parse error ${parse.relPath}:${lineNo}: ${(err as Error).message}`);
       continue;
     }
     if (!parsed) continue;
+    // A places line that is not the object its type requires. The bytes stay; the line changes
+    // nothing, and it is recorded as the tip only so a later line is still the latest.
+    if (originPlaces) {
+      rememberPlaceHead(ctx.db, adapter.id, parse.device ?? '', line, Boolean(parsed.warning));
+    }
+    if (parsed.warning) {
+      stats.parseErrors++;
+      ctx.log?.(`warning ${parse.relPath}:${lineNo}: ${parsed.warning}`);
+      continue;
+    }
     const added = insert(lineNo, parsed.events);
     if (parsed.events.length > 0 && added.length === 0) stats.duplicates++;
     for (const ev of added) {
@@ -498,6 +582,32 @@ function appendLines(
     for (const fact of parsed.sessionKinds ?? []) {
       if (recordSessionKind(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
     }
+    if (originPlaces) {
+      for (const sessionId of applyPlaceFacts(
+        ctx.db,
+        adapter.id,
+        parsed,
+        Date.now(),
+        parse.device ?? '',
+      )) {
+        touchedSessions.add(sessionId);
+      }
+    }
+    for (const ev of parsed.events) {
+      if (ev.projectSignal === 'explicit' && ev.project) {
+        recordExplicitPlace(ctx.db, adapter.id, ev.sessionId, ev.project);
+      }
+    }
+    // A session this line says has a parent: it joins that session's thread, and leaves a
+    // top-level list. A parent carried by a places line counts only from Origin's places file.
+    // An agent's own line (fromAgent) still counts from the session file.
+    for (const fact of parsed.sessionParents ?? []) {
+      if (!originPlaces && !fact.fromAgent) continue;
+      if (recordSessionParent(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
+    }
+  }
+  if (ctx.touchedSessions) {
+    for (const sessionId of touchedSessions) ctx.touchedSessions.add(sessionId);
   }
   for (const sessionId of touchedSessions) refreshSession(ctx.db, adapter.id, sessionId);
   refreshThreads(
@@ -895,7 +1005,7 @@ function fileContent(file: string): Content {
 }
 
 function openContent(ctx: IngestContext, file: SourceFile, raw: RawFileRow | null): Content | null {
-  if (file.generated) return generatedContent(ctx, file.generated, raw);
+  if (file.generated) return generatedContent(ctx, file, raw);
   let st: fs.Stats;
   try {
     st = fs.statSync(file.absPath);
@@ -914,13 +1024,11 @@ function openContent(ctx: IngestContext, file: SourceFile, raw: RawFileRow | nul
 /**
  * The next lines of a generated source, after those already ingested, as content that continues
  * the mirror. Nothing below `bytes_ingested` is ever read from it, since generated content is not
- * checked for a rewrite.
+ * checked for a rewrite. A mirror that does not end with a newline — a line left half-written —
+ * is closed with one before the new lines, and that newline is part of the bytes a hub parses.
  */
-function generatedContent(
-  ctx: IngestContext,
-  source: GeneratedSource,
-  raw: RawFileRow | null,
-): Content {
+function generatedContent(ctx: IngestContext, file: SourceFile, raw: RawFileRow | null): Content {
+  const source = file.generated as GeneratedSource;
   const start = raw?.bytes_ingested ?? 0;
   const last =
     raw && raw.lines_ingested > 0
@@ -930,7 +1038,15 @@ function generatedContent(
   if (lines.some((line) => line.includes('\n'))) {
     throw new OriginError('A generated line contains a line break.');
   }
-  const data = Buffer.from(lines.length > 0 ? `${lines.join('\n')}\n` : '');
+  let body = lines.length > 0 ? `${lines.join('\n')}\n` : '';
+  if (body.length > 0 && start > 0 && raw) {
+    const prev = readMirror(ctx.db, ctx.home, raw.id, start - 1, start);
+    if (prev.length === 1 && prev[0] !== 0x0a) {
+      body = `\n${body}`;
+      ctx.log?.(`warning ${file.relPath}: closed a line that did not end with a newline`);
+    }
+  }
+  const data = Buffer.from(body);
   return {
     size: start + data.length,
     mtimeMs: source.mtimeMs,

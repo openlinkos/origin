@@ -16,6 +16,7 @@ import {
   readFrontMatterMemory,
   subdirectories,
 } from './memory.js';
+import { parseWithPlaces } from './places.js';
 import { projectFromCwd, relativeUnder, truncate } from './util.js';
 
 /**
@@ -89,6 +90,9 @@ export function createClaudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): So
       return { absPath: path.join(root, ...segments), relPath: rel };
     },
     parseLine(line: string, ctx: ParseContext): ParsedLine | null {
+      if (ctx.relPath === 'places.jsonl' || ctx.relPath.endsWith('/places.jsonl')) {
+        return parseWithPlaces(line, ctx, () => null);
+      }
       if (ctx.relPath.startsWith(MEMORY_PREFIX)) {
         return parseMemoryLine(line, ctx, (_file, content) => readFrontMatterMemory(content));
       }

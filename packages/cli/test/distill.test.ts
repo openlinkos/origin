@@ -10,6 +10,7 @@ import {
   listProposals,
   listSessions,
   openDatabase,
+  recallScope,
   syncSource,
   threadIdOf,
 } from '@openlinkos/origin-core';
@@ -381,8 +382,9 @@ describe('origin distill', () => {
     const proposals = listProposals(db, { session: { source: 'claude-code', sessionId: session } });
     expect(proposals).toHaveLength(1);
     expect(proposals[0]).toMatchObject({ kind: 'knowledge', sources: [{ eventId: CITED }] });
-    // A later run leaves this one's session out of its scope, though it is in the project.
-    const project = path.basename(process.cwd());
+    // The hook resolves a linked work tree to the checkout's project. A later run leaves
+    // this session out of that scope, though it belongs to the project.
+    const project = recallScope(process.cwd(), { db }).project ?? '';
     expect(listSessions(db, { project, limit: 1000 }).map((s) => s.sessionId)).toContain(session);
     const again = distillScope(
       db,

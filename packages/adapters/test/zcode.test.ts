@@ -4,10 +4,13 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   appendRemote,
+  getSession,
+  getSessionParent,
   listEvents,
   listSessions,
   openMemoryDatabase,
   rawLocator,
+  readMirror,
   readRawLine,
   syncSource,
 } from '@openlinkos/origin-core';
@@ -461,11 +464,214 @@ describe('zcode adapter', () => {
         [SESSION, 'owner', 'semantics.origin'],
         ['ses_step', 'agent', 'task_type'],
       ]);
+      // No workflow tables: the parent is recorded, and no run group is invented.
+      expect(getSessionParent(store, 'zcode', 'ses_step')).toMatchObject({
+        parentSessionId: SESSION,
+        via: 'workflow',
+        signal: 'parent_id',
+        runGroup: null,
+        runName: null,
+      });
+      const mirrored = store
+        .prepare("SELECT id, bytes_ingested AS bytes FROM raw_file WHERE path LIKE '%ses_step%'")
+        .get() as { id: number; bytes: number };
+      expect(
+        readMirror(store, originHome, mirrored.id, 0, mirrored.bytes).toString('utf8'),
+      ).not.toContain('"workflow"');
       store.close();
     } finally {
       zdb.close();
       fs.rmSync(zcodeHome, { recursive: true, force: true });
       fs.rmSync(originHome, { recursive: true, force: true });
+    }
+  });
+
+  it('copies a workflow run onto the line, with the root of resumed_from as group', () => {
+    const line = JSON.stringify({
+      session: {
+        id: 'ses_step',
+        parent_id: SESSION,
+        directory: '/home/dev/demo-app',
+        title: 'actor#2@5',
+        version: '0.16.9',
+        task_type: 'workflow_child',
+      },
+      message: {
+        id: 'm',
+        sequence: 0,
+        time_created: T0,
+        time_updated: T0,
+        data: JSON.stringify({ role: 'user' }),
+      },
+      parts: [
+        {
+          id: 'p',
+          sequence: 0,
+          time_created: T0,
+          data: JSON.stringify({ type: 'text', text: 'Go' }),
+        },
+      ],
+      workflow: { id: 'run_step', name: 'Ship', resumed_from: 'run_root', group: 'run_root' },
+    });
+    expect(parseZCodeLine(line)?.sessionParents?.[0]).toMatchObject({
+      parentSessionId: SESSION,
+      via: 'workflow',
+      signal: 'dwf_run',
+      runGroup: 'run_root',
+      runName: 'Ship',
+      fromAgent: true,
+    });
+    const open = JSON.stringify({
+      session: {
+        id: 'ses_step',
+        parent_id: SESSION,
+        task_type: 'workflow_child',
+        directory: '/x',
+        title: 'T',
+        version: '0',
+      },
+      message: {
+        id: 'm',
+        sequence: 0,
+        time_created: T0,
+        time_updated: T0,
+        data: JSON.stringify({ role: 'user' }),
+      },
+      parts: [],
+      workflow: { id: 'run_step', name: 'Ship', resumed_from: 'run_root' },
+    });
+    expect(parseZCodeLine(open)?.sessionParents?.[0]?.runGroup).toBeUndefined();
+    const alone = JSON.parse(open) as { workflow: { resumed_from: string | null } };
+    alone.workflow.resumed_from = null;
+    expect(parseZCodeLine(JSON.stringify(alone))?.sessionParents?.[0]?.runGroup).toBe('run_step');
+  });
+
+  it('writes the workflow run, collapsing resumed_from to its root, without opening sqlite to parse', async () => {
+    const zcodeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-zcode-dwf-'));
+    const originHome = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-home-dwf-'));
+    const zdb = createZCodeDb(path.join(zcodeHome, 'cli', 'db', 'db.sqlite'));
+    try {
+      zdb.exec(`
+        CREATE TABLE dwf_run (
+          id text primary key, name text, resumed_from text,
+          caps_max_concurrency integer not null default 1,
+          spent_tokens integer not null default 0,
+          status text not null default 'running',
+          time_created integer not null, time_updated integer not null);
+        CREATE TABLE dwf_actor (
+          id integer primary key autoincrement, run_id text not null,
+          site_id text not null, ordinal integer not null,
+          session_id text, time_created integer not null, time_updated integer not null);
+      `);
+      zdb
+        .prepare(
+          `INSERT INTO session (id, project_id, parent_id, directory, title, version, task_type,
+                                time_created, time_updated)
+           VALUES ('ses_step', 'prj_1', ?, '/home/dev/demo-app', 'actor#2@5', '0.16.9',
+                   'workflow_child', ?, ?)`,
+        )
+        .run(SESSION, T0, T0);
+      zdb
+        .prepare(
+          `INSERT INTO message (id, session_id, time_created, time_updated, data, sequence)
+           VALUES ('msg_step', 'ses_step', ?, ?, ?, 0)`,
+        )
+        .run(T0, T0, JSON.stringify({ role: 'user' }));
+      zdb
+        .prepare(
+          `INSERT INTO part (id, message_id, session_id, time_created, time_updated, data, sequence)
+           VALUES ('prt_step', 'msg_step', 'ses_step', ?, ?, ?, 0)`,
+        )
+        .run(T0, T0, JSON.stringify({ type: 'text', text: 'Write the step.' }));
+      zdb
+        .prepare(
+          `INSERT INTO dwf_run (id, name, resumed_from, time_created, time_updated)
+           VALUES ('run_root', 'Older', NULL, ?, ?), ('run_step', 'Ship', 'run_root', ?, ?)`,
+        )
+        .run(T0, T0, T0, T0);
+      zdb
+        .prepare(
+          `INSERT INTO dwf_actor (run_id, site_id, ordinal, session_id, time_created, time_updated)
+           VALUES ('run_step', 'site', 0, 'ses_step', ?, ?)`,
+        )
+        .run(T0, T0);
+      const store = openMemoryDatabase();
+      await syncSource(
+        { db: store, home: originHome },
+        createZCodeAdapter({ home: zcodeHome, now: () => T0 + 60_000, keepOpenMs: 0 }),
+      );
+      const mirrored = store
+        .prepare("SELECT id, bytes_ingested AS bytes FROM raw_file WHERE path LIKE '%ses_step%'")
+        .get() as { id: number; bytes: number };
+      const body = JSON.parse(
+        readMirror(store, originHome, mirrored.id, 0, mirrored.bytes).toString('utf8').trim(),
+      ) as { workflow: unknown };
+      expect(body.workflow).toEqual({
+        id: 'run_step',
+        name: 'Ship',
+        resumed_from: 'run_root',
+        group: 'run_root',
+      });
+      expect(getSession(store, 'zcode', 'ses_step')?.title).toBe('actor#2@5');
+      expect(getSessionParent(store, 'zcode', 'ses_step')).toMatchObject({
+        parentSessionId: SESSION,
+        via: 'workflow',
+        signal: 'dwf_run',
+        runGroup: 'run_root',
+        runName: 'Ship',
+      });
+      store.close();
+    } finally {
+      zdb.close();
+      fs.rmSync(zcodeHome, { recursive: true, force: true });
+      fs.rmSync(originHome, { recursive: true, force: true });
+    }
+  });
+
+  it('reads a parent line of places.jsonl and a complete root line', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'zcode-none-'));
+    try {
+      const adapter = createZCodeAdapter({ home });
+      const ctx = {
+        absPath: 'places.jsonl',
+        relPath: 'places.jsonl',
+        lineNo: 1,
+        fileMtimeMs: 0,
+        generated: true,
+      };
+      expect(
+        adapter.parseLine(
+          JSON.stringify({
+            v: 1,
+            type: 'parent',
+            session: 'c',
+            parent: 'p',
+            via: 'workflow',
+            group: 'g',
+            name: 'Ship',
+            signal: 'dwf_run',
+          }),
+          ctx,
+        )?.sessionParents?.[0],
+      ).toMatchObject({ sessionId: 'c', runGroup: 'g', runName: 'Ship', fromAgent: false });
+      expect(
+        adapter.parseLine(
+          JSON.stringify({
+            v: 1,
+            type: 'root',
+            path: '/tmp/demo',
+            project: 'demo-app',
+            root: '/tmp/demo',
+            signal: 'git',
+          }),
+          ctx,
+        ),
+      ).toEqual({
+        events: [],
+        roots: [{ path: '/tmp/demo', project: 'demo-app', root: '/tmp/demo', signal: 'git' }],
+      });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 });

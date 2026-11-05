@@ -14,6 +14,11 @@
  * - session: aggregate per (source, session_id), derived from its visible events and rebuildable,
  *   plus its title, from the lines that carry one, and whether the user gave it (title_manual,
  *   added in version 2). git_branch (version 5) is the most frequent branch of its visible events.
+ *   `project` stays the label of the first event. The name reads use is `session_place` when a row
+ *   exists (version 9).
+ * - project_root / session_place: the main work tree a directory belongs to, and the project a
+ *   session resolves to (version 9). Filled from `places.jsonl` and from resolution on this
+ *   machine, never by rewriting events. `session_place` of signal `explicit` or `manual` is kept.
  * - session_follow: the links agents declared with the MCP tool `follow` (this session continues
  *   that one), derived from the tool results that carry them (see threads.ts); a link counts while
  *   its event is visible.
@@ -23,6 +28,10 @@
  *   by its event's seq, with its speaker and the field that decided it; and which sessions a line
  *   says are a child (an agent's) or a headless run (a program's). Derived from the raw lines and
  *   rebuildable (see authors.ts, reparse.ts, version 8); events are never touched.
+ * - session_parent: which session a line says is a child of another (a sub-agent or a workflow
+ *   step), with the run's group and name when the line carries them. Derived from the raw lines
+ *   and rebuildable (see parents.ts, reparse.ts, version 10); events and session.title are never
+ *   touched.
  * - proposal / proposal_source: the entries agents proposed with the MCP tool `propose`, for the
  *   person to accept or reject, and the events each cites, derived from the tool results that carry
  *   them and rebuildable (see proposals.ts, version 6). Their status is derived, never stored.
@@ -80,6 +89,39 @@
  * one), needs a migration in migrations.ts as well as the change here, so that an upgraded store
  * and a new one end up the same (see docs/architecture.md#migrations).
  */
+/**
+ * Where a session belongs (version 9). The version 9 migration creates these tables and fills
+ * nothing; version 10 reads the places already mirrored. A new store is created with this shape.
+ * The migration copies this SQL rather than importing it, so the two must stay the same.
+ */
+export const PLACE_TABLES = `
+CREATE TABLE IF NOT EXISTS project_root (
+  device  TEXT NOT NULL DEFAULT '',
+  path    TEXT NOT NULL,
+  project TEXT NOT NULL,
+  root    TEXT NOT NULL,
+  signal  TEXT NOT NULL,
+  seen_at INTEGER NOT NULL,
+  PRIMARY KEY (device, path)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS session_place (
+  source     TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  project    TEXT NOT NULL,
+  root       TEXT,
+  signal     TEXT NOT NULL,
+  PRIMARY KEY (source, session_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_place_project ON session_place (project);
+CREATE TABLE IF NOT EXISTS place_head (
+  source TEXT NOT NULL,
+  device TEXT NOT NULL DEFAULT '',
+  key    TEXT NOT NULL,
+  line   TEXT NOT NULL,
+  PRIMARY KEY (source, device, key)
+) WITHOUT ROWID;
+`;
+
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS raw_file (
   id             INTEGER PRIMARY KEY,
@@ -132,6 +174,7 @@ CREATE TABLE IF NOT EXISTS session (
 );
 CREATE INDEX IF NOT EXISTS session_project ON session (project);
 
+${PLACE_TABLES}
 CREATE TABLE IF NOT EXISTS session_follow (
   source            TEXT NOT NULL,
   session_id        TEXT NOT NULL,
@@ -214,6 +257,19 @@ CREATE TABLE IF NOT EXISTS session_kind (
   signal     TEXT NOT NULL,
   PRIMARY KEY (source, session_id, kind, signal)
 ) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS session_parent (
+  source            TEXT NOT NULL,
+  session_id        TEXT NOT NULL,
+  parent_source     TEXT NOT NULL,
+  parent_session_id TEXT NOT NULL,
+  via               TEXT NOT NULL CHECK (via IN ('subagent', 'workflow')),
+  run_group         TEXT,
+  run_name          TEXT,
+  signal            TEXT NOT NULL,
+  PRIMARY KEY (source, session_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_parent_parent ON session_parent (parent_source, parent_session_id);
 
 CREATE TABLE IF NOT EXISTS event_block (
   block     INTEGER PRIMARY KEY,

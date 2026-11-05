@@ -2,6 +2,8 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { CURRENT_VERSION, type Entry, getEntry } from './entries.js';
 import { OriginError } from './errors.js';
+import { getSessionParent, isFoldedChild } from './parents.js';
+import { entryProjectMatchSql, projectEventSql, resolvedProjectSql } from './places.js';
 import { getProposal, type Proposal, VISIBLE_PROPOSAL } from './proposals.js';
 import {
   EVENT_COLUMNS,
@@ -170,8 +172,8 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
     const where = [f.includeTools ? "e.kind <> 'memory'" : "e.kind = 'message'", 'e.seq <= ?'];
     const params: unknown[] = [ends.event];
     if (f.project !== undefined) {
-      where.push('e.project = ?');
-      params.push(f.project);
+      where.push(projectEventSql('e'));
+      params.push(f.project, f.project);
     }
     const inSessions = sessionScope(f, 'e');
     where.push(...inSessions.parts);
@@ -207,7 +209,9 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
       proposalParams.push(since);
     }
     if (f.project !== undefined) {
-      proposalWhere.push('COALESCE(p.project, e.project) = ?');
+      proposalWhere.push(
+        `COALESCE(p.project, ${resolvedProjectSql('e.source', 'e.session_id', 'e.project')}) = ?`,
+      );
       proposalParams.push(f.project);
     }
     const proposalScope = sessionScope(f, 'e');
@@ -244,8 +248,8 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
     ];
     const entryParams: unknown[] = [now];
     if (f.project !== undefined) {
-      entryWhere.push('en.project = ?');
-      entryParams.push(f.project);
+      entryWhere.push(entryProjectMatchSql('en.id'));
+      entryParams.push(f.project, f.project, f.project);
     }
     // Written from a session or thread: citing one of its visible events.
     const cited = sessionScope(f, 'c');
@@ -306,10 +310,34 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
       keys.add(key);
       const session = getSession(db, r.source, r.session_id);
       if (!session) continue;
+      // A child is listed when this page is that session, or a thread (it is a member of its
+      // parent's). Otherwise the feed names the parent.
+      const asked =
+        (f.session?.source === r.source && f.session.sessionId === r.session_id) ||
+        f.thread !== undefined;
+      let source = r.source;
+      let sessionId = r.session_id;
+      let shown = session;
+      if (!asked && isFoldedChild(db, source, sessionId)) {
+        // The feed names the parent, walking up to one that is itself listed.
+        for (let depth = 0; depth < 32 && isFoldedChild(db, source, sessionId); depth++) {
+          const parent = getSessionParent(db, source, sessionId);
+          if (!parent) break;
+          source = parent.parentSource;
+          sessionId = parent.parentSessionId;
+        }
+        const parentSession = getSession(db, source, sessionId);
+        if (!parentSession || `${source}\n${sessionId}` === `${r.source}\n${r.session_id}`)
+          continue;
+        const pkey = `${source}\n${sessionId}`;
+        if (keys.has(pkey)) continue;
+        keys.add(pkey);
+        shown = parentSession;
+      }
       const started = after
-        ? before.get(r.source, r.session_id, after.event) === undefined
-        : session.startedAt !== null && session.startedAt >= since;
-      sessions.push({ session, started });
+        ? before.get(source, sessionId, after.event) === undefined
+        : shown.startedAt !== null && shown.startedAt >= since;
+      sessions.push({ session: shown, started });
     }
 
     return {

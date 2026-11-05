@@ -7,6 +7,7 @@ import { eventInserter, refreshSession } from './ingest.js';
 import { importMemory } from './memories.js';
 import type { MigrationContext } from './migrations.js';
 import { readMirrorLine, scanMirrorLines } from './mirror.js';
+import { recordSessionParent } from './parents.js';
 import { mirrorRelPath, parseRawPath, rawDir } from './paths.js';
 import { deriveProposal } from './proposals.js';
 import { PULL_TOMBSTONES_AGAIN, setSetting } from './settings.js';
@@ -183,6 +184,19 @@ const AUTHOR_NEEDLES: Record<string, string[]> = {
   grok: ['"user_message_chunk"', '"subagent_spawned"', '"session_kind"'],
 };
 
+/**
+ * What a line must contain for a parent to be read from it. ZCode writes `parent_id` on every
+ * session line (null when it has none). A `parent` line of `places.jsonl` carries `"type":"parent"`.
+ * Other lines of Claude Code and Cursor hold no parent.
+ */
+const PARENT_NEEDLES: Record<string, string[]> = {
+  zcode: ['"parent_id"', '"type":"parent"'],
+  grok: ['"subagent_spawned"', '"type":"parent"'],
+  codex: ['"parent_thread_id"', '"type":"parent"'],
+  'claude-code': ['"type":"parent"'],
+  cursor: ['"type":"parent"'],
+};
+
 /** How often a long reparse says how far it is. */
 const PROGRESS_MS = 5_000;
 
@@ -332,4 +346,96 @@ export function reparseAuthorship(ctx: MigrationContext): void {
     );
   }
   if (counts.errors > 0) ctx.log(`${counts.errors} mirrored lines could not be parsed; skipped.`);
+}
+
+/**
+ * Derive parent sessions from the raw mirrors (see parents.ts), as ingestion with the adapters now
+ * would. Only lines that can name a parent are parsed (PARENT_NEEDLES). A run's group is recorded
+ * only when the line already carries it; this reads no agent's database and no session directory.
+ * The built-in sources' adapters are required. Threads are left to the caller. Must run inside a
+ * write transaction.
+ */
+export function reparseParents(ctx: MigrationContext): void {
+  const { db } = ctx;
+  const files = db
+    .prepare(
+      `SELECT id, source, path, generation, mirror, updated_at FROM raw_file
+        WHERE lines_ingested > 0 ORDER BY id`,
+    )
+    .all() as unknown as RawFileRecord[];
+  const todo = files.filter(
+    (f) => !(MEMORY_STREAM_SOURCES.has(f.source) && mirrorRelPath(f).startsWith('memory/')),
+  );
+  if (todo.length === 0) return;
+  const adapters = new Map<string, SourceAdapter | null>();
+  const adapterOf = (source: string): SourceAdapter | null => {
+    if (!adapters.has(source)) {
+      adapters.set(
+        source,
+        BUILT_IN_SOURCES.has(source) ? ctx.adapter(source) : ctx.findAdapter(source),
+      );
+    }
+    return adapters.get(source) ?? null;
+  };
+  const skipped = new Set<string>();
+  let parents = 0;
+  let errors = 0;
+  const started = Date.now();
+  let told = started;
+  for (const [i, f] of todo.entries()) {
+    if (Date.now() - told >= PROGRESS_MS) {
+      told = Date.now();
+      ctx.log(`Reading parent sessions: ${i} of ${todo.length} archived files…`);
+    }
+    const adapter = adapterOf(f.source);
+    if (!adapter) {
+      skipped.add(f.source);
+      continue;
+    }
+    const relPath = mirrorRelPath(f);
+    const absPath = f.path.startsWith('@') ? path.join(rawDir(ctx.home), f.mirror) : f.path;
+    const readLine = (n: number) => readMirrorLine(db, ctx.home, f.id, n);
+    try {
+      scanMirrorLines(
+        db,
+        ctx.home,
+        f.id,
+        PARENT_NEEDLES[f.source] ?? ['"type":"parent"'],
+        (line, lineNo) => {
+          if (line.trim().length === 0) return;
+          let parsed: ParsedLine | null;
+          try {
+            parsed = adapter.parseLine(line, {
+              absPath,
+              relPath,
+              lineNo,
+              fileMtimeMs: f.updated_at,
+              readLine,
+            });
+          } catch {
+            errors++;
+            return;
+          }
+          if (!parsed) return;
+          if (parsed.warning) {
+            errors++;
+            ctx.log(`warning ${relPath}:${lineNo}: ${parsed.warning}`);
+            return;
+          }
+          for (const fact of parsed.sessionParents ?? []) {
+            if (recordSessionParent(db, f.source, fact)) parents++;
+          }
+        },
+      );
+    } catch (err) {
+      if (!(err instanceof OriginError)) throw err;
+      ctx.log(`Skipped the mirror ${f.mirror}: ${err.message}`);
+    }
+  }
+  const seconds = Math.round((Date.now() - started) / 1000);
+  ctx.log(`Read ${parents} parent sessions from ${todo.length} archived files in ${seconds} s.`);
+  if (skipped.size > 0) {
+    ctx.log(`No adapter for ${[...skipped].sort().join(', ')}: their parent lines were not read.`);
+  }
+  if (errors > 0) ctx.log(`${errors} mirrored lines could not be parsed; skipped.`);
 }

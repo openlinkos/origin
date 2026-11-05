@@ -6,6 +6,7 @@ import zlib from 'node:zlib';
 import { cjkIndexText } from './cjk.js';
 import { OriginError } from './errors.js';
 import { type Migration, migrate, refuseNewerStore } from './migrations.js';
+import { comparePath } from './places.js';
 import { promptTitle } from './prompt.js';
 import { BACKFILL_EFFECTS, NEEDS_BACKFILL } from './schema.js';
 import type { SourceAdapter } from './types.js';
@@ -45,6 +46,9 @@ function registerFunctions(db: Database): void {
   );
   db.function('origin_prompt', { deterministic: true }, (text) =>
     typeof text === 'string' && promptTitle(text) !== null ? 1 : 0,
+  );
+  db.function('origin_path', { deterministic: true }, (text) =>
+    typeof text === 'string' ? comparePath(text) : null,
   );
 }
 

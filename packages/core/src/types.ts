@@ -30,6 +30,24 @@ export interface SessionKindFact {
   signal: string;
 }
 
+/**
+ * A line's statement that a session of its source has a parent (see parents.ts). `fromAgent` is
+ * the agent's own line; a `parent` line of `places.jsonl` sets it false.
+ */
+export interface SessionParentFact {
+  sessionId: string;
+  parentSessionId: string;
+  /** The parent's source; the line's own source when omitted. */
+  parentSource?: string;
+  via: 'subagent' | 'workflow';
+  runGroup?: string | null;
+  runName?: string | null;
+  /** The field that says so (`parent_id`, `subagent_spawned`, `dwf_run`, …). */
+  signal: string;
+  /** The agent's own line, rather than a `parent` line of `places.jsonl`. Not stored. */
+  fromAgent?: boolean;
+}
+
 /** An event produced by an adapter (not yet stored; no source or raw locator). */
 export interface EventInput {
   /** Stable id, unique within the source (usually the source's own message uuid; block-level events append `#i`). */
@@ -59,6 +77,11 @@ export interface EventInput {
    * an agent's display name): 1 to 200 characters, never an opaque id. Ignored on other events.
    */
   speaker?: string | null;
+  /**
+   * The line named `project` itself (`explicit`). Absent when the name is only the last segment of
+   * `cwd`. Ingestion records it and will not replace it with a resolved work tree.
+   */
+  projectSignal?: 'explicit';
 }
 
 /** A stored event row. */
@@ -120,6 +143,39 @@ export interface ParsedLine {
    * are read, so that the order lines arrive in does not matter.
    */
   sessionKinds?: SessionKindFact[];
+  /**
+   * A `places.jsonl` line's roots and places (see places.ts). No message events.
+   */
+  roots?: ProjectRootFact[];
+  places?: SessionPlaceFact[];
+  /**
+   * Sessions of this source that this line says have a parent (see SessionParentFact): its own, as
+   * a ZCode line's `parent_id` says, or another, as a Grok Build parent names the sub-agent it
+   * spawns. Kept apart from the events and combined when they are read.
+   */
+  sessionParents?: SessionParentFact[];
+  /**
+   * This line was skipped. Ingestion logs it as a warning and keeps the bytes. A `places.jsonl`
+   * line that is not the JSON object its type requires sets this and yields nothing, so one bad
+   * line does not stop the file, another source, or opening the store.
+   */
+  warning?: string;
+}
+
+/** One `project_root` row a `places.jsonl` `root` line names. */
+export interface ProjectRootFact {
+  path: string;
+  project: string;
+  root: string;
+  signal: string;
+}
+
+/** One `session_place` row a `places.jsonl` `place` line names. */
+export interface SessionPlaceFact {
+  sessionId: string;
+  project: string;
+  root: string | null;
+  signal: string;
 }
 
 /**
@@ -189,6 +245,11 @@ export interface ParseContext {
    * readable file.
    */
   readLine?: (lineNo: number) => string | null;
+  /**
+   * Set only for Origin's own `places.jsonl`: a generated file, or a device's file whose raw path
+   * is exactly `places.jsonl`. A file a person wrote, even under that name, is an ordinary source.
+   */
+  generated?: boolean;
 }
 
 /** A session source adapter for one agent (Source, see docs/architecture.md). Parsing must be deterministic and LLM-free. */

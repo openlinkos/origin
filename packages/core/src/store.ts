@@ -8,7 +8,9 @@ import {
 } from './authors.js';
 import type { Database } from './db.js';
 import { readMirrorLine } from './mirror.js';
+import { TOP_LEVEL_SESSION } from './parents.js';
 import { parseRawPath, rawDir } from './paths.js';
+import { projectEventSql, resolvedProjectSql } from './places.js';
 import { PROMPT_TITLE_MAX, promptTitle } from './prompt.js';
 import type { Author, EventKind, EventRow, Role, SessionRow } from './types.js';
 
@@ -44,7 +46,8 @@ export interface SearchHit extends EventRow {
  * The columns of an event `e` as EventRow has them, its authorship included: who wrote an input, as
  * derived and combined with its session's kind (see authors.ts).
  */
-export const EVENT_COLUMNS = `e.id, e.source, e.session_id, e.parent_id, e.ts, e.project, e.cwd, e.git_branch,
+export const EVENT_COLUMNS = `e.id, e.source, e.session_id, e.parent_id, e.ts,
+  ${resolvedProjectSql('e.source', 'e.session_id', 'e.project')} AS project, e.cwd, e.git_branch,
   e.role, e.kind, e.text, e.raw_file_id, e.raw_line, e.agent_version, e.meta,
   (${AUTHOR_SQL}) AS author, (${AUTHOR_SIGNAL_SQL}) AS author_signal, (${SPEAKER_SQL}) AS speaker`;
 
@@ -103,8 +106,8 @@ function whereClause(f: EventFilter, params: unknown[]): string {
     params.push(f.source);
   }
   if (f.project) {
-    parts.push('e.project = ?');
-    params.push(f.project);
+    parts.push(projectEventSql('e'));
+    params.push(f.project, f.project);
   }
   if (f.sessionId) {
     parts.push('e.session_id = ?');
@@ -135,16 +138,24 @@ export function listSessions(
   db: Database,
   filter: Pick<EventFilter, 'source' | 'project' | 'since' | 'until' | 'limit' | 'offset'> & {
     match?: string;
+    /**
+     * Only sessions that are not folded under a visible parent. Timelines ask for this; other
+     * callers list every session, children included.
+     */
+    topLevel?: boolean;
   } = {},
 ): SessionRow[] {
   const params: unknown[] = [];
   const parts: string[] = ['event_count > 0'];
+  if (filter.topLevel) parts.push(TOP_LEVEL_SESSION);
   if (filter.source) {
     parts.push('source = ?');
     params.push(filter.source);
   }
   if (filter.project) {
-    parts.push('project = ?');
+    parts.push(
+      `${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} = ?`,
+    );
     params.push(filter.project);
   }
   if (filter.since !== undefined) {
@@ -270,17 +281,50 @@ const positionOf = (r: UserMessage) => ({
 
 /**
  * Whether a session is the owner's conversation: whether it has a visible prompt of the owner (see
- * isOwnerPrompt). A child session or a headless run never is; nor is one of other people's words
- * alone. Briefs list only the owner's conversations, and only they join threads by their branch.
+ * isOwnerPrompt). A child session, a session that has a parent, or a headless run never is; nor is
+ * one of other people's words alone. Briefs list only the owner's conversations, and only they join
+ * threads by their branch. An upgrade still on an earlier version has not created session_kind
+ * (version 8) or session_parent (version 10); that exclusion is left out until the table exists.
  */
 export function isOwnerConversation(db: Database, source: string, sessionId: string): boolean {
-  return db.prepare(OWNER_CONVERSATION).get(source, sessionId) !== undefined;
+  const kind = hasTable(db, 'session_kind');
+  const parent = hasTable(db, 'session_parent');
+  const sql =
+    kind && parent
+      ? OWNER_CONVERSATION
+      : `SELECT 1 FROM event e INDEXED BY event_user_message
+  WHERE e.source = ? AND e.session_id = ? AND e.role = 'user' AND e.kind = 'message'
+    ${
+      kind
+        ? `AND NOT EXISTS (SELECT 1 FROM session_kind k
+      WHERE k.source = e.source AND k.session_id = e.session_id)`
+        : ''
+    }
+    ${
+      parent
+        ? `AND NOT EXISTS (SELECT 1 FROM session_parent p
+      WHERE p.source = e.source AND p.session_id = e.session_id)`
+        : ''
+    }
+    AND ${VISIBLE_EVENT} AND ${OWNER_PROMPT_SQL}
+  LIMIT 1`;
+  return db.prepare(sql).get(source, sessionId) !== undefined;
+}
+
+/** Whether this connection has the table. Checked when the statement is built: a later migration on the same connection may create it. */
+function hasTable(db: Database, name: string): boolean {
+  return (
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !==
+    undefined
+  );
 }
 
 const OWNER_CONVERSATION = `SELECT 1 FROM event e INDEXED BY event_user_message
   WHERE e.source = ? AND e.session_id = ? AND e.role = 'user' AND e.kind = 'message'
     AND NOT EXISTS (SELECT 1 FROM session_kind k
       WHERE k.source = e.source AND k.session_id = e.session_id)
+    AND NOT EXISTS (SELECT 1 FROM session_parent p
+      WHERE p.source = e.source AND p.session_id = e.session_id)
     AND ${VISIBLE_EVENT} AND ${OWNER_PROMPT_SQL}
   LIMIT 1`;
 
@@ -416,7 +460,9 @@ export function latestAgentVersions(db: Database): Map<string, string> {
   return out;
 }
 
-const SESSION_COLUMNS = `source, session_id, project, cwd, title, started_at, ended_at, event_count,
+const SESSION_COLUMNS = `source, session_id,
+  ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} AS project,
+  cwd, title, started_at, ended_at, event_count,
   (SELECT t.thread_id FROM session_thread t
     WHERE t.source = session.source AND t.session_id = session.session_id) AS thread_id`;
 
@@ -685,8 +731,11 @@ export function listProjects(
 ): Array<{ project: string; sessions: number; events: number }> {
   return db
     .prepare(
-      `SELECT project, COUNT(*) AS sessions, SUM(event_count) AS events FROM session
-       WHERE project IS NOT NULL AND event_count > 0 GROUP BY project ORDER BY sessions DESC, events DESC LIMIT ?`,
+      `SELECT ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} AS project,
+              COUNT(*) AS sessions, SUM(event_count) AS events FROM session
+       WHERE ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} IS NOT NULL
+         AND event_count > 0
+       GROUP BY 1 ORDER BY sessions DESC, events DESC LIMIT ?`,
     )
     .all(limit) as unknown as Array<{ project: string; sessions: number; events: number }>;
 }

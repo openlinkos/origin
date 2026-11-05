@@ -49,9 +49,10 @@ export const ARGS = {
       session: { type: 'string' },
       limit: { type: 'string' },
       all: { type: 'boolean', default: false },
+      children: { type: 'boolean', default: false },
     },
     usage:
-      'Usage: origin timeline [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50] | --session <id> [--all]',
+      'Usage: origin timeline [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50] [--children] | --session <id> [--all]',
   },
   search: {
     options: {
@@ -148,6 +149,24 @@ export const ARGS = {
       'Usage: origin distill [--project <name> | --thread <thr_…>] [--day <YYYY-MM-DD> | --since <t>] [--max 10] [--dry-run]',
   },
   projects: { options: {}, usage: 'Usage: origin projects' },
+  sessions: {
+    sub: {
+      reproject: {
+        options: { 'dry-run': { type: 'boolean', default: false } },
+        usage: 'Usage: origin sessions reproject [--dry-run]',
+      },
+      parents: {
+        options: {
+          'dry-run': { type: 'boolean', default: false },
+          'zcode-db': { type: 'string' },
+          'grok-home': { type: 'string' },
+        },
+        usage: 'Usage: origin sessions parents [--dry-run] [--zcode-db <file>] [--grok-home <dir>]',
+      },
+    },
+    usage:
+      'Usage: origin sessions reproject [--dry-run] | parents [--dry-run] [--zcode-db <file>] [--grok-home <dir>]',
+  },
   backup: { options: {}, positionals: [1, 1], usage: 'Usage: origin backup <dir>' },
   mcp: { options: {}, usage: 'Usage: origin mcp' },
   ui: {

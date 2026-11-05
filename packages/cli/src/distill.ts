@@ -120,7 +120,7 @@ export function distillScope(
   if (o.day && o.since) throw new OriginError('Give --day or --since, not both.');
   const card = o.thread ? describeThread(db, o.thread) : null;
   if (o.thread && !card) throw new OriginError(`Unknown thread ${o.thread}.`);
-  const project = o.project ?? card?.project ?? recallScope(at.cwd).project ?? null;
+  const project = o.project ?? card?.project ?? recallScope(at.cwd, { db }).project ?? null;
 
   let from: number | null;
   let until = at.now;

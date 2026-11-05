@@ -1,4 +1,4 @@
-import type { Entry, EventRow, SearchHit } from '@openlinkos/origin-core';
+import { displayTitle, type Entry, type EventRow, type SearchHit } from '@openlinkos/origin-core';
 import type { Ctx } from '../context.js';
 import { clip, fmtNumber, fmtSpan, time } from '../context.js';
 import { href, html, type SafeHtml } from '../html.js';
@@ -9,7 +9,9 @@ import {
   SESSION_RANGES,
   SESSION_SORTS,
   type SessionBoard,
+  type SessionBoardChild,
   type SessionBoardFilter,
+  type SessionBoardRow,
 } from '../service.js';
 import {
   alert,
@@ -42,6 +44,39 @@ import {
 /** The projects the filters list before folding the rest away; the chosen ones always show. */
 const RAIL_PROJECTS = 8;
 
+/** A session and every nested child, so a grandchild is a row of the table too. */
+function sessionRows(ctx: Ctx, s: SessionBoardRow | SessionBoardChild, child: boolean): SafeHtml[] {
+  return [sessionCells(ctx, s, child), ...s.children.flatMap((c) => sessionRows(ctx, c, true))];
+}
+
+/** One sessions-table row. A child is named by its display title; the row keeps the stored title. */
+function sessionCells(ctx: Ctx, s: SessionBoardRow | SessionBoardChild, child: boolean): SafeHtml {
+  const t = ctx.t;
+  const n = (v: number) => fmtNumber(v, ctx.lang);
+  const name = child
+    ? sessionName(
+        ctx,
+        {
+          title: displayTitle(s.title, {
+            via: (s as SessionBoardChild).via,
+            runName: (s as SessionBoardChild).runName,
+          }),
+          prompt: s.prompt,
+        },
+        120,
+      )
+    : sessionName(ctx, s, 120);
+  const cells = html`<td class="admin-wide"><a class="admin-cell-title" href="${sessionHref(s)}">${name}</a>${s.thread ? html`<span class="admin-cell-sub"><a class="ol-mono" href="${href('thread', { id: s.thread })}" title="${t('thread.title')}">${icon(ctx, 'route', 'sm')}${s.thread}</a></span>` : ''}</td>
+        <td>${agentTag(s.source)}</td>
+        <td data-label="${t('filter.project')}">${s.project ?? html`<span class="admin-faint">—</span>`}</td>
+        <td class="ol-num" data-label="${t('sessions.turns')}">${n(s.turns)}</td>
+        <td class="ol-num" data-label="${t('overview.events')}">${n(s.eventCount)}</td>
+        <td class="ol-num" data-label="${t('sessions.duration')}">${s.startedAt === null || s.endedAt === null ? '—' : fmtSpan(s.endedAt - s.startedAt, t)}</td>
+        <td class="ol-num" data-label="${t('nav.recalls')}">${s.recalls === 0 ? html`<span class="admin-faint">—</span>` : n(s.recalls)}</td>
+        <td class="ol-num">${whenShort(ctx, s.endedAt)}</td>`;
+  return child ? html`<tr class="admin-child">${cells}</tr>` : html`<tr>${cells}</tr>`;
+}
+
 /**
  * Sessions, as a list with filters (agents, projects, recall, names), a filter field, the time
  * ranges, and the sort; then the histogram of the last 30 days, and the sessions, newest first
@@ -49,7 +84,6 @@ const RAIL_PROJECTS = 8;
  */
 export function sessionsPage(ctx: Ctx, b: SessionBoard & { filter: SessionBoardFilter }): void {
   const t = ctx.t;
-  const n = (v: number) => fmtNumber(v, ctx.lang);
   const f = b.filter;
   const link = (changes: Record<string, string | string[] | null>) => withParams(ctx, changes);
   const shownProjects = [
@@ -123,18 +157,7 @@ export function sessionsPage(ctx: Ctx, b: SessionBoard & { filter: SessionBoardF
           })
       : html`<div class="ol-table-wrap"><table class="ol-table ol-table-compact ol-table-stack">
       <thead><tr><th>${t('sessions.titleColumn')}</th><th>${t('facet.agent')}</th><th>${t('filter.project')}</th><th class="ol-num">${t('sessions.turns')}</th><th class="ol-num">${t('overview.events')}</th><th class="ol-num">${t('sessions.duration')}</th><th class="ol-num">${t('nav.recalls')}</th><th class="ol-num">${t('sessions.lastActive')}</th></tr></thead>
-      <tbody>${b.rows.map(
-        (s) => html`<tr>
-        <td class="admin-wide"><a class="admin-cell-title" href="${sessionHref(s)}">${sessionName(ctx, s, 120)}</a>${s.thread ? html`<span class="admin-cell-sub"><a class="ol-mono" href="${href('thread', { id: s.thread })}" title="${t('thread.title')}">${icon(ctx, 'route', 'sm')}${s.thread}</a></span>` : ''}</td>
-        <td>${agentTag(s.source)}</td>
-        <td data-label="${t('filter.project')}">${s.project ?? html`<span class="admin-faint">—</span>`}</td>
-        <td class="ol-num" data-label="${t('sessions.turns')}">${n(s.turns)}</td>
-        <td class="ol-num" data-label="${t('overview.events')}">${n(s.eventCount)}</td>
-        <td class="ol-num" data-label="${t('sessions.duration')}">${s.startedAt === null || s.endedAt === null ? '—' : fmtSpan(s.endedAt - s.startedAt, t)}</td>
-        <td class="ol-num" data-label="${t('nav.recalls')}">${s.recalls === 0 ? html`<span class="admin-faint">—</span>` : n(s.recalls)}</td>
-        <td class="ol-num">${whenShort(ctx, s.endedAt)}</td>
-      </tr>`,
-      )}</tbody></table></div>`;
+      <tbody>${b.rows.flatMap((s) => sessionRows(ctx, s, false))}</tbody></table></div>`;
   renderPage(ctx, 200, {
     title: t('nav.sessions'),
     nav: 'sessions',

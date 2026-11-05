@@ -135,6 +135,7 @@ export {
   appendRemoteLines,
   fingerprintSources,
   type IngestContext,
+  ingestPlacesFile,
   listDevices,
   localRawFiles,
   type RemoteChunk,
@@ -243,6 +244,17 @@ export {
   storeUsage,
 } from './overview.js';
 export {
+  childSessions,
+  displayTitle,
+  getSessionParent,
+  isFoldedChild,
+  type ParentVia,
+  recordSessionParent,
+  type SessionParentRow,
+  sessionFold,
+  TOP_LEVEL_SESSION,
+} from './parents.js';
+export {
   ADMIN_PASSWORD_MAX_LENGTH,
   ADMIN_PASSWORD_MIN_LENGTH,
   ADMIN_SCRYPT_PARAMS,
@@ -264,6 +276,28 @@ export {
   verifyAdminPasswordHash,
 } from './password.js';
 export { dbPath, originHome, parseRawPath, rawDir, remotePath, sourcesDir } from './paths.js';
+export {
+  type AgentFacts,
+  comparePath,
+  entryProjectMatchSql,
+  isPlacesRel,
+  lastSegment,
+  longestRoot,
+  type PlaceResolution,
+  type ProjectMove,
+  parsePlaceLine,
+  placesSourceFile,
+  projectEventSql,
+  type ReprojectReport,
+  type ReprojectResult,
+  recordExplicitPlace,
+  reparsePlaces,
+  reproject,
+  resolvedProjectSql,
+  resolvePlace,
+  sessionShape,
+  underProjectAlias,
+} from './places.js';
 export {
   acceptProposal,
   countProposals,
@@ -486,6 +520,7 @@ export type {
   Role,
   SessionKind,
   SessionKindFact,
+  SessionParentFact,
   SessionRow,
   SourceAdapter,
   SourceFile,

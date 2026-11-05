@@ -430,6 +430,15 @@ describe('who wrote the input of a Grok session', () => {
     ).toEqual({
       events: [],
       sessionKinds: [{ sessionId: CHILD, kind: 'child', signal: 'subagent_spawned' }],
+      sessionParents: [
+        {
+          sessionId: CHILD,
+          parentSessionId: SESSION,
+          via: 'subagent',
+          signal: 'subagent_spawned',
+          fromAgent: true,
+        },
+      ],
     });
     // A sub-agent's title line says what it is; a headless run's too; a primary session's says nothing.
     const titleAt = { ...at(CHILD), relPath: `sessions/${GROUP}/${CHILD}/title.jsonl` };

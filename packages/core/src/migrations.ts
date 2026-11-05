@@ -2,8 +2,9 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { OriginError } from './errors.js';
 import { sessionBranchQuery } from './ingest.js';
+import { reparsePlaces } from './places.js';
 import { deriveProposals } from './proposals.js';
-import { reparseAuthorship, reparseMemories, reparseTitles } from './reparse.js';
+import { reparseAuthorship, reparseMemories, reparseParents, reparseTitles } from './reparse.js';
 import { SCHEMA } from './schema.js';
 import { deriveThreads } from './threads.js';
 import type { SourceAdapter } from './types.js';
@@ -156,7 +157,69 @@ export const MIGRATIONS: Migration[] = [
       deriveThreads(ctx.db);
     },
   },
+  {
+    // Where a session belongs, apart from the label on its first event. Empty until a place line
+    // or a later resolution fills it. Does not read the filesystem and does not reparse mirrors.
+    // The SQL is written here, the same shape schema.ts creates for a new store (one project root
+    // per device, and place_head). This file does not import that shape; the two must stay in step.
+    version: 9,
+    name: 'where a session belongs, apart from the label on its line',
+    up: (ctx) => {
+      ctx.db.exec(PLACE_TABLES_V9);
+    },
+  },
+  {
+    // Parent sessions (see parents.ts), then places.jsonl lines mirrored before those tables
+    // existed: a later sync skips bytes it already has, so they are applied here, after
+    // session_parent exists. A places line whose version this Origin does not know stays in the
+    // mirror, is skipped, and is logged as a warning; the format that understands it calls
+    // reparsePlaces again. Threads again, so a child joins its parent and a linked work tree joins
+    // the main checkout. Does not open an agent's database or session directory. The parent-table
+    // SQL is written below, not imported from schema.ts.
+    version: 10,
+    name: 'parent sessions, and places already mirrored',
+    up: (ctx) => {
+      ctx.db.exec(PARENT_TABLES);
+      reparseParents(ctx);
+      reparsePlaces(ctx.db, ctx.home, ctx.log);
+      deriveThreads(ctx.db);
+    },
+  },
 ];
+
+/**
+ * Version 9: where a session belongs. Written here, not imported from schema.ts. A new store is
+ * created from schema.ts with this same shape; keep the two the same. This step fills nothing.
+ * Version 10 reads the places already mirrored. A line whose version this Origin does not know
+ * stays in the mirror; the format that understands it calls reparsePlaces again.
+ */
+const PLACE_TABLES_V9 = `
+CREATE TABLE IF NOT EXISTS project_root (
+  device  TEXT NOT NULL DEFAULT '',
+  path    TEXT NOT NULL,
+  project TEXT NOT NULL,
+  root    TEXT NOT NULL,
+  signal  TEXT NOT NULL,
+  seen_at INTEGER NOT NULL,
+  PRIMARY KEY (device, path)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS session_place (
+  source     TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  project    TEXT NOT NULL,
+  root       TEXT,
+  signal     TEXT NOT NULL,
+  PRIMARY KEY (source, session_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_place_project ON session_place (project);
+CREATE TABLE IF NOT EXISTS place_head (
+  source TEXT NOT NULL,
+  device TEXT NOT NULL DEFAULT '',
+  key    TEXT NOT NULL,
+  line   TEXT NOT NULL,
+  PRIMARY KEY (source, device, key)
+) WITHOUT ROWID;
+`;
 
 /**
  * Version 7: a token is a device's when the hub holds what only a device sends under its name (a
@@ -217,6 +280,22 @@ END;
 CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log BEGIN
   SELECT RAISE(ABORT, 'audit_log is append-only');
 END;
+`;
+
+/** Version 10's parent-session table, written here rather than imported from schema.ts. */
+const PARENT_TABLES = `
+CREATE TABLE IF NOT EXISTS session_parent (
+  source            TEXT NOT NULL,
+  session_id        TEXT NOT NULL,
+  parent_source     TEXT NOT NULL,
+  parent_session_id TEXT NOT NULL,
+  via               TEXT NOT NULL CHECK (via IN ('subagent', 'workflow')),
+  run_group         TEXT,
+  run_name          TEXT,
+  signal            TEXT NOT NULL,
+  PRIMARY KEY (source, session_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_parent_parent ON session_parent (parent_source, parent_session_id);
 `;
 
 /** The tables of authorship, as version 8 created them. */

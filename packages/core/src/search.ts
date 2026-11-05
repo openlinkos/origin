@@ -1,6 +1,7 @@
 import { CJK_MESSAGE_TOKEN, cjkTermQuery, isCjkTerm } from './cjk.js';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
+import { projectEventSql, resolvedProjectSql } from './places.js';
 import {
   EVENT_COLUMNS,
   type EventFilter,
@@ -230,8 +231,8 @@ function candidateFilters(
     params.push(f.source);
   }
   if (f.project && withProject) {
-    parts.push('e.project = ?');
-    params.push(f.project);
+    parts.push(projectEventSql('e'));
+    params.push(f.project, f.project);
   }
   if (f.sessionId) {
     parts.push('e.session_id = ?');
@@ -290,8 +291,20 @@ function rangeQuery(
   };
   const projectByIndex = !!f.project && projectSize(db, f) <= PROJECT_SET_LIMIT;
   if (projectByIndex) {
+    // Events with no place row still use the project index. Placed sessions match their resolved
+    // name. `range` pushes its parameters as it is called, in the order the placeholders appear.
     whereParams.push(f.project);
-    conditions.push(`+f.rowid IN (SELECT seq FROM event WHERE project = ?${range('ts')})`);
+    const unplaced = range('e.ts');
+    whereParams.push(f.project);
+    const placed = range('e.ts');
+    conditions.push(`+f.rowid IN (
+      SELECT e.seq FROM event e
+       WHERE e.project = ? AND NOT EXISTS (
+         SELECT 1 FROM session_place sp WHERE sp.source = e.source AND sp.session_id = e.session_id)${unplaced}
+      UNION ALL
+      SELECT e.seq FROM event e
+        JOIN session_place sp ON sp.source = e.source AND sp.session_id = e.session_id
+       WHERE sp.project = ?${placed})`);
   }
   const inRange = range('x.ts');
   if (inRange) conditions.push(inRange.slice(' AND '.length));
@@ -319,7 +332,8 @@ function projectSize(db: Database, f: EventFilter): number {
   const row = db
     .prepare(
       `SELECT COALESCE(SUM(event_count), 0) AS n FROM session
-       WHERE project = ? AND ended_at >= ? AND started_at <= ?`,
+       WHERE ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} = ?
+         AND ended_at >= ? AND started_at <= ?`,
     )
     .get(f.project ?? null, f.since ?? MIN_SEQ, f.until ?? MAX_SEQ) as { n: number };
   return row.n;

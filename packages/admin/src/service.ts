@@ -5,6 +5,7 @@ import {
   type AuditRecord,
   acceptProposal,
   activeProjects,
+  childSessions,
   createToken as coreCreateToken,
   correct,
   countProposals,
@@ -82,6 +83,7 @@ import {
   recordAudit,
   rejectProposal,
   remember,
+  resolvedProjectSql,
   restore,
   revokeGrant,
   revokeToken,
@@ -97,6 +99,7 @@ import {
   storeName,
   storeUsage,
   type ThreadCard,
+  TOP_LEVEL_SESSION,
   type TokenInfo,
   type TombstoneSummary,
   type TurnStart,
@@ -191,6 +194,15 @@ export interface SessionListRow extends SessionRow {
   turns: number;
 }
 
+/** A child session nested under its parent on the sessions page. `title` stays the stored one. */
+export interface SessionBoardChild extends SessionListRow {
+  recalls: number;
+  via: 'subagent' | 'workflow';
+  runName: string | null;
+  /** Its own children, so a grandchild stays on the page under the parent. */
+  children: SessionBoardChild[];
+}
+
 /** The time ranges of the sessions page, by the last activity of a session. */
 export const SESSION_RANGES = ['today', '7d', '30d', 'all'] as const;
 export type SessionRange = (typeof SESSION_RANGES)[number];
@@ -220,6 +232,8 @@ export interface FacetValue {
 export interface SessionBoardRow extends SessionListRow {
   /** How many recalls handed this session something. */
   recalls: number;
+  /** Its child sessions that have events, in run-group order. Not counted in `total`. */
+  children: SessionBoardChild[];
 }
 
 /** A day of the sessions histogram: sessions by agent, each on the day of its last activity. */
@@ -1382,14 +1396,50 @@ export class AdminService {
    * for the rows shown, and for a name filter.
    */
   sessionBoard(f: SessionBoardFilter, now: number): SessionBoard {
+    const folded = new Set(
+      (
+        this.db
+          .prepare(
+            `SELECT source, session_id FROM session
+              WHERE event_count > 0 AND NOT (${TOP_LEVEL_SESSION})`,
+          )
+          .all() as unknown as Array<{ source: string; session_id: string }>
+      ).map((r) => `${r.source}:${r.session_id}`),
+    );
+    const childFacts = this.db
+      .prepare(
+        `SELECT source, session_id, parent_source, parent_session_id, via, run_name
+           FROM session_parent
+          ORDER BY COALESCE(run_group, ''), source, session_id`,
+      )
+      .all() as unknown as Array<{
+      source: string;
+      session_id: string;
+      parent_source: string;
+      parent_session_id: string;
+      via: 'subagent' | 'workflow';
+      run_name: string | null;
+    }>;
+    const byParent = new Map<string, typeof childFacts>();
+    for (const fact of childFacts) {
+      const key = `${fact.parent_source}:${fact.parent_session_id}`;
+      const list = byParent.get(key);
+      if (list) list.push(fact);
+      else byParent.set(key, [fact]);
+    }
+    // Top-level sessions only: a child is nested under its parent and takes no page slot.
     const all = (
       this.db
         .prepare(
-          `SELECT source, session_id, project, title, started_at, ended_at, event_count
+          `SELECT source, session_id,
+                  ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} AS project,
+                  title, started_at, ended_at, event_count
            FROM session WHERE event_count > 0`,
         )
         .all() as unknown as BoardSession[]
-    ).map((r) => ({ ...r, key: `${r.source}:${r.session_id}` }));
+    )
+      .map((r) => ({ ...r, key: `${r.source}:${r.session_id}` }))
+      .filter((r) => !folded.has(r.key));
     const recalls = new Map(
       (
         this.db
@@ -1418,7 +1468,44 @@ export class AdminService {
       recall: (r: Row) => !f.recalled || recalls.has(r.key),
       name: (r: Row) => f.name === 'any' || (f.name === 'titled') === (r.title !== null),
       range: (r: Row) => since === null || (r.ended_at ?? 0) >= since,
-      q: (r: Row) => named === null || named.has(r.key),
+      q: (r: Row) =>
+        named === null || named.has(r.key) || descendantKeys(r.key).some((k) => named.has(k)),
+    };
+    const descendantKeys = (key: string): string[] => {
+      const out: string[] = [];
+      const seen = new Set<string>([key]);
+      const walk = (parent: string) => {
+        for (const child of byParent.get(parent) ?? []) {
+          const childKey = `${child.source}:${child.session_id}`;
+          if (seen.has(childKey)) continue;
+          seen.add(childKey);
+          out.push(childKey);
+          walk(childKey);
+        }
+      };
+      walk(key);
+      return out;
+    };
+    const nest = (source: string, sessionId: string, seen: Set<string>): SessionBoardChild[] => {
+      const out: SessionBoardChild[] = [];
+      // childSessions skips a forgotten session in the middle and hangs the child on the nearest
+      // visible ancestor. The direct links above stay, so a name search can still walk through one.
+      for (const fact of childSessions(this.db, source, sessionId)) {
+        const key = `${fact.source}:${fact.sessionId}`;
+        if (seen.has(key)) continue;
+        const session = getSession(this.db, fact.source, fact.sessionId);
+        if (!session || session.eventCount <= 0) continue;
+        seen.add(key);
+        out.push({
+          ...session,
+          turns: sessionTurnStarts(this.db, fact.source, fact.sessionId).length,
+          recalls: recalls.get(key) ?? 0,
+          via: fact.via,
+          runName: fact.runName,
+          children: nest(fact.source, fact.sessionId, seen),
+        });
+      }
+      return out;
     };
     const passing = (skip?: keyof typeof tests) =>
       all.filter((r) =>
@@ -1454,6 +1541,7 @@ export class AdminService {
         ...(getSession(this.db, r.source, r.session_id) as SessionRow),
         turns: sessionTurnStarts(this.db, r.source, r.session_id).length,
         recalls: recalls.get(r.key) ?? 0,
+        children: nest(r.source, r.session_id, new Set([r.key])),
       })),
       total: matching.length,
       page,
@@ -1695,10 +1783,62 @@ export class AdminService {
     );
     const q = f.q.toLowerCase();
     const since = rangeStart(f.range, now);
+    const cited = new Map<string, Set<string>>();
+    const homes = new Set(
+      (
+        this.db
+          .prepare(
+            `SELECT ie.entry_id FROM imported_entry ie
+              JOIN entry_source hs ON hs.entry_id = ie.entry_id
+              JOIN event hm ON hm.id = hs.event_id
+             WHERE hm.kind = 'memory' AND hm.cwd IS NOT NULL`,
+          )
+          .all() as unknown as Array<{ entry_id: string }>
+      ).map((row) => row.entry_id),
+    );
+    // Same rule as the brief: a cited place counts when the session's raw label is the entry's
+    // project. An imported memory with a directory matches that directory only.
+    for (const row of this.db
+      .prepare(
+        `SELECT es.entry_id, sp.project AS project FROM entry_source es
+         JOIN entry en ON en.id = es.entry_id
+         JOIN event c ON c.id = es.event_id
+         JOIN session s ON s.source = c.source AND s.session_id = c.session_id
+         JOIN session_place sp ON sp.source = s.source AND sp.session_id = s.session_id
+        WHERE lower(s.project) = lower(en.project)`,
+      )
+      .all() as unknown as Array<{ entry_id: string; project: string }>) {
+      if (homes.has(row.entry_id)) continue;
+      const names = cited.get(row.entry_id) ?? new Set<string>();
+      names.add(row.project);
+      cited.set(row.entry_id, names);
+    }
+    for (const row of this.db
+      .prepare(
+        `SELECT ie.entry_id, pr.project AS project FROM imported_entry ie
+          JOIN entry_source hs ON hs.entry_id = ie.entry_id
+          JOIN event hm ON hm.id = hs.event_id
+          JOIN project_root pr ON pr.device = ''
+         WHERE hm.kind = 'memory' AND hm.cwd IS NOT NULL
+           AND (
+             origin_path(hm.cwd) = pr.path
+             OR substr(origin_path(hm.cwd), 1, length(pr.path) + 1) = pr.path || '/')`,
+      )
+      .all() as unknown as Array<{ entry_id: string; project: string }>) {
+      const names = cited.get(row.entry_id) ?? new Set<string>();
+      names.add(row.project);
+      cited.set(row.entry_id, names);
+    }
+    const projectNames = (e: Entry): string[] => {
+      const names = new Set<string>();
+      if (e.project !== null && !homes.has(e.id)) names.add(e.project);
+      for (const name of cited.get(e.id) ?? []) names.add(name);
+      return [...names];
+    };
     const tests = {
       kind: (e: Entry) => f.kinds.length === 0 || f.kinds.includes(e.kind),
       project: (e: Entry) =>
-        f.projects.length === 0 || (e.project !== null && f.projects.includes(e.project)),
+        f.projects.length === 0 || projectNames(e).some((name) => f.projects.includes(name)),
       author: (e: Entry) => f.authors.length === 0 || f.authors.includes(authorOf(e)),
       origin: (e: Entry) => f.origin === 'any' || (f.origin === 'imported') === e.imported,
       recalled: (e: Entry) => !f.recalled || recalled.has(e.id),
@@ -1739,7 +1879,15 @@ export class AdminService {
       ) as Record<SessionRange, number>,
       facets: {
         kinds: counted(passing('kind'), (e) => e.kind),
-        projects: counted(passing('project'), (e) => e.project),
+        projects: (() => {
+          const n = new Map<string, number>();
+          for (const e of passing('project')) {
+            for (const name of projectNames(e)) n.set(name, (n.get(name) ?? 0) + 1);
+          }
+          return [...n]
+            .map(([value, count]) => ({ value, count }))
+            .sort((a, b) => b.count - a.count || (a.value < b.value ? -1 : 1));
+        })(),
         authors: counted(passing('author'), authorOf),
         imported: byOrigin.filter((e) => e.imported).length,
         written: byOrigin.filter((e) => !e.imported).length,
