@@ -83,6 +83,8 @@ describe('usage never opens the store', () => {
     ['status', '-h'],
     ['sync', '--help'],
     ['search', 'deploy', '--help'],
+    ['digest', '--help'],
+    ['digest', '--day', '2026-10-20', '-h'],
     ['token', 'help'],
     ['token', 'create', 'laptop', '--help'],
     ['hub', '--help'],
@@ -114,6 +116,12 @@ describe('usage never opens the store', () => {
     [['token', 'create', 'ci', '--read-only'], "Unknown option '--read-only'"],
     [['admin', 'username', 'a', 'b'], 'Too many arguments.'],
     [['raw', 'upload', '--concurency', '4'], "Unknown option '--concurency'"],
+    [['digest', '--day', '2026-02-30'], 'Not a day: 2026-02-30'],
+    [['digest', '--day', 'yesterday'], 'Not a day: yesterday'],
+    [['digest', '--limit', '0'], '--limit must be a whole number from 1 to 200.'],
+    [['digest', '--limit', '201'], '--limit must be a whole number from 1 to 200.'],
+    [['digest', '--jsn'], "Unknown option '--jsn'"],
+    [['digest', '2026-10-20'], "Unexpected argument '2026-10-20'"],
   ])('origin %j is refused with its usage before the store is opened', async (argv, message) => {
     const before = snapshot();
     expect(await main(argv)).toBe(2);
@@ -145,6 +153,7 @@ describe('the arguments table', () => {
         'admin',
         'backup',
         'correct',
+        'digest',
         'distill',
         'entries',
         'forget',
@@ -188,6 +197,18 @@ describe('the arguments table', () => {
     expect(checkArgs('token', ['create', 'ci', '--agent', '--readonly'])).toEqual({ kind: 'run' });
     expect(checkArgs('admin', ['username'])).toEqual({ kind: 'run' });
     expect(checkArgs('admin', ['username', 'dana'])).toEqual({ kind: 'run' });
+    expect(checkArgs('digest', [])).toEqual({ kind: 'run' });
+    expect(
+      checkArgs('digest', [
+        '--day',
+        '2026-10-20',
+        '--project',
+        'origin',
+        '--limit',
+        '200',
+        '--json',
+      ]),
+    ).toEqual({ kind: 'run' });
     // After `--`, --help is an argument, not a request for help.
     expect(checkArgs('search', ['--', '--help'])).toEqual({ kind: 'run' });
   });

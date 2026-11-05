@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-e3b53883
+sourceHash: sha256-a83ecda8
 ---
 
 # 命令参考
@@ -10,6 +10,8 @@ origin sync      --hook <agent>                        采集 Agent 的 hook 指
 origin status                                          各来源统计、条目数与上次采集时间
 origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50] [--children]
 origin timeline  --session <id> [--all]                单个会话的事件（默认不含工具事件）
+origin digest    [--day <YYYY-MM-DD>] [--project <name>] [--source <id>] [--limit 50] [--json]
+                                                       一天的会话、提示、工具、改过的文件、条目和遗忘
 origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
 origin show      <id> [--source <id>]                  显示条目、事件（以及它的原始来源）、会话、线索、一次召回或一条提议
 origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
@@ -156,6 +158,47 @@ A session of it: origin show <session id>
 
 `origin sessions repair` 为还没有项目位置的会话补上位置，并再次读取镜像里已有的父会话事实，补上缺失的父链接，包括旧进程没有记录的 Grok `subagent_spawned`。`--dry-run` 只报告。再跑一次则什么也不改。在中枢上，它重读镜像过来的父会话行，不会去解析另一台设备的会话。在不保存会话的中继上，它说明这一点并退出。
 
+## 一天的摘要 {#digest-of-a-day}
+
+`origin digest` 按这台机器的时区回顾一个日历日，默认是今天，`--day` 可以指定别的日子：先是当天的合计和各项目，然后是顶层会话，最近的在前，每个会话附上你的提示（前五条）、它调用的工具，以及它的编辑改过的文件，再往后是当天写下的条目、提出的提议，以及遗忘和恢复，只列 id。会话的子会话（子 Agent 和工作流步骤）算在它名下，即使它自己当天没有动静。`--project` 和 `--source` 只保留一个项目或一个 Agent 的会话，以及与之相关的条目和提议；`--limit` 限制每个列表的条数（默认 50，最多 200）。它只读取库，所以如果 Agent 最近的会话还不在库里，请先运行 `origin sync`；它也不调用任何模型。`--json` 打印的内容与 MCP 工具 [`digest`](./mcp.md#digest) 返回的完全一样。哪些工具算作编辑文件，见[编辑过的文件](../sources.md#files-edited)；规则见[每日摘要](../architecture.md#daily-digest)。
+
+```console
+$ origin digest --day 2026-10-22
+Digest of 2026-10-22 (Asia/Shanghai)
+2 sessions · 148 events · 6 prompts · 1 project · 2 agents · 3 child sessions
+
+Projects
+  demo-app  2 sessions  148 events  6 prompts
+
+Sessions, most recent first (counts include child sessions)
+  14:02–17:40  claude-code demo-app                   120 events  Tag the release
+           ↳ claude-code:2f1e8c47-0000-4000-8000-000000000003  thread thr_4c1e9a7b2d30  · 3 children
+             prompts (5):   14:02  “draft the notes for 0.5.0 from the changelog”
+                            15:20  “bump every package to 0.5.0”
+                            16:05  “run the tests on Windows too”
+                            17:12  “both CI jobs are green, tag it”
+                            17:38  “remember how we tag releases”
+             tools (55):    Bash 31 · Edit 12 · Read 9 · Task 3
+             files (2):     CHANGELOG.md · packages/cli/package.json
+  10:15–11:02  codex       demo-app                    28 events  “Write the migration for the new column”
+           ↳ codex:0199b7c4-2d1e-7f3a-8b5c-6d7e8f9a0b1c
+             prompts (1):   10:15  “Write the migration for the new column”
+             tools (11):    shell 9 · apply_patch 2
+             files (1):     src/migrations.ts
+
+Entries written (1)
+  [17:39] memory, demo-app, claude-code@laptop
+      v0.5.0 is tagged from master after both CI jobs passed.
+      ↳ ent_7a2c9e1f0b44
+
+Forgets and restores, by id (1)
+  [17:35] forget  tmb_6c1d0e9a2b3f → event claude-code:7d0c4a1e-0000-4000-8000-000000000002
+
+Open any id: origin show <id>
+```
+
+在已接入中枢的设备上，`origin digest` 和各个整理命令一样读取设备自己的库，而 MCP 工具 `digest` 还会加上中枢里其他设备的会话。在中继上，它询问中枢，日子按这台机器的时区算。
+
 ## 召回 {#recall}
 
 `origin recall` 显示 Agent 在当前目录（或 `--cwd` 指定的目录）会拿到什么：新会话的简报，或者加上 `--prompt` 时与提示匹配的条目。`--agent` 按该 Agent 会拿到的样子显示，不含它自己加载的记忆。它不做任何记录。`origin agents connect` 会设置好这些 hook（见[接入 Agent](./connect-agents.md#connect-them-all-at-once)）。Claude Code 和 Codex 的 hook 运行 `origin recall --hook claude-code` 或 `--hook codex`，它从标准输入读取 hook 的事件，记录交出的内容，并输出给 Agent。`origin recalls` 按从新到旧列出 Agent 拿到过什么（加 `--all` 还会列出什么都没交出的召回），`origin show rcl_…` 显示一次召回，包括它回应的提示和本会话之后用上的项。见[召回](./recall.md)。
@@ -224,7 +267,7 @@ To bring it back: origin restore tmb_2d8f0c1a9e35 --reason <text>
 - 在设备上，`origin hub connect <url>` 经由你在浏览器中的批准接入设备：它打印一个链接和一个验证码，你在中枢的管理界面中批准这台设备，设备随即以它的库名称收到自己的令牌；加上 `--token` 时，它改用在中枢上创建的令牌，这个令牌必须以库的名称命名。它会保存中枢地址和令牌。`origin hub connect` 和 `origin hub status` 会向中枢核对，不一致时说明如何解决。此后 `origin sync` 也会与中枢同步：发送新的原始镜像字节，以及在本设备上写下的条目和遗忘记录，再应用中枢的遗忘记录。可以随时重跑，每次都会从上次停下的位置继续。`--local` 会跳过中枢。`origin status` 和 `origin hub status` 会显示这台设备上一次与中枢同步完成的时间（无论由哪个命令或 Agent 发起），如果此后有一次同步失败，还会显示它的错误。
 - 设备接入后，`origin mcp` 根据设备的库作答，并合并中枢的回答，等待中枢最多 2 秒；Agent 保存的内容写在设备上，然后再同步。
 - 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct`、`forget` 和 `restore` 之后会与中枢同步；如果连不上中枢，改动会留在设备上，直到下一次同步。
-- `origin hub connect … --relay` 把一个空库变成[中继](./hub.md#run-a-device-as-a-relay)，它不保有自己的会话或条目；已经保存了这些内容的库会被拒绝。在中继上，`origin sync` 直接把 Agent 新增的记录行发送给中枢（`--local` 不适用），`origin status` 按来源显示尚未发送的文件和字节，并在尚未发送的会话临近被 Agent 删除的年龄时发出警告，`origin mcp` 把每一次工具调用都交给中枢，`search`、`timeline`、`show`、`entries`、`correct` 和 `forget` 都会询问中枢；`entries --history`、`projects`、`forgotten` 和 `restore` 不可用（恢复请在中枢的管理界面中进行）。`origin hub status` 会显示模式。
+- `origin hub connect … --relay` 把一个空库变成[中继](./hub.md#run-a-device-as-a-relay)，它不保有自己的会话或条目；已经保存了这些内容的库会被拒绝。在中继上，`origin sync` 直接把 Agent 新增的记录行发送给中枢（`--local` 不适用），`origin status` 按来源显示尚未发送的文件和字节，并在尚未发送的会话临近被 Agent 删除的年龄时发出警告，`origin mcp` 把每一次工具调用都交给中枢，`search`、`timeline`、`digest`、`show`、`entries`、`correct` 和 `forget` 都会询问中枢；`entries --history`、`projects`、`forgotten` 和 `restore` 不可用（恢复请在中枢的管理界面中进行）。`origin hub status` 会显示模式。
 - `origin serve --admin` 会同时在 `/admin` 下提供[管理界面](./admin.md)；`--admin-listen <host:port>` 则改为在单独的监听地址上提供。在 TLS 之后时，用 `--public-url` 传入中枢的 https 地址；中枢拒绝在回环地址之外通过明文 HTTP 提供管理界面。管理界面在 `/admin` 下时，Agent 用 OAuth 登录中枢的 MCP 端点，设备经由你的批准接入（见[接入 Agent](./connect-agents.md#sign-in-with-oauth)）。
 - `origin serve --raw-s3-endpoint <url> --raw-s3-bucket <name>`，或 `ORIGIN_RAW_S3_*` 环境变量，会把中枢已封存的帧——原始镜像的大部分——保存在兼容 S3 的存储桶中，例如 MinIO；密钥只从环境变量读取。`origin raw upload` 把此前封存的帧移入存储桶并逐帧校验，默认一次 8 帧（可用 `--concurrency` 调整），`--remove` 随后删除原先存放它们的本地文件。见[把原始镜像放进存储桶](./hub.md#keep-raw-mirrors-in-a-bucket)。
 - `origin admin username <name>` 修改你登录管理界面所用的用户名，不带名称时显示它；用户名在你第一次登录时连同管理密码一起选定。

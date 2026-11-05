@@ -6,6 +6,8 @@ origin sync      --hook <agent>                        Ingest the transcript an 
 origin status                                          Per-source counts, entries, and last sync
 origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50] [--children]
 origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
+origin digest    [--day <YYYY-MM-DD>] [--project <name>] [--source <id>] [--limit 50] [--json]
+                                                       One day: its sessions, prompts, tools, files edited, entries, and forgets
 origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
 origin show      <id> [--source <id>]                  Show an entry, an event (with its original source), a session, a thread, a recall, or a proposal
 origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
@@ -151,6 +153,47 @@ A session of it: origin show <session id>
 
 `origin sessions repair` fills a place for each session that has none, and reads parent facts already in the mirror again to fill parent links that are missing, including a Grok `subagent_spawned` an older process never recorded. `--dry-run` only reports. A second run changes nothing. On a hub it re-reads mirrored parent lines and does not resolve another device's sessions. On a relay, which keeps no sessions, it says so and exits.
 
+## Digest of a day
+
+`origin digest` recaps one calendar day in this machine's time zone, today unless `--day` names another: its totals and projects, then its top-level sessions, most recent first, each with your prompts (the first five), the tools it called, and the files its edits changed, then the entries written, the proposals made, and the forgets and restores, by id only. A session's child sessions (sub-agents and workflow steps) count with it, even when it was quiet that day itself. `--project` and `--source` keep one project's or one agent's sessions, and the entries and proposals that go with them; `--limit` caps each list (50 by default, at most 200). It reads the store alone, so run `origin sync` first if your agents' latest sessions are not in it yet, and calls no model. `--json` prints exactly what the MCP tool [`digest`](./mcp.md#digest) returns. Which tools count as file edits is in [Files edited](../sources.md#files-edited); the rules are in [Daily digest](../architecture.md#daily-digest).
+
+```console
+$ origin digest --day 2026-10-22
+Digest of 2026-10-22 (Asia/Shanghai)
+2 sessions · 148 events · 6 prompts · 1 project · 2 agents · 3 child sessions
+
+Projects
+  demo-app  2 sessions  148 events  6 prompts
+
+Sessions, most recent first (counts include child sessions)
+  14:02–17:40  claude-code demo-app                   120 events  Tag the release
+           ↳ claude-code:2f1e8c47-0000-4000-8000-000000000003  thread thr_4c1e9a7b2d30  · 3 children
+             prompts (5):   14:02  “draft the notes for 0.5.0 from the changelog”
+                            15:20  “bump every package to 0.5.0”
+                            16:05  “run the tests on Windows too”
+                            17:12  “both CI jobs are green, tag it”
+                            17:38  “remember how we tag releases”
+             tools (55):    Bash 31 · Edit 12 · Read 9 · Task 3
+             files (2):     CHANGELOG.md · packages/cli/package.json
+  10:15–11:02  codex       demo-app                    28 events  “Write the migration for the new column”
+           ↳ codex:0199b7c4-2d1e-7f3a-8b5c-6d7e8f9a0b1c
+             prompts (1):   10:15  “Write the migration for the new column”
+             tools (11):    shell 9 · apply_patch 2
+             files (1):     src/migrations.ts
+
+Entries written (1)
+  [17:39] memory, demo-app, claude-code@laptop
+      v0.5.0 is tagged from master after both CI jobs passed.
+      ↳ ent_7a2c9e1f0b44
+
+Forgets and restores, by id (1)
+  [17:35] forget  tmb_6c1d0e9a2b3f → event claude-code:7d0c4a1e-0000-4000-8000-000000000002
+
+Open any id: origin show <id>
+```
+
+On a device connected to a hub, `origin digest` reads the device's own store, as the curation commands do, while the MCP tool `digest` adds the hub's sessions of other devices. On a relay, it asks the hub, for the day in this machine's time zone.
+
 ## Recall
 
 `origin recall` shows what an agent would be handed in the current directory, or in `--cwd`: the brief of a new session, or, with `--prompt`, the entries a prompt matches. `--agent` shows it as that agent would get it, without the memories it loads itself. It records nothing. `origin agents connect` sets up the hooks (see [Connect your agents](./connect-agents.md#connect-them-all-at-once)). Claude Code's and Codex's hooks run `origin recall --hook claude-code` or `--hook codex`, which reads the hook's event on standard input, records what it hands over, and prints it for the agent. `origin recalls` lists what agents were handed, newest first (`--all` also lists recalls that handed nothing over), and `origin show rcl_…` shows one, with the prompt it answered and the items the session went on to use. See [Recall](./recall.md).
@@ -219,7 +262,7 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 - On a device, `origin hub connect <url>` connects the device by your approval in the browser: it prints a link and a code, you approve the device in the hub's admin UI, and it receives its token, under its store's name; with `--token`, it uses a token created on the hub instead, which must have the store's name. It saves the hub's URL and the token. `origin hub connect` and `origin hub status` check this with the hub and say how to fix a mismatch. From then on, `origin sync` also syncs with the hub: it sends new raw mirror bytes and the entries and tombstones written on the device, then applies the tombstones of the hub. It can be re-run at any time, and each run resumes where the previous one stopped. `--local` skips the hub. `origin status` and `origin hub status` show when the device last finished a sync with the hub, whichever command or agent ran it, and the error of the last sync if it failed since.
 - Once a device is connected, `origin mcp` answers from the device's store and merges in the hub's answers, waiting for the hub at most 2 seconds; what agents save is written on the device and then synced.
 - Curation commands (`entries`, `show`, `correct`, `forget`, …) act on the device's own store. On a connected device, `correct`, `forget`, and `restore` then sync with the hub; if the hub cannot be reached, the change stays on the device until the next sync.
-- `origin hub connect … --relay` makes an empty store a [relay](./hub.md#run-a-device-as-a-relay), which keeps no sessions or entries of its own; a store that holds any is refused. On a relay, `origin sync` sends the agents' new log lines straight to the hub (`--local` does not apply), `origin status` shows per source the files and bytes still to send and warns when sessions not sent yet near the age at which their agent deletes them, `origin mcp` hands every tool call to the hub, and `search`, `timeline`, `show`, `entries`, `correct`, and `forget` ask the hub; `entries --history`, `projects`, `forgotten`, and `restore` are not available (restore in the hub's admin UI). `origin hub status` shows the mode.
+- `origin hub connect … --relay` makes an empty store a [relay](./hub.md#run-a-device-as-a-relay), which keeps no sessions or entries of its own; a store that holds any is refused. On a relay, `origin sync` sends the agents' new log lines straight to the hub (`--local` does not apply), `origin status` shows per source the files and bytes still to send and warns when sessions not sent yet near the age at which their agent deletes them, `origin mcp` hands every tool call to the hub, and `search`, `timeline`, `digest`, `show`, `entries`, `correct`, and `forget` ask the hub; `entries --history`, `projects`, `forgotten`, and `restore` are not available (restore in the hub's admin UI). `origin hub status` shows the mode.
 - `origin serve --admin` also serves the [admin UI](./admin.md) at `/admin`, and `--admin-listen <host:port>` serves it on a separate listener instead. Behind TLS, pass the hub's https address with `--public-url`; the hub refuses to serve the UI over plain HTTP beyond loopback. With the UI at `/admin`, agents sign in to the hub's MCP endpoint with OAuth, and devices connect by your approval (see [Connect your agents](./connect-agents.md#sign-in-with-oauth)).
 - `origin serve --raw-s3-endpoint <url> --raw-s3-bucket <name>`, or the `ORIGIN_RAW_S3_*` variables, keeps the hub's sealed frames, most of its raw mirrors, in an S3-compatible bucket such as MinIO; the keys are read only from the environment. `origin raw upload` moves the frames sealed before to the bucket, verifying each, 8 at a time unless `--concurrency` says otherwise, and `--remove` then removes the local files that held them. See [Keep raw mirrors in a bucket](./hub.md#keep-raw-mirrors-in-a-bucket).
 - `origin admin username <name>` changes the username you sign in to the admin UI with, and without a name shows it; you choose it at your first sign-in, with the admin password.

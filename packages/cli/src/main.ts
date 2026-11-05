@@ -118,6 +118,7 @@ import {
 import { agentFacts } from './agent-facts.js';
 import { cmdAgents } from './agents.js';
 import { ARGS, checkArgs, isStoreCommand } from './args.js';
+import { cmdDigest } from './digest.js';
 import { cmdDistill } from './distill.js';
 import { cmdForget, cmdForgotten, cmdRestore, type ForgettingCtx } from './forgetting.js';
 import { count, oneLine, table } from './format.js';
@@ -161,6 +162,8 @@ Usage:
   origin status                                          Per-source counts, entries, and last sync
   origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50] [--children]
   origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
+  origin digest    [--day <YYYY-MM-DD>] [--project <name>] [--source <id>] [--limit 50] [--json]
+                                                         One day: its sessions, prompts, tools, files edited, entries, and forgets
   origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
   origin show      <id> [--source <id>]                  Show an entry, an event (with its original source), a session, a thread, a recall, or a proposal
   origin entries   [--kind <kind>] [--project <name>] [--history] [--limit 50]
@@ -298,6 +301,14 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdStatus(ctx);
       case 'timeline':
         return await cmdTimeline(ctx, rest);
+      case 'digest':
+        return await cmdDigest(
+          {
+            db,
+            hub: isRelay(db) ? (args) => askHub(relayHub(ctx), 'digest', args) : null,
+          },
+          rest,
+        );
       case 'search':
         return await cmdSearch(ctx, rest);
       case 'show':

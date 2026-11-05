@@ -15,7 +15,9 @@ import {
   getSetting,
   initStoreName,
   isEntryForgotten,
+  isoIn,
   listEntries,
+  localTimeZone,
   makeRelay,
   openDatabase,
   readMirror,
@@ -25,8 +27,9 @@ import {
   revokeToken,
   syncSource,
 } from '@openlinkos/origin-core';
-import { createRelayServer, type SearchResult } from '@openlinkos/origin-mcp';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createRelayServer, digestOf, type SearchResult } from '@openlinkos/origin-mcp';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cmdDigest } from '../src/digest.js';
 import type { HubConfig } from '../src/hub/config.js';
 import { relayFileWithHub, relayWithHub } from '../src/hub/relay.js';
 import { askHub } from '../src/hub/remote.js';
@@ -336,6 +339,33 @@ describe('relay mode', () => {
     await expect(askHub(hub, 'get', { id: 'claude-code:nope' })).rejects.toThrow(
       /Unknown entry or event/,
     );
+
+    // `origin digest` on a relay prints the hub's digest of the day in this machine's zone.
+    const zone = localTimeZone();
+    const day = isoIn(getEvent(main.db, USER_EVENT)?.ts ?? 0, zone).slice(0, 10);
+    const asked: Record<string, unknown>[] = [];
+    const printed: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      printed.push(args.join(' '));
+    });
+    try {
+      const ctx = {
+        db: relayDb,
+        hub: (args: Record<string, unknown>) => {
+          asked.push(args);
+          return askHub(hub, 'digest', args);
+        },
+      };
+      expect(await cmdDigest(ctx, ['--day', day, '--json'])).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(asked).toEqual([
+      { day, time_zone: zone, project: undefined, source: undefined, limit: 50 },
+    ]);
+    const digest = JSON.parse(printed.join('\n'));
+    expect(digest).toEqual(digestOf(main.db, { day, time_zone: zone, limit: 50 }));
+    expect(digest.sessions.map((s: { id: string }) => s.id)).toEqual([`claude-code:${SESSION}`]);
 
     // A hub that is gone: the command says that a relay has nothing else to ask.
     const gone = http.createServer();

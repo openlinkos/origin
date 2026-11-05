@@ -2,6 +2,15 @@
 
 All notable changes to Origin are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the store format or a public interface, and its notes say what to do. The six packages (`@openlinkos/origin` and `@openlinkos/origin-core`, `-adapters`, `-mcp`, `-admin`, and `-openclaw`, the plugin for OpenClaw) are released together under one version.
 
+## [Unreleased]
+
+### Daily digest
+
+- The new MCP tool `digest`, and `origin digest`, recap one calendar day from the store alone, with no model call: the day's totals, by project and by agent; its top-level sessions, most recent first, each with your prompts that day, its tool calls by tool, and the files its edit calls changed, with the work of its child sessions counted in; the entries written and the proposals made that day; and its forgets and restores, by id only. Nothing forgotten is counted or shown. Every session, entry, and proposal comes with its id, for `get` or `origin show`.
+- The day is today unless `day` (`--day`) names another, in the time zone of the process that answers, or the one `time_zone` names; `project` and `source` narrow it, and `limit` caps each list (50, at most 200). Which tools count as file edits, per agent, is in the documentation of sources.
+- `digest` reads, so read-only agents have it too. On a device connected to a hub, it is the hub's digest of the device's day, less what the device has forgotten, or the device's own when the hub does not answer in time; on a relay, the call and `origin digest` go to the hub. `origin digest --json` prints what the tool returns.
+- The store format does not change.
+
 ## [0.5.0] - 2026-11-06
 
 Lets agents read along from any id, groups sessions into threads, archives each turn as it ends, has agents propose what you then review, brings in the sessions of any program, OpenClaw's included, tells your words from everyone else's, files each session under its main project, and connects agents and devices to your hub without copying tokens.

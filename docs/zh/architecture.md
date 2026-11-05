@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-1b975a51
+sourceHash: sha256-8f319738
 ---
 
 # 架构
@@ -95,7 +95,7 @@ agent session logs on disk ──scan──▶ Raw (append-only mirror)
  agents ◀── MCP (stdio): brief · search · timeline · changes · digest · get · sources · follow · remember · propose · correct · forget
  agents ◀── hooks: origin recall (session start · prompt): a brief, and the entries a prompt matches
  agents ──▶ hooks: origin sync --hook (turn end · sub-agent · compaction): the transcript to ingest
- people ◀── CLI `origin`: sync · status · timeline · search · show · entries · correct · forget · forgotten · restore · recall · recalls · proposals · accept · reject · distill
+ people ◀── CLI `origin`: sync · status · timeline · digest · search · show · entries · correct · forget · forgotten · restore · recall · recalls · proposals · accept · reject · distill
  people ◀── admin UI (hub, /admin): overview · sessions · recalls · search · entries · proposals · remember · correct · accept · reject · forget · restore · tokens
  people ◀── origin ui (device, 127.0.0.1): overview · sessions · recalls · search · entries · proposals · remember · correct · accept · reject · forget · restore
 ```
@@ -691,7 +691,7 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 - **中枢的进度。** 当中枢持有的某个文件比中继的游标所说的更多或更少时（途中丢失的回应、中继的另一个进程抢先发送、从备份恢复的中枢、以中枢已知的设备名新建的中继库），只要文件在中枢游标处恰好有一行结束，中继就从中枢的游标继续；生成的来源会向适配器要行，直到到达那个偏移量。否则，它把这个文件作为一个新的代次发送。因偏移量被拒绝的块（`409`）也按同样的方式处理。中枢直接拒绝的文件（`400`、`413`）会被报告并跳过，其他文件照常发送。
 - **离线。** 什么也不发送，游标也不移动：新的行留在 Agent 自己的记录文件里。有些 Agent 会删除旧的记录（Claude Code 在 `cleanupPeriodDays` 之后删除，默认 30 天），而中继不保留副本，所以中继必须定期连上它的中枢。Agent 运行期间，有 hook 的 Agent 在每一轮结束后由 hook 发送记录文件新增的行，它的 `origin mcp` 也每分钟发送一次新的行，Agent 离开时再发送一次；`origin status` 按来源显示还有多少字节尚未发送。
 - **清理前的警告。** 当仍有完整的行尚未发送的最旧文件，临近它的 Agent 删除它的年龄时，中继会发出警告；年龄按文件的修改时间计算，和 Claude Code 的做法一样。对 Claude Code，是在 `cleanupPeriodDays`（从它配置目录中的 `settings.json` 读取，未设置时为 30 天）之前一周以内，如果它短于两周，则是过了它的一半之后；对保留期限未知的 Agent，是这样的文件已有一周之久，而且中继已有一周没有连上中枢。`origin status` 会显示这个警告，`origin sync` 在没能发送全部内容时也会显示；`origin mcp` 在连不上中枢期间最多每小时检查一次，把警告写入它的日志，并附在工具的错误里，让 Agent 看到。检查在 CLI 中进行；`core` 只给出这样的最旧文件（`relayPending`）。
-- **回答与写入。** 中继没有可以据以作答的事件，也没有事件可以用来核对条目所引用的事件，所以每个工具都是中枢的（见 [MCP server](#mcp-server)）。写入按中枢的规则在中枢上进行：中枢检查每个被引用的事件都在它那里存在且可见（不变量 1），应用遗忘（不变量 2），并把作者记为 `<agent>@<中继名>`，origin 为中枢（见[访问](#access)）。CLI 的查询和管理命令（`search`、`timeline`、`show`、`entries`、`correct`、`forget`）同样询问中枢的 `/mcp`，身份是 `user@<中继名>`；`entries --history`、`projects`、`forgotten` 和 `restore` 在中继上不可用，恢复要在中枢的管理界面中进行。
+- **回答与写入。** 中继没有可以据以作答的事件，也没有事件可以用来核对条目所引用的事件，所以每个工具都是中枢的（见 [MCP server](#mcp-server)）。写入按中枢的规则在中枢上进行：中枢检查每个被引用的事件都在它那里存在且可见（不变量 1），应用遗忘（不变量 2），并把作者记为 `<agent>@<中继名>`，origin 为中枢（见[访问](#access)）。CLI 的查询和管理命令（`search`、`timeline`、`digest`、`show`、`entries`、`correct`、`forget`）同样询问中枢的 `/mcp`，身份是 `user@<中继名>`；`entries --history`、`projects`、`forgotten` 和 `restore` 在中继上不可用，恢复要在中枢的管理界面中进行。
 - **复制。** 中继自己不写条目或遗忘记录，中枢的遗忘记录在它那里也找不到需要隐藏的东西，所以它不保存任何遗忘记录；它仍然拉取这些记录，让自己的复制游标像设备的一样前移。它的 Agent 的记忆所对应的条目，由中枢从中继发来的行中派生（见[原生记忆](#native-memories)）。
 
 ### 管理界面 {#admin-ui}

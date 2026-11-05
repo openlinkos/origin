@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util';
-import { UPLOAD_CONCURRENCY } from '@openlinkos/origin-core';
+import { DIGEST_LIMIT_MAX, digestDay, UPLOAD_CONCURRENCY } from '@openlinkos/origin-core';
 import { BUCKET_OPTIONS } from './hub/bucket.js';
 import { UI_PORT } from './ui.js';
 
@@ -17,7 +17,28 @@ export interface ArgSpec {
   positionals?: readonly [number, number];
   /** Options that must be given, not blank, each with what to say when it is not. */
   required?: Readonly<Record<string, string>>;
+  /** What is wrong with the values given, or null: a check that needs no store. */
+  check?: (values: Readonly<Record<string, unknown>>) => string | null;
   usage: string;
+}
+
+/** `--day` and `--limit` of `origin digest`, as the digest reads them. */
+function digestValues(values: Readonly<Record<string, unknown>>): string | null {
+  if (typeof values.day === 'string') {
+    try {
+      digestDay(values.day);
+    } catch (err) {
+      return (err as Error).message;
+    }
+  }
+  const limit = values.limit;
+  if (
+    typeof limit === 'string' &&
+    !(/^\d+$/.test(limit) && Number(limit) >= 1 && Number(limit) <= DIGEST_LIMIT_MAX)
+  ) {
+    return `--limit must be a whole number from 1 to ${DIGEST_LIMIT_MAX}.`;
+  }
+  return null;
 }
 
 /** A command made of subcommands, such as `origin token create <name>`. */
@@ -53,6 +74,18 @@ export const ARGS = {
     },
     usage:
       'Usage: origin timeline [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50] [--children] | --session <id> [--all]',
+  },
+  digest: {
+    options: {
+      day: { type: 'string' },
+      project: { type: 'string' },
+      source: { type: 'string' },
+      limit: { type: 'string' },
+      json: { type: 'boolean', default: false },
+    },
+    check: digestValues,
+    usage:
+      'Usage: origin digest [--day YYYY-MM-DD] [--project <name>] [--source <id>] [--limit 50] [--json]',
   },
   search: {
     options: {
@@ -321,5 +354,7 @@ function checkSpec(label: string, spec: ArgSpec, args: readonly string[]): ArgCh
     const v = parsed.values[name];
     if (typeof v !== 'string' || v.trim().length === 0) return fail(message);
   }
+  const problem = spec.check?.(parsed.values);
+  if (problem) return fail(problem);
   return { kind: 'run' };
 }
