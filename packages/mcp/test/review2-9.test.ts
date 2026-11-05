@@ -26,14 +26,21 @@ function open(home: string): Database {
 describe('project roots and the device they were learned on', () => {
   it("briefs a deleted work tree from this device's own roots", () => {
     const home = tempDir('origin-review2-brief-');
+    // A real path, then deleted. `D:/…` is relative on Linux, and path.resolve would
+    // look up a different directory than the root this test inserts.
+    const tree = tempDir('origin-review2-tree-');
+    const main = path.join(tree, 'demo-app');
+    const gone = path.join(tree, 'feature-wt');
+    fs.mkdirSync(main);
+    fs.mkdirSync(gone);
+    fs.rmSync(gone, { recursive: true, force: true });
     const db = open(home);
-    const gone = 'D:/work/feature-wt';
     try {
       db.prepare(
         `INSERT INTO project_root (device, path, project, root, signal, seen_at)
          VALUES ('', ?, 'demo-app', ?, 'git', 1)`,
-      ).run(comparePath(gone), comparePath('D:/work/demo-app'));
-      const text = briefIn(db, { cwd: gone }, 'grok@laptop', 'D:/work/demo-app').text;
+      ).run(comparePath(gone), comparePath(main));
+      const text = briefIn(db, { cwd: gone }, 'grok@laptop', main).text;
       expect(text).toContain('project demo-app');
       expect(text).not.toContain('feature-wt');
     } finally {
