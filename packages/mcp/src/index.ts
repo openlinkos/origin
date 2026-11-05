@@ -1,6 +1,6 @@
 /**
- * Origin MCP (see docs/architecture.md): the eleven tools (brief · search · timeline · changes · get ·
- * sources · follow · remember · propose · correct · forget) served over stdio, over stateless HTTP for a hub,
+ * Origin MCP (see docs/architecture.md): the twelve tools (brief · search · timeline · changes · digest ·
+ * get · sources · follow · remember · propose · correct · forget) served over stdio, over stateless HTTP for a hub,
  * over stdio on a device connected to a hub, from its own store merged with the hub's answers, or
  * over stdio on a relay, forwarded to its hub.
  */
@@ -16,6 +16,12 @@ export {
 } from './hub-link.js';
 export {
   type ChangesResult,
+  DIGEST_WITH_CHILDREN,
+  type DigestCountsView,
+  type DigestPromptView,
+  type DigestResult,
+  type DigestSessionView,
+  digestOf,
   type EntryResult,
   type EntryStub,
   type EntryView,

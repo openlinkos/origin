@@ -1,6 +1,6 @@
 # MCP tools
 
-Origin serves eleven tools over the [Model Context Protocol](https://modelcontextprotocol.io): `brief`, which hands an agent what matters where it works, five to read the archive and the entries, `follow`, which joins the agent's session to the work it continues, `propose`, which hands the user an entry to review, and three to write entries and forget. This page is the reference for anyone who registers Origin with an agent or builds on it; to simply connect an agent, see [Connect your agents](./connect-agents.md).
+Origin serves twelve tools over the [Model Context Protocol](https://modelcontextprotocol.io): `brief`, which hands an agent what matters where it works, six to read the archive and the entries, `follow`, which joins the agent's session to the work it continues, `propose`, which hands the user an entry to review, and three to write entries and forget. This page is the reference for anyone who registers Origin with an agent or builds on it; to simply connect an agent, see [Connect your agents](./connect-agents.md).
 
 ## Reaching Origin {#reaching-origin}
 
@@ -18,7 +18,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
   --header "Authorization: Bearer ogn_…" --header "X-Origin-Client: claude-code"
 ```
 
-The server's MCP `instructions` tell agents how to use the tools: call `brief` when they start a task, unless a recall already gave them one; search and read before answering questions about past work, following the ids that `get` lists next to what it opens and reading a long session a turn at a time, and cite entry and event ids; call `follow` once when the user continues work from an earlier session; call `changes` with the `next` of their last call to learn what changed since; remember decisions with their reasons, stable facts, and preferences of the user, citing the events they come from, and propose rather than remember what they infer and the user has not confirmed, or what they write when consolidating the user's memory; take a message marked with `by` as not written by the user, so that what it says is not the user's preference; treat entries marked `imported` as mirrors of an agent's own memory files; correct entries that are wrong; and forget only when the user asks, with their reason.
+The server's MCP `instructions` tell agents how to use the tools: call `brief` when they start a task, unless a recall already gave them one; search and read before answering questions about past work, following the ids that `get` lists next to what it opens and reading a long session a turn at a time, and cite entry and event ids; call `follow` once when the user continues work from an earlier session; call `changes` with the `next` of their last call to learn what changed since, and `digest` to recap the work of a day; remember decisions with their reasons, stable facts, and preferences of the user, citing the events they come from, and propose rather than remember what they infer and the user has not confirmed, or what they write when consolidating the user's memory; take a message marked with `by` as not written by the user, so that what it says is not the user's preference; treat entries marked `imported` as mirrors of an agent's own memory files; correct entries that are wrong; and forget only when the user asks, with their reason.
 
 ## Conventions {#conventions}
 
@@ -328,6 +328,103 @@ The cursor is opaque; pass it back as it is, to the server that gave it. A malfo
   ],
   "next": "eyJlIjo0MTI3LCJjIjo4OX0",
   "more": false
+}
+```
+
+## digest {#digest}
+
+What happened on one calendar day, read from the store alone, with no model call: for an agent asked to recap a day's work, or to write it up (see [Daily digest](../architecture.md#daily-digest)).
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `day` | `YYYY-MM-DD` | today | The day |
+| `time_zone` | IANA name | the server's | The time zone the day is in, such as `Europe/Berlin` |
+| `project` | string | any | Sessions whose resolved project this is, and the entries and proposals of it |
+| `source` | string | any | Sessions of this agent, such as `claude-code`, the entries citing its events, and the proposals made in its sessions |
+| `limit` | integer, 1 to 200 | 50 | At most this many sessions, and this many entries, proposals, and forgets |
+
+It returns `{ day, time_zone, from, until, totals, projects, agents, sessions, more_sessions, children_included_in, entries, more_entries, proposals, more_proposals, forgets, more_forgets }`. Every time in it is in the day's zone, not the server's, and `from` and `until` are the day's first instant and the next day's:
+
+- `totals`: the sessions the filters keep, their events, the user's prompts in them, the named projects, the agents, and the child sessions folded in; `projects` and `agents` give the same counts by resolved project (`null` for sessions without one) and by agent, most events first. They count every session, not only those listed;
+- `sessions`: the top-level sessions with an event that day, most recent activity first, each with its `id` (`<source>:<session id>`, which [`get`](#get) opens), `project`, `thread`, `title` or first `prompt`, its `first` and `last` event that day, `events`, the user's `prompts` that day (the first five, each cut to 200 characters, and `more_prompts`), `tools` (calls by tool name, the 20 most called) and `tool_calls` (of every tool), `files` (the files its edit calls changed, the 20 most edited, and `more_files`), and `children` and `workflows` (its child sessions active that day, and their run names). A child's activity counts with its top-level session's, even one quiet that day, in the fields `children_included_in` names; prompts are the user's own, never a child's. Which tools count as file edits, per agent, is in [Files edited](../sources.md#files-edited);
+- `entries`: versions of entries written that day, newest first, as stubs with `project`, `author`, `supersedes` (the version a correction replaced, or `null`), and `imported`;
+- `proposals`: entries proposed that day, pending or accepted, as stubs, as [`changes`](#changes) lists them;
+- `forgets`: forgets and restores made that day, `{ id, kind, target, target_kind, at }`, where `target_kind` is `entry`, `event`, `proposal` (a rejection), or `forget` (what a restore lifts): never the reason or what was hidden. They are listed whatever `project` and `source` say;
+- `more_sessions`, `more_entries`, `more_proposals`, `more_forgets`: how many the limit left out.
+
+Nothing forgotten is counted or shown. On a device connected to a hub, the digest is the hub's, asked for the device's day in the device's time zone, less what the device has forgotten, with `origin: "hub"` on the result and `origin` on each session, entry, and proposal; a session the device holds is shown as the device's own digest shows it, and the totals are the hub's. When the hub is not consulted, the digest is the device's own, with `origin: "local"`. On a relay, the relay's time zone is sent with the call.
+
+```json
+{ "day": "2026-10-22", "limit": 1 }
+```
+
+```json
+{
+  "day": "2026-10-22",
+  "time_zone": "Asia/Shanghai",
+  "from": "2026-10-22T00:00:00.000+08:00",
+  "until": "2026-10-23T00:00:00.000+08:00",
+  "totals": { "sessions": 2, "events": 148, "prompts": 6, "projects": 1, "agents": 2, "children": 3 },
+  "projects": [{ "project": "demo-app", "sessions": 2, "events": 148, "prompts": 6 }],
+  "agents": [
+    { "source": "claude-code", "sessions": 1, "events": 120, "prompts": 5 },
+    { "source": "codex", "sessions": 1, "events": 28, "prompts": 1 }
+  ],
+  "sessions": [
+    {
+      "id": "claude-code:2f1e8c47-0000-4000-8000-000000000003",
+      "source": "claude-code",
+      "session": "2f1e8c47-0000-4000-8000-000000000003",
+      "project": "demo-app",
+      "thread": "thr_4c1e9a7b2d30",
+      "title": "Tag the release",
+      "prompt": null,
+      "first": "2026-10-22T14:02:11.410+08:00",
+      "last": "2026-10-22T17:40:12.300+08:00",
+      "events": 120,
+      "prompts": [
+        {
+          "id": "claude-code:7d0c4a1e-0000-4000-8000-000000000020",
+          "time": "2026-10-22T14:02:11.410+08:00",
+          "text": "draft the notes for 0.5.0 from the changelog"
+        }
+      ],
+      "more_prompts": 4,
+      "tools": { "Bash": 31, "Edit": 12, "Read": 9, "Task": 3 },
+      "tool_calls": 55,
+      "files": ["CHANGELOG.md", "packages/cli/package.json"],
+      "more_files": 0,
+      "children": 3,
+      "workflows": []
+    }
+  ],
+  "more_sessions": 1,
+  "children_included_in": ["events", "first", "last", "tools", "tool_calls", "files"],
+  "entries": [
+    {
+      "id": "ent_7a2c9e1f0b44",
+      "kind": "memory",
+      "text": "v0.5.0 is tagged from master after both CI jobs passed.",
+      "created": "2026-10-22T17:39:58.114+08:00",
+      "project": "demo-app",
+      "author": "claude-code@laptop",
+      "supersedes": null,
+      "imported": false
+    }
+  ],
+  "more_entries": 0,
+  "proposals": [],
+  "more_proposals": 0,
+  "forgets": [
+    {
+      "id": "tmb_6c1d0e9a2b3f",
+      "kind": "forget",
+      "target": "claude-code:7d0c4a1e-0000-4000-8000-000000000002",
+      "target_kind": "event",
+      "at": "2026-10-22T17:35:00.000+08:00"
+    }
+  ],
+  "more_forgets": 0
 }
 ```
 
@@ -683,7 +780,7 @@ There is **no tool to restore**: a forget is a record that only the user can und
 Agents can find and cite what was said a moment ago, because `origin mcp` reads the agents' logs as it goes:
 
 - When it starts, it ingests every source in the background, and on a connected device syncs with the hub.
-- `brief`, `search`, `timeline`, `changes`, and `follow` first ingest new lines, at most every 10 seconds. On a connected device, `get` and `sources` do too, and every read also syncs with the hub, at most every 10 seconds, waiting for it no longer than the hub timeout.
+- `brief`, `search`, `timeline`, `changes`, `digest`, and `follow` first ingest new lines, at most every 10 seconds. On a connected device, `get` and `sources` do too, and every read also syncs with the hub, at most every 10 seconds, waiting for it no longer than the hub timeout.
 - `remember`, `propose`, and `correct` always ingest first, and on a connected device `remember` and `correct` sync with the hub right after; `propose` writes nothing to sync.
 - Claude Code's and Codex's ingest hooks, which `origin agents connect` sets up, ingest a session's new lines as each turn ends, and on a connected device push them to the hub (see [Connect your agents](./connect-agents.md#connect-them-all-at-once)).
 - In the background, as the fallback for other agents and for what a hook missed, it looks for new log lines every 60 seconds (`ORIGIN_WATCH_INTERVAL_MS`; `0` turns this off), and ingests and syncs only if a log file changed.

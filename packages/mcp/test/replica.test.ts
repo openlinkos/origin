@@ -6,12 +6,14 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import {
   correct,
   type Database,
+  digestDay,
   exportEntry,
   forget,
   getEntry,
   getEvent,
   getRecall,
   initStoreName,
+  localTimeZone,
   openDatabase,
   planRecall,
   receiveEntry,
@@ -24,12 +26,20 @@ import { fakeAdapter, line } from '../../core/test/helpers.js';
 import {
   createOriginServer,
   createReplicaServer,
+  type DigestResult,
+  type DigestSessionView,
   type EventResult,
   type RecallResult,
   type ReplicaOptions,
   type SessionResult,
 } from '../src/index.js';
-import { type LocalFacts, mergeGet, mergeTimeline } from '../src/merge.js';
+import {
+  type HeldSession,
+  type LocalFacts,
+  mergeDigest,
+  mergeGet,
+  mergeTimeline,
+} from '../src/merge.js';
 import { refreshGate } from '../src/tools.js';
 import { parse, startTestHub, type TestHub, TOKEN, type ToolCallResult } from './hub-fixture.js';
 
@@ -144,7 +154,7 @@ describe('origin mcp on a connected device', () => {
 
   it('merges search results from both stores, once each, labelled', async () => {
     await connect();
-    expect((await agent.listTools()).tools).toHaveLength(11);
+    expect((await agent.listTools()).tools).toHaveLength(12);
     const r = await call('search', { query: 'Keep' });
     expect(r.note).toBeNull();
     const events = byId<{ id: string; origin: string }>(r.json.events);
@@ -777,5 +787,155 @@ describe('proposals on a connected device', () => {
     forget(db, 'fake:mine', { reason: 'Rejected.' });
     const after = await call('changes', { include_tools: true });
     expect(after.json.proposals.map((p: { id: string }) => p.id)).toEqual(['prp_0000000000f1']);
+  });
+});
+
+describe('digest on a connected device', () => {
+  /** The day the test sessions are on, in this process's zone. */
+  const day = () => digestDay(undefined, undefined, 1000).day;
+
+  it("reads the hub's digest of the device's day, less what the device has forgotten", async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    await connect({
+      fetch: async (input, init) => {
+        if (typeof init?.body === 'string') {
+          const message = JSON.parse(init.body);
+          if (message.method === 'tools/call') asked.push(message.params);
+        }
+        return fetch(input, init);
+      },
+    });
+    forget(db, 'fake:e1', { reason: 'not on this device' });
+    const today = await call('digest', {});
+    expect(today.note).toBeNull();
+    // The hub reads the day this device means, in this device's zone.
+    expect(asked).toEqual([
+      expect.objectContaining({
+        name: 'digest',
+        arguments: expect.objectContaining({ day: digestDay().day, time_zone: localTimeZone() }),
+      }),
+    ]);
+    expect(today.json.sessions).toEqual([]);
+
+    const d = await call('digest', { day: day() });
+    expect(d.json).toMatchObject({ day: day(), time_zone: localTimeZone(), origin: 'hub' });
+    // The other device's session, and the shared one as this device holds it now.
+    expect(
+      d.json.sessions.map((s: DigestSessionView) => [s.id, s.origin, s.events, s.prompts.length]),
+    ).toEqual([
+      ['fake:sh', 'hub', 1, 1],
+      ['fake:s1', 'local', 1, 0],
+    ]);
+    expect(JSON.stringify(d.json)).not.toContain('TLS');
+
+    await hub.stop();
+    const alone = await call('digest', { day: day() });
+    expect(alone.note).toMatch(/hub was not consulted/);
+    expect(alone.json.origin).toBe('local');
+    expect(alone.json.sessions.map((s: DigestSessionView) => s.id)).toEqual(['fake:sd', 'fake:s1']);
+  });
+
+  it("leaves out of the hub's digest what the device has forgotten (invariant 2)", () => {
+    const facts: LocalFacts = {
+      known: (id) => ['fake:a1', 'fake:b1'].includes(id),
+      forgotten: (id) => ['fake:p2', 'ent_00000000000a', 'fake:r1'].includes(id),
+      entryStatus: () => null,
+      versions: () => [],
+    };
+    const session = (id: string, prompts: string[]): DigestSessionView => ({
+      id: `fake:${id}`,
+      source: 'fake',
+      session: id,
+      project: null,
+      thread: null,
+      title: null,
+      prompt: 'the hub says',
+      first: '',
+      last: '',
+      events: 3,
+      prompts: prompts.map((p) => ({ id: p, time: '', text: p })),
+      more_prompts: 0,
+      tools: {},
+      tool_calls: 0,
+      files: [],
+      more_files: 0,
+      children: 0,
+      workflows: [],
+    });
+    const entry = (id: string) => ({
+      id,
+      kind: 'memory',
+      text: '',
+      created: '',
+      project: null,
+      author: '',
+      supersedes: null,
+      imported: false,
+    });
+    const proposal = (id: string, event: string) => ({
+      id,
+      kind: 'memory',
+      text: '',
+      status: 'pending' as const,
+      time: '',
+      session: 's',
+      event,
+      project: null,
+    });
+    const base = {
+      day: '2026-10-20',
+      time_zone: 'UTC',
+      from: '',
+      until: '',
+      totals: { sessions: 3, events: 9, prompts: 3, projects: 0, agents: 1, children: 0 },
+      projects: [],
+      agents: [],
+      more_sessions: 0,
+      children_included_in: [],
+      more_entries: 0,
+      more_proposals: 0,
+      forgets: [],
+      more_forgets: 0,
+    };
+    const hub: DigestResult = {
+      ...base,
+      sessions: [
+        session('gone', ['fake:g1']),
+        session('held', ['fake:p1', 'fake:p2']),
+        session('theirs', ['fake:t1']),
+      ],
+      entries: [entry('ent_00000000000a'), entry('ent_00000000000b')],
+      proposals: [proposal('prp_0000000000a1', 'fake:r1'), proposal('prp_0000000000a2', 'fake:r2')],
+    };
+    const held = (_source: string, id: string): HeldSession | null =>
+      id === 'gone'
+        ? { visible: false, prompt: null }
+        : id === 'held'
+          ? { visible: true, prompt: 'mine' }
+          : null;
+    const merged = mergeDigest(null, hub, facts, held) as DigestResult;
+    expect(merged.origin).toBe('hub');
+    expect(
+      merged.sessions.map((s) => [s.id, s.origin, s.prompt, s.prompts.map((p) => p.id)]),
+    ).toEqual([
+      ['fake:held', 'local', 'mine', ['fake:p1']],
+      ['fake:theirs', 'hub', 'the hub says', ['fake:t1']],
+    ]);
+    expect(merged.entries.map((e) => e.id)).toEqual(['ent_00000000000b']);
+    expect(merged.proposals.map((p) => p.id)).toEqual(['prp_0000000000a2']);
+    expect(merged.totals).toEqual(hub.totals);
+    // The device's own line wins for a session its digest lists; without the hub, its own digest.
+    const mine: DigestResult = {
+      ...base,
+      sessions: [{ ...session('held', []), events: 1 }],
+      entries: [],
+      proposals: [],
+    };
+    expect(mergeDigest(mine, hub, facts, held)?.sessions[0]).toMatchObject({
+      id: 'fake:held',
+      events: 1,
+      origin: 'local',
+    });
+    expect(mergeDigest(mine, null, facts, held)).toEqual({ ...mine, origin: 'local' });
   });
 });

@@ -1,5 +1,7 @@
 import {
   type ChangesResult,
+  type DigestResult,
+  type DigestSessionView,
   type EntryResult,
   type EntryStub,
   type EntryView,
@@ -348,6 +350,54 @@ export function mergeChanges(
     forgets,
     proposals,
     more: Boolean(local?.more) || Boolean(hub?.more),
+  };
+}
+
+/** What a device holds of a session: whether any of its events is visible, and its first prompt. */
+export interface HeldSession {
+  visible: boolean;
+  prompt: string | null;
+}
+
+/**
+ * `digest` on a device: the hub's digest, which covers every device, without what this device has
+ * forgotten; this device's own when the hub did not answer. Both read the same day in the same
+ * zone (the device asks the hub for its own). A session the device holds is the device's line when
+ * its own digest lists it, and is left out when its events here are all hidden; the prompts,
+ * entries, and proposals the device has forgotten are left out. The totals are the hub's.
+ */
+export function mergeDigest(
+  local: DigestResult | null,
+  hub: DigestResult | null,
+  facts: LocalFacts,
+  held: (source: string, session: string) => HeldSession | null,
+): DigestResult | null {
+  if (!hub) return local && { ...local, origin: 'local' };
+  const mine = new Map((local?.sessions ?? []).map((s) => [s.id, s]));
+  const sessions: DigestSessionView[] = [];
+  for (const s of hub.sessions) {
+    const here = held(s.source, s.session);
+    if (here && !here.visible) continue;
+    const own = here && mine.get(s.id);
+    if (own) {
+      sessions.push({ ...own, origin: 'local' });
+      continue;
+    }
+    sessions.push({
+      ...s,
+      ...(here && s.prompt !== null ? { prompt: here.prompt } : {}),
+      prompts: s.prompts.filter((p) => !facts.forgotten(p.id)),
+      origin: here ? 'local' : 'hub',
+    });
+  }
+  return {
+    ...hub,
+    sessions,
+    entries: hub.entries.filter((e) => !facts.forgotten(e.id)).map((e) => labelled(e, facts, e.id)),
+    proposals: hub.proposals
+      .filter((p) => !facts.forgotten(p.event))
+      .map((p) => labelled(p, facts, p.event)),
+    origin: 'hub',
   };
 }
 

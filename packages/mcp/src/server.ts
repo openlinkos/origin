@@ -6,6 +6,7 @@ import {
   briefIn,
   changesIn,
   correctIn,
+  digestOf,
   followHere,
   forgetIn,
   getById,
@@ -130,6 +131,11 @@ function localHandlers(
       run(async () => {
         await refresh();
         return toolResult(changesIn(db, args));
+      }),
+    digest: (args) =>
+      run(async () => {
+        await refresh();
+        return toolResult(digestOf(db, args));
       }),
     follow: (args) =>
       run(async () => {

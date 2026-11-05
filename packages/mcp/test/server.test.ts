@@ -106,13 +106,14 @@ async function call(name: string, args: Record<string, unknown>) {
 }
 
 describe('origin MCP server', () => {
-  it('exposes the eleven tools', async () => {
+  it('exposes the twelve tools', async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
         'brief',
         'changes',
         'correct',
+        'digest',
         'follow',
         'forget',
         'get',
@@ -967,6 +968,108 @@ describe('proposals', () => {
   });
 });
 
+describe('digest', () => {
+  it('sums up a day: its sessions as ids `get` opens, their prompts, and its times in its zone', async () => {
+    const r = await call('digest', { day: '1970-01-01', time_zone: 'UTC' });
+    expect(r.isError).toBe(false);
+    expect(r.json).toMatchObject({
+      day: '1970-01-01',
+      time_zone: 'UTC',
+      from: '1970-01-01T00:00:00.000+00:00',
+      until: '1970-01-02T00:00:00.000+00:00',
+      totals: { sessions: 1, events: 2, prompts: 1, projects: 1, agents: 1, children: 0 },
+      projects: [{ project: 'demo', sessions: 1, events: 2, prompts: 1 }],
+      agents: [{ source: 'fake', sessions: 1, events: 2, prompts: 1 }],
+      more_sessions: 0,
+      children_included_in: ['events', 'first', 'last', 'tools', 'tool_calls', 'files'],
+      entries: [],
+      proposals: [],
+      forgets: [],
+    });
+    expect(r.json.sessions).toEqual([
+      {
+        id: 'fake:s1',
+        source: 'fake',
+        session: 's1',
+        project: 'demo',
+        thread: null,
+        title: null,
+        prompt: 'Store everything in SQLite so it stays local.',
+        first: '1970-01-01T00:00:01.000+00:00',
+        last: '1970-01-01T00:00:02.000+00:00',
+        events: 2,
+        prompts: [
+          {
+            id: 'fake:e1',
+            time: '1970-01-01T00:00:01.000+00:00',
+            text: 'Store everything in SQLite so it stays local.',
+          },
+        ],
+        more_prompts: 0,
+        tools: {},
+        tool_calls: 0,
+        files: [],
+        more_files: 0,
+        children: 0,
+        workflows: [],
+      },
+    ]);
+    expect((await call('get', { id: r.json.sessions[0].id })).json).toMatchObject({
+      session: 's1',
+      turns: 1,
+    });
+    // Eight hours ahead of UTC, the same events fall on the same day, and the times say so.
+    const east = await call('digest', { day: '1970-01-01', time_zone: 'Asia/Shanghai' });
+    expect(east.json.from).toBe('1970-01-01T00:00:00.000+08:00');
+    expect(east.json.sessions[0].first).toBe('1970-01-01T08:00:01.000+08:00');
+    expect((await call('digest', { day: '1970-01-02', time_zone: 'UTC' })).json.sessions).toEqual(
+      [],
+    );
+  });
+
+  it("folds today's workflow child into its parent, and lists the entries written", async () => {
+    writeChildSession(src);
+    await call('remember', {
+      kind: 'knowledge',
+      text: 'Retries are cached.\nFor a day.',
+      confidence: 0.9,
+      sources: [{ event_id: 'fake:r1' }],
+    });
+    const r = await call('digest', {});
+    expect(r.json.day).toBe(
+      new Date().toLocaleDateString('en-CA', {
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }),
+    );
+    expect(r.json.sessions.map((s: { id: string }) => s.id)).toEqual(['fake:parent-1']);
+    expect(r.json.sessions[0]).toMatchObject({
+      title: 'Cache the retries',
+      events: 3,
+      children: 1,
+      workflows: ['Ship'],
+    });
+    expect(r.json.sessions[0].prompts.map((p: { id: string }) => p.id)).toEqual([
+      'fake:r1',
+      'fake:r2',
+    ]);
+    expect(r.json.entries).toEqual([
+      expect.objectContaining({
+        kind: 'knowledge',
+        text: 'Retries are cached.',
+        author: 'test-agent@laptop',
+        supersedes: null,
+      }),
+    ]);
+  });
+
+  it('refuses a day or a time zone it cannot read', async () => {
+    expect((await call('digest', { day: '2026-1-5' })).isError).toBe(true);
+    expect((await call('digest', { day: '2026-02-30' })).text).toMatch(/Not a day: 2026-02-30/);
+    expect((await call('digest', { time_zone: 'Mars/Olympus' })).text).toMatch(/Unknown time zone/);
+    expect((await call('digest', { limit: 201 })).isError).toBe(true);
+  });
+});
+
 describe('a read-only connection', () => {
   it('has the reading tools only, and says so', async () => {
     const server = createOriginServer({ db, home, readOnly: true, syncIntervalMs: 0 });
@@ -975,9 +1078,15 @@ describe('a read-only connection', () => {
     await Promise.all([reader.connect(clientSide), server.mcp.connect(serverSide)]);
     const { tools } = await reader.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ['brief', 'changes', 'follow', 'get', 'search', 'sources', 'timeline'].sort(),
+      ['brief', 'changes', 'digest', 'follow', 'get', 'search', 'sources', 'timeline'].sort(),
     );
     expect(reader.getInstructions()).toContain('This connection is read-only');
+    const digest = (await reader.callTool({ name: 'digest', arguments: {} })) as {
+      isError?: boolean;
+      content: Array<{ text: string }>;
+    };
+    expect(digest.isError).toBeFalsy();
+    expect(JSON.parse(digest.content[0]?.text ?? '{}')).toHaveProperty('totals');
     const r = (await reader.callTool({
       name: 'remember',
       arguments: { kind: 'memory', text: 'x', confidence: 1, sources: [{ quote: 'SQLite' }] },

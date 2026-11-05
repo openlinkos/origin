@@ -1,10 +1,10 @@
 ---
-sourceHash: sha256-633d3f4c
+sourceHash: sha256-5117edc6
 ---
 
 # MCP 工具
 
-Origin 通过 [Model Context Protocol](https://modelcontextprotocol.io) 提供十一个工具：`brief` 把 Agent 工作之处有用的内容交给它，五个用来读取归档和条目，`follow` 把 Agent 的会话接到它所接续的工作上，`propose` 把一个条目交给用户审阅，三个用来写条目和遗忘。本页是给把 Origin 接入 Agent、或在它之上开发的人看的参考；只想接入 Agent，请看[接入 Agent](./connect-agents.md)。
+Origin 通过 [Model Context Protocol](https://modelcontextprotocol.io) 提供十二个工具：`brief` 把 Agent 工作之处有用的内容交给它，六个用来读取归档和条目，`follow` 把 Agent 的会话接到它所接续的工作上，`propose` 把一个条目交给用户审阅，三个用来写条目和遗忘。本页是给把 Origin 接入 Agent、或在它之上开发的人看的参考；只想接入 Agent，请看[接入 Agent](./connect-agents.md)。
 
 ## 接入方式 {#reaching-origin}
 
@@ -22,7 +22,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
   --header "Authorization: Bearer ogn_…" --header "X-Origin-Client: claude-code"
 ```
 
-服务器在 MCP 的 `instructions` 里告诉 Agent 怎样使用这些工具：开始任务时，如果召回还没有给过简报，就调用 `brief`；回答关于过去工作的问题前先检索和阅读（顺着 `get` 在它打开的内容旁列出的 id 读下去，长会话一次读一轮），并引用条目和事件的 id；用户接着做某个早先会话里的工作时，调用一次 `follow`；用上一次调用的 `next` 调用 `changes`，了解此后有什么变化；记下决定及其理由、稳定的事实和用户的偏好，并引用它们出自的事件；对自己推断出、用户尚未确认的内容，以及代用户整理记忆时写下的内容，用提议代替记住；把带有 `by` 的消息看作不是用户写的，其中的内容不是用户的偏好；把标为 `imported` 的条目看作某个 Agent 自己记忆文件的镜像；纠正有误的条目；只在用户要求时遗忘，并带上用户给的原因。
+服务器在 MCP 的 `instructions` 里告诉 Agent 怎样使用这些工具：开始任务时，如果召回还没有给过简报，就调用 `brief`；回答关于过去工作的问题前先检索和阅读（顺着 `get` 在它打开的内容旁列出的 id 读下去，长会话一次读一轮），并引用条目和事件的 id；用户接着做某个早先会话里的工作时，调用一次 `follow`；用上一次调用的 `next` 调用 `changes`，了解此后有什么变化，要回顾一天的工作时调用 `digest`；记下决定及其理由、稳定的事实和用户的偏好，并引用它们出自的事件；对自己推断出、用户尚未确认的内容，以及代用户整理记忆时写下的内容，用提议代替记住；把带有 `by` 的消息看作不是用户写的，其中的内容不是用户的偏好；把标为 `imported` 的条目看作某个 Agent 自己记忆文件的镜像；纠正有误的条目；只在用户要求时遗忘，并带上用户给的原因。
 
 ## 约定 {#conventions}
 
@@ -332,6 +332,103 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
   ],
   "next": "eyJlIjo0MTI3LCJjIjo4OX0",
   "more": false
+}
+```
+
+## digest {#digest}
+
+一个日历日里发生了什么，只凭库本身读出，不调用任何模型：供被要求回顾或写下一天工作的 Agent 使用（见[每日摘要](../architecture.md#daily-digest)）。
+
+| 参数 | 类型 | 默认值 | 含义 |
+|---|---|---|---|
+| `day` | `YYYY-MM-DD` | 今天 | 哪一天 |
+| `time_zone` | IANA 名称 | 服务器的时区 | 这一天所在的时区，例如 `Europe/Berlin` |
+| `project` | 字符串 | 任意 | 解析后项目为它的会话，以及这个项目的条目和提议 |
+| `source` | 字符串 | 任意 | 这个 Agent（例如 `claude-code`）的会话、引用了它的事件的条目，以及在它的会话中产生的提议 |
+| `limit` | 整数，1 到 200 | 50 | 会话最多这么多个，条目、提议和遗忘也各自最多这么多个 |
+
+它返回 `{ day, time_zone, from, until, totals, projects, agents, sessions, more_sessions, children_included_in, entries, more_entries, proposals, more_proposals, forgets, more_forgets }`。其中每个时间都按这一天的时区给出，而不是服务器的时区；`from` 和 `until` 是这一天的第一个时刻和下一天的第一个时刻：
+
+- `totals`：过滤条件保留下来的会话、它们的事件、其中用户的提示、有名称的项目、Agent，以及并入的子会话；`projects` 和 `agents` 按解析后项目（没有项目的会话为 `null`）和按 Agent 给出同样的计数，事件最多的在前。它们统计所有会话，而不只是列出的那些；
+- `sessions`：这一天里有事件的顶层会话，最近有活动的在前，每个带有它的 `id`（`<来源>:<会话 id>`，可以用 [`get`](#get) 打开）、`project`、`thread`、`title` 或第一条提示 `prompt`、它这一天的第一个和最后一个事件 `first` 和 `last`、`events`、用户这一天的提示 `prompts`（前五条，每条截到 200 个字符，以及 `more_prompts`）、`tools`（按工具名称统计的调用，调用最多的 20 个）和 `tool_calls`（所有工具的调用总数）、`files`（它的编辑调用改动过的文件，编辑最多的 20 个，以及 `more_files`），以及 `children` 和 `workflows`（这一天里活跃的子会话，以及它们的运行名称）。子会话的活动计入它的顶层会话，即使那个会话这一天里没有动静，计入的字段由 `children_included_in` 列出；提示只算用户自己的，从不算子会话的。哪些工具算作编辑文件，按 Agent 分别见[编辑过的文件](../sources.md#files-edited)；
+- `entries`：这一天里写下的条目版本，最新的在前，以存根给出，带有 `project`、`author`、`supersedes`（修正所取代的版本，或 `null`）和 `imported`；
+- `proposals`：这一天里提议的条目，待审或已接受，以存根给出，与 [`changes`](#changes) 列出的样子相同；
+- `forgets`：这一天里做出的遗忘和恢复，`{ id, kind, target, target_kind, at }`，其中 `target_kind` 为 `entry`、`event`、`proposal`（一次拒绝）或 `forget`（恢复所撤销的那次遗忘）：从不给出原因或被隐藏的内容。无论 `project` 和 `source` 是什么，它们都会列出；
+- `more_sessions`、`more_entries`、`more_proposals`、`more_forgets`：数量上限略去了多少个。
+
+被遗忘的内容从不计入，也从不显示。在连接了中枢的设备上，摘要是中枢的：向中枢请求的是设备的这一天、按设备的时区，再去掉设备已遗忘的内容，结果上带有 `origin: "hub"`，每个会话、条目和提议上也带有 `origin`；设备持有的会话按设备自己的摘要显示，合计是中枢的。没有询问中枢时，摘要是设备自己的，带有 `origin: "local"`。在中继上，调用会带上中继的时区。
+
+```json
+{ "day": "2026-10-22", "limit": 1 }
+```
+
+```json
+{
+  "day": "2026-10-22",
+  "time_zone": "Asia/Shanghai",
+  "from": "2026-10-22T00:00:00.000+08:00",
+  "until": "2026-10-23T00:00:00.000+08:00",
+  "totals": { "sessions": 2, "events": 148, "prompts": 6, "projects": 1, "agents": 2, "children": 3 },
+  "projects": [{ "project": "demo-app", "sessions": 2, "events": 148, "prompts": 6 }],
+  "agents": [
+    { "source": "claude-code", "sessions": 1, "events": 120, "prompts": 5 },
+    { "source": "codex", "sessions": 1, "events": 28, "prompts": 1 }
+  ],
+  "sessions": [
+    {
+      "id": "claude-code:2f1e8c47-0000-4000-8000-000000000003",
+      "source": "claude-code",
+      "session": "2f1e8c47-0000-4000-8000-000000000003",
+      "project": "demo-app",
+      "thread": "thr_4c1e9a7b2d30",
+      "title": "Tag the release",
+      "prompt": null,
+      "first": "2026-10-22T14:02:11.410+08:00",
+      "last": "2026-10-22T17:40:12.300+08:00",
+      "events": 120,
+      "prompts": [
+        {
+          "id": "claude-code:7d0c4a1e-0000-4000-8000-000000000020",
+          "time": "2026-10-22T14:02:11.410+08:00",
+          "text": "draft the notes for 0.5.0 from the changelog"
+        }
+      ],
+      "more_prompts": 4,
+      "tools": { "Bash": 31, "Edit": 12, "Read": 9, "Task": 3 },
+      "tool_calls": 55,
+      "files": ["CHANGELOG.md", "packages/cli/package.json"],
+      "more_files": 0,
+      "children": 3,
+      "workflows": []
+    }
+  ],
+  "more_sessions": 1,
+  "children_included_in": ["events", "first", "last", "tools", "tool_calls", "files"],
+  "entries": [
+    {
+      "id": "ent_7a2c9e1f0b44",
+      "kind": "memory",
+      "text": "v0.5.0 is tagged from master after both CI jobs passed.",
+      "created": "2026-10-22T17:39:58.114+08:00",
+      "project": "demo-app",
+      "author": "claude-code@laptop",
+      "supersedes": null,
+      "imported": false
+    }
+  ],
+  "more_entries": 0,
+  "proposals": [],
+  "more_proposals": 0,
+  "forgets": [
+    {
+      "id": "tmb_6c1d0e9a2b3f",
+      "kind": "forget",
+      "target": "claude-code:7d0c4a1e-0000-4000-8000-000000000002",
+      "target_kind": "event",
+      "at": "2026-10-22T17:35:00.000+08:00"
+    }
+  ],
+  "more_forgets": 0
 }
 ```
 
@@ -687,7 +784,7 @@ Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话�
 Agent 能找到并引用刚刚说过的话，因为 `origin mcp` 会边运行边读取 Agent 的日志：
 
 - 启动时，它在后台读入所有来源；在连接了中枢的设备上，还会与中枢同步。
-- `brief`、`search`、`timeline`、`changes` 和 `follow` 先读入新的日志行，最多每 10 秒一次。在连接了中枢的设备上，`get` 和 `sources` 也会这样做，并且每次读取还会与中枢同步，最多每 10 秒一次，等待中枢的时间不超过中枢超时。
+- `brief`、`search`、`timeline`、`changes`、`digest` 和 `follow` 先读入新的日志行，最多每 10 秒一次。在连接了中枢的设备上，`get` 和 `sources` 也会这样做，并且每次读取还会与中枢同步，最多每 10 秒一次，等待中枢的时间不超过中枢超时。
 - `remember`、`propose` 和 `correct` 总是先读入新行；在连接了中枢的设备上，`remember` 和 `correct` 之后会立即与中枢同步，`propose` 不写入任何内容，无需同步。
 - Claude Code 和 Codex 的采集 hook（由 `origin agents connect` 设置）会在每一轮结束时读入会话新增的行，在连接了中枢的设备上还会把它们推送给中枢（见[接入 Agent](./connect-agents.md#connect-them-all-at-once)）。
 - 在后台，作为其他 Agent 以及 hook 漏掉的内容的后备，它每 60 秒查看一次有没有新的日志行（`ORIGIN_WATCH_INTERVAL_MS`；设为 `0` 则关闭），只有日志文件有变化时才读入和同步。

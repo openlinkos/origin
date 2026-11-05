@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-88621a9c
+sourceHash: sha256-1b975a51
 ---
 
 # 架构
@@ -92,7 +92,7 @@ agent session logs on disk ──scan──▶ Raw (append-only mirror)
                                         ▼
                                   Event store (SQLite + FTS5) ◀── Entries · Tombstones
                                         │
- agents ◀── MCP (stdio): brief · search · timeline · changes · get · sources · follow · remember · propose · correct · forget
+ agents ◀── MCP (stdio): brief · search · timeline · changes · digest · get · sources · follow · remember · propose · correct · forget
  agents ◀── hooks: origin recall (session start · prompt): a brief, and the entries a prompt matches
  agents ──▶ hooks: origin sync --hook (turn end · sub-agent · compaction): the transcript to ingest
  people ◀── CLI `origin`: sync · status · timeline · search · show · entries · correct · forget · forgotten · restore · recall · recalls · proposals · accept · reject · distill
@@ -514,6 +514,7 @@ Agent 自己的记录没有写明的父会话，或稍后补上的运行分组�
 | `search` | 对条目和事件做全文检索；不带查询词时列出最近的条目。过滤条件：范围、类型、时间段、来源、项目、工具事件。每个事件都指明它所在的会话；落在子会话上的命中也会指明它的父会话（见[父会话](#parent-sessions)） |
 | `timeline` | 某个时间段内的顶层会话（默认 7 天；`include_children` 也列出子会话），每个会话带有它的标题，没有标题时带有它的第一条提示（见[会话的名称](#search-and-timeline)）、它有多少子会话及其工作流名称，以及它的线索；或单个会话的事件，一次一页：某一轮（`turn`），或某个事件之后（`after`），并说明后面还有多少（`more`） |
 | `changes` | 某个游标之后到达库中的内容，从旧到新且有界：这些事件所属的顶层会话（当筛选指明那个会话或一条线索时也包括子会话）、事件、条目和遗忘（只给 id），以及接着读用的游标（见[变更流](#change-feed)）。过滤条件：项目、线索、会话、工具事件 |
+| `digest` | 一个日历日，只凭库本身（见[每日摘要](#daily-digest)）：合计、按项目和按 Agent 的计数；这一天里活跃的顶层会话，并入活跃的子会话，每个带有它的 id、主人的提示、按工具统计的调用和编辑过的文件；写下的条目、产生的提议和做出的遗忘（只给 id）。参数：日期（默认今天）、时区（默认 server 自己的）、项目、来源、数量上限 |
 | `get` | Origin 交出的任意 id，以一张写明近旁内容的卡片返回（见[沿引用阅读](#reading-along-references)）：条目及其来源、历史和相关条目；事件及其正文（分页）、所在会话、所在轮次、前后的事件和引用它的条目；会话及其各轮、它的线索、从中写下的条目、它拿到的召回、前后的会话、它是子会话时的父会话，以及它是父会话时按运行分组的子会话；线索及其会话和从中写下的内容；召回及其交出的内容；提议及其来源、提出它的会话和它成为的条目 |
 | `sources` | 条目或事件对应的原始记录行：文件、镜像、行号、原始文本 |
 | `follow` | 声明调用者的会话接续了 Agent 所在项目中的某个会话或某条线索，使它们成为一条线索（见[线索](#threads)）：它不写下任何内容，只返回链接，由采集从 Agent 的记录中读出 |
@@ -522,14 +523,14 @@ Agent 自己的记录没有写明的父会话，或稍后补上的运行分组�
 | `correct` | 用纠正后的版本取代一个条目 |
 | `forget` | 按上述规则隐藏一个条目或事件，并附上用户给出的原因；仅在用户明确要求时使用。没有用于恢复的工具：只有主人能恢复，方式是 CLI 或管理界面 |
 
-- **新鲜度。** server 在启动时采集所有来源，在 `brief`、`search`、`timeline`、`changes` 和 `follow` 之前也会采集（最多每 10 秒一次；在连接了中枢的设备上，`get` 和 `sources` 之前也会），在 `remember`、`propose` 和 `correct` 之前则总会采集，因此 Agent 能引用它当前所在对话中的记录行。
+- **新鲜度。** server 在启动时采集所有来源，在 `brief`、`search`、`timeline`、`changes`、`digest` 和 `follow` 之前也会采集（最多每 10 秒一次；在连接了中枢的设备上，`get` 和 `sources` 之前也会），在 `remember`、`propose` 和 `correct` 之前则总会采集，因此 Agent 能引用它当前所在对话中的记录行。
 - **Agent 运行期间。** Claude Code 和 Codex 的 hook 会在每一轮结束时把会话新增的行交给 Origin（见[实时采集](#live-ingestion)）。作为后备，为其他 Agent 以及 hook 漏掉的内容，server 还会每 60 秒查看一次有没有新的记录行（`ORIGIN_WATCH_INTERVAL_MS`；设为 0 则关闭），这样 Agent 最后一次调用工具之后写下的内容也能进入库和中枢，而不必等到下一个 Agent 启动。每次查看会把各记录文件的大小和修改时间与上次采集时比较，不读取文件内容，只有发生变化时才采集。查看在后台进行，与其他刷新使用同一套闸门，所以一次只查看一次，也绝不会与另一次同步重叠；工具调用不会等待它，除非本来就需要刷新；耗时较长的采集也会在各个事务之间让工具调用先执行。
 - **Agent 离开时。** 标准输入结束，或者 server 收到 SIGTERM、SIGINT 或 SIGHUP 时，它会再采集一次，已接入中枢时还会与中枢同步，最多等待 5 秒，然后退出。Agent 如果直接杀掉 server，就会跳过这一步；下一次启动时会补上。
-- **在已接入中枢的设备上。** server 仍然根据设备自己的库作答，读取类工具（`search`、`timeline`、`changes`、`get`、`sources`）会同时询问中枢的 `/mcp`。两边的结果会合并、按 id 去重，并标上 `origin: "local"`（本设备有这一项）或 `"hub"`。无论中枢返回什么，设备已经遗忘的内容都不会显示；同一个条目的多个版本中，只列出按[条目](#entries)中的规则确定的当前版本；`get` 会合并两个库中该条目的历史。对于设备没有的 id，`get` 和 `sources` 由中枢作答；对设备没有的会话或线索调用 `follow`，也由中枢按它自己的库、针对设备的工作树来检查。`changes` 的游标同时含有设备的游标和中枢的游标（`{ l, h }`）：两边的变更流按 id 合并并加上标签，去掉设备已遗忘的内容，连同在本设备上事件已全部消失的会话；任何一边还有更多内容时，`more` 为真；中枢没有回应时，游标中属于中枢的部分保持不动。如果中枢在 2 秒内（`ORIGIN_HUB_TIMEOUT_MS`）没有回应，或者无法连接，工具就只根据设备作答，并附加第二段文本，说明这次没有询问中枢。agent 一完成初始化，server 就建立到中枢的连接，这样第一次读取不必把这段时间花在 TLS 握手和 MCP 初始化上。
+- **在已接入中枢的设备上。** server 仍然根据设备自己的库作答，读取类工具（`search`、`timeline`、`changes`、`digest`、`get`、`sources`）会同时询问中枢的 `/mcp`。两边的结果会合并、按 id 去重，并标上 `origin: "local"`（本设备有这一项）或 `"hub"`。无论中枢返回什么，设备已经遗忘的内容都不会显示；同一个条目的多个版本中，只列出按[条目](#entries)中的规则确定的当前版本；`get` 会合并两个库中该条目的历史。对于设备没有的 id，`get` 和 `sources` 由中枢作答；对设备没有的会话或线索调用 `follow`，也由中枢按它自己的库、针对设备的工作树来检查。`changes` 的游标同时含有设备的游标和中枢的游标（`{ l, h }`）：两边的变更流按 id 合并并加上标签，去掉设备已遗忘的内容，连同在本设备上事件已全部消失的会话；任何一边还有更多内容时，`more` 为真；中枢没有回应时，游标中属于中枢的部分保持不动。`digest` 向中枢请求设备的这一天、按设备的时区，结果是中枢的，再去掉设备已遗忘的内容（见[每日摘要](#daily-digest)）。如果中枢在 2 秒内（`ORIGIN_HUB_TIMEOUT_MS`）没有回应，或者无法连接，工具就只根据设备作答，并附加第二段文本，说明这次没有询问中枢。agent 一完成初始化，server 就建立到中枢的连接，这样第一次读取不必把这段时间花在 TLS 握手和 MCP 初始化上。
 - **已接入中枢的设备上的写入**先落到设备的库中，再同步上去。`propose` 不写入任何内容，它像 `remember` 一样针对设备的库检查。server 在读取类工具之前与中枢同步（最多每 10 秒一次），每次写入后、每次后台查看发现新的记录行后、以及 Agent 离开时也会同步，而且为了等待中枢而推迟回答的时间不会超过超时时限。失败的同步会在下一次后台查看时重试。对于设备没有的条目或事件，`correct` 和 `forget` 会在中枢上执行；连不上中枢时，它们会失败并给出清楚的错误说明。
-- **在中继上。** 每个工具都交给中枢的 `/mcp`，中枢的回答原样返回，不带 `origin` 标签；`brief` 和 `follow` 以中继的工作树作为 Agent 的目录，因为中枢看不到中继的磁盘。在此之前，server 先把 Agent 新增的记录行发送给中枢：读取类工具之前最多每 10 秒一次，最多等待中枢超时时限；每次写入之前（包括 `propose`）都会发送，最多等待 15 秒，这样条目就能引用刚刚说过的内容。由于它自己没有回答，它最多等待中枢的回答 15 秒；连不上中枢时，工具会失败，并说明中继离线时无法作答。记录文件有变化时，它每分钟也会发送一次新的行，Agent 离开时再发送一次（见[中继](#relays)）。
+- **在中继上。** 每个工具都交给中枢的 `/mcp`，中枢的回答原样返回，不带 `origin` 标签；`brief` 和 `follow` 以中继的工作树作为 Agent 的目录，因为中枢看不到中继的磁盘；`digest` 则带上中继的时区。在此之前，server 先把 Agent 新增的记录行发送给中枢：读取类工具之前最多每 10 秒一次，最多等待中枢超时时限；每次写入之前（包括 `propose`）都会发送，最多等待 15 秒，这样条目就能引用刚刚说过的内容。由于它自己没有回答，它最多等待中枢的回答 15 秒；连不上中枢时，工具会失败，并说明中继离线时无法作答。记录文件有变化时，它每分钟也会发送一次新的行，Agent 离开时再发送一次（见[中继](#relays)）。
 - **只读连接。** 预设权限为 `readonly` 的 Agent 的连接（见[访问](#access)）不提供 `remember`、`propose`、`correct` 和 `forget`，它的说明会告诉 Agent 它可以读取记忆，但不能修改。
-- **引导。** server 的 MCP `instructions` 会告诉 Agent：开始任务时，如果召回还没有给过它简报，就调用 `brief`；何时检索，要顺着 `get` 在它打开的内容旁列出的 id 读下去、长会话一次读一轮，用户接着做简报或时间线中列出的某个早先会话里的工作时，调用一次 `follow`，想知道自上次以来有什么变化时，用上一次的 `next` 调用 `changes`，何时记住（带理由的决定、稳定的事实、偏好），何时改为提议（它们推断出、用户尚未确认的内容，以及代用户整理记忆时写下的一切），只有用户可以接受或拒绝提议，`forget` 需要明确的请求和用户给出的原因，只有用户能恢复被遗忘的内容，带有 `by` 的消息不是用户写的，所以其中的内容不是用户的偏好，以及导入的条目对应某个 Agent 自己的记忆文件，所以文件之后的变化会取代在 Origin 中做的纠正。结果中的条目会说明自己是否为导入的（`imported`）。
+- **引导。** server 的 MCP `instructions` 会告诉 Agent：开始任务时，如果召回还没有给过它简报，就调用 `brief`；何时检索，要顺着 `get` 在它打开的内容旁列出的 id 读下去、长会话一次读一轮，用户接着做简报或时间线中列出的某个早先会话里的工作时，调用一次 `follow`，想知道自上次以来有什么变化时，用上一次的 `next` 调用 `changes`，要回顾一天的工作时调用 `digest`，何时记住（带理由的决定、稳定的事实、偏好），何时改为提议（它们推断出、用户尚未确认的内容，以及代用户整理记忆时写下的一切），只有用户可以接受或拒绝提议，`forget` 需要明确的请求和用户给出的原因，只有用户能恢复被遗忘的内容，带有 `by` 的消息不是用户写的，所以其中的内容不是用户的偏好，以及导入的条目对应某个 Agent 自己的记忆文件，所以文件之后的变化会取代在 Origin 中做的纠正。结果中的条目会说明自己是否为导入的（`imported`）。
 - **错误。** 无效输入、未知 id 和已遗忘的 id 会以工具错误的形式返回，并附带可读的说明。
 
 ### 沿引用阅读 {#reading-along-references}
@@ -656,7 +657,7 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 | `POST /oauth/token` | 有管理界面时：一个表单，`grant_type` 为 `authorization_code`（带 `code`、`client_id`、`redirect_uri`、`code_verifier`、`resource`）、`refresh_token` 或 `urn:ietf:params:oauth:grant-type:device_code`（带 `device_code` 和 `client_id=origin`）；返回 `200 { access_token, token_type, expires_in, refresh_token, scope }`，对设备则返回带有它的设备令牌的 `{ access_token, token_type, device }`；其他情况返回 `400 { error, error_description }`，例如设备等待期间的 `authorization_pending` 或 `slow_down` |
 | `POST /oauth/revoke` | 有管理界面时：由客户端发起的令牌吊销（RFC 7009）；总是返回 `200` |
 | `POST /oauth/device` | 有管理界面时：供 `origin hub connect` 使用的设备授权（RFC 8628），一个带有 `client_id=origin` 和 `device_name` 的表单；返回 `200 { device_code, user_code, verification_uri, verification_uri_complete, expires_in, interval }`，验证码有效 10 分钟 |
-| `POST /mcp` | MCP Streamable HTTP，无状态，JSON 响应；与 stdio server 相同的十一个工具，对 `readonly` 的 Agent 则不含写入类工具。中枢提供 OAuth 时，`401` 会指明受保护资源元数据 |
+| `POST /mcp` | MCP Streamable HTTP，无状态，JSON 响应；与 stdio server 相同的十二个工具，对 `readonly` 的 Agent 则不含写入类工具。中枢提供 OAuth 时，`401` 会指明受保护资源元数据 |
 | `GET /v1/device` | `{ device, hub }`：令牌所属的设备（即令牌名）和中枢的名称 |
 | `GET /v1/cursors?device=<name>` | 令牌所属设备的每个文件在中枢上的字节游标；加上 `&source=<id>&path=<path>` 时，只给出那一个文件每个代次的游标（较早的中枢会忽略这两个参数，列出每个文件，由调用方从中挑出这个文件） |
 | `POST /v1/ingest` | 追加一个块：JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }`，其中 `data` 为 base64，`offset` 按镜像未压缩的内容计算（中继发送的是文件的内容，二者相同）；请求体可以使用 gzip 编码。返回 `200 { bytes, eventsAdded, … }`，偏移量不匹配时返回 `409 { bytes }` |

@@ -27,7 +27,7 @@ Origin puts **you** at the center instead of the tool:
 
 ## Features
 
-- **MCP server** (`origin mcp`) with eleven tools: `brief`, `search`, `timeline`, `changes`, `get`, `sources`, `follow`, `remember`, `propose`, `correct`, `forget`. It syncs automatically, so agents always see the latest sessions.
+- **MCP server** (`origin mcp`) with twelve tools: `brief`, `search`, `timeline`, `changes`, `digest`, `get`, `sources`, `follow`, `remember`, `propose`, `correct`, `forget`. It syncs automatically, so agents always see the latest sessions.
 - **Entries** in three kinds: `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries). Each carries its sources, a confidence, and a version history.
 - **Native memory import.** The memory files that Claude Code, ZCode, and Grok Build keep for themselves are imported as entries, each citing the version of its file: when the agent changes a memory, the entry follows, and when it deletes one, the entry ends.
 - **Recall.** When a session starts, and with each prompt, agents are handed what matters where they work: your preferences, the project's latest decisions and facts, your latest sessions there with any agent, and the entries the prompt is about, one line each, chosen without a model. Claude Code and Codex get it through their hooks and other agents with the `brief` tool; `origin agents connect` sets this up. Every recall is recorded, so you can see what an agent was handed and whether it used it.
@@ -94,7 +94,7 @@ The full documentation lives in [`docs/`](docs/) and is published at [origin.ope
 - [Upgrading](docs/guide/upgrading.md): versions, image tags, store formats, and how to upgrade a device and a hub
 - [Troubleshooting](docs/guide/troubleshooting.md): common problems and their fixes
 - [CLI reference](docs/guide/cli.md): every command, with examples and environment variables
-- [MCP tools](docs/guide/mcp.md): the eleven tools agents use, their parameters, and what they return
+- [MCP tools](docs/guide/mcp.md): the twelve tools agents use, their parameters, and what they return
 - [Architecture](docs/architecture.md): data model, invariants, ingestion, entries, the MCP server, and the hub
 - [Session sources](docs/sources.md): the on-disk formats of each agent, and of their memories
 - [Changelog](CHANGELOG.md): what changed in each release

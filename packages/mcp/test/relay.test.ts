@@ -3,7 +3,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { getEntry, getEvent, getRecall, remember, syncSource } from '@openlinkos/origin-core';
+import {
+  digestDay,
+  getEntry,
+  getEvent,
+  getRecall,
+  localTimeZone,
+  remember,
+  syncSource,
+} from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeAdapter, line } from '../../core/test/helpers.js';
 import { createRelayServer, type RelayServerOptions } from '../src/index.js';
@@ -58,7 +66,7 @@ const call = async (name: string, args: Record<string, unknown>) =>
 describe('origin mcp on a relay', () => {
   it('answers every read from the hub, once the new log lines have reached it', async () => {
     await connect();
-    expect((await (agent as Client).listTools()).tools).toHaveLength(11);
+    expect((await (agent as Client).listTools()).tools).toHaveLength(12);
     // Written to the agent's log a moment ago: only the hub can find it, once it has been sent.
     fs.writeFileSync(
       path.join(logs, 'now.jsonl'),
@@ -242,6 +250,17 @@ describe('threads and changes on a relay', () => {
     const changes = await call('changes', {});
     expect(changes.json.events.map((e: { id: string }) => e.id)).toEqual(['fake:n1']);
     expect(changes.json.next).toEqual(expect.any(String));
+  });
+
+  it("asks the hub for the digest of a day in the relay's time zone", async () => {
+    await connect();
+    const today = await call('digest', {});
+    expect(today.json).toMatchObject({ day: digestDay().day, time_zone: localTimeZone() });
+    const day = digestDay(undefined, undefined, 1000).day;
+    const r = await call('digest', { day });
+    expect(r.json.sessions.map((s: { id: string }) => s.id)).toEqual(['fake:s1']);
+    expect(r.json.origin).toBeUndefined(); // the hub's answer, as it is
+    expect((await call('digest', { day, time_zone: 'UTC' })).json.time_zone).toBe('UTC');
   });
 });
 

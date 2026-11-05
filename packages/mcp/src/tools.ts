@@ -8,7 +8,7 @@ export const INSTRUCTIONS = `Origin is the user's local, cross-agent memory: an 
 
 - When you start a task, call \`brief\` with your working directory, unless a note headed \`Origin recall\` already gave you one: it lists the user's preferences, the project's latest decisions and facts, and its latest sessions, one line each. Use \`get\` on the ids that matter.
 - To answer questions about past work, decisions, or reasons, use \`search\` and \`timeline\`, then \`get\` or \`sources\` to read the original text. \`get\` opens any id Origin gives you (an entry, an event, a session, a thread, a recall, or a proposal) and lists what is next to it, one line each with its id: follow the ids that matter rather than reading everything. Read a long session a turn at a time with \`timeline\` (\`session\`, \`turn\`, \`after\`). Cite entry and event ids.
-- When the user continues work from an earlier session that the brief, a timeline, or a search showed you, call \`follow\` once with its id (or its thread's), so that the sessions form one thread. To learn what changed since you last looked, call \`changes\` with the \`next\` of your last call.
+- When the user continues work from an earlier session that the brief, a timeline, or a search showed you, call \`follow\` once with its id (or its thread's), so that the sessions form one thread. To learn what changed since you last looked, call \`changes\` with the \`next\` of your last call; to recap the work of one day, call \`digest\`.
 - When you learn something that will matter in future sessions — a decision and its reason, a stable fact, a preference of the user — save it, citing the events it comes from: event ids from search/timeline, or an exact quote from this conversation. \`remember\` what the user said or decided; \`propose\` what you infer and they have not confirmed, and whatever you write when consolidating their memory on their behalf. A proposal waits for the user: only they accept or reject it, in the Origin admin UI or CLI.
 - A message marked with \`by\` (\`person\`, \`agent\`, or \`system\`, with its \`speaker\` when known) was not written by the user: what it says is not the user's preference.
 - Entries marked \`imported\` mirror an agent's own memory files (such as Claude Code's memory directory); a later version of the file supersedes a correction made here. Entries whose validity has ended are left out of search unless you ask for one by id.
@@ -39,7 +39,7 @@ interface ToolSpec {
 
 const readOnly = { readOnlyHint: true, openWorldHint: false } as const;
 
-/** The eleven tools, defined once and shared by the local servers and the forwarding proxy. */
+/** The twelve tools, defined once and shared by the local servers and the forwarding proxy. */
 export const TOOL_SPECS = {
   brief: {
     title: 'Brief',
@@ -119,6 +119,37 @@ export const TOOL_SPECS = {
         .default(false)
         .describe('Also list tool calls and results, not only messages'),
       limit: z.number().int().min(1).max(200).default(50),
+    },
+    annotations: readOnly,
+  },
+  digest: {
+    title: 'Digest of a day',
+    description:
+      "What happened on one calendar day, from the store alone: totals, by project and by agent; the top-level sessions active that day, most recent first, each with its `id` for `get`, the user's prompts that day, the tools called, and the files its edit calls changed (a child session's activity is folded into its parent's, in the fields `children_included_in` names); the entries written that day (corrections included), the entries proposed, and the forgets made (by id only). Use it to recap a day's work.",
+    inputSchema: {
+      day: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/, 'A day is written YYYY-MM-DD')
+        .optional()
+        .describe('The day, YYYY-MM-DD (default: today)'),
+      time_zone: z
+        .string()
+        .optional()
+        .describe(
+          "The IANA time zone the day is in, e.g. Europe/Berlin (default: the server's own)",
+        ),
+      project: z
+        .string()
+        .optional()
+        .describe('Only sessions, entries, and proposals of this project'),
+      source: z.string().optional().describe('Only sessions of this agent, e.g. claude-code'),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(200)
+        .default(50)
+        .describe('Most sessions listed, and most entries, proposals, and forgets'),
     },
     annotations: readOnly,
   },

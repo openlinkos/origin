@@ -4,11 +4,14 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   type Database,
   decodeCursor,
+  digestDay,
   encodeCursor,
   entryHistory,
   getEntry,
+  getSession,
   isEntryForgotten,
   isoLocal,
+  localTimeZone,
   OriginError,
 } from '@openlinkos/origin-core';
 import { createHubLink, type HubAnswer } from './hub-link.js';
@@ -17,6 +20,8 @@ import {
   type ChangesResult,
   changesIn,
   correctIn,
+  type DigestResult,
+  digestOf,
   followIn,
   followScope,
   forgetIn,
@@ -34,8 +39,10 @@ import {
   timelineOf,
 } from './local.js';
 import {
+  type HeldSession,
   type LocalFacts,
   mergeChanges,
+  mergeDigest,
   mergeGet,
   mergeSearch,
   mergeSources,
@@ -119,7 +126,7 @@ export interface ReplicaServer {
 
 /**
  * The stdio MCP server of a device connected to a hub (see docs/architecture.md#mcp-server). It
- * serves the eleven tools from the device's own store, as without a hub, and completes read tools
+ * serves the twelve tools from the device's own store, as without a hub, and completes read tools
  * with the hub's answers: both are asked at once, the results are merged and labelled `local` or
  * `hub`, and a hub that does not answer in time is left out with a note. Writes land in the local
  * store and are then synced up; `correct` and `forget` of something only the hub has are done on
@@ -177,6 +184,16 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
         created: isoLocal(v.createdAt),
         status: v.status,
       })),
+  };
+
+  /** What this device holds of a session, or null when it holds none of it. */
+  const held = (source: string, session: string): HeldSession | null => {
+    const row = db
+      .prepare('SELECT event_count FROM session WHERE source = ? AND session_id = ?')
+      .get(source, session) as { event_count: number } | undefined;
+    if (!row) return null;
+    const shown = row.event_count > 0 ? getSession(db, source, session) : null;
+    return { visible: shown !== null, prompt: shown?.prompt ?? null };
   };
 
   /** A tool result, with a second note when the hub was not consulted. */
@@ -292,6 +309,21 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
             ),
         ),
       ),
+    digest: (args) =>
+      run(() => {
+        // The hub reads the day this device means, in this device's zone.
+        const zone = args.time_zone ?? localTimeZone();
+        const asked = { ...args, time_zone: zone, day: args.day ?? digestDay(undefined, zone).day };
+        return read<DigestResult>(
+          'digest',
+          asked,
+          () => digestOf(db, asked),
+          (mine, theirs, hub) => {
+            const merged = mergeDigest(mine, theirs as DigestResult | null, facts, held);
+            return merged ? answer(merged, hub) : toolError('Neither store could make the digest.');
+          },
+        );
+      }),
     changes: (args) =>
       run(async () => {
         // A device's cursor is both stores': `{ l, h }`, this store's and the hub's own.

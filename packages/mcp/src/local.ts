@@ -8,6 +8,7 @@ import {
   describeProposal,
   describeSession,
   describeThread,
+  digest,
   displayTitle,
   type Entry,
   type EventRow,
@@ -28,6 +29,7 @@ import {
   isEntryForgotten,
   isEntryId,
   isEventForgotten,
+  isoIn,
   isoLocal,
   isProposalId,
   listEntries,
@@ -67,7 +69,7 @@ import {
 import type { ToolArgs } from './tools.js';
 
 /**
- * The eleven tools against one store, returning plain JSON values (see docs/architecture.md#mcp-server).
+ * The twelve tools against one store, returning plain JSON values (see docs/architecture.md#mcp-server).
  * Caller errors (bad input, unknown or forgotten ids) are thrown as OriginError. The servers wrap
  * these: the local ones as they are, a connected device's merged with its hub's answers.
  */
@@ -441,6 +443,92 @@ export interface ChangesResult {
   more: boolean;
 }
 
+/** A prompt the user wrote that day, cut short. */
+export interface DigestPromptView {
+  id: string;
+  time: string;
+  text: string;
+}
+
+/**
+ * A top-level session active that day (see digestOf). The fields named in the digest's
+ * `children_included_in` include the activity of its child sessions that day.
+ */
+export interface DigestSessionView {
+  /** `<source>:<session id>`, which `get` opens. */
+  id: string;
+  source: string;
+  session: string;
+  project: string | null;
+  thread: string | null;
+  title: string | null;
+  /** Without a title, its first prompt, as on a timeline. */
+  prompt: string | null;
+  /** Its first and last event that day. */
+  first: string;
+  last: string;
+  events: number;
+  /** The user's first prompts that day, and how many more they wrote. */
+  prompts: DigestPromptView[];
+  more_prompts: number;
+  /** Calls that day by tool, most first, and the calls of every tool. */
+  tools: Record<string, number>;
+  tool_calls: number;
+  /** The files its edit calls changed that day, most edited first, and how many more. */
+  files: string[];
+  more_files: number;
+  /** Its child sessions active that day, and their workflow names. */
+  children: number;
+  workflows: string[];
+  origin?: Found;
+}
+
+export interface DigestCountsView {
+  sessions: number;
+  events: number;
+  prompts: number;
+}
+
+/** The digest of one day (see digestOf). */
+export interface DigestResult {
+  day: string;
+  time_zone: string;
+  /** The day's first instant, and the next day's first: every time in it is in its zone. */
+  from: string;
+  until: string;
+  totals: DigestCountsView & { projects: number; agents: number; children: number };
+  projects: Array<DigestCountsView & { project: string | null }>;
+  agents: Array<DigestCountsView & { source: string }>;
+  sessions: DigestSessionView[];
+  more_sessions: number;
+  /** The session fields that include their child sessions' activity. */
+  children_included_in: string[];
+  /** Versions written that day, newest first; `supersedes` names the version a correction replaced. */
+  entries: Array<
+    EntryStub & {
+      project: string | null;
+      author: string;
+      supersedes: string | null;
+      imported: boolean;
+      origin?: Found;
+    }
+  >;
+  more_entries: number;
+  proposals: Array<ProposalStub & { origin?: Found }>;
+  more_proposals: number;
+  /** Forgets and restores made that day, by id only. */
+  forgets: Array<{
+    id: string;
+    kind: 'forget' | 'restore';
+    target: string;
+    target_kind: 'entry' | 'event' | 'proposal' | 'forget';
+    at: string;
+  }>;
+  more_forgets: number;
+  /** On a device connected to a hub: whose digest it is. */
+  origin?: Found;
+}
+
 /** What `follow` hands back, which the agent's log records and ingestion reads (see threads.ts). */
 export interface FollowResult {
   link: string;
@@ -751,6 +839,74 @@ export function changesIn(db: Database, args: ToolArgs<'changes'>): ChangesResul
     proposals: feed.proposals.map(proposalStub),
     next: encodeFeedCursor(feed.next),
     more: feed.more,
+  };
+}
+
+/** The session fields of a digest that include the activity of child sessions. */
+export const DIGEST_WITH_CHILDREN = ['events', 'first', 'last', 'tools', 'tool_calls', 'files'];
+
+/**
+ * The digest of one day (see docs/architecture.md#daily-digest), its times in the day's zone:
+ * sessions, entries, proposals, and forgets as stubs, forgets by id only.
+ */
+export function digestOf(db: Database, args: ToolArgs<'digest'>): DigestResult {
+  const d = digest(db, {
+    day: args.day,
+    timeZone: args.time_zone,
+    project: args.project,
+    source: args.source,
+    limit: args.limit,
+  });
+  const time = (ms: number) => isoIn(ms, d.timeZone);
+  return {
+    day: d.day,
+    time_zone: d.timeZone,
+    from: time(d.from),
+    until: time(d.until),
+    totals: d.totals,
+    projects: d.projects,
+    agents: d.agents,
+    sessions: d.sessions.map((s) => ({
+      id: `${s.source}:${s.sessionId}`,
+      source: s.source,
+      session: s.sessionId,
+      project: s.project,
+      thread: s.thread,
+      title: s.title,
+      prompt: s.prompt,
+      first: time(s.first),
+      last: time(s.last),
+      events: s.events,
+      prompts: s.prompts.map((p) => ({ id: p.id, time: time(p.ts), text: p.text })),
+      more_prompts: s.promptCount - s.prompts.length,
+      tools: Object.fromEntries(s.tools.map((t) => [t.name, t.calls])),
+      tool_calls: s.toolCalls,
+      files: s.files,
+      more_files: s.fileCount - s.files.length,
+      children: s.children,
+      workflows: s.workflows,
+    })),
+    more_sessions: d.moreSessions,
+    children_included_in: DIGEST_WITH_CHILDREN,
+    entries: d.entries.map((e) => ({
+      ...entryStub(e),
+      created: time(e.createdAt),
+      project: e.project,
+      author: e.author,
+      supersedes: e.supersedes,
+      imported: e.imported,
+    })),
+    more_entries: d.moreEntries,
+    proposals: d.proposals.map((p) => ({ ...proposalStub(p), time: time(p.at) })),
+    more_proposals: d.moreProposals,
+    forgets: d.forgets.map((f) => ({
+      id: f.id,
+      kind: f.kind,
+      target: f.target,
+      target_kind: f.targetKind,
+      at: time(f.at),
+    })),
+    more_forgets: d.moreForgets,
   };
 }
 

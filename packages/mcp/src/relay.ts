@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { recallScope } from '@openlinkos/origin-core';
+import { localTimeZone, recallScope } from '@openlinkos/origin-core';
 import { createHubLink } from './hub-link.js';
 import { agentName, run } from './server.js';
 import {
@@ -149,6 +149,9 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       const scope = recallScope(args.cwd?.trim() || opts.cwd || process.cwd());
       return forward('follow')({ ...args, cwd: scope.root ?? scope.cwd });
     },
+    // The hub reads the day in this machine's time zone, not its own.
+    digest: (args: ToolArgs<'digest'>) =>
+      forward('digest')({ ...args, time_zone: args.time_zone ?? localTimeZone() }),
   } as unknown as ToolHandlers;
   registerOriginTools(mcp, handlers);
 
