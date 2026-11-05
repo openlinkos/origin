@@ -2,6 +2,7 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { CURRENT_VERSION, type Entry, getEntry } from './entries.js';
 import { OriginError } from './errors.js';
+import { isFoldedChild } from './parents.js';
 import { getProposal, type Proposal, VISIBLE_PROPOSAL } from './proposals.js';
 import {
   EVENT_COLUMNS,
@@ -306,6 +307,12 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
       keys.add(key);
       const session = getSession(db, r.source, r.session_id);
       if (!session) continue;
+      // A child is listed when this page is that session, or a thread (it is a member of its
+      // parent's). Otherwise the feed names the parent.
+      const asked =
+        (f.session?.source === r.source && f.session.sessionId === r.session_id) ||
+        f.thread !== undefined;
+      if (!asked && isFoldedChild(db, r.source, r.session_id)) continue;
       const started = after
         ? before.get(r.source, r.session_id, after.event) === undefined
         : session.startedAt !== null && session.startedAt >= since;

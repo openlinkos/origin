@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
+import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { KNOWN_SOURCE_IDS } from '@openlinkos/origin-adapters';
+import { grokHome, KNOWN_SOURCE_IDS, zcodeHome } from '@openlinkos/origin-adapters';
 import { parseListen, parsePublicUrl, SIGN_IN_LINK_MS } from '@openlinkos/origin-admin';
 import {
   activeGrantNamed,
@@ -13,6 +14,7 @@ import {
   dbPath,
   defaultStoreName,
   describeThread,
+  displayTitle,
   ENTRY_KINDS,
   type Entry,
   type EntryKind,
@@ -28,6 +30,7 @@ import {
   getEvent,
   getRecall,
   getSession,
+  getSessionParent,
   HUB_STORE_NAME,
   initStoreName,
   isEntryForgotten,
@@ -71,6 +74,7 @@ import {
   type SourceAdapter,
   searchEntries,
   searchEvents,
+  sessionFold,
   setAdminPassword,
   setAdminUsername,
   setStoreName,
@@ -125,6 +129,7 @@ import { askHub } from './hub/remote.js';
 import { RetentionWatch, retentionWarning, retentionWarnings } from './hub/retention.js';
 import { type HubAdminOptions, poweredByEnv, startHub } from './hub/serve.js';
 import { type HubSyncResult, lastHubSync, syncWithHub } from './hub/sync.js';
+import { backfillParents } from './parents.js';
 import { readNewPassword } from './password.js';
 import {
   cmdAccept,
@@ -147,7 +152,7 @@ Usage:
   origin sync      [--source <id>] [--verbose] [--local] Ingest local agent sessions, then sync with the hub if connected
   origin sync      --hook <agent>                        Ingest the transcript an agent's hook names (reads its event on stdin)
   origin status                                          Per-source counts, entries, and last sync
-  origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
+  origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50] [--children]
   origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
   origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
   origin show      <id> [--source <id>]                  Show an entry, an event (with its original source), a session, a thread, a recall, or a proposal
@@ -164,6 +169,8 @@ Usage:
   origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   What an agent would be handed there; --hook <agent> answers its hooks
   origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   What agents were handed, newest first
   origin projects                                        Known project names
+  origin sessions  parents [--dry-run] [--zcode-db <file>] [--grok-home <dir>]
+                                                         Fill workflow run names, and Grok parents only a summary names
   origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
   origin mcp                                             Run the MCP server over stdio (forwards to the hub when connected)
   origin agents    [connect | disconnect] [<agent>...] [--yes]   Register Origin, and its hooks, with the agents here
@@ -204,6 +211,7 @@ const NAMED_COMMANDS = new Set([
   'distill',
   'hub',
   'ui',
+  'sessions',
 ]);
 
 /**
@@ -310,6 +318,8 @@ export async function main(argv: string[]): Promise<number> {
         );
       case 'projects':
         return cmdProjects(ctx);
+      case 'sessions':
+        return await cmdSessions(ctx, rest);
       case 'backup':
         return await cmdBackup(ctx, rest);
       case 'mcp':
@@ -626,7 +636,12 @@ type ShownSession = Pick<
   | 'endedAt'
   | 'eventCount'
   | 'thread'
->;
+> & {
+  /** How many child sessions it has, when the list counted them. */
+  children?: number;
+  /** Distinct workflow names among those children. */
+  workflows?: string[];
+};
 
 /** An event as the CLI lists it. `cwd` is undefined when the hub's answer does not carry it. */
 interface ShownEvent {
@@ -677,7 +692,43 @@ const fromSessionView = (v: SessionView): ShownSession => ({
   endedAt: parseIso(v.ended),
   eventCount: v.events,
   thread: v.thread ?? null,
+  children: v.children,
+  workflows: v.workflows,
 });
+
+/** A session as a list shows it: the display title, and how many children it has. */
+function presentSession(db: Database, s: SessionRow): ShownSession {
+  const parent = getSessionParent(db, s.source, s.sessionId);
+  const fold = sessionFold(db, s.source, s.sessionId);
+  return {
+    sessionId: s.sessionId,
+    source: s.source,
+    project: s.project,
+    title: displayTitle(s.title, parent),
+    prompt: s.prompt,
+    startedAt: s.startedAt,
+    endedAt: s.endedAt,
+    eventCount: s.eventCount,
+    thread: s.thread,
+    children: fold.children,
+    workflows: fold.workflows,
+  };
+}
+
+/** `parent` and `parent_title` for a search hit, when the session has a parent. */
+function parentOfSession(
+  db: Database,
+  source: string,
+  sessionId: string,
+): { parent?: string; parentTitle?: string | null } {
+  const row = getSessionParent(db, source, sessionId);
+  if (!row) return {};
+  const session = getSession(db, row.parentSource, row.parentSessionId);
+  const title = session
+    ? displayTitle(session.title, getSessionParent(db, row.parentSource, row.parentSessionId))
+    : null;
+  return { parent: `${row.parentSource}:${row.parentSessionId}`, parentTitle: title };
+}
 
 const fromEventView = (v: EventView): ShownEvent => ({
   id: v.id,
@@ -742,7 +793,13 @@ function printSessions(sessions: ShownSession[]): number {
     console.log(
       `  ${fmtTime(s.startedAt)}–${fmtTime(s.endedAt)}  ${s.source.padEnd(11)} ${(s.project ?? '—').padEnd(24)} ${String(s.eventCount).padStart(5)} events  ${oneLine(name, 60)}`,
     );
-    console.log(`           ↳ ${s.sessionId}${s.thread ? `  thread ${s.thread}` : ''}`);
+    const kids =
+      s.children && s.children > 0
+        ? `  · ${s.children} ${s.children === 1 ? 'child' : 'children'}${
+            s.workflows && s.workflows.length > 0 ? ` (${s.workflows.join(', ')})` : ''
+          }`
+        : '';
+    console.log(`           ↳ ${s.sessionId}${s.thread ? `  thread ${s.thread}` : ''}${kids}`);
   }
   const threads = sessions.some((s) => s.thread) ? '; a thread: origin show <thr_ id>' : '';
   console.log(
@@ -762,6 +819,7 @@ async function cmdTimeline(ctx: Ctx, args: string[]): Promise<number> {
       project: values.project,
       session: values.session,
       include_tools: values.all,
+      include_children: values.children,
       limit: hubLimit(limit ?? (values.session ? 500 : 50), 500),
     })) as TimelineResult;
     if ('events' in r) return printSessionEvents(r.session, r.events.map(fromEventView));
@@ -785,7 +843,8 @@ async function cmdTimeline(ctx: Ctx, args: string[]): Promise<number> {
       source: values.source,
       project: values.project,
       limit: limit ?? 50,
-    }),
+      topLevel: !values.children,
+    }).map((s) => presentSession(ctx.db, s)),
   );
 }
 
@@ -819,7 +878,7 @@ async function cmdSearch(ctx: Ctx, args: string[]): Promise<number> {
   }
   const limit = values.limit ? Number(values.limit) : 20;
   let entries: ShownEntry[];
-  let hits: Array<ShownEvent & { snippet: string }>;
+  let hits: Array<ShownEvent & { snippet: string; parent?: string; parentTitle?: string | null }>;
   if (isRelay(ctx.db)) {
     if (values.recent) {
       console.error('On a relay, the hub ranks the matches by relevance; --recent does not apply.');
@@ -834,7 +893,11 @@ async function cmdSearch(ctx: Ctx, args: string[]): Promise<number> {
       limit: hubLimit(limit, 100),
     })) as SearchResult;
     entries = r.entries.map(fromEntryView);
-    hits = r.events.map((h) => ({ ...fromEventView(h), snippet: h.snippet }));
+    hits = r.events.map((h) => ({
+      ...fromEventView(h),
+      snippet: h.snippet,
+      ...(h.parent ? { parent: h.parent, parentTitle: h.parent_title ?? null } : {}),
+    }));
   } else {
     entries = searchEntries(ctx.db, query, { project: values.project, limit });
     hits = searchEvents(ctx.db, query, {
@@ -845,7 +908,7 @@ async function cmdSearch(ctx: Ctx, args: string[]): Promise<number> {
       kinds: values.all ? undefined : ['message'],
       order: values.recent ? 'recent' : 'relevance',
       limit,
-    });
+    }).map((h) => ({ ...h, ...parentOfSession(ctx.db, h.source, h.sessionId) }));
   }
   if (entries.length === 0 && hits.length === 0) {
     console.log('No hits.');
@@ -857,8 +920,11 @@ async function cmdSearch(ctx: Ctx, args: string[]): Promise<number> {
     if (hits.length > 0) console.log('\nEvents:');
   }
   for (const h of hits) {
+    const parent = h.parent
+      ? `\n    parent ${h.parent}${h.parentTitle ? `  ${oneLine(h.parentTitle, 80)}` : ''}`
+      : '';
     console.log(
-      `[${fmtDateTime(h.ts)}] ${h.source} ${h.project ?? '—'} ${h.role}/${h.kind}${writtenBy(h)}\n    ${oneLine(h.snippet, 200)}\n    ↳ ${h.id}`,
+      `[${fmtDateTime(h.ts)}] ${h.source} ${h.project ?? '—'} ${h.role}/${h.kind}${writtenBy(h)}\n    ${oneLine(h.snippet, 200)}${parent}\n    ↳ ${h.id}`,
     );
   }
   console.log(
@@ -1027,6 +1093,19 @@ function printSession(s: SessionResult): void {
     console.log(
       `Thread      ${s.thread.id}, ${count(s.thread.sessions, 'session')}  (origin show ${s.thread.id})`,
     );
+  }
+  if (s.parent) {
+    const parentName = s.parent.title ?? '—';
+    console.log(`Parent      ${s.parent.source}:${s.parent.session}  ${oneLine(parentName, 80)}`);
+  }
+  if (s.children && s.children.length > 0) {
+    console.log('\nChildren:');
+    for (const c of s.children) {
+      const name = c.title ?? '—';
+      console.log(
+        `  ${(c.group ?? '—').padEnd(12)} ${c.via.padEnd(9)} ${oneLine(name, 60)}  ${c.source}:${c.session}`,
+      );
+    }
   }
   if (s.prompts.length > 0) {
     console.log('\nTurns:');
@@ -1372,6 +1451,26 @@ function forgettingCtx(ctx: Ctx): ForgettingCtx {
     relayHub: () => relayHub(ctx),
     afterChange: () => syncAfterChange(ctx),
   };
+}
+
+/**
+ * `origin sessions parents`. The default homes are resolved here, and only when the flags are
+ * omitted, so a caller that passes both paths never touches them.
+ */
+async function cmdSessions(ctx: Ctx, args: string[]): Promise<number> {
+  const [action, ...rest] = args;
+  if (action !== 'parents') {
+    console.error(`origin sessions: Unknown subcommand "${action ?? ''}".\n${ARGS.sessions.usage}`);
+    return 2;
+  }
+  const { values } = parseArgs({ args: rest, options: ARGS.sessions.sub.parents.options });
+  const zcodeDb = values['zcode-db'] ?? path.join(zcodeHome(), 'cli', 'db', 'db.sqlite');
+  const grok = values['grok-home'] ?? grokHome();
+  return backfillParents(ctx, {
+    dryRun: values['dry-run'],
+    zcodeDb,
+    grokHome: grok,
+  });
 }
 
 function cmdProjects(ctx: Ctx): number {

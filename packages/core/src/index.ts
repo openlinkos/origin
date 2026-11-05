@@ -243,6 +243,18 @@ export {
   storeUsage,
 } from './overview.js';
 export {
+  childSessions,
+  displayTitle,
+  getSessionParent,
+  isFoldedChild,
+  type ParentVia,
+  parsePlaceLine,
+  recordSessionParent,
+  type SessionParentRow,
+  sessionFold,
+  TOP_LEVEL_SESSION,
+} from './parents.js';
+export {
   ADMIN_PASSWORD_MAX_LENGTH,
   ADMIN_PASSWORD_MIN_LENGTH,
   ADMIN_SCRYPT_PARAMS,
@@ -486,6 +498,7 @@ export type {
   Role,
   SessionKind,
   SessionKindFact,
+  SessionParentFact,
   SessionRow,
   SourceAdapter,
   SourceFile,

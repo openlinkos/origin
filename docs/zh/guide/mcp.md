@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-2322e25f
+sourceHash: sha256-633d3f4c
 ---
 
 # MCP 工具
@@ -66,7 +66,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 }
 ```
 
-**会话**有 `session`、`source`、`project`、`title`（Agent 给它起的标题，没有则为 null）、`prompt`（没有标题的会话中用户写的第一条提示，截到 80 个字符，没有则为 null）、`started`、`ended`、`events`（可见事件的数量），以及 `thread`，即它与其他会话同在的那条线索的 id，没有则为 null。
+**会话**有 `session`、`source`、`project`、`title`（Agent 给它起的标题，没有则为 null；当已存标题含有那个记号且运行有名称时，工作流步骤显示为 `{运行名称} · actor#N@M`）、`prompt`（没有标题的会话中用户写的第一条提示，截到 80 个字符，没有则为 null）、`started`、`ended`、`events`（可见事件的数量），以及 `thread`，即它与其他会话同在的那条线索的 id，没有则为 null。列出会话的地方还有 `children`（有多少）和 `workflows`（它们不同的运行名称）。见[父会话](../architecture.md#parent-sessions)。
 
 **线索**是同一项目中属于同一件工作的那些会话，可以出自一个或多个 Agent：Agent 用 [`follow`](#follow) 连起来的会话，以及位于同一个 git 分支（`main` 这样的默认分支除外）上、彼此相隔不超过 30 天的会话。Origin 从归档中推导线索，它的任何部分都不是手写的。线索的 id 取自它的第一个会话，所以只有更早的会话加入时才会改变（见[线索](../architecture.md#threads)）。
 
@@ -94,7 +94,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 }
 ```
 
-与其他会话同在一条线索中的会话，以它的线索列出，占一行：线索的 id、多少个会话及其 Agent、起止时间、名称，以及最后一条提示。
+与其他会话同在一条线索中的会话，以它的线索列出，占一行：线索的 id、多少个会话及其 Agent、起止时间、名称，以及最后一条提示。单独列出的父会话，以及根会话有子会话的线索，在有子会话时也会说明有多少，以及它们的工作流名称。
 
 ## search {#search}
 
@@ -111,7 +111,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 | `include_tools` | 布尔值 | `false` | 除了消息，也检索工具调用和工具结果 |
 | `limit` | 整数，1 到 100 | 20 | 条目和事件各自最多返回这么多 |
 
-返回 `{ entries, events }`：当前的条目（不含有效期已结束的），以及事件；每个事件的文本截到 400 个字符，并带有一个 `snippet`，即第一处匹配附近最多 200 个字符，每处匹配都用方括号标出，还带有 `session_title`，即事件所在会话的标题，没有标题时为它的第一条提示。
+返回 `{ entries, events }`：当前的条目（不含有效期已结束的），以及事件；每个事件的文本截到 400 个字符，并带有一个 `snippet`，即第一处匹配附近最多 200 个字符，每处匹配都用方括号标出，还带有 `session_title`，即事件所在会话的标题，没有标题时为它的第一条提示。所在会话有父会话的命中还有 `parent`（`<来源>:<会话 id>`）和 `parent_title`，即该父会话显示出来的标题；没有父会话时这两项都省略。
 
 ```json
 { "query": "release workflow", "limit": 5 }
@@ -157,7 +157,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 
 ## timeline {#timeline}
 
-某个时间范围内的会话，最新的在前；给了 `session` 时，按顺序一页一页地列出一个会话的事件。
+某个时间范围内的顶层会话，最新的在前（没有记录父会话，也不是未指明父会话的子会话）；给了 `session` 时，按顺序一页一页地列出一个会话的事件。`include_children` 把子会话也列出来。
 
 | 参数 | 类型 | 默认 | 含义 |
 |---|---|---|---|
@@ -169,9 +169,10 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 | `turn` | 整数，0 或更大 | 无 | 与 `session` 一起使用时：只列出这一轮的事件。一轮从用户写的一条提示、或 Agent 据以工作的一条命令开始，第一条为 1；0 是第一条提示之前的内容 |
 | `after` | 事件 id | 无 | 与 `session` 一起使用时：只列出这个事件之后的事件，即上一页的最后一个之后 |
 | `include_tools` | 布尔值 | `false` | 与 `session` 一起使用时：除了消息，也列出工具调用和结果、注入的上下文和系统事件 |
+| `include_children` | 布尔值 | `false` | 也列出子会话。默认情况下时间线只列出顶层会话 |
 | `limit` | 整数，1 到 500 | 50 | 最多返回这么多会话或事件 |
 
-返回 `{ sessions }`，按最后活动时间排序，每个会话带有它的 `thread`；或者在给了 `session` 时返回 `{ session, title, prompt, events, more }`：会话的名称，所请求范围内最早的若干事件，从早到晚，每个事件的文本截到 1,000 个字符，以及 `more`，即这个范围内最后一个事件之后还有多少可见的事件。要继续读，把最后一个事件的 id 作为 `after` 传入；要读某一轮，把它的序号作为 `turn` 传入（[`get`](#get) 给出的会话卡片列出了它的各轮）。两个来源的会话共用同一个会话 id 时，需要给出 `source`。
+返回 `{ sessions }`，按最后活动时间排序，每个会话带有它的 `thread`、`children` 和 `workflows`；或者在给了 `session` 时返回 `{ session, title, prompt, events, more }`：会话的名称，所请求范围内最早的若干事件，从早到晚，每个事件的文本截到 1,000 个字符，以及 `more`，即这个范围内最后一个事件之后还有多少可见的事件。当已存标题含有那个记号时，工作流步骤的 `title` 是 `{运行名称} · actor#N@M`。要继续读，把最后一个事件的 id 作为 `after` 传入；要读某一轮，把它的序号作为 `turn` 传入（[`get`](#get) 给出的会话卡片列出了它的各轮）。两个来源的会话共用同一个会话 id 时，需要给出 `source`。
 
 ```json
 { "since": "2d", "project": "demo-app", "limit": 2 }
@@ -189,7 +190,9 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
       "started": "2026-10-20T09:01:05.120+08:00",
       "ended": "2026-10-20T10:44:51.007+08:00",
       "events": 212,
-      "thread": "thr_4c1e9a7b2d30"
+      "thread": "thr_4c1e9a7b2d30",
+      "children": 0,
+      "workflows": []
     },
     {
       "session": "ses_0199f0a1-7c2e-7d3a-9b4c-5e6f7a8b9c0d",
@@ -200,7 +203,9 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
       "started": "2026-10-19T16:20:00.000+08:00",
       "ended": "2026-10-19T16:52:13.480+08:00",
       "events": 48,
-      "thread": null
+      "thread": null,
+      "children": 0,
+      "workflows": []
     }
   ]
 }
@@ -261,7 +266,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 它返回 `{ sessions, events, entries, forgets, proposals, next, more }`：
 
 - `events`：按到达库中的次序排列的可见事件，以存根给出，带有它的 `session`；
-- `sessions`：这些事件所属的会话，与 `timeline` 列出的样子相同，带有它的 `thread`，以及 `new`：会话在这一范围内开始时为 true（它的事件没有一个早于这一范围）；
+- `sessions`：这些事件所属的顶层会话，与 `timeline` 列出的样子相同，带有它的 `thread`、`children` 和 `workflows`，以及 `new`：会话在这一范围内开始时为 true（它的事件没有一个早于这一范围）。当 `session` 指明某个子会话，或设置了 `thread` 时，子会话也会列出；
 - `entries`：这一范围内写下或收到、现在仍是当前版本的条目，以存根给出，带有它所取代的版本 `supersedes`；
 - `forgets`：这一范围内的遗忘，即 `{ id, target, at }`，带有被遗忘内容的 id，但从不带它的文本或原因，这样 Agent 就不再引用它；恢复也会列出，它的目标是那次遗忘的 id；
 - `proposals`：这一范围内提出的条目（见 [propose](#propose)），待审的或已接受的，以存根 `{ id, kind, text, status, time, session, event, project }` 给出，不论 `include_tools` 如何设置，这样 Agent 或常驻程序就能注意到它们；含有超过 `limit` 条提议的一页止于它列出的最后一条；
@@ -286,6 +291,8 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
       "ended": "2026-10-22T17:40:12.300+08:00",
       "events": 6,
       "thread": "thr_4c1e9a7b2d30",
+      "children": 0,
+      "workflows": [],
       "new": true
     }
   ],
@@ -340,7 +347,7 @@ Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话�
 
 - **条目**：`{ entry, sources, history, related }`。`sources` 是它引用的事件，每个带有它从中引用的 `quote`（没有则为 null）、截到 500 个字符的文本，以及 `session_title`；`history` 列出条目的每个版本，从早到晚，包括分叉，每个版本有 `id`、`supersedes`、`author`、`created` 和 `status`；`related` 以存根列出最多 10 个其他的当前条目，它们引用了这个条目所引用的某个事件，或它所引用会话中的另一个事件，从新到旧；对从记忆文件导入的条目，只列出引用了文件同一个版本的条目。已被取代或有效期已结束的条目，按 id 仍然可以取到。
 - **事件**：事件本身，带有它的 `cwd`、`git_branch`、`agent_version` 和 `session_title`，以及从 `offset` 开始、最多 20,000 个字符的正文，并给出 `total_chars`（正文全长）和 `next_offset`（下一页的起点，读到末尾时为 null）。它的第一页（`offset` 为 0）还带有它近旁的内容：`turn`，即 `{ number, prompt }`，它所在的轮次和开启这一轮的提示的存根，在第一条提示之前则为 null；`replies_to`，它的 Agent 记录的、它所接续的事件的存根（Claude Code 的 `parentUuid`），没有则为 null；`around`，即 `{ before, after }`，同一会话中它前后各两个可见事件的存根，除非它本身是工具调用或工具结果，否则只取消息；以及 `cited_by`，以存根列出最多 10 个引用它的当前条目。
-- **会话**：一张卡片，带有会话的各字段、它的 `cwd`，以及 `turns`（轮数）；`prompts`，它前 20 轮的起点，每个为 `{ turn, id, time, text }`，以及 `more_prompts`，即这些之后还有多少轮；`thread`，即 `{ id, sessions }`，它所在的线索及其会话数，没有则为 null；`entries`，以存根列出最多 10 个从中写下的当前条目（引用了它的事件的条目），从新到旧；`recalls`，最多 10 次它拿到的召回，从新到旧，每次为 `{ id, occasion, time, items }`，`items` 是它交出的内容中仍然可见的数量；以及 `before` 和 `after`，同一项目中按开始时间紧挨在它前后的会话，不限 Agent，没有则为 null。要读某一轮，用 [`timeline`](#timeline)。
+- **会话**：一张卡片，带有会话的各字段、它的 `cwd`，以及 `turns`（轮数）；`prompts`，它前 20 轮的起点，每个为 `{ turn, id, time, text }`，以及 `more_prompts`，即这些之后还有多少轮；`thread`，即 `{ id, sessions }`，它所在的线索及其会话数，没有则为 null；`entries`，以存根列出最多 10 个从中写下的当前条目（引用了它的事件的条目），从新到旧；`recalls`，最多 10 次它拿到的召回，从新到旧，每次为 `{ id, occasion, time, items }`，`items` 是它交出的内容中仍然可见的数量；`before` 和 `after`，同一项目中按开始时间紧挨在它前后的会话，不限 Agent，没有则为 null；`parent`，即 `{ source, session, title }`，当这个会话是子会话时；以及 `children`，有子会话时每个子会话一行 `{ source, session, title, via, group }`，按工作流运行分组。这里的 `children` 是这个列表，不是时间线一行上的计数；没有父会话或子会话时，`parent` 和 `children` 都省略。要读某一轮，用 [`timeline`](#timeline)。
 - **线索**：`{ thread, project, title, started, ended, sessions, more_sessions, agents, branches, entries, last_prompt }`：它的 id，它的项目和名称（取自它的第一个会话），开始和结束的时间，它的前 20 个会话 `sessions`（从旧到新）以及之后还有多少个，它的会话所属的 `agents` 和所在的工作分支 `branches`，`entries`，以存根列出最多 10 个从其中任一会话写下的当前条目（从新到旧），以及 `last_prompt`，即有提示的会话中最近那一个的最新提示的存根，带有它的 `session`，没有则为 null。
 - **召回**：`{ id, time, occasion, agent, session, device, project, directory, budget, tokens, items, text }`：它在何时、为哪个 Agent、哪个会话和哪台设备、在哪里而做，它的预算和用掉的 token，它的各项，每项为 `{ rank, layer, kind, id, score, used }`（`kind` 为 `entry`、`session` 或 `thread`，会话还有 `source`；`used` 表示会话后来是否用到了这一项，会话还不知道时为 null），以及 `text`，即 Agent 拿到的内容，按库现在的样子重建。此后被遗忘的内容在两者中都会略去。
 - **提议**：`{ id, status, kind, text, confidence, project, valid_from, valid_to, note, time, agent, session, event, sources, missing_sources, accepted_as }`：它提议的内容；`status`，`pending` 或 `accepted`；它在何时、由哪个 `agent`、在哪个 `session`（按 `timeline` 列出的样子）中提出，以及读出它的 `event`；`sources`，它引用的事件，以存根给出，带有各自的 `quote` 和 `session`，`missing_sources` 是其中本库尚未持有的数目；`accepted_as`，它成为的条目（当前版本）的存根，或 null。被拒绝的提议会返回错误（``Proposal <id> was rejected (tmb_…); restoring that forget makes it pending again.``），引用了被遗忘事件的提议也一样（`Proposal <id> has been forgotten.`）。

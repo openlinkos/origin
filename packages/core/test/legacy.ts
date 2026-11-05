@@ -123,6 +123,8 @@ export function downgradeToV1(file: string): void {
 function dropAuthorship(db: DatabaseSync): void {
   db.exec('DROP TABLE IF EXISTS event_author');
   db.exec('DROP TABLE IF EXISTS session_kind');
+  // Version 9: parent sessions. Dropping the table drops its index.
+  db.exec('DROP TABLE IF EXISTS session_parent');
 }
 
 /**

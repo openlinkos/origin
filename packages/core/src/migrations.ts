@@ -3,7 +3,7 @@ import { transaction } from './db.js';
 import { OriginError } from './errors.js';
 import { sessionBranchQuery } from './ingest.js';
 import { deriveProposals } from './proposals.js';
-import { reparseAuthorship, reparseMemories, reparseTitles } from './reparse.js';
+import { reparseAuthorship, reparseMemories, reparseParents, reparseTitles } from './reparse.js';
 import { SCHEMA } from './schema.js';
 import { deriveThreads } from './threads.js';
 import type { SourceAdapter } from './types.js';
@@ -156,6 +156,18 @@ export const MIGRATIONS: Migration[] = [
       deriveThreads(ctx.db);
     },
   },
+  {
+    // Parent sessions (see parents.ts): derived from the lines already archived, which are parsed
+    // again for a parent they already name. A run's group is filled only when the line carries it.
+    // Threads again, since a child joins its parent's thread and is never the root.
+    version: 9,
+    name: 'parent sessions from the lines already archived',
+    up: (ctx) => {
+      ctx.db.exec(PARENT_TABLES_V9);
+      reparseParents(ctx);
+      deriveThreads(ctx.db);
+    },
+  },
 ];
 
 /**
@@ -217,6 +229,22 @@ END;
 CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log BEGIN
   SELECT RAISE(ABORT, 'audit_log is append-only');
 END;
+`;
+
+/** The parent-session table, as version 9 created it. */
+const PARENT_TABLES_V9 = `
+CREATE TABLE IF NOT EXISTS session_parent (
+  source            TEXT NOT NULL,
+  session_id        TEXT NOT NULL,
+  parent_source     TEXT NOT NULL,
+  parent_session_id TEXT NOT NULL,
+  via               TEXT NOT NULL CHECK (via IN ('subagent', 'workflow')),
+  run_group         TEXT,
+  run_name          TEXT,
+  signal            TEXT NOT NULL,
+  PRIMARY KEY (source, session_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_parent_parent ON session_parent (parent_source, parent_session_id);
 `;
 
 /** The tables of authorship, as version 8 created them. */

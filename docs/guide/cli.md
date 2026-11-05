@@ -4,7 +4,7 @@
 origin sync      [--source <id>] [--verbose] [--local] Ingest local agent sessions, then sync with the hub if connected
 origin sync      --hook <agent>                        Ingest the transcript an agent's hook names (reads its event on stdin)
 origin status                                          Per-source counts, entries, and last sync
-origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
+origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50] [--children]
 origin timeline  --session <id> [--all]                Events of one session (tool events hidden unless --all)
 origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
 origin show      <id> [--source <id>]                  Show an entry, an event (with its original source), a session, a thread, a recall, or a proposal
@@ -21,6 +21,8 @@ origin distill   [--project <name> | --thread <thr_…>] [--day <YYYY-MM-DD> | -
 origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   What an agent would be handed there; --hook <agent> answers its hooks
 origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   What agents were handed, newest first
 origin projects                                        Known project names
+origin sessions  parents [--dry-run] [--zcode-db <file>] [--grok-home <dir>]
+                                                       Fill workflow run names, and Grok parents only a summary names
 origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
 origin mcp                                             Run the MCP server over stdio (adds the hub's answers when connected)
 origin agents    [connect | disconnect] [<agent>...] [--yes]   Register Origin, and its hooks, with the agents here
@@ -48,7 +50,7 @@ origin push                                            Same as origin sync (kept
 
 ## Searching
 
-`search` looks in entries and in session messages. Every word of the query must occur, as a case-insensitive substring; CJK text works too, including one- and two-character words such as `部署`. Results are ranked by relevance among the newest 2,000 matches; `--recent` sorts by time instead, newest first, and `--all` also searches tool calls and their output. Other words shorter than three characters, such as `AI`, are checked against the newest 25,000 events that match the rest of the query, so add a longer word or a time range to reach older ones. The details are in [Search and timeline](../architecture.md#search-and-timeline).
+`search` looks in entries and in session messages. Every word of the query must occur, as a case-insensitive substring; CJK text works too, including one- and two-character words such as `部署`. Results are ranked by relevance among the newest 2,000 matches; `--recent` sorts by time instead, newest first, and `--all` also searches tool calls and their output. Other words shorter than three characters, such as `AI`, are checked against the newest 25,000 events that match the rest of the query, so add a longer word or a time range to reach older ones. A hit in a child session also names its parent (`source:id`) and that parent's title. The details are in [Search and timeline](../architecture.md#search-and-timeline).
 
 ```console
 $ origin search "schema migrations"
@@ -82,7 +84,7 @@ Sources:
       ↳ claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
 ```
 
-For a session id, `show` prints the session as a card, the one the MCP tool `get` hands agents: its name and time, its thread, if it is in one, the prompts that start its first 20 turns, the entries written from it, the recalls it was handed, and the sessions just before and after it in its project, with the id of each, to `show` next. When sessions of two agents have the same id, `--source` picks one.
+For a session id, `show` prints the session as a card, the one the MCP tool `get` hands agents: its name and time, its thread, if it is in one, the prompts that start its first 20 turns, the entries written from it, the recalls it was handed, and the sessions just before and after it in its project, with the id of each, to `show` next. A child names its parent, and a parent lists its children, grouped by workflow run, one line each. When sessions of two agents have the same id, `--source` picks one.
 
 ```console
 $ origin show 9d3b6f20-5a1e-4c7d-8b2f-6e0a4c9d1b3f
@@ -138,6 +140,12 @@ Last prompt [2026-10-22 16:01] run the migration tests on Windows too
 
 A session of it: origin show <session id>
 ```
+
+## Parent sessions
+
+`origin timeline` lists top-level sessions: none that record a parent, and no child session that names none. `--children` lists those too. A parent line adds how many children it has, and their workflow names, when there are any. A workflow step whose stored title contains `actor#N@M` is shown as `{run name} · actor#N@M`; the title in the store is unchanged. The same names are what `origin show` prints. See [Parent sessions](../architecture.md#parent-sessions).
+
+`origin sessions parents` reads ZCode's database and Grok Build's session directory, read-only, and appends parent lines to each source's `places.jsonl`: a workflow run's group and name, and a Grok parent that only `summary.json` names (`parent_session_id`), when the archive does not already record that parent. `--dry-run` prints how many lines it would append and writes nothing. `--zcode-db` and `--grok-home` name those paths; without them, `~/.zcode` and `~/.grok` (`GROK_HOME` when it is set) are used, and a path that is not there is skipped. The command exits 0 in that case. On a relay, which keeps no sessions, it says so and exits without opening those homes.
 
 ## Recall
 

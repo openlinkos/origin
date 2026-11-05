@@ -62,7 +62,7 @@ An **event** has `id`, `time`, `source`, `project`, `session` (the session id), 
 }
 ```
 
-A **session** has `session`, `source`, `project`, `title` (the title its agent gave it, or null), `prompt` (for a session without a title, the first prompt the user wrote in it, cut to 80 characters, or null), `started`, `ended`, `events` (the number of its visible events), and `thread`, the id of the thread it is in with other sessions, or null.
+A **session** has `session`, `source`, `project`, `title` (the title its agent gave it, or null; a workflow step is shown as `{run name} · actor#N@M` when its stored title contains that token and its run has a name), `prompt` (for a session without a title, the first prompt the user wrote in it, cut to 80 characters, or null), `started`, `ended`, `events` (the number of its visible events), and `thread`, the id of the thread it is in with other sessions, or null. Where a list shows sessions, it also has `children`, how many, and `workflows`, their distinct run names. See [Parent sessions](../architecture.md#parent-sessions).
 
 A **thread** is the sessions of one project that belong to one piece of work, with one agent or several: those that agents linked with [`follow`](#follow), and those on the same git branch, other than a default branch such as `main`, within 30 days of each other. Origin derives threads from the archive; nothing about them is written by hand. A thread's id comes from its first session, so it changes only when an earlier session joins it (see [Threads](../architecture.md#threads)).
 
@@ -90,7 +90,7 @@ It returns `{ recall, text }`: the recall's id, and the items under a header tha
 }
 ```
 
-A session in a thread with others is listed as its thread, on one line: its id, how many sessions of which agents, from when to when, its name, and its last prompt.
+A session in a thread with others is listed as its thread, on one line: its id, how many sessions of which agents, from when to when, its name, and its last prompt. A parent that is listed on its own, and a thread whose root has children, also says how many children it has, and their workflow names, when there are any.
 
 ## search {#search}
 
@@ -107,7 +107,7 @@ Full-text search over entries and session events, best match first. Without a qu
 | `include_tools` | boolean | `false` | Also search tool calls and tool results, not only messages |
 | `limit` | integer, 1 to 100 | 20 | At most this many entries, and this many events |
 
-It returns `{ entries, events }`: current entries, without those whose validity has ended, and events, each with its text cut to 400 characters, a `snippet` of up to 200 characters around the first match, with every match in brackets, and `session_title`, the title of the event's session or, without one, its first prompt.
+It returns `{ entries, events }`: current entries, without those whose validity has ended, and events, each with its text cut to 400 characters, a `snippet` of up to 200 characters around the first match, with every match in brackets, and `session_title`, the title of the event's session or, without one, its first prompt. A hit whose session has a parent also has `parent` (`<source>:<session id>`) and `parent_title`, that parent's title as it is shown; both are omitted when there is no parent.
 
 ```json
 { "query": "release workflow", "limit": 5 }
@@ -153,7 +153,7 @@ It returns `{ entries, events }`: current entries, without those whose validity 
 
 ## timeline {#timeline}
 
-Sessions in a time range, newest first; or, with `session`, the events of one session in order, a page at a time.
+Top-level sessions in a time range, newest first (no recorded parent, and not a child session that names none); or, with `session`, the events of one session in order, a page at a time. `include_children` lists the children too.
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
@@ -165,9 +165,10 @@ Sessions in a time range, newest first; or, with `session`, the events of one se
 | `turn` | integer, 0 or more | none | With `session`: only the events of this turn. A turn starts at a prompt the user wrote, or a command the agent acted on, 1 at the first; 0 is what came before the first prompt |
 | `after` | event id | none | With `session`: only the events after this one, the last of the page before |
 | `include_tools` | boolean | `false` | With `session`: also list tool calls and results, injected context, and system events, not only messages |
+| `include_children` | boolean | `false` | Also list child sessions. By default a timeline lists top-level sessions only |
 | `limit` | integer, 1 to 500 | 50 | At most this many sessions, or events |
 
-It returns `{ sessions }`, sessions ordered by their last activity, each with its `thread`, or, with `session`, `{ session, title, prompt, events, more }`: the session's name, its first events in the range asked for, oldest first, each with its text cut to 1,000 characters, and `more`, how many visible events of that range follow the last one. To read on, pass the last event's id as `after`; to read one turn, pass its number as `turn` (a session's card from [`get`](#get) lists its turns). A session id that sessions of two sources share needs `source`.
+It returns `{ sessions }`, sessions ordered by their last activity, each with its `thread`, `children`, and `workflows`, or, with `session`, `{ session, title, prompt, events, more }`: the session's name, its first events in the range asked for, oldest first, each with its text cut to 1,000 characters, and `more`, how many visible events of that range follow the last one. A workflow step's `title` is `{run name} · actor#N@M` when its stored title contains that token. To read on, pass the last event's id as `after`; to read one turn, pass its number as `turn` (a session's card from [`get`](#get) lists its turns). A session id that sessions of two sources share needs `source`.
 
 ```json
 { "since": "2d", "project": "demo-app", "limit": 2 }
@@ -185,7 +186,9 @@ It returns `{ sessions }`, sessions ordered by their last activity, each with it
       "started": "2026-10-20T09:01:05.120+08:00",
       "ended": "2026-10-20T10:44:51.007+08:00",
       "events": 212,
-      "thread": "thr_4c1e9a7b2d30"
+      "thread": "thr_4c1e9a7b2d30",
+      "children": 0,
+      "workflows": []
     },
     {
       "session": "ses_0199f0a1-7c2e-7d3a-9b4c-5e6f7a8b9c0d",
@@ -196,7 +199,9 @@ It returns `{ sessions }`, sessions ordered by their last activity, each with it
       "started": "2026-10-19T16:20:00.000+08:00",
       "ended": "2026-10-19T16:52:13.480+08:00",
       "events": 48,
-      "thread": null
+      "thread": null,
+      "children": 0,
+      "workflows": []
     }
   ]
 }
@@ -257,7 +262,7 @@ What reached the store since a cursor, oldest first: for an agent that comes bac
 It returns `{ sessions, events, entries, forgets, proposals, next, more }`:
 
 - `events`: visible events in the order they reached the store, as stubs with their `session`;
-- `sessions`: the sessions of those events, as `timeline` lists them, with their `thread`, and `new`, true if the session started in the range (none of its events came before);
+- `sessions`: the top-level sessions of those events, as `timeline` lists them, with their `thread`, `children`, and `workflows`, and `new`, true if the session started in the range (none of its events came before). A child is listed when `session` names it, or when `thread` is set;
 - `entries`: entries written or received in the range that are current, as stubs with the version they `supersedes`;
 - `forgets`: forgets in the range, `{ id, target, at }`, with the id of what was forgotten but never its text or the reason, so that the agent stops citing it; a restore is listed too, with the forget's id as its target;
 - `proposals`: entries proposed in the range (see [propose](#propose)), pending or accepted, as stubs `{ id, kind, text, status, time, session, event, project }`, whatever `include_tools` says, so that an agent or a runtime notices them; a page with more than `limit` of them ends at the last one it lists;
@@ -282,6 +287,8 @@ The cursor is opaque; pass it back as it is, to the server that gave it. A malfo
       "ended": "2026-10-22T17:40:12.300+08:00",
       "events": 6,
       "thread": "thr_4c1e9a7b2d30",
+      "children": 0,
+      "workflows": [],
       "new": true
     }
   ],
@@ -336,7 +343,7 @@ Any id Origin hands over, with what is next to it: an entry, an event, a session
 
 - **An entry**: `{ entry, sources, history, related }`. `sources` are the events it cites, each with the `quote` it cites from it, or null, its text cut to 500 characters, and its `session_title`; `history` lists every version of the entry, oldest first, forks included, each with `id`, `supersedes`, `author`, `created`, and `status`; `related` lists up to 10 other current entries that cite an event this one cites, or another event of a session it cites, newest first, as stubs; for an entry imported from a memory file, only those that cite the same version of the file. An entry that is superseded or whose validity has ended is still returned by id.
 - **An event**: the event with its `cwd`, `git_branch`, `agent_version`, and `session_title`, and its text from `offset` on, at most 20,000 characters, with `total_chars`, the length of all of it, and `next_offset`, where the next page starts, or null at the end. Its first page (`offset` 0) also has what is next to it: `turn`, `{ number, prompt }`, the turn it falls in and the stub of the prompt that started that turn, or null before the first prompt; `replies_to`, the stub of the event its agent recorded it as following (Claude Code's `parentUuid`), or null; `around`, `{ before, after }`, the stubs of the two visible events on each side in its session, messages only unless the event is a tool call or result; and `cited_by`, up to 10 current entries that cite it, as stubs.
-- **A session**: a card with the fields of a session, its `cwd`, and `turns`, its number of turns; `prompts`, where its first 20 turns start, each `{ turn, id, time, text }`, and `more_prompts`, how many turns follow those; `thread`, `{ id, sessions }`, the thread it is in and how many sessions that has, or null; `entries`, up to 10 current entries written from it (that cite its events), newest first, as stubs; `recalls`, up to 10 recalls it was handed, newest first, each `{ id, occasion, time, items }`, where `items` counts what it handed over that is still visible; and `before` and `after`, the sessions just before and after it in its project, of any agent, by when they started, or null. Read a turn with [`timeline`](#timeline).
+- **A session**: a card with the fields of a session, its `cwd`, and `turns`, its number of turns; `prompts`, where its first 20 turns start, each `{ turn, id, time, text }`, and `more_prompts`, how many turns follow those; `thread`, `{ id, sessions }`, the thread it is in and how many sessions that has, or null; `entries`, up to 10 current entries written from it (that cite its events), newest first, as stubs; `recalls`, up to 10 recalls it was handed, newest first, each `{ id, occasion, time, items }`, where `items` counts what it handed over that is still visible; `before` and `after`, the sessions just before and after it in its project, of any agent, by when they started, or null; `parent`, `{ source, session, title }`, when this session is a child; and `children`, one `{ source, session, title, via, group }` per child, grouped by workflow run, when it has any. `children` here is that list, not the count a timeline row uses, and both `parent` and `children` are omitted when there are none. Read a turn with [`timeline`](#timeline).
 - **A thread**: `{ thread, project, title, started, ended, sessions, more_sessions, agents, branches, entries, last_prompt }`: its id, its project and name (its first session's), when it started and ended, its first 20 `sessions`, oldest first, and how many follow those, the `agents` of its sessions and the work `branches` they were on, `entries`, up to 10 current entries written from any of its sessions, newest first, as stubs, and `last_prompt`, the stub of the latest prompt of its most recent session that has one, with its `session`, or null.
 - **A recall**: `{ id, time, occasion, agent, session, device, project, directory, budget, tokens, items, text }`: when, for which agent, session, and device, and where it was made, its budget and the tokens it used, its items, each `{ rank, layer, kind, id, score, used }` (`kind` is `entry`, `session`, or `thread`, and a session's has its `source`; `used` says whether the session went on to use the item, and is null while the session is not known), and `text`, what the agent was handed, rebuilt from the store as it is now. What was forgotten since is left out of both.
 - **A proposal**: `{ id, status, kind, text, confidence, project, valid_from, valid_to, note, time, agent, session, event, sources, missing_sources, accepted_as }`: what it proposes; `status`, `pending` or `accepted`; when it was proposed, by which `agent`, in which `session` (as `timeline` lists it), and the `event` it was read from; `sources`, the events it cites, as stubs with their `quote` and `session`, and `missing_sources`, how many of them this store does not have yet; and `accepted_as`, the stub of the entry it became (its current version), or null. A rejected proposal is an error (``Proposal <id> was rejected (tmb_…); restoring that forget makes it pending again.``), and so is one that cites a forgotten event (`Proposal <id> has been forgotten.`).

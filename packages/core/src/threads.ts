@@ -17,12 +17,16 @@ import { isOwnerConversation, type SessionPrompt, sessionPrompts } from './store
  *   on the same git branch, other than a default branch (DEFAULT_BRANCHES), whose times are at most
  *   BRANCH_GAP_MS apart (from the end of one to the start of the next). A sub-agent's session or a
  *   headless run on the branch is no piece of the owner's work by itself, and joins none this way.
+ * - A child (see session_parent, or a session_kind of `child`) joins its parent's thread when that
+ *   parent is already in one. It never becomes the root, and a parent with only its children is
+ *   not a thread: children never create one.
  *
  * Only sessions with visible events take part. A group of one session is no thread. A thread's id
- * is derived from its root, the member that started first (ties by source, then session id), so
- * every store that holds the same members gives it the same id; it changes only when an earlier
- * session joins, as when older logs arrive later. session_thread holds the members of every thread;
- * it is kept up to date as sessions change (refreshThreads) and can be rebuilt (rebuildThreads).
+ * is derived from its root, the member that started first among those that are not children (ties
+ * by source, then session id), so every store that holds the same members gives it the same id; it
+ * changes only when an earlier session joins, as when older logs arrive later. session_thread holds
+ * the members of every thread; it is kept up to date as sessions change (refreshThreads) and can be
+ * rebuilt (rebuildThreads).
  */
 
 export const THREAD_ID_RE = /^thr_[0-9a-f]{12}$/;
@@ -170,6 +174,96 @@ class Groups {
   }
 }
 
+/**
+ * A child session: it has a parent, or a line says it is a child. Never a thread's root.
+ * session_kind arrives in version 8 and session_parent in version 9; a migration that derives
+ * threads before then omits the table it does not have.
+ */
+function childSession(db: Database): (source: string, sessionId: string) => boolean {
+  const parent = hasTable(db, 'session_parent');
+  const kind = hasTable(db, 'session_kind');
+  if (!parent && !kind) return () => false;
+  const parts: string[] = [];
+  if (parent) {
+    parts.push('EXISTS (SELECT 1 FROM session_parent p WHERE p.source = ? AND p.session_id = ?)');
+  }
+  if (kind) {
+    parts.push(
+      "EXISTS (SELECT 1 FROM session_kind k WHERE k.source = ? AND k.session_id = ? AND k.kind = 'child')",
+    );
+  }
+  const stmt = db.prepare(`SELECT 1 WHERE ${parts.join(' OR ')}`);
+  const known = new Map<string, boolean>();
+  return (source, sessionId) => {
+    const k = keyOf(source, sessionId);
+    let child = known.get(k);
+    if (child === undefined) {
+      child =
+        stmt.get(
+          ...(parent && kind ? [source, sessionId, source, sessionId] : [source, sessionId]),
+        ) !== undefined;
+      known.set(k, child);
+    }
+    return child;
+  };
+}
+
+/** Whether this connection has the table. A later migration on the same connection may create it. */
+function hasTable(db: Database, name: string): boolean {
+  return (
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !==
+    undefined
+  );
+}
+
+/**
+ * Attach the children of sessions that are already in a thread (a component of two or more) to
+ * that thread, and their children in turn, when the child has visible events and is not already
+ * in a thread of its own. A parent and its children alone stay apart: nothing here starts a thread.
+ */
+function attachChildren(db: Database, nodes: Map<string, Node>, groups: Groups): void {
+  // Version 9 creates session_parent. Earlier derivations have no parent rows to attach.
+  if (!hasTable(db, 'session_parent')) return;
+  const sizes = new Map<string, number>();
+  for (const k of nodes.keys()) {
+    const root = groups.find(k);
+    sizes.set(root, (sizes.get(root) ?? 0) + 1);
+  }
+  const anchored = new Set<string>();
+  for (const k of nodes.keys()) {
+    if ((sizes.get(groups.find(k)) ?? 0) >= 2) anchored.add(k);
+  }
+  const childrenOf = db.prepare(
+    `SELECT source, session_id FROM session_parent
+      WHERE parent_source = ? AND parent_session_id = ?
+      ORDER BY source, session_id`,
+  );
+  const load = db.prepare(
+    `SELECT ${NODE_COLUMNS} FROM session WHERE source = ? AND session_id = ? AND ${VISIBLE_SESSION}`,
+  );
+  const queue = [...anchored].sort();
+  const seen = new Set<string>(anchored);
+  for (let i = 0; i < queue.length; i++) {
+    const k = queue[i] as string;
+    const at = k.indexOf('\n');
+    const source = k.slice(0, at);
+    const sessionId = k.slice(at + 1);
+    for (const c of childrenOf.all(source, sessionId) as Array<{
+      source: string;
+      session_id: string;
+    }>) {
+      const ck = keyOf(c.source, c.session_id);
+      if (seen.has(ck)) continue;
+      seen.add(ck);
+      const node = nodes.get(ck) ?? (load.get(c.source, c.session_id) as Node | undefined);
+      if (!node) continue;
+      nodes.set(ck, node);
+      groups.union(k, ck);
+      queue.push(ck);
+    }
+  }
+}
+
 /** Which session comes first, for a thread's root: by start, then source, then session id. */
 function earlier(a: Node, b: Node): boolean {
   if (a.started_at !== b.started_at) return a.started_at < b.started_at;
@@ -205,6 +299,8 @@ const VISIBLE_LINK = 'NOT EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_i
 /**
  * Write the threads of the components `groups` forms over `nodes`, after removing the rows of every
  * session in `affected`: a component of two or more sessions is a thread, under the id of its root.
+ * The root is the earliest member that is not a child. A component whose members are all children
+ * is not a thread.
  */
 function writeThreads(
   db: Database,
@@ -224,13 +320,18 @@ function writeThreads(
     if (list) list.push(node);
     else components.set(root, [node]);
   }
+  const child = childSession(db);
   const insert = db.prepare(
     'INSERT OR REPLACE INTO session_thread (source, session_id, thread_id) VALUES (?, ?, ?)',
   );
   for (const members of components.values()) {
     if (members.length < 2) continue;
-    let root = members[0] as Node;
-    for (const m of members) if (earlier(m, root)) root = m;
+    let root: Node | null = null;
+    for (const m of members) {
+      if (child(m.source, m.session_id)) continue;
+      if (!root || earlier(m, root)) root = m;
+    }
+    if (!root) continue;
     const id = threadIdOf(root.source, root.session_id);
     for (const m of members) insert.run(m.source, m.session_id, id);
   }
@@ -265,6 +366,29 @@ export function refreshThreads(
        SELECT f.source, f.session_id FROM session_follow f
         WHERE f.target_source = ? AND f.target_session_id = ? AND ${VISIBLE_LINK}`,
     ),
+    parent: hasTable(db, 'session_parent')
+      ? db.prepare(
+          'SELECT parent_source, parent_session_id FROM session_parent WHERE source = ? AND session_id = ?',
+        )
+      : null,
+    children: hasTable(db, 'session_parent')
+      ? db.prepare(
+          'SELECT source, session_id FROM session_parent WHERE parent_source = ? AND parent_session_id = ?',
+        )
+      : null,
+  };
+  const expand = (source: string, sessionId: string) => {
+    if (!q.parent || !q.children) return;
+    const parent = q.parent.get(source, sessionId) as
+      | { parent_source: string; parent_session_id: string }
+      | undefined;
+    if (parent) visit(parent.parent_source, parent.parent_session_id);
+    for (const c of q.children.all(source, sessionId) as Array<{
+      source: string;
+      session_id: string;
+    }>) {
+      visit(c.source, c.session_id);
+    }
   };
   const seen = new Set<string>();
   const pending: Array<[string, string]> = [];
@@ -298,6 +422,8 @@ export function refreshThreads(
   };
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     const [source, sessionId] = next;
+    // A child leaves its parent's thread with the parent, and a parent takes its children with it.
+    expand(source, sessionId);
     const node = load(source, sessionId);
     if (!node) continue; // no visible events: in no thread
     const k = keyOf(source, sessionId);
@@ -332,6 +458,7 @@ export function refreshThreads(
       visit(f.source, f.session_id);
     }
   }
+  attachChildren(db, nodes, groups);
   writeThreads(db, seen, nodes, groups);
 }
 
@@ -390,6 +517,7 @@ export function deriveThreads(db: Database, opts: { anySession?: boolean } = {})
     const b = keyOf(l.target_source, l.target_session_id);
     if (nodes.has(a) && nodes.has(b)) groups.union(a, b);
   }
+  attachChildren(db, nodes, groups);
   db.exec('DELETE FROM session_thread');
   writeThreads(db, [], nodes, groups);
 }

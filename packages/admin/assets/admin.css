@@ -421,6 +421,11 @@ a.admin-cell-title:hover {
   color: var(--ol-color-accent-text);
 }
 
+/* A child session nested under its parent. The stored title is unchanged; the link uses the display title. */
+.admin-child .admin-cell-title {
+  padding-left: 1.25rem;
+}
+
 .admin-cell-sub {
   display: block;
   overflow: hidden;

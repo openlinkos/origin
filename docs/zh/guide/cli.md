@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-77f68965
+sourceHash: sha256-06a9d495
 ---
 
 # 命令参考
@@ -8,7 +8,7 @@ sourceHash: sha256-77f68965
 origin sync      [--source <id>] [--verbose] [--local] 采集本机 Agent 会话；已接入中枢时再与中枢同步
 origin sync      --hook <agent>                        采集 Agent 的 hook 指明的记录文件（从标准输入读取它的事件）
 origin status                                          各来源统计、条目数与上次采集时间
-origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50]
+origin timeline  [--since 7d] [--until <t>] [--source <id>] [--project <name>] [--limit 50] [--children]
 origin timeline  --session <id> [--all]                单个会话的事件（默认不含工具事件）
 origin search    <query> [--since <t>] [--source <id>] [--project <name>] [--all] [--recent] [--limit 20]
 origin show      <id> [--source <id>]                  显示条目、事件（以及它的原始来源）、会话、线索、一次召回或一条提议
@@ -25,6 +25,8 @@ origin distill   [--project <name> | --thread <thr_…>] [--day <YYYY-MM-DD> | -
 origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   Agent 在该目录会拿到什么；--hook <agent> 用于回应它的 hook
 origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   Agent 拿到过什么，从新到旧
 origin projects                                        已知的项目名
+origin sessions  parents [--dry-run] [--zcode-db <file>] [--grok-home <dir>]
+                                                       补上工作流运行的名称，以及只有摘要写明的 Grok 父会话
 origin backup    <dir>                                 把数据库和原始镜像备份到 <dir>（增量）
 origin mcp                                             以 stdio 运行 MCP server（接入中枢后补充中枢的回答）
 origin agents    [connect | disconnect] [<agent>...] [--yes]   把 Origin 及其 hook 接入本机的 Agent
@@ -53,7 +55,7 @@ origin push                                            与 origin sync 相同（
 
 ## 检索 {#searching}
 
-`search` 同时检索条目和会话消息。查询中的每个词都必须作为子串出现（不区分大小写）；中文同样支持，包括 `部署` 这样一到两个字的词。结果在最新的 2,000 个匹配中按相关度排序；加 `--recent` 改为按时间从新到旧排序，加 `--all` 会把工具调用及其输出也纳入检索。其他短于三个字符的词，例如 `AI`，只在匹配查询其余部分的最新 25,000 个事件中核对，所以要找更早的事件，请加上一个更长的词或限定时间范围。详见[检索与时间线](../architecture.md#search-and-timeline)。
+`search` 同时检索条目和会话消息。查询中的每个词都必须作为子串出现（不区分大小写）；中文同样支持，包括 `部署` 这样一到两个字的词。结果在最新的 2,000 个匹配中按相关度排序；加 `--recent` 改为按时间从新到旧排序，加 `--all` 会把工具调用及其输出也纳入检索。其他短于三个字符的词，例如 `AI`，只在匹配查询其余部分的最新 25,000 个事件中核对，所以要找更早的事件，请加上一个更长的词或限定时间范围。落在子会话中的命中还会给出它的父会话（`source:id`）和父会话的标题。详见[检索与时间线](../architecture.md#search-and-timeline)。
 
 ```console
 $ origin search "schema migrations"
@@ -87,7 +89,7 @@ Sources:
       ↳ claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
 ```
 
-对会话 id，`show` 以卡片的形式显示这个会话，就是 MCP 工具 `get` 交给 Agent 的那张：它的名称和时间、它所在的线索（如果有的话）、开启它前 20 轮的提示、从中写下的条目、它拿到的召回，以及同一项目中紧挨在它前后的会话，每样都带着 id，可以接着 `show`。两个 Agent 的会话 id 相同时，用 `--source` 选其中一个。
+对会话 id，`show` 以卡片的形式显示这个会话，就是 MCP 工具 `get` 交给 Agent 的那张：它的名称和时间、它所在的线索（如果有的话）、开启它前 20 轮的提示、从中写下的条目、它拿到的召回，以及同一项目中紧挨在它前后的会话，每样都带着 id，可以接着 `show`。子会话会给出它的父会话，父会话会按工作流运行分组列出它的子会话，每个一行。两个 Agent 的会话 id 相同时，用 `--source` 选其中一个。
 
 ```console
 $ origin show 9d3b6f20-5a1e-4c7d-8b2f-6e0a4c9d1b3f
@@ -143,6 +145,12 @@ Last prompt [2026-10-22 16:01] run the migration tests on Windows too
 
 A session of it: origin show <session id>
 ```
+
+## 父会话 {#parent-sessions}
+
+`origin timeline` 列出顶层会话：不列出记录了父会话的会话，也不列出未指明父会话的子会话。`--children` 把这些也列出来。父会话的那一行在有子会话时会加上有多少，以及它们的工作流名称。已存标题含有 `actor#N@M` 的工作流步骤显示为 `{运行名称} · actor#N@M`；库中的标题不变。`origin show` 打印的也是这些名称。见[父会话](../architecture.md#parent-sessions)。
+
+`origin sessions parents` 只读地读取 ZCode 的数据库和 Grok Build 的会话目录，并向每个来源的 `places.jsonl` 追加父会话行：工作流运行的分组和名称，以及只有 `summary.json` 写明的 Grok 父会话（`parent_session_id`），前提是归档还没有记录这个父会话。`--dry-run` 打印它会追加多少行，什么也不写。`--zcode-db` 和 `--grok-home` 指定这些路径；不给时使用 `~/.zcode` 和 `~/.grok`（设置了 `GROK_HOME` 时用它），不存在的路径会被跳过。这时命令以 0 退出。在不保存会话的中继上，它说明这一点并退出，不打开这些目录。
 
 ## 召回 {#recall}
 

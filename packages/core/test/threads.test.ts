@@ -52,6 +52,12 @@ interface Line {
   kind?: string;
   project?: string;
   branch?: string;
+  parents?: Array<{
+    session: string;
+    parent: string;
+    via?: 'workflow' | 'subagent';
+    signal?: string;
+  }>;
 }
 
 /** Write a session's lines to its own log file (appending), in the fake adapter's format. */
@@ -140,6 +146,58 @@ describe('threads by branch (R2)', () => {
       ).git_branch;
     expect(branch('s1')).toBe('feat-y');
     expect(branch('s2')).toBe('two');
+  });
+});
+
+describe('a child and its parent', () => {
+  const child = (parent: string): Line[] => [
+    {
+      id: 'ca',
+      session: 'child',
+      ts: T0 - DAY,
+      text: 'Run the step',
+      branch: 'feat-x',
+      parents: [{ session: 'child', parent, via: 'workflow', signal: 'parent_id' }],
+    },
+    {
+      id: 'cb',
+      session: 'child',
+      ts: T0 - DAY + 1000,
+      role: 'assistant',
+      text: 'Step done',
+      branch: 'feat-x',
+    },
+  ];
+
+  it("joins its parent's thread and is never the root", async () => {
+    write('s1.jsonl', session('s1', T0, 'feat-x'));
+    write('s2.jsonl', session('s2', T0 + DAY, 'feat-x'));
+    write('child.jsonl', child('s1'));
+    await sync();
+    const id = threadIdOf('fake', 's1');
+    expect(threads()).toEqual({ [id]: ['fake:child', 'fake:s1', 'fake:s2'] });
+    expect(threadOf(db, 'fake', 'child')).toBe(id);
+    const rows = () =>
+      db.prepare('SELECT thread_id, source, session_id FROM session_thread ORDER BY 1, 2, 3').all();
+    const once = rows();
+    rebuildThreads(db);
+    expect(rows()).toEqual(once);
+    rebuildThreads(db);
+    expect(rows()).toEqual(once);
+  });
+
+  it('does not make a thread out of a parent and only its child', async () => {
+    write('s1.jsonl', session('s1', T0, 'feat-x'));
+    write('child.jsonl', child('s1'));
+    await sync();
+    expect(threads()).toEqual({});
+  });
+
+  it('does not make a thread out of a child alone', async () => {
+    write('child.jsonl', child('s1'));
+    await sync();
+    expect(threads()).toEqual({});
+    expect(threadOf(db, 'fake', 'child')).toBeNull();
   });
 });
 

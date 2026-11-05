@@ -153,10 +153,22 @@ describe('who wrote a Codex input', () => {
     expect(parseCodexLine(meta(thread), ctx(1), info)).toEqual({
       events: [],
       sessionKinds: [{ sessionId: SESSION, kind: 'child', signal: 'source' }],
+      sessionParents: [
+        {
+          sessionId: SESSION,
+          parentSessionId: '0199f0a1-0000-7000-8000-00000000aaaa',
+          parentSource: 'codex',
+          via: 'subagent',
+          signal: 'parent_thread_id',
+          fromAgent: true,
+        },
+      ],
     });
-    expect(parseCodexLine(meta({ subagent: 'review' }), ctx(1), info)?.sessionKinds).toEqual([
+    const namedOnly = parseCodexLine(meta({ subagent: 'review' }), ctx(1), info);
+    expect(namedOnly?.sessionKinds).toEqual([
       { sessionId: SESSION, kind: 'child', signal: 'source' },
     ]);
+    expect(namedOnly?.sessionParents).toBeUndefined();
     expect(parseCodexLine(meta('exec'), ctx(1), info)?.sessionKinds).toEqual([
       { sessionId: SESSION, kind: 'headless', signal: 'source' },
     ]);

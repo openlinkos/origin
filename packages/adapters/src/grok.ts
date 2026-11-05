@@ -19,6 +19,7 @@ import {
   readFrontMatterMemory,
   readPlainMemory,
 } from './memory.js';
+import { parseWithPlaces } from './places.js';
 import { projectFromCwd, truncate } from './util.js';
 
 /**
@@ -96,8 +97,9 @@ interface GrokUpdate {
   status?: string;
   rawInput?: unknown;
   rawOutput?: unknown;
-  /** A `subagent_spawned` notice's sub-agent, a session of its own. */
+  /** A `subagent_spawned` notice's sub-agent, a session of its own, and the session that spawned it. */
   child_session_id?: unknown;
+  parent_session_id?: unknown;
   _meta?: {
     'x.ai/tool'?: { name?: string };
     hideFromScrollback?: boolean;
@@ -155,12 +157,15 @@ export function createGrokAdapter(opts: GrokAdapterOptions = {}): SourceAdapter 
       out.sort((a, b) => a.relPath.localeCompare(b.relPath));
       return out;
     },
-    parseLine: (line, ctx) => {
-      if (ctx.relPath.startsWith(MEMORY_PREFIX)) return parseMemoryLine(line, ctx, readGrokMemory);
-      return ctx.relPath.endsWith(`/${TITLES}`)
-        ? parseGrokTitleLine(line, ctx)
-        : parseGrokLine(line, ctx);
-    },
+    parseLine: (line, ctx) =>
+      parseWithPlaces(line, ctx, (row, parsed) => {
+        if (parsed.relPath.startsWith(MEMORY_PREFIX)) {
+          return parseMemoryLine(row, parsed, readGrokMemory);
+        }
+        return parsed.relPath.endsWith(`/${TITLES}`)
+          ? parseGrokTitleLine(row, parsed)
+          : parseGrokLine(row, parsed);
+      }),
   };
 }
 
@@ -434,11 +439,26 @@ export function parseGrokLine(line: string, ctx: ParseContext): ParsedLine | nul
   switch (u.sessionUpdate) {
     case 'subagent_spawned': {
       // A sub-agent runs as a session of its own, whose prompts this session's agent writes.
+      // The notice names its parent; a title line's session_kind does not.
       const child = u.child_session_id;
       if (typeof child !== 'string' || child.length === 0) return null;
+      const parent = u.parent_session_id;
+      const named =
+        typeof parent === 'string' && parent.length > 0 && parent !== child
+          ? [
+              {
+                sessionId: child,
+                parentSessionId: parent,
+                via: 'subagent' as const,
+                signal: 'subagent_spawned',
+                fromAgent: true,
+              },
+            ]
+          : undefined;
       return {
         events: [],
         sessionKinds: [{ sessionId: child, kind: 'child', signal: 'subagent_spawned' }],
+        ...(named ? { sessionParents: named } : {}),
       };
     }
     case 'user_message_chunk':

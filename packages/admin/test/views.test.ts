@@ -415,6 +415,30 @@ describe('the workbench lists', () => {
     expect(service.sessionBoard({ ...board, agents: ['other'] }, NOW).total).toBe(1);
   });
 
+  it('nests a workflow child under its parent and does not give the child a page slot', async () => {
+    write([
+      { id: 'p1', session: 'parent', ts: NOW - 1000, project: 'demo-app', text: 'Run it' },
+      { id: 'c1', session: 'child', ts: NOW - 500, project: 'demo-app', text: 'Do the step' },
+    ]);
+    await sync();
+    db.prepare("UPDATE session SET title = ? WHERE session_id = 'child'").run(
+      'actor#2@5 do the step',
+    );
+    db.prepare(
+      `INSERT INTO session_parent
+         (source, session_id, parent_source, parent_session_id, via, run_group, run_name, signal)
+       VALUES ('fake', 'child', 'fake', 'parent', 'workflow', 'run-1', 'Ship', 'dwf_run')`,
+    ).run();
+    const listed = service.sessionBoard(board, NOW);
+    expect(listed.total).toBe(1);
+    expect(listed.rows.map((r) => r.sessionId)).toEqual(['parent']);
+    const child = listed.rows[0]?.children[0];
+    expect(child?.sessionId).toBe('child');
+    expect(child?.title).toBe('actor#2@5 do the step');
+    expect(child?.runName).toBe('Ship');
+    expect(child?.via).toBe('workflow');
+  });
+
   it('show a session as a trace: every turn with its calls and failures, the latest in full', async () => {
     write(conversation(3, NOW - DAY));
     write([

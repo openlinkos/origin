@@ -6,6 +6,7 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { CURRENT_VERSION, type EntryKind } from './entries.js';
 import { storeName } from './identity.js';
+import { sessionFold } from './parents.js';
 import { findNewest, searchEvents } from './search.js';
 import {
   getEvent,
@@ -475,6 +476,14 @@ function entryLine(c: Candidate, layer: RecallLayer, plan: RecallPlan): string {
   return `- ${c.id}${tags.length > 0 ? ` (${tags.join(', ')})` : ''} ${entrySummary(c.text)}`;
 }
 
+/** A session's children, on its brief line: how many, and the workflow names among them. */
+function childTail(fold: { children: number; workflows: string[] }): string {
+  if (fold.children === 0) return '';
+  const noun = fold.children === 1 ? 'child' : 'children';
+  const names = fold.workflows.length > 0 ? ` (${fold.workflows.join(', ')})` : '';
+  return ` · ${fold.children} ${noun}${names}`;
+}
+
 /** A session's line in a brief: its agent, when it ended, its id, its name, and its last prompt. */
 function sessionLine(
   source: string,
@@ -482,8 +491,9 @@ function sessionLine(
   at: number,
   name: string,
   last: string | null,
+  fold: { children: number; workflows: string[] },
 ): string {
-  return `- ${source} ${minute(at)} ${sessionId}: ${cutTokens(name, SUMMARY_TOKENS)}${lastPromptTail(name, last)}`;
+  return `- ${source} ${minute(at)} ${sessionId}: ${cutTokens(name, SUMMARY_TOKENS)}${lastPromptTail(name, last)}${childTail(fold)}`;
 }
 
 function lastPromptTail(name: string, last: string | null): string {
@@ -500,12 +510,15 @@ function threadLine(db: Database, id: string, until?: number): string | null {
   const summary = threadSummary(db, id);
   const root = listThreadSessions(db, id, { limit: 1 })[0];
   const name = root ? (root.title ?? root.prompt) : null;
-  if (!summary || !name || summary.startedAt === null || summary.endedAt === null) return null;
+  if (!summary || !root || !name || summary.startedAt === null || summary.endedAt === null) {
+    return null;
+  }
   const first = day(summary.startedAt);
   const last = day(until === undefined ? summary.endedAt : Math.min(until, summary.endedAt));
   const span = first === last ? first : `${first} – ${last}`;
   const prompt = threadLastPrompt(db, id, { until })?.prompt ?? null;
-  return `- ${id} (${summary.sessions} sessions: ${summary.agents.join(', ')}; ${span}): ${cutTokens(name, SUMMARY_TOKENS)}${lastPromptTail(name, prompt)}`;
+  const fold = sessionFold(db, root.source, root.sessionId);
+  return `- ${id} (${summary.sessions} sessions: ${summary.agents.join(', ')}; ${span}): ${cutTokens(name, SUMMARY_TOKENS)}${lastPromptTail(name, prompt)}${childTail(fold)}`;
 }
 
 /**
@@ -555,7 +568,14 @@ function recentSessions(db: Database, plan: RecallPlan): Draft[] {
       kind: 'session',
       ref: `${r.source}:${r.session_id}`,
       score: null,
-      line: sessionLine(r.source, r.session_id, r.ended_at, name, prompts.at(-1)?.prompt ?? null),
+      line: sessionLine(
+        r.source,
+        r.session_id,
+        r.ended_at,
+        name,
+        prompts.at(-1)?.prompt ?? null,
+        sessionFold(db, r.source, r.session_id),
+      ),
     });
   }
   return drafts;
@@ -776,7 +796,17 @@ export function rebuildRecall(
       missing.push(item.ref);
       continue;
     }
-    lines.set(item.ref, sessionLine(source, id, r.at, name, prompts.at(-1)?.prompt ?? null));
+    lines.set(
+      item.ref,
+      sessionLine(
+        source,
+        id,
+        r.at,
+        name,
+        prompts.at(-1)?.prompt ?? null,
+        sessionFold(db, source, id),
+      ),
+    );
   }
   const shown = recall.items.filter((i) => lines.has(i.ref));
   if (shown.length === 0) return { text: '', lines, missing };

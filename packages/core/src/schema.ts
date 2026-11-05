@@ -23,6 +23,10 @@
  *   by its event's seq, with its speaker and the field that decided it; and which sessions a line
  *   says are a child (an agent's) or a headless run (a program's). Derived from the raw lines and
  *   rebuildable (see authors.ts, reparse.ts, version 8); events are never touched.
+ * - session_parent: which session a line says is a child of another (a sub-agent or a workflow
+ *   step), with the run's group and name when the line carries them. Derived from the raw lines
+ *   and rebuildable (see parents.ts, reparse.ts, version 9); events and session.title are never
+ *   touched.
  * - proposal / proposal_source: the entries agents proposed with the MCP tool `propose`, for the
  *   person to accept or reject, and the events each cites, derived from the tool results that carry
  *   them and rebuildable (see proposals.ts, version 6). Their status is derived, never stored.
@@ -214,6 +218,19 @@ CREATE TABLE IF NOT EXISTS session_kind (
   signal     TEXT NOT NULL,
   PRIMARY KEY (source, session_id, kind, signal)
 ) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS session_parent (
+  source            TEXT NOT NULL,
+  session_id        TEXT NOT NULL,
+  parent_source     TEXT NOT NULL,
+  parent_session_id TEXT NOT NULL,
+  via               TEXT NOT NULL CHECK (via IN ('subagent', 'workflow')),
+  run_group         TEXT,
+  run_name          TEXT,
+  signal            TEXT NOT NULL,
+  PRIMARY KEY (source, session_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_parent_parent ON session_parent (parent_source, parent_session_id);
 
 CREATE TABLE IF NOT EXISTS event_block (
   block     INTEGER PRIMARY KEY,

@@ -2,11 +2,13 @@ import { randomBytes } from 'node:crypto';
 import {
   type Author,
   changesSince,
+  childSessions,
   correct,
   type Database,
   describeProposal,
   describeSession,
   describeThread,
+  displayTitle,
   type Entry,
   type EventRow,
   encodeFeedCursor,
@@ -21,6 +23,7 @@ import {
   getEvent,
   getRecall,
   getSession,
+  getSessionParent,
   hasAuthor,
   isEntryForgotten,
   isEntryId,
@@ -54,6 +57,7 @@ import {
   type SessionRow,
   searchEntries,
   searchEvents,
+  sessionFold,
   sessionKey,
   sessionNames,
   stubText,
@@ -122,6 +126,10 @@ export interface SearchHitView extends EventView {
   snippet: string;
   /** The title of the event's session, or its first prompt (absent from older hubs). */
   session_title?: string | null;
+  /** `<source>:<session id>` of the session's parent, when it has one. */
+  parent?: string;
+  /** The parent's title, as it is shown (absent when `parent` is). */
+  parent_title?: string | null;
 }
 
 export interface SearchResult {
@@ -144,6 +152,13 @@ export interface SessionView {
   events: number;
   /** The thread the session is in with others, or null (absent from older hubs). */
   thread?: string | null;
+  /**
+   * How many child sessions this one has. On a timeline, which lists top-level sessions unless
+   * `include_children` is set (absent from older hubs).
+   */
+  children?: number;
+  /** Distinct workflow names among those children (absent from older hubs). */
+  workflows?: string[];
   origin?: Found;
 }
 
@@ -248,8 +263,19 @@ export interface EventResult extends EventView {
   cited_by?: EntryStub[];
 }
 
+/** One child of a session, as `get` lists it: one line, grouped by `group`. */
+export interface SessionChild {
+  /** The workflow run's group, or null when the child is not in one. */
+  group: string | null;
+  via: string;
+  source: string;
+  session: string;
+  /** The name it is shown under (see displayTitle). */
+  title: string | null;
+}
+
 /** A session as a card: what it is, and what is next to it (see sessionResult). */
-export interface SessionResult extends Omit<SessionView, 'thread'> {
+export interface SessionResult extends Omit<SessionView, 'thread' | 'children'> {
   cwd: string | null;
   turns: number;
   prompts: PromptStub[];
@@ -261,6 +287,10 @@ export interface SessionResult extends Omit<SessionView, 'thread'> {
   recalls: RecallStub[];
   before: SessionView | null;
   after: SessionView | null;
+  /** The session this one is a child of, when it has a parent. */
+  parent?: { source: string; session: string; title: string | null };
+  /** Its children, one line each, ordered so one run group stays together. */
+  children?: SessionChild[];
 }
 
 /** A thread as a card: what it is, its sessions, and what was written from them (see threadResult). */
@@ -502,6 +532,26 @@ export function sessionView(s: SessionRow): SessionView {
   };
 }
 
+/** A session as it is shown: the display title, and, on a list, its child count and workflows. */
+function shownSession(db: Database, s: SessionRow, fold: boolean): SessionView {
+  const parent = getSessionParent(db, s.source, s.sessionId);
+  const view = sessionView(s);
+  view.title = displayTitle(s.title, parent);
+  if (fold) {
+    const counted = sessionFold(db, s.source, s.sessionId);
+    view.children = counted.children;
+    view.workflows = counted.workflows;
+  }
+  return view;
+}
+
+/** The title a session is shown under, or null when the store has no such session. */
+function shownTitle(db: Database, source: string, sessionId: string): string | null {
+  const row = getSession(db, source, sessionId);
+  if (!row) return null;
+  return displayTitle(row.title, getSessionParent(db, source, sessionId));
+}
+
 /** A session's name: its title, or its first prompt. */
 const nameOf = (s: SessionRow | null): string | null => (s ? (s.title ?? s.prompt) : null);
 
@@ -574,11 +624,20 @@ export function searchStore(db: Database, args: ToolArgs<'search'>): SearchResul
   const names = sessionNames(db, events);
   return {
     entries: entries.map(entryView),
-    events: events.map((h) => ({
-      ...eventView(h, 400),
-      snippet: h.snippet,
-      session_title: names.get(sessionKey(h.source, h.sessionId)) ?? null,
-    })),
+    events: events.map((h) => {
+      const parent = getSessionParent(db, h.source, h.sessionId);
+      return {
+        ...eventView(h, 400),
+        snippet: h.snippet,
+        session_title: names.get(sessionKey(h.source, h.sessionId)) ?? null,
+        ...(parent
+          ? {
+              parent: `${parent.parentSource}:${parent.parentSessionId}`,
+              parent_title: shownTitle(db, parent.parentSource, parent.parentSessionId),
+            }
+          : {}),
+      };
+    }),
   };
 }
 
@@ -596,7 +655,7 @@ export function timelineOf(db: Database, args: ToolArgs<'timeline'>): TimelineRe
     });
     return {
       session: args.session,
-      title: session.title,
+      title: displayTitle(session.title, getSessionParent(db, session.source, session.sessionId)),
       prompt: session.prompt,
       events: page.events.map((e) => eventView(e, 1000)),
       more: page.more,
@@ -608,8 +667,9 @@ export function timelineOf(db: Database, args: ToolArgs<'timeline'>): TimelineRe
     source: args.source,
     project: args.project,
     limit: args.limit,
+    topLevel: !args.include_children,
   });
-  return { sessions: sessions.map(sessionView) };
+  return { sessions: sessions.map((s) => shownSession(db, s, true)) };
 }
 
 /** An event's text is read in pages of this many UTF-16 code units. */
@@ -684,7 +744,7 @@ export function changesIn(db: Database, args: ToolArgs<'changes'>): ChangesResul
     limit: args.limit,
   });
   return {
-    sessions: feed.sessions.map((s) => ({ ...sessionView(s.session), new: s.started })),
+    sessions: feed.sessions.map((s) => ({ ...shownSession(db, s.session, true), new: s.started })),
     events: feed.events.map((e) => ({ ...eventStub(e), session: e.sessionId })),
     entries: feed.entries.map((e) => ({ ...entryStub(e), supersedes: e.supersedes })),
     forgets: feed.forgets.map((f) => ({ id: f.id, target: f.target, at: isoLocal(f.at) })),
@@ -805,7 +865,15 @@ function eventResult(db: Database, id: string, offset: number): EventResult {
 /** A session's card: what it is, its turns, the entries written from it, its recalls, its neighbours. */
 export function sessionResult(db: Database, session: SessionRow): SessionResult {
   const card = describeSession(db, session);
-  const view = sessionView(session);
+  const view = shownSession(db, session, false);
+  const parent = getSessionParent(db, session.source, session.sessionId);
+  const children = childSessions(db, session.source, session.sessionId).map((c) => ({
+    group: c.runGroup,
+    via: c.via,
+    source: c.source,
+    session: c.sessionId,
+    title: displayTitle(getSession(db, c.source, c.sessionId)?.title ?? null, c),
+  }));
   return {
     session: view.session,
     source: view.source,
@@ -833,8 +901,18 @@ export function sessionResult(db: Database, session: SessionRow): SessionResult 
       time: isoLocal(recall.at),
       items,
     })),
-    before: card.before && sessionView(card.before),
-    after: card.after && sessionView(card.after),
+    before: card.before && shownSession(db, card.before, false),
+    after: card.after && shownSession(db, card.after, false),
+    ...(parent
+      ? {
+          parent: {
+            source: parent.parentSource,
+            session: parent.parentSessionId,
+            title: shownTitle(db, parent.parentSource, parent.parentSessionId),
+          },
+        }
+      : {}),
+    ...(children.length > 0 ? { children } : {}),
   };
 }
 

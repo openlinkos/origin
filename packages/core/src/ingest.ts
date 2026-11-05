@@ -21,6 +21,7 @@ import {
   settleMirror,
 } from './mirror.js';
 import { assertComplete } from './mode.js';
+import { recordSessionParent } from './parents.js';
 import { distinctRelPath, mirrorRelPath, parseRawPath, rawDir, remotePath } from './paths.js';
 import { deriveProposal } from './proposals.js';
 import { deriveFollow, refreshThreads } from './threads.js';
@@ -497,6 +498,11 @@ function appendLines(
     // it whether it is the owner's conversation, so its threads are looked at again.
     for (const fact of parsed.sessionKinds ?? []) {
       if (recordSessionKind(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
+    }
+    // A session this line says has a parent: it joins that session's thread, and leaves a
+    // top-level list.
+    for (const fact of parsed.sessionParents ?? []) {
+      if (recordSessionParent(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
     }
   }
   for (const sessionId of touchedSessions) refreshSession(ctx.db, adapter.id, sessionId);
