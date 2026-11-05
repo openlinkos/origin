@@ -163,9 +163,13 @@ export const ARGS = {
         },
         usage: 'Usage: origin sessions parents [--dry-run] [--zcode-db <file>] [--grok-home <dir>]',
       },
+      repair: {
+        options: { 'dry-run': { type: 'boolean', default: false } },
+        usage: 'Usage: origin sessions repair [--dry-run]',
+      },
     },
     usage:
-      'Usage: origin sessions reproject [--dry-run] | parents [--dry-run] [--zcode-db <file>] [--grok-home <dir>]',
+      'Usage: origin sessions reproject [--dry-run] | parents [--dry-run] [--zcode-db <file>] [--grok-home <dir>] | repair [--dry-run]',
   },
   backup: { options: {}, positionals: [1, 1], usage: 'Usage: origin backup <dir>' },
   mcp: { options: {}, usage: 'Usage: origin mcp' },

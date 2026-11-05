@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { type Database, transaction } from './db.js';
+import { assertStoreCurrent, type Database, transaction } from './db.js';
 import { readMirror } from './mirror.js';
-import { parentPlaceFact } from './parents.js';
+import { parentPlaceFact, recordSessionParent } from './parents.js';
 import { mirrorRelPath, parseRawPath, remotePath } from './paths.js';
 import { refreshThreads } from './threads.js';
 import type { ParsedLine, ProjectRootFact, SessionPlaceFact, SourceFile } from './types.js';
@@ -568,9 +568,16 @@ export function recordExplicitPlace(
   ).run(source, sessionId, project);
 }
 
+/** What applying one places line changed: sessions to thread again, and parent rows filled. */
+export interface AppliedPlaces {
+  sessions: string[];
+  parents: number;
+}
+
 /**
- * Apply the roots and places of one parsed line. No-op until the tables exist. `device` is `''`
- * on this store and the sending device's name on a hub. Returns the sessions whose place changed.
+ * Apply the roots, places, and parents of one parsed line. No-op until the tables exist. `device`
+ * is `''` on this store and the sending device's name on a hub. A parent line fills `session_parent`
+ * the same way ingestion does, including a run's group and name on a row an agent line already named.
  */
 export function applyPlaceFacts(
   db: Database,
@@ -578,16 +585,25 @@ export function applyPlaceFacts(
   parsed: ParsedLine,
   seenAt = Date.now(),
   device = '',
-): string[] {
-  if (!hasTable(db, 'session_place')) return [];
-  const changed: string[] = [];
+): AppliedPlaces {
+  if (!hasTable(db, 'session_place')) return { sessions: [], parents: 0 };
+  const sessions: string[] = [];
+  let parents = 0;
   for (const root of parsed.roots ?? []) upsertRoot(db, root, seenAt, device);
   for (const place of parsed.places ?? []) {
     if (upsertPlaceLine(db, source, place.sessionId, place.project, place.root, place.signal)) {
-      changed.push(place.sessionId);
+      sessions.push(place.sessionId);
     }
   }
-  return changed;
+  if (hasTable(db, 'session_parent')) {
+    for (const fact of parsed.sessionParents ?? []) {
+      if (recordSessionParent(db, source, fact)) {
+        parents += 1;
+        sessions.push(fact.sessionId);
+      }
+    }
+  }
+  return { sessions, parents };
 }
 
 export function rootLine(row: PlaceAlias): string {
@@ -880,6 +896,7 @@ export function placesSourceFile(
  * `fn` inside that transaction; starting another fails, and any other failure still throws.
  */
 function withWriteLock<T>(db: Database, fn: () => T): T {
+  assertStoreCurrent(db);
   try {
     db.exec('BEGIN IMMEDIATE');
   } catch (err) {
@@ -913,14 +930,21 @@ function readPlacesText(db: Database, home: string, id: number): string | null {
   }
 }
 
+export interface ReparsedPlaces {
+  changed: Array<{ source: string; sessionId: string }>;
+  /** Parent rows inserted or filled from places lines. */
+  parents: number;
+}
+
 export function reparsePlaces(
   db: Database,
   home: string,
   log?: (message: string) => void,
-): Array<{ source: string; sessionId: string }> {
-  if (!hasTable(db, 'session_place')) return [];
+): ReparsedPlaces {
+  if (!hasTable(db, 'session_place')) return { changed: [], parents: 0 };
   return withWriteLock(db, () => {
     const changed: Array<{ source: string; sessionId: string }> = [];
+    let parents = 0;
     const files = db
       .prepare(
         `SELECT id, source, path, generation, mirror FROM raw_file
@@ -959,12 +983,14 @@ export function reparsePlaces(
         if (key) latest.set(key, parsed);
       }
       for (const parsed of latest.values()) {
-        for (const sessionId of applyPlaceFacts(db, file.source, parsed, Date.now(), device)) {
+        const applied = applyPlaceFacts(db, file.source, parsed, Date.now(), device);
+        parents += applied.parents;
+        for (const sessionId of applied.sessions) {
           changed.push({ source: file.source, sessionId });
         }
       }
     }
-    return changed;
+    return { changed, parents };
   });
 }
 
@@ -991,6 +1017,8 @@ export interface ReprojectResult {
   report: ReprojectReport;
   /** Generated `places.jsonl` files to ingest. Empty for a dry run. */
   files: Array<{ source: string; file: SourceFile }>;
+  /** Parent rows filled from mirrored places lines. Zero for a dry run, which does not re-read them. */
+  parents: number;
 }
 
 /** Sessions with events, and how many of them a `session_parent` row names. Zero children without that table. */
@@ -1044,6 +1072,8 @@ export function reproject(
   db: Database,
   opts: {
     dryRun?: boolean;
+    /** Resolve only sessions that have no `session_place` row. A session that has one is left. */
+    unplacedOnly?: boolean;
     home?: string;
     agentFacts?: (source: string, sessionId: string) => AgentFacts | null;
     now?: number;
@@ -1051,7 +1081,8 @@ export function reproject(
 ): ReprojectResult {
   const now = opts.now ?? Date.now();
   const before = sessionShape(db);
-  const reparsed = !opts.dryRun && opts.home ? reparsePlaces(db, opts.home) : [];
+  const reparsed =
+    !opts.dryRun && opts.home ? reparsePlaces(db, opts.home) : { changed: [], parents: 0 };
   const rows = db
     .prepare(
       `SELECT s.source, s.session_id, s.project, s.cwd, s.event_count,
@@ -1064,8 +1095,9 @@ export function reproject(
     .all() as unknown as Array<SessionWork & { source: string }>;
   const remote = remoteSessionKeys(db);
   const local = rows.filter((row) => !remote.has(`${row.source}\0${row.session_id}`));
+  const work = opts.unplacedOnly ? local.filter((row) => row.signal == null) : local;
   const moves = new Map<string, ProjectMove>();
-  for (const row of local) {
+  for (const row of work) {
     if (chosenProject(row)) continue;
     if (!row.cwd) continue;
     const gone = !exists(row.cwd);
@@ -1098,10 +1130,10 @@ export function reproject(
         ).n;
   const files: Array<{ source: string; file: SourceFile }> = [];
   if (!opts.dryRun && opts.home) {
-    const sources = [...new Set(local.map((row) => row.source))];
+    const sources = [...new Set(work.map((row) => row.source))];
     for (const source of sources) {
       const touchedSessions = new Set(
-        local.filter((row) => row.source === source).map((row) => row.session_id),
+        work.filter((row) => row.source === source).map((row) => row.session_id),
       );
       const file = placesSourceFile(db, opts.home, source, {
         now,
@@ -1111,13 +1143,13 @@ export function reproject(
       if (file) files.push({ source, file });
     }
   }
-  if (!opts.dryRun && reparsed.length > 0) {
-    transaction(db, () => refreshThreads(db, reparsed), { immediate: true });
+  if (!opts.dryRun && reparsed.changed.length > 0) {
+    transaction(db, () => refreshThreads(db, reparsed.changed), { immediate: true });
   }
   const after = opts.dryRun ? before : sessionShape(db);
   const listed = [...moves.values()].sort(
     (a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to),
   );
   const body = { moves: listed, entriesLeft, before, after };
-  return { report: { ...body, text: reportText(body) }, files };
+  return { report: { ...body, text: reportText(body) }, files, parents: reparsed.parents };
 }

@@ -84,7 +84,7 @@ export {
   type SourceInput,
   searchEntries,
 } from './entries.js';
-export { ConflictError, OriginError } from './errors.js';
+export { ConflictError, OriginError, StoreUpgradedError } from './errors.js';
 export {
   type ApplyOptions,
   type ApplyResult,
@@ -248,6 +248,7 @@ export {
   displayTitle,
   getSessionParent,
   isFoldedChild,
+  PARENT_LINE_SIGNALS,
   type ParentVia,
   recordSessionParent,
   type SessionParentRow,
@@ -408,6 +409,7 @@ export {
   relaySource,
   saveRelayCursor,
 } from './relay.js';
+export { type RepairReport, type RepairResult, repairSessions } from './repair.js';
 export {
   exportEntry,
   type OwnChange,

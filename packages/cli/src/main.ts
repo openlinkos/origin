@@ -68,6 +68,7 @@ import {
   recallSession,
   recordAudit,
   relayPending,
+  repairSessions,
   reproject,
   resolveId,
   revokeGrant,
@@ -175,6 +176,7 @@ Usage:
   origin sessions  reproject [--dry-run]                 Resolve each session to its main project
   origin sessions  parents [--dry-run] [--zcode-db <file>] [--grok-home <dir>]
                                                          Fill workflow run names, and Grok parents only a summary names
+  origin sessions  repair [--dry-run]                    Fill places and parent links an older process left out
   origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
   origin mcp                                             Run the MCP server over stdio (forwards to the hub when connected)
   origin agents    [connect | disconnect] [<agent>...] [--yes]   Register Origin, and its hooks, with the agents here
@@ -1458,9 +1460,9 @@ function forgettingCtx(ctx: Ctx): ForgettingCtx {
 }
 
 /**
- * `origin sessions reproject` and `origin sessions parents`. Arguments are checked before the
- * store is opened. Default ZCode and Grok homes are resolved only for `parents`, and only when
- * those flags are omitted.
+ * `origin sessions reproject`, `parents`, and `repair`. Arguments are checked before the store is
+ * opened. Default ZCode and Grok homes are resolved only for `parents`, and only when those flags
+ * are omitted.
  */
 async function cmdSessions(ctx: Ctx, args: string[]): Promise<number> {
   const [action, ...rest] = args;
@@ -1491,6 +1493,25 @@ async function cmdSessions(ctx: Ctx, args: string[]): Promise<number> {
       zcodeDb,
       grokHome: grok,
     });
+  }
+  if (action === 'repair') {
+    if (isRelay(ctx.db)) {
+      throw new OriginError(
+        'This store is a relay and keeps no sessions of its own. Run origin sessions repair on the hub.',
+      );
+    }
+    const { values } = parseArgs({ args: rest, options: ARGS.sessions.sub.repair.options });
+    const result = repairSessions(ctx.db, {
+      dryRun: values['dry-run'] === true,
+      home: ctx.home,
+      adapters: storeAdapters(ctx.home),
+      agentFacts,
+    });
+    for (const { source, file } of result.files) {
+      await ingestPlacesFile({ db: ctx.db, home: ctx.home }, source, file);
+    }
+    console.log(result.report.text);
+    return 0;
   }
   console.error(`origin sessions: Unknown subcommand "${action ?? ''}".\n${ARGS.sessions.usage}`);
   return 2;

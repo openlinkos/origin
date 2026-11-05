@@ -24,6 +24,7 @@ origin projects                                        Known project names
 origin sessions  reproject [--dry-run]                 Resolve each session to its main project
 origin sessions  parents [--dry-run] [--zcode-db <file>] [--grok-home <dir>]
                                                        Fill workflow run names, and Grok parents only a summary names
+origin sessions  repair [--dry-run]                    Fill places and parent links an older process left out
 origin backup    <dir>                                 Back up the database and raw mirrors into <dir> (incremental)
 origin mcp                                             Run the MCP server over stdio (adds the hub's answers when connected)
 origin agents    [connect | disconnect] [<agent>...] [--yes]   Register Origin, and its hooks, with the agents here
@@ -147,6 +148,8 @@ A session of it: origin show <session id>
 `origin timeline` lists top-level sessions: none that record a parent, and no child session that names none. `--children` lists those too. A parent line adds how many children it has, and their workflow names, when there are any. A workflow step whose stored title contains `actor#N@M` is shown as `{run name} · actor#N@M`; the title in the store is unchanged. The same names are what `origin show` prints. See [Parent sessions](../architecture.md#parent-sessions).
 
 `origin sessions parents` reads ZCode's database and Grok Build's session directory, read-only, and appends parent lines to each source's `places.jsonl`: a workflow run's group and name, and a Grok parent that only `summary.json` names (`parent_session_id`), when the archive does not already record that parent. `--dry-run` prints how many lines it would append and writes nothing. `--zcode-db` and `--grok-home` name those paths; without them, `~/.zcode` and `~/.grok` (`GROK_HOME` when it is set) are used, and a path that is not there is skipped. The command exits 0 in that case. On a relay, which keeps no sessions, it says so and exits without opening those homes.
+
+`origin sessions repair` fills a place for each session that has none, and reads parent facts already in the mirror again to fill parent links that are missing, including a Grok `subagent_spawned` an older process never recorded. `--dry-run` only reports. A second run changes nothing. On a hub it re-reads mirrored parent lines and does not resolve another device's sessions. On a relay, which keeps no sessions, it says so and exits.
 
 ## Recall
 

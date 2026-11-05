@@ -1,6 +1,6 @@
 import type { Database } from './db.js';
-import { transaction } from './db.js';
-import { OriginError } from './errors.js';
+import { assertStoreCurrent, transaction } from './db.js';
+import { OriginError, StoreUpgradedError } from './errors.js';
 import { sessionBranchQuery } from './ingest.js';
 import { reparsePlaces } from './places.js';
 import { deriveProposals } from './proposals.js';
@@ -482,6 +482,7 @@ export function refuseNewerStore(
  * may be running a migration that takes a while.
  */
 function underLock<T>(db: Database, fn: () => T): T {
+  assertStoreCurrent(db);
   const timeout = (db.prepare('PRAGMA busy_timeout').get() as { timeout: number }).timeout;
   db.exec(`PRAGMA busy_timeout = ${MIGRATION_WAIT_MS}`);
   try {
@@ -591,7 +592,8 @@ export function migrate(db: Database, opts: MigrateOptions): void {
           db.exec(`PRAGMA user_version = ${step.version}`);
         });
       } catch (err) {
-        if (!step.up || err instanceof NewerStoreError) throw err;
+        if (!step.up || err instanceof NewerStoreError || err instanceof StoreUpgradedError)
+          throw err;
         const reason = (err as Error).message.replace(/\.?$/, '.');
         throw Object.assign(
           new OriginError(
