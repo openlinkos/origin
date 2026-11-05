@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
-import { ENTRY_KINDS } from '@openlinkos/origin-core';
+import { ENTRY_KINDS, StoreUpgradedError } from '@openlinkos/origin-core';
 import { z } from 'zod';
 
 /** Guidance sent to agents in the MCP `initialize` response. */
@@ -286,7 +286,8 @@ export function toolError(message: string): CallToolResult {
  * than `intervalMs` ago, even while another (a background one) is running. A read that needs a
  * refresh shares the one in flight. A forced refresh (after or before a write) asked for while one
  * is in flight runs once more after it, so that it covers what was just written; forced requests
- * that arrive meanwhile share that run. Failures are logged, never thrown.
+ * that arrive meanwhile share that run. Failures are logged, never thrown. A store a newer Origin
+ * has upgraded ends the process, so the client starts it again.
  */
 export function refreshGate(
   fn: (() => Promise<void>) | undefined,
@@ -300,7 +301,11 @@ export function refreshGate(
   const run = (): Promise<void> => {
     queued = null;
     const current = (fn as () => Promise<void>)()
-      .catch((err: unknown) => log?.(`${label} failed: ${(err as Error).message}`))
+      .catch((err: unknown) => {
+        log?.(`${label} failed: ${(err as Error).message}`);
+        // The exit does not return. A test spy throws, and the caller awaits this refresh.
+        if (err instanceof StoreUpgradedError) process.exit(1);
+      })
       .finally(() => {
         last = Date.now();
         if (inflight === current) inflight = null;
@@ -333,7 +338,8 @@ export const CLOSE_TIMEOUT_MS = 5_000;
  * Run `tick` every `intervalMs` in the background, one at a time (the next is scheduled once the
  * last has finished), until the returned function is called. `tick` refreshes through the refresh
  * gates, so it never overlaps another refresh, and tool calls never wait for the timer. Failures
- * are logged, never thrown. An interval of 0 or less runs nothing.
+ * are logged, never thrown. A store a newer Origin has upgraded ends the process, so the client
+ * starts it again. An interval of 0 or less runs nothing.
  */
 export function startWatch(
   intervalMs: number,
@@ -346,7 +352,15 @@ export function startWatch(
   const schedule = () => {
     timer = setTimeout(() => {
       tick()
-        .catch((err: unknown) => log?.(`background sync failed: ${(err as Error).message}`))
+        .catch((err: unknown) => {
+          log?.(`background sync failed: ${(err as Error).message}`);
+          if (!(err instanceof StoreUpgradedError)) return;
+          stopped = true;
+          process.exit(1);
+        })
+        .catch(() => {
+          // Nothing awaits a timer. process.exit does not return; a test spy throws.
+        })
         .finally(() => {
           if (!stopped) schedule();
         });

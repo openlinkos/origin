@@ -451,6 +451,33 @@ describe('places.jsonl', () => {
       events: [],
       warning: 'places.jsonl: version 2 is not read by this Origin; the line is kept',
     });
+    // A parent line's signal is its own set. A place signal cannot name a parent, and a parent
+    // signal cannot lock a session's project.
+    expect(
+      parsePlaceLine(
+        '{"v":1,"type":"parent","session":"s1","parent":"p1","via":"workflow","signal":"git"}',
+      ).warning,
+    ).toMatch(/signal/);
+    expect(
+      parsePlaceLine(
+        '{"v":1,"type":"place","session":"s1","project":"demo-app","root":null,"signal":"dwf_run"}',
+      ).warning,
+    ).toMatch(/signal/);
+    expect(
+      parsePlaceLine(
+        '{"v":1,"type":"parent","session":"s1","parent":"p1","via":"subagent","signal":"parent_session_id"}',
+      ).sessionParents?.[0],
+    ).toMatchObject({ signal: 'parent_session_id', fromAgent: false });
+    expect(
+      parsePlaceLine(
+        '{"v":1,"type":"parent","session":"s1","parent":"p1","via":"subagent","signal":"subagent_spawned"}',
+      ).sessionParents?.[0],
+    ).toMatchObject({ signal: 'subagent_spawned' });
+    expect(
+      parsePlaceLine(
+        '{"v":1,"type":"parent","session":"s1","parent":"p1","via":"subagent","signal":"parent_thread_id"}',
+      ).sessionParents?.[0],
+    ).toMatchObject({ signal: 'parent_thread_id' });
   });
 
   it('does not let a place line replace an explicit name', async () => {

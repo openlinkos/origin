@@ -583,15 +583,8 @@ function appendLines(
       if (recordSessionKind(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
     }
     if (originPlaces) {
-      for (const sessionId of applyPlaceFacts(
-        ctx.db,
-        adapter.id,
-        parsed,
-        Date.now(),
-        parse.device ?? '',
-      )) {
-        touchedSessions.add(sessionId);
-      }
+      const applied = applyPlaceFacts(ctx.db, adapter.id, parsed, Date.now(), parse.device ?? '');
+      for (const sessionId of applied.sessions) touchedSessions.add(sessionId);
     }
     for (const ev of parsed.events) {
       if (ev.projectSignal === 'explicit' && ev.project) {

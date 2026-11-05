@@ -9,6 +9,7 @@ import type { MigrationContext } from './migrations.js';
 import { readMirrorLine, scanMirrorLines } from './mirror.js';
 import { recordSessionParent } from './parents.js';
 import { mirrorRelPath, parseRawPath, rawDir } from './paths.js';
+import { isOriginPlacesFile } from './places.js';
 import { deriveProposal } from './proposals.js';
 import { PULL_TOMBSTONES_AGAIN, setSetting } from './settings.js';
 import { recordedAgentVersion } from './store.js';
@@ -350,12 +351,18 @@ export function reparseAuthorship(ctx: MigrationContext): void {
 
 /**
  * Derive parent sessions from the raw mirrors (see parents.ts), as ingestion with the adapters now
- * would. Only lines that can name a parent are parsed (PARENT_NEEDLES). A run's group is recorded
- * only when the line already carries it; this reads no agent's database and no session directory.
- * The built-in sources' adapters are required. Threads are left to the caller. Must run inside a
- * write transaction.
+ * would. Only lines that can name a parent are parsed (PARENT_NEEDLES). A `places.jsonl` mirror is
+ * not one of them: its parent lines are applied by `reparsePlaces`, and an agent's adapter cannot
+ * parse them. A run's group is recorded only when the line already carries it; this reads no
+ * agent's database and no session directory. The built-in sources' adapters are required. Threads
+ * are left to the caller. Must run inside a write transaction. Returns the rows that changed.
  */
-export function reparseParents(ctx: MigrationContext): void {
+export interface ParentReparse {
+  parents: number;
+  sessions: Array<{ source: string; sessionId: string }>;
+}
+
+export function reparseParents(ctx: MigrationContext): ParentReparse {
   const { db } = ctx;
   const files = db
     .prepare(
@@ -363,10 +370,13 @@ export function reparseParents(ctx: MigrationContext): void {
         WHERE lines_ingested > 0 ORDER BY id`,
     )
     .all() as unknown as RawFileRecord[];
-  const todo = files.filter(
-    (f) => !(MEMORY_STREAM_SOURCES.has(f.source) && mirrorRelPath(f).startsWith('memory/')),
-  );
-  if (todo.length === 0) return;
+  const todo = files.filter((f) => {
+    const rel = mirrorRelPath(f);
+    if (MEMORY_STREAM_SOURCES.has(f.source) && rel.startsWith('memory/')) return false;
+    // Parent lines of places.jsonl are not agent events. reparsePlaces applies them.
+    return !isOriginPlacesFile(rel, f.path);
+  });
+  if (todo.length === 0) return { parents: 0, sessions: [] };
   const adapters = new Map<string, SourceAdapter | null>();
   const adapterOf = (source: string): SourceAdapter | null => {
     if (!adapters.has(source)) {
@@ -378,6 +388,7 @@ export function reparseParents(ctx: MigrationContext): void {
     return adapters.get(source) ?? null;
   };
   const skipped = new Set<string>();
+  const sessions: Array<{ source: string; sessionId: string }> = [];
   let parents = 0;
   let errors = 0;
   const started = Date.now();
@@ -423,7 +434,10 @@ export function reparseParents(ctx: MigrationContext): void {
             return;
           }
           for (const fact of parsed.sessionParents ?? []) {
-            if (recordSessionParent(db, f.source, fact)) parents++;
+            if (recordSessionParent(db, f.source, fact)) {
+              parents++;
+              sessions.push({ source: f.source, sessionId: fact.sessionId });
+            }
           }
         },
       );
@@ -438,4 +452,5 @@ export function reparseParents(ctx: MigrationContext): void {
     ctx.log(`No adapter for ${[...skipped].sort().join(', ')}: their parent lines were not read.`);
   }
   if (errors > 0) ctx.log(`${errors} mirrored lines could not be parsed; skipped.`);
+  return { parents, sessions };
 }

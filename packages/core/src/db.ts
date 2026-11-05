@@ -4,8 +4,8 @@ import * as sqlite from 'node:sqlite';
 import { DatabaseSync } from 'node:sqlite';
 import zlib from 'node:zlib';
 import { cjkIndexText } from './cjk.js';
-import { OriginError } from './errors.js';
-import { type Migration, migrate, refuseNewerStore } from './migrations.js';
+import { OriginError, StoreUpgradedError } from './errors.js';
+import { type Migration, migrate, refuseNewerStore, STORE_VERSION } from './migrations.js';
 import { comparePath } from './places.js';
 import { promptTitle } from './prompt.js';
 import { BACKFILL_EFFECTS, NEEDS_BACKFILL } from './schema.js';
@@ -122,10 +122,21 @@ export function openMemoryDatabase(): Database {
 }
 
 /**
+ * Refuse a write when a newer Origin has upgraded the store since this process opened it. A read
+ * of `user_version`, before the write transaction starts. A store this process is itself upgrading
+ * is still at an older version, so the upgrade is not refused.
+ */
+export function assertStoreCurrent(db: Database): void {
+  const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
+  if (row.user_version > STORE_VERSION) throw new StoreUpgradedError();
+}
+
+/**
  * Run inside a transaction; on error, roll back and rethrow. `immediate` takes the write lock up
  * front, so read-then-write sequences are serialized across processes.
  */
 export function transaction<T>(db: Database, fn: () => T, opts: { immediate?: boolean } = {}): T {
+  assertStoreCurrent(db);
   db.exec(opts.immediate ? 'BEGIN IMMEDIATE' : 'BEGIN');
   try {
     const out = fn();

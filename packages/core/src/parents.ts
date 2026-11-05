@@ -34,6 +34,19 @@ export interface SessionParentRow {
  */
 const AGENT_SIGNALS = new Set(['parent_id', 'subagent_spawned', 'parent_thread_id', 'dwf_run']);
 
+/**
+ * Signals a `places.jsonl` parent line may carry. Separate from a root or place line, which may
+ * only say git, agent, or learned: a parent signal must not lock a session's project, and a place
+ * signal is not a parent. Every signal this Origin writes on a parent line is here.
+ */
+export const PARENT_LINE_SIGNALS = new Set([
+  'parent_id',
+  'subagent_spawned',
+  'parent_thread_id',
+  'dwf_run',
+  'parent_session_id',
+]);
+
 const VIAS = new Set<ParentVia>(['subagent', 'workflow']);
 
 /** The token a workflow step's stored title carries: `actor#N@M`. */
@@ -295,7 +308,8 @@ export function displayTitle(
 
 /**
  * A `places.jsonl` `parent` object, or null when session, parent, via, or signal is missing.
- * Not a parse error: the caller still returns `{ events: [] }`.
+ * A missing field is not a parse error. A signal outside {@link PARENT_LINE_SIGNALS} throws, and
+ * the caller turns that into a warning, the same as a place line with a signal it may not carry.
  */
 export function parentPlaceFact(obj: Record<string, unknown>): SessionParentFact | null {
   const sessionId = nonempty(obj.session);
@@ -303,6 +317,11 @@ export function parentPlaceFact(obj: Record<string, unknown>): SessionParentFact
   const signal = nonempty(obj.signal);
   if (!sessionId || !parentSessionId || !signal) return null;
   if (obj.via !== 'subagent' && obj.via !== 'workflow') return null;
+  if (!PARENT_LINE_SIGNALS.has(signal)) {
+    throw new Error(
+      'places.jsonl: a parent "signal" must be parent_id, subagent_spawned, parent_thread_id, dwf_run, or parent_session_id',
+    );
+  }
   return {
     sessionId,
     parentSessionId,

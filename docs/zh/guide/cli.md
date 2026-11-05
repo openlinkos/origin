@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-7c3ed03d
+sourceHash: sha256-e3b53883
 ---
 
 # 命令参考
@@ -28,6 +28,7 @@ origin projects                                        已知的项目名
 origin sessions  reproject [--dry-run]                 把每个会话解析到它的主项目
 origin sessions  parents [--dry-run] [--zcode-db <file>] [--grok-home <dir>]
                                                        补上工作流运行的名称，以及只有摘要写明的 Grok 父会话
+origin sessions  repair [--dry-run]                    补上旧进程漏掉的项目位置和父会话链接
 origin backup    <dir>                                 把数据库和原始镜像备份到 <dir>（增量）
 origin mcp                                             以 stdio 运行 MCP server（接入中枢后补充中枢的回答）
 origin agents    [connect | disconnect] [<agent>...] [--yes]   把 Origin 及其 hook 接入本机的 Agent
@@ -152,6 +153,8 @@ A session of it: origin show <session id>
 `origin timeline` 列出顶层会话：不列出记录了父会话的会话，也不列出未指明父会话的子会话。`--children` 把这些也列出来。父会话的那一行在有子会话时会加上有多少，以及它们的工作流名称。已存标题含有 `actor#N@M` 的工作流步骤显示为 `{运行名称} · actor#N@M`；库中的标题不变。`origin show` 打印的也是这些名称。见[父会话](../architecture.md#parent-sessions)。
 
 `origin sessions parents` 只读地读取 ZCode 的数据库和 Grok Build 的会话目录，并向每个来源的 `places.jsonl` 追加父会话行：工作流运行的分组和名称，以及只有 `summary.json` 写明的 Grok 父会话（`parent_session_id`），前提是归档还没有记录这个父会话。`--dry-run` 打印它会追加多少行，什么也不写。`--zcode-db` 和 `--grok-home` 指定这些路径；不给时使用 `~/.zcode` 和 `~/.grok`（设置了 `GROK_HOME` 时用它），不存在的路径会被跳过。这时命令以 0 退出。在不保存会话的中继上，它说明这一点并退出，不打开这些目录。
+
+`origin sessions repair` 为还没有项目位置的会话补上位置，并再次读取镜像里已有的父会话事实，补上缺失的父链接，包括旧进程没有记录的 Grok `subagent_spawned`。`--dry-run` 只报告。再跑一次则什么也不改。在中枢上，它重读镜像过来的父会话行，不会去解析另一台设备的会话。在不保存会话的中继上，它说明这一点并退出。
 
 ## 召回 {#recall}
 

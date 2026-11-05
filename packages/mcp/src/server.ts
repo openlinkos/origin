@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import type { Database } from '@openlinkos/origin-core';
+import { type Database, StoreUpgradedError } from '@openlinkos/origin-core';
 import {
   briefIn,
   changesIn,
@@ -78,13 +78,21 @@ export interface OriginServer {
   stop(): Promise<void>;
 }
 
-/** Run a tool body; caller errors (bad ids, bad input) come back as tool errors, not crashes. */
+/**
+ * Run a tool body. Caller errors (bad ids, bad input) come back as tool errors, not crashes. A
+ * store a newer Origin has upgraded is said on stderr, and the process exits so the client starts
+ * it again. Stdout carries the protocol.
+ */
 export async function run(
   body: () => CallToolResult | Promise<CallToolResult>,
 ): Promise<CallToolResult> {
   try {
     return await body();
   } catch (err) {
+    if (err instanceof StoreUpgradedError) {
+      process.stderr.write(`${err.message}\n`);
+      process.exit(1);
+    }
     return toolError((err as Error).message);
   }
 }

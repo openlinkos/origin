@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-d0405fdc
+sourceHash: sha256-c0cb59ec
 ---
 
 # 升级
@@ -32,7 +32,7 @@ origin --version
 origin status          # opens the store, upgrading it if needed
 ```
 
-然后重启你的 Agent 或它们的会话，让每个 Agent 都启动新的 `origin mcp`。已经在运行的 `origin mcp` 会一直保持它启动时的版本，直到它的 Agent 重启。
+然后重启你的 Agent 或它们的会话，让每个 Agent 都启动新的 `origin mcp`。已经在运行的 `origin mcp` 会一直保持它启动时的版本，直到它的 Agent 重启。这次升级之后，请重启每个 Agent 的 Origin MCP：在 0.4.0 上启动的进程会继续写库，它也不知道要停下来。从下一个版本起，进程如果发现库已被更新的 Origin 升级，会拒绝写入，并告诉你重启这个进程。`origin mcp` 会退出，由它的客户端再启动一次。
 
 Origin 需要 Node.js 22.16 或更高版本；某个版本可能提高这个最低要求，会在它的升级说明里写明。
 
@@ -73,11 +73,11 @@ docker logs origin-hub     # shows the upgrade of the store, if any
 | 尚未发布 | 9 | 根据已经归档的内容，记录每个会话的 git 分支，并把会话归入线索；召回记录可以指向一条线索；从已经归档的工具结果中找出 Agent 提议的条目；在中枢上，把每个令牌标为设备的或 Agent 的；从已经归档的行中读出每条消息是谁写的（你、别人、某个 Agent 还是某个程序），并补上 Agent 日志中以前没有读取的消息；新增空的 `project_root`（每个设备一行）、`session_place` 和 `place_head` 表，使工作树可以按它的主项目来读（见[项目](../architecture.md#projects)）。这一步不写入任何行，也不读取文件 |
 | 尚未发布 | 10 | 根据同样的这些行记录哪个会话是另一个会话的子会话，而不打开 Agent 的数据库（见[父会话](../architecture.md#parent-sessions)）。这张表建好之后，读取在项目表出现之前就已经镜像的 `places.jsonl` 行。本 Origin 不认识的版本原样留在镜像里，解析时跳过并记一条警告 |
 
-格式 2 和 3 都是 0.2.0 引入的，格式 5 到 10 随下一个版本发布。每一步的细节见[架构](../architecture.md#migrations)。读出每条消息是谁写的、以及哪个会话是子会话，都需要重新解析已归档的日志，所以在较大的库上，升级后的第一条命令或启动时的中枢可能要花一分钟甚至更久；它会边做边报告进度。它不打开 ZCode 的数据库，也不打开 Grok Build 的会话目录。`origin sessions parents` 在你运行它时补上工作流运行的名称，以及只有摘要写明的 Grok 父会话（见[父会话](./cli.md#parent-sessions)）。`project_root` 和 `session_place` 在解析工作树、采集到 `places.jsonl` 的一行，或升级到格式 10 时读到表出现之前就已经镜像的行之前，保持为空。升级之前就已经在镜像里的工作树会话会一直保留目录名：升级时 Origin 不会逐个会话去解析。在保存这些会话的设备上运行 `origin sessions reproject`；再跑一次则什么也不追加。不要在中枢上运行，中枢保留每台设备自己的结论。本 Origin 不认识的版本原样留在镜像里，并记一条警告。以后哪个格式开始认识它，就再读一次。
+格式 2 和 3 都是 0.2.0 引入的，格式 5 到 10 随下一个版本发布。每一步的细节见[架构](../architecture.md#migrations)。读出每条消息是谁写的、以及哪个会话是子会话，都需要重新解析已归档的日志，所以在较大的库上，升级后的第一条命令或启动时的中枢可能要花一分钟甚至更久；它会边做边报告进度。它不打开 ZCode 的数据库，也不打开 Grok Build 的会话目录。`origin sessions parents` 在你运行它时补上工作流运行的名称，以及只有摘要写明的 Grok 父会话（见[父会话](./cli.md#parent-sessions)）。`project_root` 和 `session_place` 在解析工作树、采集到 `places.jsonl` 的一行，或升级到格式 10 时读到表出现之前就已经镜像的行之前，保持为空。升级之前就已经在镜像里的工作树会话会一直保留目录名：升级时 Origin 不会逐个会话去解析。在保存这些会话的设备上运行 `origin sessions reproject`；再跑一次则什么也不追加。不要在中枢上运行，中枢保留每台设备自己的结论。升级之后由旧进程收进来的会话没有 place，父会话也可能缺。`origin sessions repair` 为还没有 place 的会话重新解析项目，并再次读取镜像里已有的父会话事实（例如 Grok 的 `subagent_spawned`），补上缺失的父链接。`--dry-run` 只报告会改什么。再跑一次则什么也不改。中枢可以运行它，用来重读镜像过来的 `places.jsonl` 父会话行；它不会去解析另一台设备的会话。本 Origin 不认识的版本原样留在镜像里，并记一条警告。以后哪个格式开始认识它，就再读一次。
 
 - **先备份。** 升级是谨慎的，而备份只需一条命令：`origin backup <dir>`（见[备份](./privacy.md#backing-up)）。在中枢上，请在替换容器之前在容器内运行，比如 `docker exec origin-hub origin backup /data/backup-0.2`。
 - **不能降级。** Origin 发现库的格式比自己新时，会拒绝打开并提示升级，不做任何改动。要回到旧版本，请恢复升级前做的备份；在那之后写入的内容会丢失。
-- **多个进程。** 如果有多个进程同时打开库，比如 CLI 和多个 Agent 的 MCP 服务器，由其中一个执行升级，其他进程等待它完成，最多等五分钟。
+- **多个进程。** 如果有多个进程同时打开库，比如 CLI 和多个 Agent 的 MCP 服务器，由其中一个执行升级，其他进程等待它完成，最多等五分钟。此后的 Origin 如果发现库已被更新的版本升级，会拒绝写入，并告诉你重启这个进程。`origin mcp` 会退出，以便客户端再启动它。在 0.4.0 上启动的进程不知道要停下来。
 
 ## 验证发布 {#verify-a-release}
 
