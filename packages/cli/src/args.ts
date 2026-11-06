@@ -167,20 +167,6 @@ export const ARGS = {
     required: { reason: 'A reason is required: it is kept with the record.' },
     usage: 'Usage: origin reject <proposal-id> --reason <text> [--yes]',
   },
-  distill: {
-    options: {
-      project: { type: 'string' },
-      thread: { type: 'string' },
-      day: { type: 'string' },
-      since: { type: 'string' },
-      agent: { type: 'string', default: 'claude-code' },
-      max: { type: 'string' },
-      'max-turns': { type: 'string' },
-      'dry-run': { type: 'boolean', default: false },
-    },
-    usage:
-      'Usage: origin distill [--project <name> | --thread <thr_…>] [--day <YYYY-MM-DD> | --since <t>] [--max 10] [--dry-run]',
-  },
   projects: { options: {}, usage: 'Usage: origin projects' },
   sessions: {
     sub: {

@@ -154,7 +154,6 @@ describe('the arguments table', () => {
         'backup',
         'correct',
         'digest',
-        'distill',
         'entries',
         'forget',
         'forgotten',

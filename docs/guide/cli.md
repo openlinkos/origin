@@ -18,8 +18,6 @@ origin restore   <tombstone-id> --reason <text> [--yes]  Bring back what a forge
 origin proposals [--project <name>] [--status pending|accepted|rejected|all] [--limit 50]   Entries agents proposed, for you to review
 origin accept    <proposal-id> [--yes]                 Accept a proposal: write its entry (needs --yes)
 origin reject    <proposal-id> --reason <text> [--yes] Reject a proposal: forget it, as a record (needs --yes)
-origin distill   [--project <name> | --thread <thr_…>] [--day <YYYY-MM-DD> | --since <t>] [--max 10] [--dry-run]
-                                                       Have Claude Code, headless, read a scope and propose entries
 origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   What an agent would be handed there; --hook <agent> answers its hooks
 origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   What agents were handed, newest first
 origin projects                                        Known project names
@@ -221,7 +219,7 @@ The rules are described in [Privacy and your data](./privacy.md#forgetting).
 
 ## Reviewing proposals
 
-Agents propose, with the MCP tool [`propose`](./mcp.md#propose), what they infer and you have not confirmed, and what they write when they consolidate your memory for you, as [`origin distill`](./distill.md) has them do. A proposal is no entry until you accept it. `origin proposals` lists those that wait for you, newest first; `--status accepted` lists those you accepted, with the entry each became, `--status rejected` those you rejected, by id and reason only, and `--status all` all three. `--project` keeps those of one project: the project a proposal names, or its session's.
+Agents propose, with the MCP tool [`propose`](./mcp.md#propose), what they infer and you have not confirmed, and what they write when they consolidate your memory for you. Origin runs no model and consolidates nothing itself: an agent outside it, such as a personal agent, reads your work through the MCP tools and proposes what is worth keeping. A proposal is no entry until you accept it. `origin proposals` lists those that wait for you, newest first; `--status accepted` lists those you accepted, with the entry each became, `--status rejected` those you rejected, by id and reason only, and `--status all` all three. `--project` keeps those of one project: the project a proposal names, or its session's.
 
 ```console
 $ origin proposals
@@ -245,10 +243,6 @@ To bring it back: origin restore tmb_2d8f0c1a9e35 --reason <text>
 ```
 
 An accepted proposal is an entry like any other: correct it or forget it as such. On a connected device, accepting and rejecting then sync with the hub, so that the entry or the forget reaches every store. On a relay, review proposals in the hub's admin UI; `origin show prp_…` still asks the hub. See [Proposals](../architecture.md#proposals) for the rules.
-
-## Consolidating
-
-`origin distill` runs Claude Code headless (`claude -p`) on a scope, by default the last 24 hours of the project you are in, against this Origin's own MCP server and nothing else, to read what happened and propose entries for you to review. `--project` or `--thread` picks what it reads, `--day` or `--since` when, `--max` how many it may propose (10 by default), and `--max-turns` how many turns it may take (40); `--dry-run` prints the prompt and the command and runs nothing. When it ends, it ingests the run's session and lists what it proposed. See [Consolidate with a headless agent](./distill.md).
 
 ## In your browser
 
@@ -281,7 +275,6 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 | `ORIGIN_HUB_TOKEN` | — | Hub token; overrides `origin hub connect` |
 | `ORIGIN_DEVICE` | host name | The name a new store takes: this device's name on the hub, and the origin recorded on what it writes |
 | `ORIGIN_HUB_TIMEOUT_MS` | `2000` | How long `origin mcp` on a connected device waits for the hub before answering without it |
-| `ORIGIN_DISTILL_COMMAND` | `claude` on the `PATH` | The command `origin distill` runs in place of `claude`: a program, or a `.js` or `.mjs` script run with Node |
 | `ORIGIN_WATCH_INTERVAL_MS` | `60000` | How often `origin mcp` looks for new log lines while an agent runs (and syncs them with the hub when connected), the fallback for what agents' hooks do not hand over; `0` turns it off |
 | `ORIGIN_ZCODE_SETTLE_MS` | `3600000` | How long an unfinished ZCode message must stay unchanged before Origin writes it out. `0` writes it on the next sync once its timestamp is in the past. The Grok adapter has no such wait |
 | `ORIGIN_ADMIN` | `off` | `on` serves the admin UI at `/admin` (`origin serve --admin`) |

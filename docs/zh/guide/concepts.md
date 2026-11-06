@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-7a623526
+sourceHash: sha256-6a24af9a
 ---
 
 # 核心概念
@@ -85,7 +85,7 @@ Agent 想明白的东西，并不都应该立刻成为知识。当 Agent 推断�
 - 用 `origin accept` 或在管理界面中**接受**它，它就成为一条由你写下的条目，引用它依据的内容以及这条提议本身。
 - 用 `origin reject` 加上原因**拒绝**它，它就被遗忘，并留下记录：`origin restore` 可以让它重新成为待审。
 
-在你决定之前，它还不是知识：检索、简报和召回都不会交出它，Agent 也不能接受或拒绝它。和跟随链接一样，提议是从 Agent 自己的记录中读出来的，所以归档了同一份记录的每个库都有同样的提议。[`origin distill`](./distill.md) 让无头运行的 Claude Code 读一天或一条线索的工作，提议值得保留的内容。确切的规则见架构中的[提议](../architecture.md#proposals)。
+在你决定之前，它还不是知识：检索、简报和召回都不会交出它，Agent 也不能接受或拒绝它。和跟随链接一样，提议是从 Agent 自己的记录中读出来的，所以归档了同一份记录的每个库都有同样的提议。Origin 自己不运行任何模型来整理你的记忆：Origin 之外的 Agent（例如个人 Agent）可以通过 [MCP 工具](./mcp.md)读你的工作，提议值得保留的内容，由你接受或拒绝。确切的规则见架构中的[提议](../architecture.md#proposals)。
 
 ## 设备、中枢与中转 {#devices-hubs-and-relays}
 

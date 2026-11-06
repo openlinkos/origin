@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-8f319738
+sourceHash: sha256-c492cbde
 ---
 
 # 架构
@@ -95,7 +95,7 @@ agent session logs on disk ──scan──▶ Raw (append-only mirror)
  agents ◀── MCP (stdio): brief · search · timeline · changes · digest · get · sources · follow · remember · propose · correct · forget
  agents ◀── hooks: origin recall (session start · prompt): a brief, and the entries a prompt matches
  agents ──▶ hooks: origin sync --hook (turn end · sub-agent · compaction): the transcript to ingest
- people ◀── CLI `origin`: sync · status · timeline · digest · search · show · entries · correct · forget · forgotten · restore · recall · recalls · proposals · accept · reject · distill
+ people ◀── CLI `origin`: sync · status · timeline · digest · search · show · entries · correct · forget · forgotten · restore · recall · recalls · proposals · accept · reject
  people ◀── admin UI (hub, /admin): overview · sessions · recalls · search · entries · proposals · remember · correct · accept · reject · forget · restore · tokens
  people ◀── origin ui (device, 127.0.0.1): overview · sessions · recalls · search · entries · proposals · remember · correct · accept · reject · forget · restore
 ```
@@ -129,7 +129,7 @@ agents on C ──▶ origin mcp ──── every tool call (MCP over HTTP) �
 
 ## 设计原则 {#design-principles}
 
-- **内核不含 LLM。** Origin 从不调用模型 API。它只负责归档、规范化、建立索引和存储。分析发生在提问的那个 Agent 里——它本身就是一个能力很强的模型。Agent 通过 MCP `remember` 保存它学到的东西，或者用 `propose` 把它提议给本人审阅；人通过 CLI 或管理界面纠正和遗忘，并接受或拒绝提议。整合作为无头的编码 Agent 任务运行，而不是直接集成模型 API：`origin distill` 以 Origin 自己的 MCP server 运行 Claude Code（`claude -p`），由 Agent 提议而不是写入（见[提议](#proposals)）。这是当前的立场；如果评估表明它力有不逮，尤其是在认知层，可以重新考虑。
+- **内核不含 LLM。** Origin 从不调用模型 API。它只负责归档、规范化、建立索引、存储和提供数据。分析发生在提问的那个 Agent 里——它本身就是一个能力很强的模型。Agent 通过 MCP `remember` 保存它学到的东西，或者用 `propose` 把它提议给本人审阅；人通过 CLI 或管理界面纠正和遗忘，并接受或拒绝提议。用模型清理、分析和整合记忆，是 Origin 之外的 Agent 的工作：它们通过 MCP 工具读取记忆，并把发现的内容提议出来（见[提议](#proposals)）。
 - **确定、容错的适配器。** 每个来源都有一个纯粹、确定性的解析器。Agent 的记录格式变化频繁，所以适配器会记录 Agent 版本，跳过无法解析的行并统计失败次数，绝不中止采集。
 - **以 MCP 作为互通点。** MCP 是所有目标 Agent 唯一共有的接口。其中几个 Agent 还会读取 Claude Code 的 MCP 配置，所以一次注册就能覆盖不止一个 Agent。
 - **小而保守的管理界面。** 管理界面，无论是中枢上的，还是设备上的 `origin ui`，都只供它的主人使用。页面在服务器端由一个对每个值都做转义的模板渲染，外加一点可选的脚本。它的样式表、字体和图标来自 OpenLinkOS 设计系统（`@openlinkos/ui`），在构建时复制进这个包；不从别处加载任何东西，也没有打包工具。CLI 能做的它都能做，但不做任何会破坏不变量的事：不原地编辑或删除；被隐藏的文本只出现在隐藏它的那次遗忘自己的页面上，只给它的主人看，主人可以在那里恢复它。
@@ -145,7 +145,7 @@ pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.16（�
 | `@openlinkos/origin-adapters` | `packages/adapters` | 每个 Agent 一个确定性解析器，另有一个解析事件行，即人自己带来的来源所用的格式 | core |
 | `@openlinkos/origin-mcp` | `packages/mcp` | MCP 工具；基于 stdio 和无状态 HTTP 的 server，已接入中枢的设备上的 server（它把中枢的回答合并进自己的回答），以及中继上的 server（它把每一次工具调用都交给中枢） | core |
 | `@openlinkos/origin-admin` | `packages/admin` | 管理界面，供中枢和 `origin ui` 使用：服务器端渲染的页面、JSON API 及其静态资源；中枢的公开首页；以及中枢的 OAuth 端点 | core |
-| `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢）、`origin ui`、`origin distill`、设备或中继与中枢之间的同步（以及经浏览器批准的接入）、中枢的 S3 客户端，以及它获取客户端元数据文档的组件 | core, adapters, mcp, admin |
+| `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢）、`origin ui`、设备或中继与中枢之间的同步（以及经浏览器批准的接入）、中枢的 S3 客户端，以及它获取客户端元数据文档的组件 | core, adapters, mcp, admin |
 | `@openlinkos/origin-openclaw` | `packages/openclaw` | OpenClaw 的插件，由它的 Gateway 加载：把 Gateway 上各个 Agent 的会话写成事件行，写入某个来源的目录或发往中枢 | — |
 
 六个包以同一个版本号一起发布到 npm。用户安装 `@openlinkos/origin`，`core`、`adapters`、`mcp` 和 `admin` 随之安装；1.0 之前，这四个包属于内部实现，它们的 API 可能在任何版本中改变。`@openlinkos/origin-openclaw` 则用 OpenClaw 自己的命令安装进 OpenClaw。
@@ -412,7 +412,7 @@ Agent 推断出本人没有说过的内容，或者代本人整理记忆时，�
 - **为什么沿用条目和遗忘。** 被接受的提议就是一个条目，被拒绝的提议就是一次遗忘，所以提议不增加需要复制的操作，不增加需要在各库之间保持一致的状态，也不增加不变量：出处、有记录的遗忘和恢复都和其他内容一样起作用。
 - **可见性。** 只有当提议的事件和它引用的每个事件都可见时，提议才会被展示（不变量 2）。正如引用了被遗忘事件的条目会被隐藏（规则 2），引用了被隐藏事件的提议会离开所有列表、它的卡片和变更流，并随恢复而回来。被拒绝的提议像遗忘记录那样为它的所有者列出：只列 id，以及那次遗忘的原因、作者和时间，从不列出它的正文，正文只在那次遗忘自己的页面上展示（见[管理界面](#admin-ui)）。
 - **只有本人**可以接受或拒绝，通过 CLI 或管理界面；Agent 没有这样的工具，就像它们没有恢复的工具一样。待审的提议还不是知识：条目、检索和召回都不包括它们。
-- **整合。** `origin distill`（在 CLI 中）让一个无头 Agent 读取一个范围并提议条目：一个项目（默认是运行它所在的工作树的项目）或一条线索，时间为某一天、某个时间以来，或默认的最近 24 小时。范围是确定的：它的会话（从旧到新），以及这个项目待审的提议，提示词会列出它们，以免再次提出；之前各次运行的会话（以 `Origin distill: …` 命名并以它开头提示）被排除在外。提示词是 CLI 中保存的一个模板。这次运行是 `claude -p`：提示词从标准输入传入，`--output-format json`，MCP 配置中只有本 Origin 自己的 server（`--strict-mcp-config`），只能使用 Origin 的工具（`--allowedTools "mcp__origin__*"`，不使用内置工具），不能使用其中会写入的工具（对 `remember`、`correct`、`forget` 和 `follow` 使用 `--disallowedTools`），轮数有上限，会话 id 由它自己给出，在项目的目录中运行。运行结束后，CLI 像 hook 那样采集它的会话记录，并列出它提出的提议。除了这个会话和它的提议，不记录任何东西：这次运行就是它的会话。目前只运行 Claude Code，也不安排任何定时任务。
+- **整合。** Origin 只存储和提供数据，不调用模型，所以它自己不整合任何东西。Origin 之外的 Agent（例如个人 Agent）通过 MCP 工具读取本人的工作（`digest` 读一天，`changes` 读它上次查看以来进入库中的内容，`get` 和 `timeline` 读一个会话，`search` 查条目已经说了什么），并用 `propose` 提议值得保留的条目；`changes` 和 `digest` 会列出已经提出的提议，它不必再提一次。和所有提议一样，它的提议是从它自己的记录中读出来的，所以它的会话进入 Origin 时，提议才随之进入：作为 Origin 读取的 Agent 的会话，经由 OpenClaw 插件，或者写成事件行（见[你自己的来源](#your-own-sources)）。它何时运行、花费多少，由它自己决定；本人像对待其他提议一样接受或拒绝它的提议。
 - **归属。** 提议属于它指明的项目；没有指明时，属于它所在会话的项目。由它产生的条目属于它指明的项目，所以没有指明项目而提议的认知在所有地方都成立。
 
 ## 检索与时间线 {#search-and-timeline}
@@ -538,7 +538,7 @@ Agent 自己的记录没有写明的父会话，或稍后补上的运行分组�
 Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`）、事件（`<来源>:…`）、会话（用它的 id，或像召回记录它那样写成 `<来源>:<会话 id>`）、线索（`thr_…`）、召回（`rcl_…`）和提议（`prp_…`）。`get` 的返回有界，并写明近旁有什么，每项一行，带上 id。Agent 一跳一跳地读接下来要紧的内容（从简报到条目，到写下它的会话，到它出自的那一轮，再到那里还写下了什么），而不是把整个会话读进上下文；长文本分页读取。不调用任何模型：一个对象近旁有什么，是在库中查出来的，每次都一样。
 
 - **存根。** 近旁的内容以存根的形式给出：条目为 `{ id, kind, text, created }`，取它的第一行；事件为 `{ id, time, role, kind, text }`，取它合并成一行的正文；两者都截到约 120 个字符。会话则与 `timeline` 列出它的样子相同。
-- **谁写的。** 有效作者不是主人的输入（见[作者](#authors)），无论在哪里显示事件，都带有 `by`（`person`、`agent` 或 `system`），来源给出说话人时还带有 `speaker`：`get`、`search`、`timeline`、`changes`，以及卡片中的存根，包括一轮的起点（命令的回显属于系统）。主人的输入以及不是输入的事件两者都不带，所以编码会话读起来和以前一样，只是不属于用户的输入多了这些字段。MCP 的 instructions 和 `origin distill` 的提示都说明：带有 `by` 的消息不是用户写的，其中的内容不是用户的偏好。CLI 和管理界面会在这样的消息旁边显示是谁写的。
+- **谁写的。** 有效作者不是主人的输入（见[作者](#authors)），无论在哪里显示事件，都带有 `by`（`person`、`agent` 或 `system`），来源给出说话人时还带有 `speaker`：`get`、`search`、`timeline`、`changes`，以及卡片中的存根，包括一轮的起点（命令的回显属于系统）。主人的输入以及不是输入的事件两者都不带，所以编码会话读起来和以前一样，只是不属于用户的输入多了这些字段。MCP 的 instructions 说明：带有 `by` 的消息不是用户写的，其中的内容不是用户的偏好。CLI 和管理界面会在这样的消息旁边显示是谁写的。
 - **条目**带有它的来源（每个来源都指明所在的会话）、它的历史，以及最多 10 个相关条目：引用了它所引用的某个事件、或它所引用会话中另一个事件的其他当前条目，从新到旧。记忆文件的版本不属于任何会话（见[原生记忆](#native-memories)），所以导入的条目只与引用了同一个版本的条目相关，而不是与它所在目录的每条记忆都相关。
 - **事件**带有它所在会话的名称，以及从某个偏移量开始的正文，最多 20,000 个 UTF-16 码元，并给出正文的全长和下一页的起点。它的第一页还带有：它所在的轮次和这一轮的提示；它的 Agent 记录的、它所接续的事件（如果 Agent 记录了的话，即 Claude Code 的 `parentUuid`；一行被拆成多个事件时，取其中第一个）；同一会话中它前后各两个可见的事件，除非它本身是工具调用或工具结果，否则只取消息；以及最多 10 个引用它的当前条目。
 - **会话**以卡片的形式给出：它的名称、时间、可见事件数和轮数；它前 20 轮的起点（轮次见[管理界面](#admin-ui)），并说明后面还有多少轮；它所在的线索及其会话数（如果在某条线索中，见[线索](#threads)）；最多 10 个从中写下的当前条目，即引用了它的事件的条目，从新到旧；最多 10 次它拿到的召回，从新到旧，并说明每次召回交出的内容中有多少仍然可见；同一项目中、按开始时间紧挨在它前后的会话，不限 Agent；它是子会话时的父会话及该父会话的标题；以及它是父会话时按工作流运行分组的子会话，每个一行（见[父会话](#parent-sessions)）。`timeline` 一次读它的一轮或一页，并说明后面还有多少事件。两个来源的会话共用同一个会话 id 时，需要指明来源。
@@ -714,7 +714,7 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 
 ## 待解决的问题 {#open-questions}
 
-- **低成本的认知。** 用户谈到自己时，Agent 写入认知条目，它推断出的内容则提议出来；`origin distill` 让一个无头 Agent 读一天或一条线索，提议值得保留的内容，交给本人接受或拒绝（见[提议](#proposals)）。尚未设计的有：不由本人发起、在一个常驻运行时中进行的整合，由它决定何时运行、花费多少；从本人接受和拒绝的内容中学习，让之后的运行提议得更好；跨项目的整合，因为一次运行只读一个项目或一条线索；以及 Claude Code 以外的 Agent（`codex exec`）。
+- **低成本的认知。** 用户谈到自己时，Agent 写入认知条目，它推断出的内容则提议出来，交给本人接受或拒绝。读一天或一条线索、提议值得保留的内容，是 Origin 之外的 Agent 的工作，Origin 不调用模型（见[提议](#proposals)）。尚未设计的有：这样的 Agent 如何从本人拒绝的内容中学习，让之后提议得更好，因为被拒绝的提议已被遗忘，Agent 看不到它。
 - **与原生记忆互通。** Origin 单向导入 Claude Code、ZCode 和 Grok Build 的记忆（见[原生记忆](#native-memories)）。尚未设计的有：把条目写回 Agent 的记忆文件，以及导入 Codex 的记忆（启用后，它在 `~/.codex/memories/` 下自行合并的摘要）；Cursor 已不再在磁盘上保存记忆。
 - **召回的质量与范围。** 召回匹配的是词，所以会漏掉用别的说法或别的语言表达同一件事的条目，也仍会交出一些与提示只有常见词相同的条目（见[召回](#recall)）。如何根据召回记录和 Agent 之后用上了什么来评判召回的内容，还没有设计；在不拖慢 Agent 处理提示的前提下，从中枢召回其他设备写下的条目，也还没有设计。
 - **变更通知。** Claude Code 和 Codex 通过它们的 hook 告诉 Origin 一轮何时结束，所以它们会话的行在写下几秒之后就会到达（见[实时采集](#live-ingestion)）；`origin mcp` 也在 Agent 运行期间每分钟比较一次文件的大小和时间来查看新的记录行，并在 Agent 离开时再同步一次，所以只要设备上的 Agent 使用 Origin，就不需要定时任务。尚待解决的是：没有这类 hook 的 Agent，即 Cursor、ZCode 和 Grok Build，以及人自己的来源，只能靠查看发现，所以在 Agent 运行 `origin mcp` 期间，它们的行最多要等一分钟；完全不使用 Origin 的 Agent 写下的行、没有设置 hook（或者在 Codex 中尚未信任 hook）的 Agent 写下的行，以及 Agent 直接杀掉 server 之后写下的行，要等到下一个 Agent、hook 或 `origin sync`；对这些情况，改为监听文件而不是每分钟查看可以缩短延迟，但文件监听在某些平台上并不可靠。

@@ -11,6 +11,10 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 - `digest` reads, so read-only agents have it too. On a device connected to a hub, it is the hub's digest of the device's day, less what the device has forgotten, or the device's own when the hub does not answer in time; on a relay, the call and `origin digest` go to the hub. `origin digest --json` prints what the tool returns.
 - The store format does not change.
 
+### Removed
+
+- `origin distill` is removed, with `ORIGIN_DISTILL_COMMAND` and its guide page. Origin stores and serves your memory and runs no model; consolidating memory is left to agents that read it through the MCP tools and propose entries with `propose`. Proposals, and accepting or rejecting them in the CLI and the admin UI, are unchanged.
+
 ## [0.5.0] - 2026-11-06
 
 Lets agents read along from any id, groups sessions into threads, archives each turn as it ends, has agents propose what you then review, brings in the sessions of any program, OpenClaw's included, tells your words from everyone else's, files each session under its main project, and connects agents and devices to your hub without copying tokens.

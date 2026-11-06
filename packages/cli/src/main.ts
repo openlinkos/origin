@@ -119,7 +119,6 @@ import { agentFacts } from './agent-facts.js';
 import { cmdAgents } from './agents.js';
 import { ARGS, checkArgs, isStoreCommand } from './args.js';
 import { cmdDigest } from './digest.js';
-import { cmdDistill } from './distill.js';
 import { cmdForget, cmdForgotten, cmdRestore, type ForgettingCtx } from './forgetting.js';
 import { count, oneLine, table } from './format.js';
 import { bucketFlags, setUpFrames } from './hub/bucket.js';
@@ -174,8 +173,6 @@ Usage:
   origin proposals [--project <name>] [--status pending|accepted|rejected|all] [--limit 50]   Entries agents proposed, for you to review
   origin accept    <proposal-id> [--yes]                 Accept a proposal: write its entry (needs --yes)
   origin reject    <proposal-id> --reason <text> [--yes] Reject a proposal: forget it, as a record (needs --yes)
-  origin distill   [--project <name> | --thread <thr_…>] [--day <YYYY-MM-DD> | --since <t>] [--max 10] [--dry-run]
-                                                         Have Claude Code, headless, read a scope and propose entries
   origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   What an agent would be handed there; --hook <agent> answers its hooks
   origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   What agents were handed, newest first
   origin projects                                        Known project names
@@ -220,7 +217,6 @@ const NAMED_COMMANDS = new Set([
   'restore',
   'accept',
   'reject',
-  'distill',
   'hub',
   'ui',
   'sessions',
@@ -331,11 +327,6 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdAccept(proposalsCtx(ctx), rest);
       case 'reject':
         return await cmdReject(proposalsCtx(ctx), rest);
-      case 'distill':
-        return await cmdDistill(
-          { db: ctx.db, home: ctx.home, afterChange: () => syncAfterChange(ctx) },
-          rest,
-        );
       case 'projects':
         return cmdProjects(ctx);
       case 'sessions':

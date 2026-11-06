@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-a83ecda8
+sourceHash: sha256-39949817
 ---
 
 # 命令参考
@@ -22,8 +22,6 @@ origin restore   <tombstone-id> --reason <text> [--yes]  带回一次遗忘隐�
 origin proposals [--project <name>] [--status pending|accepted|rejected|all] [--limit 50]   Agent 提出、等你审阅的条目
 origin accept    <proposal-id> [--yes]                 接受一条提议：写下它的条目（需要 --yes）
 origin reject    <proposal-id> --reason <text> [--yes] 拒绝一条提议：遗忘它，并留下记录（需要 --yes）
-origin distill   [--project <name> | --thread <thr_…>] [--day <YYYY-MM-DD> | --since <t>] [--max 10] [--dry-run]
-                                                       让无头的 Claude Code 读取一个范围并提议条目
 origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   Agent 在该目录会拿到什么；--hook <agent> 用于回应它的 hook
 origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   Agent 拿到过什么，从新到旧
 origin projects                                        已知的项目名
@@ -226,7 +224,7 @@ The forget is kept as a record with its reason; you can restore it later with or
 
 ## 审阅提议 {#reviewing-proposals}
 
-Agent 用 MCP 工具 [`propose`](./mcp.md#propose) 提议它推断出、你尚未确认的内容，以及它替你整理记忆时写下的内容，[`origin distill`](./distill.md) 就让它这样做。提议在你接受之前都不是条目。`origin proposals` 从新到旧列出等着你的提议；`--status accepted` 列出你接受了的，以及每条成为的条目；`--status rejected` 列出你拒绝了的，只列 id 和原因；`--status all` 三者都列。`--project` 只保留一个项目的提议：提议指明的项目，或者它所在会话的项目。
+Agent 用 MCP 工具 [`propose`](./mcp.md#propose) 提议它推断出、你尚未确认的内容，以及它替你整理记忆时写下的内容。Origin 不运行任何模型，自己也不整理任何东西：Origin 之外的 Agent（例如个人 Agent）通过 MCP 工具读你的工作，提议值得保留的内容。提议在你接受之前都不是条目。`origin proposals` 从新到旧列出等着你的提议；`--status accepted` 列出你接受了的，以及每条成为的条目；`--status rejected` 列出你拒绝了的，只列 id 和原因；`--status all` 三者都列。`--project` 只保留一个项目的提议：提议指明的项目，或者它所在会话的项目。
 
 ```console
 $ origin proposals
@@ -250,10 +248,6 @@ To bring it back: origin restore tmb_2d8f0c1a9e35 --reason <text>
 ```
 
 被接受的提议就是一个普通的条目：照常纠正或遗忘它。在连接了中枢的设备上，接受和拒绝之后会与中枢同步，这样条目或遗忘就会到达每个库。在中继上，请在中枢的管理界面中审阅提议；`origin show prp_…` 仍然会询问中枢。规则见[提议](../architecture.md#proposals)。
-
-## 整理记忆 {#consolidating}
-
-`origin distill` 在一个范围上以无头方式运行 Claude Code（`claude -p`），默认范围是你所在项目的最近 24 小时；它只连接本 Origin 自己的 MCP server，读取发生了什么，并提议条目交给你审阅。`--project` 或 `--thread` 选择读什么，`--day` 或 `--since` 选择什么时候，`--max` 限制它最多提议多少条（默认 10 条），`--max-turns` 限制它最多用多少轮（40）；`--dry-run` 只打印提示词和命令，不运行任何东西。结束时，它采集这次运行的会话，并列出它的提议。见[用无头 Agent 整理记忆](./distill.md)。
 
 ## 在浏览器中 {#in-your-browser}
 
@@ -286,7 +280,6 @@ To bring it back: origin restore tmb_2d8f0c1a9e35 --reason <text>
 | `ORIGIN_HUB_TOKEN` | — | 中枢令牌，覆盖 `origin hub connect` 的配置 |
 | `ORIGIN_DEVICE` | 主机名 | 新库使用的名称：也就是本设备在中枢上的名称，以及它写入的内容所记录的来源库（origin） |
 | `ORIGIN_HUB_TIMEOUT_MS` | `2000` | 已接入中枢的设备上，`origin mcp` 等待中枢多久，超时后不再等待中枢直接作答 |
-| `ORIGIN_DISTILL_COMMAND` | `PATH` 上的 `claude` | `origin distill` 用来代替 `claude` 运行的命令：一个程序，或者用 Node 运行的 `.js` 或 `.mjs` 脚本 |
 | `ORIGIN_WATCH_INTERVAL_MS` | `60000` | Agent 运行期间，`origin mcp` 多久查看一次新的记录行（已接入中枢时一并同步），作为 Agent 的 hook 没有交来的内容的后备；设为 `0` 则关闭 |
 | `ORIGIN_ZCODE_SETTLE_MS` | `3600000` | 未完成的 ZCode 消息要保持多久没有变化，Origin 才把它写出来。设为 `0` 则时间戳已过去时，下次同步就写。Grok 适配器没有这个等待 |
 | `ORIGIN_ADMIN` | `off` | 设为 `on` 时在 `/admin` 下提供管理界面（`origin serve --admin`） |

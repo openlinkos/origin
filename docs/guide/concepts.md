@@ -81,7 +81,7 @@ Not everything an agent works out should become knowledge at once. When an agent
 - **Accept** it, with `origin accept` or in the admin UI, and it becomes an entry written by you, citing what it rests on and the proposal itself.
 - **Reject** it, with `origin reject` and a reason, and it is forgotten, as a record: `origin restore` makes it pending again.
 
-Until you decide, it is not knowledge: search, briefs, and recall do not hand it over, and agents cannot accept or reject it. Like follow links, proposals are read from the agents' own logs, so every store that archives a log has the same ones. [`origin distill`](./distill.md) has Claude Code, running headless, read a day or a thread of your work and propose what is worth keeping. See [Proposals](../architecture.md#proposals) in the architecture for the exact rules.
+Until you decide, it is not knowledge: search, briefs, and recall do not hand it over, and agents cannot accept or reject it. Like follow links, proposals are read from the agents' own logs, so every store that archives a log has the same ones. Origin itself runs no model to consolidate your memory: an agent outside it, such as a personal agent, can read your work through the [MCP tools](./mcp.md) and propose what is worth keeping, for you to accept or reject. See [Proposals](../architecture.md#proposals) in the architecture for the exact rules.
 
 ## Devices, hubs, and relays
 
