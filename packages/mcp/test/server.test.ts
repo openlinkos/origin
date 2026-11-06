@@ -14,7 +14,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fakeAdapter, line } from '../../core/test/helpers.js';
 import { createOriginServer } from '../src/index.js';
-import { sourceOfAgent } from '../src/local.js';
+import { briefIn, sourceOfAgent } from '../src/local.js';
 
 let home: string;
 let src: string;
@@ -150,7 +150,73 @@ describe('origin MCP server', () => {
     expect(elsewhere.json.text).toContain('holds nothing for project other');
     const nowhere = await call('brief', {});
     expect(nowhere).toMatchObject({ isError: true });
-    expect(nowhere.text).toContain('Pass `cwd`');
+    expect(nowhere.text).toContain('Pass `cwd`, your working directory, or `project`');
+  });
+
+  it('briefs an agent that works in no directory on its project, by name', async () => {
+    // An OpenClaw agent's sessions: filed under the agent's id, with no working directory.
+    const now = Date.now();
+    const at = (n: number) => now - 60_000 + n * 1000;
+    fs.writeFileSync(
+      path.join(src, 'openclaw.jsonl'),
+      `${[
+        {
+          id: 'oc1',
+          session: 'oc-main-1',
+          ts: at(1),
+          role: 'user',
+          text: 'Plan the weekly digest',
+        },
+        { id: 'oc2', session: 'oc-main-1', ts: at(2), role: 'assistant', text: 'Planned it.' },
+        { id: 'oc3', session: 'oc-wen-1', ts: at(3), role: 'user', text: 'Draft the newsletter' },
+        { id: 'oc4', session: 'oc-wen-1', ts: at(4), role: 'assistant', text: 'Drafted it.' },
+      ]
+        .map((l) =>
+          JSON.stringify({ ...l, project: l.session === 'oc-main-1' ? 'main' : 'xiaowen' }),
+        )
+        .join('\n')}\n`,
+    );
+    const saved = await call('remember', {
+      kind: 'knowledge',
+      text: 'The weekly digest goes out on Mondays.',
+      confidence: 0.9,
+      project: 'main',
+      sources: [{ event_id: 'fake:oc1' }],
+    });
+    expect(saved.isError).toBe(false);
+    const r = await call('brief', { project: 'main' });
+    expect(r.json.text).toContain('(project main)');
+    expect(r.json.text).toContain('The weekly digest goes out on Mondays.');
+    expect(r.json.text).toContain('oc-main-1: Plan the weekly digest');
+    expect(r.json.text).not.toContain('oc-wen-1');
+    expect(getRecall(db, r.json.recall)).toMatchObject({
+      occasion: 'request',
+      project: 'main',
+      cwd: null,
+    });
+    // Another agent's project is another project.
+    const other = await call('brief', { project: 'xiaowen' });
+    expect(other.json.text).toContain('oc-wen-1: Draft the newsletter');
+    expect(other.json.text).not.toContain('Mondays');
+    // With a directory too, the name is the project's, and the directory is kept.
+    const both = await call('brief', { project: 'main', cwd: '/home/dana/code/demo' });
+    expect(getRecall(db, both.json.recall)).toMatchObject({
+      project: 'main',
+      cwd: '/home/dana/code/demo',
+    });
+    expect(both.json.text).toContain('The weekly digest goes out on Mondays.');
+  });
+
+  it("briefs on a named project, not on the server's own directory", () => {
+    const here = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-here-'));
+    try {
+      const named = briefIn(db, { project: 'main' }, 'openclaw@laptop', here);
+      expect(getRecall(db, named.recall)).toMatchObject({ project: 'main', cwd: null });
+      const own = briefIn(db, {}, 'openclaw@laptop', here);
+      expect(getRecall(db, own.recall)).toMatchObject({ cwd: here });
+    } finally {
+      fs.rmSync(here, { recursive: true, force: true });
+    }
   });
 
   it('hands over the past messages that match the task an agent asks about', async () => {

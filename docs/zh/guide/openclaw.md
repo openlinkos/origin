@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-5148f873
+sourceHash: sha256-06aba679
 ---
 
 # 接入 OpenClaw
@@ -121,6 +121,8 @@ origin search "migration lock" --source openclaw        # its messages, among ev
 ```
 
 在中枢上，这些会话出现在[管理界面](./admin.md)的 `openclaw` 之下，接入中枢的 Agent 可以通过 `search`、`timeline` 和 `get` 找到它们。一行的出处指向中枢为发送它的文件保存的镜像 `raw/devices/openclaw-us/openclaw/…`，通过 `origin show` 能看到插件写下的那一行原文。
+
+访问你中枢 MCP server 的 OpenClaw Agent 不在任何目录中工作，所以它向 `brief` 请求的是它的会话所归的项目，除非你设置了 `projectBy` 或 `project`，那就是它的 Agent id：`{ "project": "main" }`（见 [MCP 工具](./mcp.md#brief)）。
 
 ## 每条消息是谁写的 {#who-wrote-each-message}
 

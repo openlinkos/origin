@@ -143,6 +143,19 @@ describe('origin mcp on a relay', () => {
     });
   });
 
+  it('asks the hub for a brief on a project by name, without its own work tree', async () => {
+    const repo = path.join(logs, 'demo');
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+    await connect({ cwd: repo });
+    const r = await call('brief', { project: 'main' });
+    expect(r.isError).toBe(false);
+    expect(getRecall(hub.db, r.json.recall)).toMatchObject({
+      origin: 'laptop',
+      project: 'main',
+      cwd: null,
+    });
+  });
+
   it('hands the hub every input of a read as it is: ids of any kind, pages, and turns', async () => {
     await connect();
     const card = await call('get', { id: 's1', source: 'fake' });

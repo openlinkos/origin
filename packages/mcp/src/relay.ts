@@ -140,8 +140,10 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
 
   const handlers = {
     ...Object.fromEntries(TOOL_NAMES.map((name) => [name, forward(name)])),
-    // The hub cannot see this machine's disk: it is told the work tree, as the project's directory.
+    // The hub cannot see this machine's disk: it is told the work tree, as the project's directory,
+    // unless the agent names a project and no directory (see briefIn).
     brief: (args: ToolArgs<'brief'>) => {
+      if (args.project?.trim() && !args.cwd?.trim()) return forward('brief')(args);
       const scope = recallScope(args.cwd?.trim() || opts.cwd || process.cwd());
       return forward('brief')({ ...args, cwd: scope.root ?? scope.cwd });
     },

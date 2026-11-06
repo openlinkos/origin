@@ -6,7 +6,7 @@ import { z } from 'zod';
 /** Guidance sent to agents in the MCP `initialize` response. */
 export const INSTRUCTIONS = `Origin is the user's local, cross-agent memory: an append-only archive of their sessions with AI coding agents, plus durable entries — memory (what happened), knowledge (stable facts), and cognition (the user's preferences, methods, goals, and boundaries).
 
-- When you start a task, call \`brief\` with your working directory, unless a note headed \`Origin recall\` already gave you one: it lists the user's preferences, the project's latest decisions and facts, and its latest sessions, one line each. Use \`get\` on the ids that matter.
+- When you start a task, call \`brief\` with your working directory (or, if you work in none, the \`project\` you work for), unless a note headed \`Origin recall\` already gave you one: it lists the user's preferences, the project's latest decisions and facts, and its latest sessions, one line each. Use \`get\` on the ids that matter.
 - To answer questions about past work, decisions, or reasons, use \`search\` and \`timeline\`, then \`get\` or \`sources\` to read the original text. \`get\` opens any id Origin gives you (an entry, an event, a session, a thread, a recall, or a proposal) and lists what is next to it, one line each with its id: follow the ids that matter rather than reading everything. Read a long session a turn at a time with \`timeline\` (\`session\`, \`turn\`, \`after\`). Cite entry and event ids.
 - When the user continues work from an earlier session that the brief, a timeline, or a search showed you, call \`follow\` once with its id (or its thread's), so that the sessions form one thread. To learn what changed since you last looked, call \`changes\` with the \`next\` of your last call; to recap the work of one day, call \`digest\`.
 - When you learn something that will matter in future sessions — a decision and its reason, a stable fact, a preference of the user — save it, citing the events it comes from: event ids from search/timeline, or an exact quote from this conversation. \`remember\` what the user said or decided; \`propose\` what you infer and they have not confirmed, and whatever you write when consolidating their memory on their behalf. A proposal waits for the user: only they accept or reject it, in the Origin admin UI or CLI.
@@ -44,12 +44,20 @@ export const TOOL_SPECS = {
   brief: {
     title: 'Brief',
     description:
-      "What the user's memory holds for where you work, one line per item: their preferences and boundaries, the project's latest decisions and facts, and its latest sessions with any agent (a parent line adds its child count and workflow names); with `about`, also the entries that match it and the past messages of the project's sessions that match it, each with its event id. Call it when you start a task, unless you were already given an Origin recall.",
+      "What the user's memory holds for where you work, one line per item: their preferences and boundaries, the project's latest decisions and facts, and its latest sessions with any agent (a parent line adds its child count and workflow names); with `about`, also the entries that match it and the past messages of the project's sessions that match it, each with its event id. Call it when you start a task, unless you were already given an Origin recall. Pass `cwd`, or `project` when you work in no directory.",
     inputSchema: {
       cwd: z
         .string()
         .optional()
-        .describe("Your working directory (default: the directory Origin's server runs in)"),
+        .describe(
+          "Your working directory (default: the directory Origin's server runs in, unless `project` is given)",
+        ),
+      project: z
+        .string()
+        .optional()
+        .describe(
+          "The project to brief on, by name, when you work in no directory (an OpenClaw agent passes its agent id); with `cwd` too, the project's name instead of the directory's",
+        ),
       about: z.string().optional().describe("What the task is about, in the user's words"),
     },
     annotations: readOnly,

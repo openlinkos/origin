@@ -118,6 +118,8 @@ origin search "migration lock" --source openclaw        # its messages, among ev
 
 On the hub, the sessions appear in the [admin UI](./admin.md) under `openclaw`, and agents connected to the hub find them through `search`, `timeline`, and `get`. A line's provenance leads to the hub's mirror of the file it was sent in, `raw/devices/openclaw-us/openclaw/…`, and through `origin show` to the line as the plugin wrote it.
 
+An OpenClaw agent that reaches your hub's MCP server works in no directory, so it asks `brief` for the project its sessions are filed under, its agent id unless you set `projectBy` or `project`: `{ "project": "main" }` (see [MCP tools](./mcp.md#brief)).
+
 ## Who wrote each message
 
 Each user message's line says who wrote it, in the [event-line](../sources.md#your-own-sources-event-lines) fields `author` and `speaker`. It records what OpenClaw keeps with the message, as a fact: neither the plugin nor Origin judges a message or works out who anyone is.

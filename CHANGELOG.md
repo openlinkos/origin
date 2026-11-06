@@ -20,6 +20,10 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 - A search within a project, as recall makes for each word it looks up, checks each match's project where that reads less than listing the project's events first; on a store of 200,000 events, this took looking past messages up from about a second to a few tens of milliseconds.
 - **Upgrading.** The store format moves from version 10 to version 11: the first command after the upgrade, or the hub as it starts, makes the table of recall items again, keeping every row. Upgrade the hub before its devices: a hub of 0.5 refuses a recall that lists a past message, and a device's sync says so and keeps that recall, and those after it, until the hub is upgraded.
 
+### Recall in more agents
+
+- `brief` takes a `project`, for agents that work in no directory, such as OpenClaw's, whose sessions are filed under their agent id: `{ "project": "main" }` briefs on that project's entries and sessions. With a `cwd` too, the project's name is the one given; with neither, the server's own directory, as before.
+
 ### Removed
 
 - `origin distill` is removed, with `ORIGIN_DISTILL_COMMAND` and its guide page. Origin stores and serves your memory and runs no model; consolidating memory is left to agents that read it through the MCP tools and propose entries with `propose`. Proposals, and accepting or rejecting them in the CLI and the admin UI, are unchanged.

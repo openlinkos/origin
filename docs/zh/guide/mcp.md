@@ -78,10 +78,13 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 
 | 参数 | 类型 | 默认值 | 含义 |
 |---|---|---|---|
-| `cwd` | 字符串 | server 运行所在的目录 | Agent 的工作目录：包含它的 git 工作树，或者这个目录本身，就是项目。中枢看不到 Agent 的磁盘，所以按原样使用这个目录，而且必须提供 |
+| `cwd` | 字符串 | server 运行所在的目录，给出 `project` 时除外 | Agent 的工作目录：包含它的 git 工作树，或者这个目录本身，就是项目。中枢看不到 Agent 的磁盘，所以按原样使用这个目录，而且必须提供它或 `project` |
+| `project` | 字符串 | 无 | 项目名称，供不在任何目录中工作的 Agent 使用，比如 OpenClaw 的 Agent，它的会话归在它的 Agent id 之下：简报针对这个名称，没有目录。同时给出 `cwd` 时，`project` 指定项目，`cwd` 给出它的目录 |
 | `about` | 字符串 | 无 | 任务是关于什么的，用用户的话说：会加上与它匹配的条目和过往消息 |
 
-它返回 `{ recall, text }`：召回的 id，以及各项内容，上面有一行说明如何阅读；如果用户的记忆中还没有这个项目的内容，就是一行这样的说明。在已接入中枢的设备上，`brief` 只读取设备的库；中继把它交给中枢，以自己运行所在的工作树作为 `cwd`，中枢把这次召回记录为为该设备所做。
+它返回 `{ recall, text }`：召回的 id，以及各项内容，上面有一行说明如何阅读；如果用户的记忆中还没有这个项目的内容，就是一行这样的说明。在已接入中枢的设备上，`brief` 只读取设备的库；中继把它交给中枢，以自己运行所在的工作树作为 `cwd`（Agent 指定了 `project` 而没有给 `cwd` 时除外），中枢把这次召回记录为为该设备所做。
+
+你中枢上的 OpenClaw Agent，比如 id 为 `main` 的那个，用 `{ "project": "main" }` 请求，拿到的是归在 `main` 之下的会话和条目的简报。
 
 ```json
 { "cwd": "/home/dana/code/demo-app", "about": "the release workflow" }

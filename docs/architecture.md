@@ -598,6 +598,8 @@ Recall is what Origin hands an agent without being asked: a short brief when a s
 
 **Through MCP.** `brief` hands over a brief, and with `about` the entries and past messages that match it, as a recall with the occasion `request`. The server the agent runs answers it: on a device from its store, without its hub on a connected device, as the hooks do; a relay hands it to the hub with its work tree as the directory, which the hub takes as it is, since it cannot see the agent's disk, and the hub records the recall as made for the device. An MCP call names no session, so a request recall records none, and can hand over a message of the agent's own session; its session is the one whose log holds the recall's id in a tool result, once archived.
 
+**By project name.** An agent that works in no directory, such as an OpenClaw agent or a bot that reaches the hub's `/mcp`, passes `brief` a `project` instead of a `cwd`. The recall is then made for that name, with no directory and no work tree, and the server's own directory is not used: entries and sessions are in its scope by the project they are filed under (an OpenClaw agent's sessions are filed under its agent id). With `cwd` too, `project` names the project and `cwd` gives its directory, which still decides for the sessions and imported entries that record one. A relay hands such a call to the hub as it is.
+
 ## Personal hub
 
 A hub is an ordinary Origin store that also runs `origin serve`. It is self-hosted and single-tenant: one person, their devices, their agents. Nothing in the hub is specific to any hosting provider; the published container image `ghcr.io/openlinkos/origin` runs it anywhere.

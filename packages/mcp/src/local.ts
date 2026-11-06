@@ -1274,6 +1274,11 @@ export function sourceOfAgent(name: string): string {
  * The brief an agent asks for, recorded as a recall made for its device. `here` is the directory
  * the server runs in on the agent's machine, whose disk it can read; a hub has none, and takes the
  * agent's `cwd` as it is. `author` is `<agent>@<device>`.
+ *
+ * An agent that works in no directory, such as an OpenClaw agent, names its `project`: the brief is
+ * then for that name alone, with no directory, and what is matched by directory (a session's `cwd`,
+ * an imported memory's) is matched by name. With `cwd` too, `project` names the project and `cwd`
+ * its directory. The server's own directory is the default only when neither is given.
  */
 export function briefIn(
   db: Database,
@@ -1281,22 +1286,27 @@ export function briefIn(
   author: string,
   here: string | null,
 ): BriefResult {
-  const dir = args.cwd?.trim() || here;
-  if (!dir) {
+  const project = args.project?.trim() || null;
+  const dir = args.cwd?.trim() || (project ? null : here);
+  if (!dir && !project) {
     throw new OriginError(
-      'Pass `cwd`, your working directory: the hub cannot tell where you work.',
+      'Pass `cwd`, your working directory, or `project`, the project you work for: the hub cannot tell where you work.',
     );
   }
   const at = author.lastIndexOf('@');
   const named = at < 0 ? '' : author.slice(at + 1);
   const device = placeDevice(here, named);
+  const scope = dir
+    ? recallScope(dir, { onDisk: here !== null, db, device })
+    : { cwd: null, root: null, project: null };
   const plan = planRecall(db, {
     occasion: 'request',
     source: sourceOfAgent(at < 0 ? author : author.slice(0, at)),
     prompt: args.about ?? null,
     onDisk: here !== null,
     device,
-    ...recallScope(dir, { onDisk: here !== null, db, device }),
+    ...scope,
+    ...(project ? { project } : {}),
   });
   const recall = recordRecall(db, plan, { origin: at < 0 ? undefined : named });
   const where = plan.project ? `project ${plan.project}` : 'this directory';

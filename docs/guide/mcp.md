@@ -74,10 +74,13 @@ What the user's memory holds for where the agent works, one line per item: a bri
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
-| `cwd` | string | the directory the server runs in | The agent's working directory: the git work tree that holds it, or the directory itself, is the project. A hub cannot see the agent's disk, so it takes the directory as it is, and needs it |
+| `cwd` | string | the directory the server runs in, unless `project` is given | The agent's working directory: the git work tree that holds it, or the directory itself, is the project. A hub cannot see the agent's disk, so it takes the directory as it is, and needs it or `project` |
+| `project` | string | none | The project, by name, for an agent that works in no directory, such as an OpenClaw agent, whose sessions are filed under its agent id: the brief is for that name, with no directory. With `cwd` too, `project` names the project and `cwd` gives its directory |
 | `about` | string | none | What the task is about, in the user's words: adds the entries and past messages that match it |
 
-It returns `{ recall, text }`: the recall's id, and the items under a header that says how to read them, or a line saying that the user's memory holds nothing for the project yet. On a device connected to a hub, `brief` reads the device's store only; a relay hands it to the hub with the work tree it runs in as `cwd`, and the hub records the recall as made for the device.
+It returns `{ recall, text }`: the recall's id, and the items under a header that says how to read them, or a line saying that the user's memory holds nothing for the project yet. On a device connected to a hub, `brief` reads the device's store only; a relay hands it to the hub with the work tree it runs in as `cwd`, unless the agent names a `project` and no `cwd`, and the hub records the recall as made for the device.
+
+An OpenClaw agent on your hub, say the one whose id is `main`, asks with `{ "project": "main" }`, and is briefed on the sessions and entries filed under `main`.
 
 ```json
 { "cwd": "/home/dana/code/demo-app", "about": "the release workflow" }
