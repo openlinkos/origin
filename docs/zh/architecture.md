@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-12253012
+sourceHash: sha256-0ac92b2a
 ---
 
 # 架构
@@ -674,7 +674,7 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 | `GET /v1/device` | `{ device, hub }`：令牌所属的设备（即令牌名）和中枢的名称 |
 | `GET /v1/cursors?device=<name>` | 令牌所属设备的每个文件在中枢上的字节游标；加上 `&source=<id>&path=<path>` 时，只给出那一个文件每个代次的游标（较早的中枢会忽略这两个参数，列出每个文件，由调用方从中挑出这个文件） |
 | `POST /v1/ingest` | 追加一个块：JSON `{ device, source, path, relPath, generation, offset, mtimeMs, agentVersion, data }`，其中 `data` 为 base64，`offset` 按镜像未压缩的内容计算（中继发送的是文件的内容，二者相同）；请求体可以使用 gzip 编码。返回 `200 { bytes, eventsAdded, … }`，偏移量不匹配时返回 `409 { bytes }` |
-| `POST /v1/sources/<name>/lines?path=<path>` | 为没有自己设备的写入者追加事件行（见[你自己的来源](#your-own-sources)），写到来源 `<name>` 的文件 `path`，视为令牌所属设备发送的内容。请求体是 `application/x-ndjson` 或 `text/plain`，可以用 gzip 编码；解压后最多 8 MiB，没有换行符的最后一行以请求体结尾为界。`<name>` 必须是人自己的来源名称，不能是内置来源；`path` 是相对路径，由 `/` 分隔的若干部分组成，每部分由字母、数字、`.`、`_` 和 `-` 组成并以字母或数字开头，以 `.jsonl` 结尾，最多 200 个字符。返回 `200 { lines, events, duplicates, parse_errors }`；名称、路径或请求体无效时返回 `400`，请求体过大返回 `413`，媒体类型不对返回 `415` |
+| `POST /v1/sources/<name>/lines?path=<path>` | 为没有自己设备的写入者追加事件行（见[你自己的来源](#your-own-sources)），写到来源 `<name>` 的文件 `path`，视为令牌所属设备发送的内容。请求体是 `application/x-ndjson` 或 `text/plain`，可以用 gzip 编码；解压后最多 8 MiB，没有换行符的最后一行以请求体结尾为界。`<name>` 必须是人自己的来源名称，不能是内置来源；`path` 是相对路径，由 `/` 分隔的若干部分组成，每部分由字母、数字、`.`、`_` 和 `-` 组成并以字母或数字开头，以 `.jsonl` 结尾，最多 200 个字符。返回 `200 { lines, events, duplicates, parse_errors, errors }`，`errors` 按行在文件中的行号说明前五个无效行及原因；名称、路径或请求体无效时返回 `400`，请求体过大返回 `413`，媒体类型不对返回 `415` |
 | `POST /v1/entries` | `{ device, entries }`，最多 1,000 个条目，每个为 `{ id, kind, text, confidence, author, project, supersedes, validFrom, validTo, createdAt, origin, sources: [{ eventId, quote }] }`，其 `origin` 必须是令牌所属的设备。按顺序保存；返回 `200 { applied, pending }`，其中 `pending` 为 null，或者是第一个所引用事件或所取代版本尚不在中枢上的条目的 `{ id, missing }`（它之后的条目都不会被保存）。同一个 id 下内容不同时返回 `409` |
 | `POST /v1/tombstones` | `{ device, tombstones }`，最多 1,000 条遗忘记录，每条为 `{ id, target, reason, createdAt, origin, author, entries, events }`（`author` 可选），附带它在设备上覆盖的内容，其 `origin` 必须是令牌所属的设备。恢复的目标是一次遗忘的 id，并且不列出任何内容；如果中枢还没有收到它的遗忘，就先保存它，等那次遗忘到达时生效。按[遗忘](#forgetting)中的规则应用；返回 `200 { applied }`，同一个 id 下内容不同时返回 `409` |
 | `POST /v1/recalls` | `{ device, recalls }`，最多 1,000 次召回，每次为 `{ id, at, origin, source, sessionId, occasion, project, cwd, promptHash, budget, tokens, items }`，每一项为 `{ rank, layer, kind, ref, score, tokens, excerpt }`，其中过往消息的 `excerpt` 可以省略，0.5 及更早版本的设备就不发送它；`origin` 必须是令牌所属的设备。按 id 只保存一次；返回 `200 { applied }`，同一个 id 内容不同时返回 `409` |

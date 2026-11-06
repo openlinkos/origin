@@ -29,6 +29,11 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 - `origin agents` says when Codex has not trusted Origin's hooks yet, and when ZCode's hooks are off.
 - Run `origin agents connect`, and then with `--yes`, to add the new hooks, and start a new session of each agent.
 
+### Event lines sent to a hub
+
+- The hub's answer to `POST /v1/sources/<name>/lines` adds `errors`: the first five lines that are not valid events, each with its number in the file and why, so that a writer in the cloud, which cannot read the hub's log, can fix itself.
+- The guide to your own sources says how a bot that writes its own conversations marks what reached it: only what you wrote is `owner`; a prompt the platform adds, a scheduled trigger, or an alert is `system`, and another bot's message `agent`. It also says to send whole texts and ids without the source's name.
+
 ### Removed
 
 - `origin distill` is removed, with `ORIGIN_DISTILL_COMMAND` and its guide page. Origin stores and serves your memory and runs no model; consolidating memory is left to agents that read it through the MCP tools and propose entries with `propose`. Proposals, and accepting or rejecting them in the CLI and the admin UI, are unchanged.

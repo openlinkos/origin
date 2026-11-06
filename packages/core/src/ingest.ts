@@ -67,6 +67,11 @@ export interface IngestContext {
    */
   home: string;
   log?: (message: string) => void;
+  /**
+   * Called for each line that yields nothing because it is not valid, with the file's path, the
+   * line's number in it, and why: the hub tells a writer of event lines the first few.
+   */
+  onParseError?: (path: string, line: number, reason: string) => void;
   /** Size at which a mirror's open tail is sealed into zstd frames (default FRAME_BYTES; tests). */
   frameBytes?: number;
   /**
@@ -534,6 +539,7 @@ function appendLines(
     } catch (err) {
       stats.parseErrors++;
       ctx.log?.(`parse error ${parse.relPath}:${lineNo}: ${(err as Error).message}`);
+      ctx.onParseError?.(parse.relPath, lineNo, (err as Error).message);
       continue;
     }
     if (!parsed) continue;
@@ -545,6 +551,7 @@ function appendLines(
     if (parsed.warning) {
       stats.parseErrors++;
       ctx.log?.(`warning ${parse.relPath}:${lineNo}: ${parsed.warning}`);
+      ctx.onParseError?.(parse.relPath, lineNo, parsed.warning);
       continue;
     }
     const added = insert(lineNo, parsed.events);
@@ -571,6 +578,7 @@ function appendLines(
         if (!(err instanceof OriginError)) throw err;
         stats.parseErrors++;
         ctx.log?.(`memory not imported ${parse.relPath}:${lineNo}: ${err.message}`);
+        ctx.onParseError?.(parse.relPath, lineNo, err.message);
       }
     }
     if (parsed.sessionTitle && parsed.sessionId) {

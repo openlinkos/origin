@@ -337,20 +337,33 @@ async function appendSourceLines(
   let data = await readBody(req, MAX_LINES_BODY);
   if (data.length > 0 && data[data.length - 1] !== 0x0a) data = Buffer.concat([data, NEWLINE]);
   const adapter = adapterFor(name) as SourceAdapter;
-  const r = appendRemoteLines({ db: opts.db, home: opts.home, log: opts.log }, adapter, {
-    device,
-    source: name,
-    path: file,
-    relPath: file,
-    data,
-  });
+  // The first few lines that are not valid events, with why, so that a writer can fix them.
+  const errors: Array<{ line: number; error: string }> = [];
+  const onParseError = (_path: string, line: number, error: string) => {
+    if (errors.length < LINES_ERRORS_SHOWN) errors.push({ line, error });
+  };
+  const r = appendRemoteLines(
+    { db: opts.db, home: opts.home, log: opts.log, onParseError },
+    adapter,
+    {
+      device,
+      source: name,
+      path: file,
+      relPath: file,
+      data,
+    },
+  );
   sendJson(res, 200, {
     lines: r.linesRead,
     events: r.eventsAdded,
     duplicates: r.duplicates,
     parse_errors: r.parseErrors,
+    errors,
   });
 }
+
+/** How many of a request's invalid lines the hub's answer describes. */
+const LINES_ERRORS_SHOWN = 5;
 
 const NEWLINE = Buffer.from('\n');
 

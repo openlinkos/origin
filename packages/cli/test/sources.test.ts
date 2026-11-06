@@ -339,7 +339,13 @@ describe('your own sources on a hub', () => {
   it('appends event lines to the file of the token’s device, and parses them', async () => {
     const res = await post('chat', '?path=2026/11/02.jsonl', lines(2));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ lines: 2, events: 2, duplicates: 0, parse_errors: 0 });
+    expect(await res.json()).toEqual({
+      lines: 2,
+      events: 2,
+      duplicates: 0,
+      parse_errors: 0,
+      errors: [],
+    });
 
     // The file is the bot's, named by its path, and mirrored as a device's file is.
     expect(remoteCursors(hubDb, 'bot')).toEqual([
@@ -363,14 +369,25 @@ describe('your own sources on a hub', () => {
 
     // Sending again is safe: the mirror records what was sent, and nothing is added twice.
     const again = await post('chat', '?path=2026/11/02.jsonl', lines(2));
-    expect(await again.json()).toEqual({ lines: 2, events: 0, duplicates: 2, parse_errors: 0 });
+    expect(await again.json()).toEqual({
+      lines: 2,
+      events: 0,
+      duplicates: 2,
+      parse_errors: 0,
+      errors: [],
+    });
     expect(remoteCursors(hubDb, 'bot')[0]?.bytes).toBe(2 * Buffer.byteLength(lines(2)));
     expect(listEvents(hubDb, { source: 'chat' })).toHaveLength(2);
 
     // Bad lines are counted; a last line without a line break ends with the body, as curl -d sends.
     const rest = notesLines().slice(2);
     const more = await post('chat', '?path=2026/11/02.jsonl', `${rest.join('\n')}\nnot json`);
-    expect(await more.json()).toEqual({ lines: 4, events: 2, duplicates: 0, parse_errors: 2 });
+    // The answer says which lines are not valid events, and why: their numbers in the file.
+    const answer = await more.json();
+    expect(answer).toMatchObject({ lines: 4, events: 2, duplicates: 0, parse_errors: 2 });
+    expect(answer.errors).toHaveLength(2);
+    expect(answer.errors.map((e: { line: number }) => e.line)).toEqual([7, 8]);
+    for (const e of answer.errors) expect(e.error).toEqual(expect.any(String));
     expect(getSession(hubDb, 'chat', 'retry-2')).toMatchObject({ eventCount: 2 });
     expect(getSession(hubDb, 'chat', 'retry-1')?.thread).toMatch(/^thr_/);
 
@@ -489,7 +506,13 @@ describe('your own sources on a hub', () => {
       const beside = await post('notes', '?path=2026/11/02.jsonl', lines(1), {
         Authorization: `Bearer ${laptopToken}`,
       });
-      expect(await beside.json()).toEqual({ lines: 1, events: 0, duplicates: 1, parse_errors: 0 });
+      expect(await beside.json()).toEqual({
+        lines: 1,
+        events: 0,
+        duplicates: 1,
+        parse_errors: 0,
+        errors: [],
+      });
       expect(
         remoteCursors(hubDb, 'laptop')
           .map((c) => c.path)

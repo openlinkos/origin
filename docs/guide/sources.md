@@ -70,12 +70,12 @@ curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=2026/11
 ```
 
 ```json
-{ "lines": 2, "events": 2, "duplicates": 0, "parse_errors": 0 }
+{ "lines": 2, "events": 2, "duplicates": 0, "parse_errors": 0, "errors": [] }
 ```
 
 - **Where they go.** The hub keeps the lines as file `path` of the source, here `2026/11/02.jsonl` of `chat-ops`, sent by the token's name, `chat-bridge`, and reads them as it reads what a device sends. They stay on the hub: devices never download them, and agents find them through the hub, as everything else there.
 - **The body.** Event lines, at most 8 MiB, as `application/x-ndjson` or `text/plain`, possibly gzip-encoded. Use `--data-binary`, which sends a file as it is, rather than `-d`, which drops its line breaks; one line without a line break at the end, as `-d '{"id":…}'` sends it, is fine.
-- **The answer.** How many lines the hub read, how many new events they gave, how many it already had (`duplicates`), and how many are not valid events (`parse_errors`), which it keeps but reads nothing from.
+- **The answer.** How many lines the hub read, how many new events they gave, how many it already had (`duplicates`), and how many are not valid events (`parse_errors`), which it keeps but reads nothing from; `errors` describes the first five of those, each with its line's number in the file and why, such as `{ "line": 7, "error": "\"author\" is only for lines whose \"role\" is user" }`. Fix the writer and go on appending to the same file: a line once read is kept, valid or not, so sending it again in a new file only adds a copy.
 - **Sending again.** If you do not know whether a request arrived, send it again: lines the hub already has add nothing.
 - **A token of its own.** A device's token works too, and sends as that device; lines sent with it under a path that the device's own `sources/` directory also has are kept in a file of their own, beside the device's.
 
@@ -85,6 +85,16 @@ curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=2026/11
 - **Lines are never changed.** Like Origin's whole archive, a source is append-only: an event, once read, keeps its text. To say something else, write a new event with a new id.
 - **A session is one conversation.** A chat thread, an incident, a run of a job, a day of notes: whatever you would want to open as a whole. Its events are shown in time order, whichever file holds them.
 - **Ids Origin gives its own objects** start with `ent_`, `thr_`, `rcl_`, or `prp_`; do not start a session id with them, since `get` would read it as one of those.
+
+## A bot that writes its own conversations
+
+An agent or a bot that sends its own conversations, say a cloud bot keeping a copy of each chat, writes what happened, as it happened, and says who wrote each input:
+
+- **Inputs and replies.** What reached the bot is a line whose `role` is `user`, with its `author` (see [Who wrote it](#who-wrote-it)); the bot's own replies, tool calls, and tool results are `assistant` lines, with no `author` or `speaker`. Several bots writing to one source put their names in `meta`, and give each its own sessions.
+- **Only your words are yours.** A prompt the platform adds unseen, a scheduled task's trigger, an alert, and a run's report are `system`; what another bot hands over is `agent`, with that bot's name as `speaker`. Origin takes `owner` lines for your words: they weigh what recall finds, and are your prompts in a session's page and a day's digest.
+- **The whole text.** Send each message as it was, not cut short: a request holds 8 MiB.
+- **Ids and titles.** An `id` is the bot's own id for the message, without the source's name, which Origin adds (`<source>:<id>`). Give a `title` only when the conversation has one; without it, Origin names a session by its first prompt of yours.
+- **Mistakes.** Lines already read are not changed. To replace them, ask for the wrong events to be forgotten and send the right ones with new ids, best under the source's final name.
 
 ## Who wrote it
 

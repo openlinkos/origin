@@ -33,6 +33,11 @@ Origin 所有值得注意的改动都列在这里。版本号遵循[语义化版
 - `origin agents` 会说明 Codex 何时还没有信任 Origin 的 hook，以及 ZCode 的 hook 何时处于关闭状态。
 - 运行 `origin agents connect`，再加上 `--yes` 运行一次，加上新的 hook，然后为每个 Agent 开始一个新会话。
 
+### 发给中枢的事件行 {#event-lines-sent-to-a-hub}
+
+- 中枢对 `POST /v1/sources/<name>/lines` 的回答新增 `errors`：前五个不是有效事件的行，每行给出它在文件中的行号和原因，这样云端的写入方读不到中枢的日志，也能自己改正。
+- 关于你自己来源的指南说明了写入自己对话的机器人怎样标记到达它的内容：只有你写的才是 `owner`；平台加上的提示、定时触发或告警是 `system`，别的机器人的消息是 `agent`。它还说明要发送完整的文本，id 不带来源名称。
+
 ### 移除 {#removed}
 
 - 移除了 `origin distill`，以及 `ORIGIN_DISTILL_COMMAND` 和它的指南页面。Origin 存储并提供你的记忆，不运行任何模型；整理记忆交给通过 MCP 工具读取它、用 `propose` 提议条目的 Agent。提议，以及在 CLI 和管理界面中接受或拒绝提议，都没有变化。
