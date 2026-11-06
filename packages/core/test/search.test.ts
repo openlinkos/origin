@@ -250,6 +250,14 @@ describe('terms without an index', () => {
     expect(messages('qz', { project: 'small' })).toEqual(['small']);
   });
 
+  it('ends once every match is read, however few of them pass its filters', async () => {
+    await ingest([['mine', 500, 'a needle of my own']]);
+    bulk(3_000, 1_000, 'needle in a haystack');
+    // Many matches, one of them in the session asked for: too few to ever set a cutoff.
+    expect(messages('needle', { sessionId: 'S', order: 'recent', limit: 3 })).toEqual(['mine']);
+    expect(messages('needle', { sessionId: 'S' })).toEqual(['mine']);
+  });
+
   it('filters by a small project through its index and a large one by reading the matches', () => {
     bulk(1_500, 1_000, 'needle in a haystack', 'big');
     bulk(1_500, 5_000, 'needle in a haystack', 'other');

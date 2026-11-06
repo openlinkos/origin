@@ -15,6 +15,10 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 
 - `origin distill` is removed, with `ORIGIN_DISTILL_COMMAND` and its guide page. Origin stores and serves your memory and runs no model; consolidating memory is left to agents that read it through the MCP tools and propose entries with `propose`. Proposals, and accepting or rejecting them in the CLI and the admin UI, are unchanged.
 
+### Fixes
+
+- A search that matches many events, of which its filters (a session, a project, a source, kinds) keep fewer than it needs, no longer runs forever when it has no start time: it ends once every match is read.
+
 ## [0.5.0] - 2026-11-06
 
 Lets agents read along from any id, groups sessions into threads, archives each turn as it ends, has agents propose what you then review, brings in the sessions of any program, OpenClaw's included, tells your words from everyone else's, files each session under its main project, and connects agents and devices to your hub without copying tokens.

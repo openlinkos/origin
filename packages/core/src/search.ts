@@ -427,7 +427,10 @@ function newest(db: Database, p: Plan, f: EventFilter, need: Need): Hit[] {
     for (;;) {
       let chain: Chain | null = null;
       for (const c of chains) if (!chain || c.bound() > chain.bound()) chain = c;
-      if (!chain || chain.bound() < Math.max(cut, floor)) break;
+      // Every chain read to its end (its bound is then -Infinity) means every match was read, even
+      // when too few of them pass for a cutoff ever to be set.
+      const latest = chain?.bound() ?? Number.NEGATIVE_INFINITY;
+      if (!chain || latest === Number.NEGATIVE_INFINITY || latest < Math.max(cut, floor)) break;
       // Read this chain until the rest of it may no longer hold the newest unread hit.
       chain.rows ??= db
         .prepare(q.sql)
