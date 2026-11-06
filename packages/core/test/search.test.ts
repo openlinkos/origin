@@ -263,10 +263,10 @@ describe('terms without an index', () => {
     bulk(1_500, 5_000, 'needle in a haystack', 'other');
     const size = db.prepare(
       `INSERT OR REPLACE INTO session (source, session_id, project, started_at, ended_at, event_count)
-       VALUES ('fake', 'big-session', 'big', 1000, 2499, ?)`,
+       VALUES ('fake', ?, ?, ?, ?, ?)`,
     );
     for (const events of [1_500, 1_000_000]) {
-      size.run(events);
+      size.run('big-session', 'big', 1000, 2499, events);
       expect(messages('needle', { project: 'big', order: 'recent', limit: 3 })).toEqual([
         'bulk2499',
         'bulk2498',
@@ -276,6 +276,15 @@ describe('terms without an index', () => {
       expect(messages('needle', { project: 'big', since: 2_400, limit: 5_000 })).toHaveLength(100);
       expect(messages('needle', { project: 'other', until: 5_009, limit: 5_000 })).toHaveLength(10);
     }
+    // A project that is a small share of a search with many matches: through its index too.
+    bulk(5, 9_000, 'needle in a haystack', 'tiny');
+    size.run('tiny-session', 'tiny', 9000, 9004, 5);
+    expect(messages('needle', { project: 'tiny', order: 'recent', limit: 3 })).toEqual([
+      'bulk9004',
+      'bulk9003',
+      'bulk9002',
+    ]);
+    expect(messages('needle', { project: 'tiny', limit: 5_000 })).toHaveLength(5);
   });
 });
 

@@ -215,6 +215,13 @@ interface Need {
 }
 
 /**
+ * How a query checks an event's project: through the project's events, read once (`set`); for
+ * each candidate, through its session's place (`row`), which reads nothing more than the row it
+ * already has; or not at all, when the driving index is matched against the project already.
+ */
+type ProjectCheck = 'set' | 'row' | 'none';
+
+/**
  * What makes an event a candidate besides the indexed terms and the time range: the filters on its
  * columns (source, project unless matched by its index, session, kinds) and, for event_fts, the
  * terms its trigrams only roughly match.
@@ -223,16 +230,19 @@ function candidateFilters(
   p: Plan,
   f: EventFilter,
   params: unknown[],
-  withProject = true,
+  project: ProjectCheck = 'set',
 ): string[] {
   const parts: string[] = [];
   if (f.source) {
     parts.push('e.source = ?');
     params.push(f.source);
   }
-  if (f.project && withProject) {
+  if (f.project && project === 'set') {
     parts.push(projectEventSql('e'));
     params.push(f.project, f.project);
+  } else if (f.project && project === 'row') {
+    parts.push(`${resolvedProjectSql('e.source', 'e.session_id', 'e.project')} = ?`);
+    params.push(f.project);
   }
   if (f.sessionId) {
     parts.push('e.session_id = ?');
@@ -253,8 +263,10 @@ function passColumn(p: Plan, params: unknown[]): string {
 }
 
 /**
- * A project with at most this many events in the time range is matched through its index (its
- * events' seqs, read once), so that a search in it does not read every match to check its project.
+ * A project with at most this many events in the time range can be matched through its index (its
+ * events' seqs, read once), so that a search in it does not read every match to check its project:
+ * when it is a small share of the store. A larger one, a large share, or a query with few matches
+ * checks the project of each match it reads instead.
  */
 const PROJECT_SET_LIMIT = 100_000;
 
@@ -262,13 +274,14 @@ const PROJECT_SET_LIMIT = 100_000;
  * SQL reading the matches of an index-driven plan between two seqs (bound last), latest arrival
  * first: seq, ts, `cand`, and `pass`. Filters that need an event's row only set `cand`, so every
  * match comes back and a query can stop as soon as it has enough; the others (the time range, CJK
- * terms, a small project) are part of the WHERE clause and read no event.
+ * terms, and the project, when `projectSet` has it matched through its events) are part of the
+ * WHERE clause and read no event.
  */
 function rangeQuery(
-  db: Database,
   p: Plan,
   f: EventFilter,
   need: Need,
+  projectSet: boolean,
 ): { sql: string; params: (lo: number, hi: number) => unknown[] } {
   const table = p.table as string;
   const conditions: string[] = [];
@@ -289,7 +302,7 @@ function rangeQuery(
     }
     return sql;
   };
-  const projectByIndex = !!f.project && projectSize(db, f) <= PROJECT_SET_LIMIT;
+  const projectByIndex = !!f.project && projectSet;
   if (projectByIndex) {
     // Events with no place row still use the project index. Placed sessions match their resolved
     // name. `range` pushes its parameters as it is called, in the order the placeholders appear.
@@ -309,7 +322,9 @@ function rangeQuery(
   const inRange = range('x.ts');
   if (inRange) conditions.push(inRange.slice(' AND '.length));
   const selectParams: unknown[] = [];
-  const filters = candidateFilters(p, f, selectParams, !projectByIndex);
+  // A match's row is read anyway to set `cand`: its project is checked there, not through every
+  // event of a large project.
+  const filters = candidateFilters(p, f, selectParams, projectByIndex ? 'none' : 'row');
   const cand = filters.length > 0 ? `(${filters.join(' AND ')})` : '1';
   const pass = passColumn(p, selectParams);
   const row = cand !== '1' || pass !== '1' || !!need.accept;
@@ -389,18 +404,32 @@ function newest(db: Database, p: Plan, f: EventFilter, need: Need): Hit[] {
     }
     return select(hits, need.count, cap);
   }
-  const q = rangeQuery(db, p, f, need);
+  const size = f.project ? projectSize(db, f) : 0;
 
-  // Few matches: read them all, in any order.
+  // Few matches: read them all, in any order, each checked for its project, unless the project has
+  // fewer events than that: those are read once instead, and the matches need no row.
   const few = Math.max(5 * need.count, 2_000);
   const count = db.prepare(
     `SELECT count(*) AS n FROM (SELECT 1 FROM ${p.table} WHERE ${p.table} MATCH ? LIMIT ?)`,
   );
-  if ((count.get(p.match, few + 1) as { n: number }).n <= few) {
+  const matches = (count.get(p.match, few + 1) as { n: number }).n;
+  if (matches <= few) {
+    const q = rangeQuery(p, f, need, size < matches);
     const all = db.prepare(q.sql).iterate(...(q.params(MIN_SEQ, MAX_SEQ) as never[]));
     for (const r of all as Iterable<Row>) take(r);
     return select(hits, need.count, cap);
   }
+  // With many matches, a small project is matched through its events when that reads fewer rows
+  // than checking matches until enough are in it: about need.count × (all events / its events), as
+  // if its share of the matches were its share of the store.
+  let projectSet = false;
+  if (f.project && size <= PROJECT_SET_LIMIT) {
+    const total = (
+      db.prepare('SELECT COALESCE(MAX(seq), 0) AS n FROM event').get() as { n: number }
+    ).n;
+    projectSet = need.count * total > size * size;
+  }
+  const q = rangeQuery(p, f, need, projectSet);
 
   // Many matches: read the chains of blocks newest first, each with its own stream, always from the
   // chain that may still hold the newest unread hit, until no chain can hold one newer than those
