@@ -15,8 +15,10 @@ on:
       - '.github/workflows/image.yml'
   workflow_dispatch:
 
+# One group per ref: a release tag pushed with its commit must not cancel master's build, which alone
+# adds the edge and timestamped tags the hub deployment follows.
 concurrency:
-  group: image
+  group: image-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
