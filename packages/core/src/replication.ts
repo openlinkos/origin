@@ -25,6 +25,8 @@ import {
   getRecall,
   insertRecall,
   RECALL_ID_RE,
+  RECALL_ITEM_KINDS,
+  RECALL_LAYERS,
   RECALL_OCCASIONS,
   type RecallItemRecord,
   type RecallOccasion,
@@ -349,7 +351,6 @@ export function shouldSendEntry(db: Database, id: string): boolean {
 
 /** Most items one recall may hand over (see LAYER_MAX in recall.ts, with room to grow). */
 const MAX_RECALL_ITEMS = 100;
-const RECALL_LAYERS = ['cognition', 'project', 'sessions', 'prompt'];
 
 function checkCount(value: unknown, what: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 1e6) {
@@ -372,17 +373,24 @@ export function parseReplicaRecall(value: unknown): RecallRecord {
   const items = value.items.map((item: unknown, i: number): RecallItemRecord => {
     const what = `item ${i + 1} of ${id}`;
     if (!isRecord(item) || item.rank !== i + 1) invalid(what);
-    if (!RECALL_LAYERS.includes(item.layer as string)) invalid(what);
-    if (item.kind !== 'entry' && item.kind !== 'session' && item.kind !== 'thread') invalid(what);
+    if (!(RECALL_LAYERS as readonly unknown[]).includes(item.layer)) invalid(what);
+    if (!(RECALL_ITEM_KINDS as readonly unknown[]).includes(item.kind)) invalid(what);
     const score = item.score ?? null;
     if (score !== null && (typeof score !== 'number' || !Number.isFinite(score))) invalid(what);
+    // Where a message's excerpt starts (version 11): a device of an earlier version sends none.
+    const excerpt = item.excerpt ?? null;
+    if (excerpt !== null) {
+      if (item.kind !== 'event') invalid(what);
+      checkCount(excerpt, what);
+    }
     return {
       rank: i + 1,
       layer: item.layer as RecallItemRecord['layer'],
-      kind: item.kind,
+      kind: item.kind as RecallItemRecord['kind'],
       ref: checkString(item.ref, what, MAX_ID),
       score,
       tokens: checkCount(item.tokens, what),
+      excerpt: excerpt as number | null,
     };
   });
   return {

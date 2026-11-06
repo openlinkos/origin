@@ -12,6 +12,8 @@ import {
   getEvent,
   isOwnerConversation,
   listThreadSessions,
+  type SearchHit,
+  sessionKey,
   sessionPrompts,
   VISIBLE_EVENT,
 } from './store.js';
@@ -31,7 +33,8 @@ import type { Author, EventRow } from './types.js';
  *   several sessions on one line.
  * - With a prompt: the entries whose first line it matches, scored with BM25 over words weighed by
  *   how rarely the user says them, above a threshold, leaving out what the session was handed
- *   since its last brief.
+ *   since its last brief; then the past messages of the project's conversations that match it the
+ *   same way, found through the search index by the prompt's heaviest words, one per session.
  * - Entries imported from an agent's own memory files for this project are not handed back to that
  *   agent, which loads those files itself.
  * - One line per item, within a token budget: the agent asks for the rest with `get`.
@@ -41,20 +44,35 @@ export const RECALL_OCCASIONS = ['start', 'prompt', 'request'] as const;
 /** When a recall happens: a session starts, the user sends a prompt, or an agent asks. */
 export type RecallOccasion = (typeof RECALL_OCCASIONS)[number];
 
-export type RecallLayer = 'cognition' | 'project' | 'sessions' | 'prompt';
+/** The layers of a recall, in the order its text has them. */
+export const RECALL_LAYERS = ['cognition', 'project', 'sessions', 'prompt', 'messages'] as const;
+/**
+ * Where an item comes from: the user's preferences, the project's entries, its latest sessions, the
+ * entries a prompt matches, or the past messages it matches.
+ */
+export type RecallLayer = (typeof RECALL_LAYERS)[number];
 
 /** Default token budgets: a brief, what a prompt adds, and a brief an agent asks for. */
 export const RECALL_BUDGET: Record<RecallOccasion, number> = {
   start: 800,
-  prompt: 400,
-  request: 1200,
+  prompt: 600,
+  request: 1500,
 };
 
 /** Most items per layer. */
-const LAYER_MAX: Record<RecallLayer, number> = { cognition: 5, project: 5, sessions: 3, prompt: 5 };
+const LAYER_MAX: Record<RecallLayer, number> = {
+  cognition: 5,
+  project: 5,
+  sessions: 3,
+  prompt: 5,
+  messages: 3,
+};
 
 /** An item's summary is cut to this many tokens. */
 const SUMMARY_TOKENS = 40;
+
+/** A past message's excerpt is cut to this many tokens. */
+const MESSAGE_TOKENS = 60;
 
 /** Sessions that ended longer ago than this are left out of a brief. */
 const SESSION_MAX_AGE_MS = 30 * 86_400_000;
@@ -84,17 +102,23 @@ export interface RecallInput {
   device?: string;
 }
 
-/** What a recall item is: an entry, a session, or a thread of sessions. */
-export type RecallItemKind = 'entry' | 'session' | 'thread';
+export const RECALL_ITEM_KINDS = ['entry', 'session', 'thread', 'event'] as const;
+/** What a recall item is: an entry, a session, a thread of sessions, or an event (a message). */
+export type RecallItemKind = (typeof RECALL_ITEM_KINDS)[number];
 
 export interface RecallItem {
   rank: number;
   layer: RecallLayer;
   kind: RecallItemKind;
-  /** An entry id, `<source>:<session id>`, or a thread id. */
+  /** An entry id, `<source>:<session id>`, a thread id, or an event id. */
   ref: string;
-  /** The prompt's BM25 score for the entry (prompt items only). */
+  /** The prompt's BM25 score for the entry or message (prompt and message items only). */
   score: number | null;
+  /**
+   * Where an event's excerpt starts in its text, in code points, so that its line can be rebuilt
+   * exactly; null for other kinds.
+   */
+  excerpt: number | null;
   /** The line handed to the agent. */
   line: string;
   tokens: number;
@@ -517,6 +541,8 @@ interface Draft {
   kind: RecallItemKind;
   ref: string;
   score: number | null;
+  /** Where an event's excerpt starts (see RecallItem). */
+  excerpt?: number | null;
   line: string;
 }
 
@@ -637,6 +663,162 @@ function recentSessions(db: Database, plan: RecallPlan): Draft[] {
   return drafts;
 }
 
+/** The prompt's words a past message is looked up by, at most this many: its heaviest. */
+const MESSAGE_TERMS = 6;
+/** The newest matches of each word read as candidates. */
+const MESSAGE_CANDIDATES = 50;
+/** A candidate is matched on the start of its text, as a long prompt is. */
+const MESSAGE_CHARS = 2_000;
+/** About this many tokens of a message come before the word its excerpt is about. */
+const EXCERPT_LEAD_TOKENS = 12;
+
+/**
+ * The words of a prompt to look past messages up by: its distinct terms, without guesses at a word
+ * (pairs of one-letter CJK words) and the project's own name; words outside CJK of three characters
+ * or more with a letter, and CJK words of two or more; the MESSAGE_TERMS heaviest, in order of
+ * weight, and among equal weights in the order the prompt has them.
+ */
+function messageTerms(prompt: string, weights: TermWeights, project: string): string[] {
+  const { terms, guessed } = tokenize(prompt.slice(0, PROMPT_CHARS));
+  const name = project.toLowerCase();
+  const kept = [...new Set(terms)].filter((t) => {
+    if (guessed.has(t) || t === name) return false;
+    const n = [...t].length;
+    return (t.codePointAt(0) as number) >= WIDE ? n >= 2 : n >= 3 && /\p{L}/u.test(t);
+  });
+  return kept
+    .map((t, i) => ({ t, i, w: weights.weight(t) }))
+    .sort((a, b) => b.w - a.w || a.i - b.i)
+    .slice(0, MESSAGE_TERMS)
+    .map((x) => x.t);
+}
+
+/**
+ * The past messages a prompt matches, best first, at most one per session: the user's own prompts
+ * and agents' replies in the owner's conversations in this project, other than this session's and
+ * those handed to it since its last brief. Candidates are the newest messages that hold one of the
+ * prompt's heaviest words, found through the search index; they are matched as entries are
+ * (matchTerms), with the same weights and threshold.
+ */
+function pastMessages(
+  db: Database,
+  plan: RecallPlan,
+  weights: TermWeights,
+  handed: Set<string>,
+): Draft[] {
+  if (!plan.project || !plan.prompt) return [];
+  const found = new Map<string, SearchHit>();
+  for (const term of messageTerms(plan.prompt, weights, plan.project)) {
+    const hits = searchEvents(db, term, {
+      kinds: ['message'],
+      project: plan.project,
+      order: 'recent',
+      limit: MESSAGE_CANDIDATES,
+      until: plan.at,
+    });
+    for (const h of hits) if (!found.has(h.id)) found.set(h.id, h);
+  }
+  // Whether a session may be quoted, decided once per session: an owner's conversation, in this
+  // project as a brief's sessions are (two checkouts of the same name are told apart).
+  const sessions = new Map<string, boolean>();
+  const quotable = (h: SearchHit): boolean => {
+    const key = sessionKey(h.source, h.sessionId);
+    let ok = sessions.get(key);
+    if (ok === undefined) {
+      ok = inProject(db, plan, h.cwd, h.project) && isOwnerConversation(db, h.source, h.sessionId);
+      sessions.set(key, ok);
+    }
+    return ok;
+  };
+  const pool = [...found.values()].filter(
+    (h) =>
+      (h.role === 'assistant' || (h.role === 'user' && isOwnerPrompt(h))) &&
+      !handed.has(h.id) &&
+      !(h.source === plan.source && h.sessionId === plan.sessionId) &&
+      quotable(h),
+  );
+  if (pool.length === 0) return [];
+  const matches = matchTerms(
+    plan.prompt,
+    pool.map((h) => h.text.slice(0, MESSAGE_CHARS)),
+    weights,
+    [plan.project],
+  );
+  const drafts: Draft[] = [];
+  const seen = new Set<string>();
+  for (const m of matches) {
+    if (drafts.length >= LAYER_MAX.messages) break;
+    const h = pool[m.index] as SearchHit;
+    const key = sessionKey(h.source, h.sessionId);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // The excerpt is about the heaviest word of the prompt the message holds.
+    const term = m.terms.reduce((a, b) => (weights.weight(b) > weights.weight(a) ? b : a));
+    const excerpt = excerptStart(h.text, term);
+    drafts.push({
+      layer: 'messages',
+      kind: 'event',
+      ref: h.id,
+      score: m.score,
+      excerpt,
+      line: messageLine(h, excerpt),
+    });
+  }
+  return drafts;
+}
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Where the excerpt of a message about `term` starts, in code points: a little before the term's
+ * first occurrence in the part of the text that was matched (outside CJK, as a word if it occurs as
+ * one), at the start of a word; 0 if it does not occur there.
+ */
+export function excerptStart(text: string, term: string): number {
+  const head = text.slice(0, MESSAGE_CHARS);
+  const word = escapeRegExp(term);
+  const wide = (term.codePointAt(0) as number) >= WIDE;
+  const found =
+    (wide ? null : new RegExp(`(?<![\\p{L}\\p{N}_])${word}(?![\\p{L}\\p{N}_])`, 'iu').exec(head)) ??
+    new RegExp(word, 'iu').exec(head);
+  if (!found) return 0;
+  const chars = [...text.slice(0, found.index)];
+  let start = chars.length;
+  let tokens = 0;
+  while (start > 0) {
+    const cost = ((chars[start - 1] as string).codePointAt(0) as number) >= WIDE ? 1 : 0.25;
+    if (tokens + cost > EXCERPT_LEAD_TOKENS) break;
+    tokens += cost;
+    start--;
+  }
+  // Not in the middle of a word: after the first space in the lead, if it has one.
+  if (start > 0 && !/\s/u.test(chars[start - 1] as string)) {
+    const space = chars.slice(start).findIndex((c) => /\s/u.test(c));
+    if (space >= 0) start += space + 1;
+  }
+  return start;
+}
+
+/**
+ * A message's excerpt from code point `start`: the rest of its text on one line, cut to
+ * MESSAGE_TOKENS, with `…` where text was left out at either end.
+ */
+export function messageExcerpt(text: string, start: number): string {
+  const chars = [...text];
+  const at = Math.min(Math.max(0, start), chars.length);
+  const before = /\S/u.test(chars.slice(0, at).join(''));
+  const body = chars.slice(at).join('').replace(/\s+/g, ' ').trim();
+  return cutTokens(`${before ? '…' : ''}${body}`, MESSAGE_TOKENS);
+}
+
+/** A past message's line: its id, its agent, its day, who wrote it, and its excerpt. */
+function messageLine(
+  e: Pick<SearchHit, 'id' | 'source' | 'ts' | 'role' | 'text'>,
+  start: number,
+): string {
+  return `- ${e.id} (${e.source}, ${day(e.ts)}, ${e.role}) ${messageExcerpt(e.text, start)}`;
+}
+
 /**
  * The brief's entries, newest first: this project's cognition, then cognition of no project; then
  * this project's memory and knowledge. Cognition of other projects comes only when a prompt
@@ -673,15 +855,26 @@ const HEADINGS: Record<RecallLayer, (plan: RecallPlan) => string> = {
   project: (p) => `Project ${p.project}:`,
   sessions: (p) => `Latest sessions in ${p.project}, any agent (source, time, session id):`,
   prompt: (p) => (p.occasion === 'prompt' ? 'Matching this prompt:' : 'Matching the task:'),
+  messages: (p) =>
+    p.occasion === 'prompt'
+      ? 'Past messages that match this prompt (agent, day, who):'
+      : 'Past messages that match the task (agent, day, who):',
 };
 
+/**
+ * The first line of a recall's text. A brief at the start of a session has no past messages; a
+ * recall with a prompt, or one an agent asks for, can have them.
+ */
 function header(plan: Pick<RecallPlan, 'occasion' | 'project'>, id: string): string {
   const scope = plan.project ? ` (project ${plan.project})` : '';
   const what =
     plan.occasion === 'prompt'
-      ? 'entries from the user’s cross-agent memory that match this prompt'
+      ? 'entries and past messages from the user’s cross-agent memory that match this prompt'
       : `a brief from the user’s cross-agent memory${scope}`;
-  return `Origin recall ${id}: ${what}, one line each. Origin's \`get\` opens any id here: an entry for its text and sources, a session or thread for its turns or sessions and what was written there. Entries can be outdated; the user's words in this session come first.`;
+  const messages = plan.occasion !== 'start';
+  const opens = `an entry for its text and sources, a session or thread for its turns or sessions and what was written there${messages ? ', a message for its full text and the turns around it' : ''}`;
+  const dated = messages ? 'Entries and messages' : 'Entries';
+  return `Origin recall ${id}: ${what}, one line each. Origin's \`get\` opens any id here: ${opens}. ${dated} can be outdated; the user's words in this session come first.`;
 }
 
 /**
@@ -731,6 +924,8 @@ export function planRecall(db: Database, input: RecallInput): RecallPlan {
     for (const m of matches) {
       drafts.push(draftOf(db, pool[m.index] as Candidate, 'prompt', plan, m.score));
     }
+    // The archive itself: what was said in the project's past conversations.
+    drafts.push(...pastMessages(db, plan, weights, handed));
   }
   fit(plan, drafts);
   return plan;
@@ -746,7 +941,7 @@ function fit(plan: RecallPlan, drafts: Draft[]): void {
     if (used + heading + tokens > plan.budget) continue;
     used += heading + tokens;
     layer = d.layer;
-    plan.items.push({ ...d, rank: plan.items.length + 1, tokens });
+    plan.items.push({ ...d, excerpt: d.excerpt ?? null, rank: plan.items.length + 1, tokens });
   }
   plan.tokens = plan.items.length > 0 ? used : 0;
 }
@@ -768,9 +963,9 @@ export function recallText(plan: RecallPlan, id: string): string {
 
 /**
  * The text a recorded recall handed over, rebuilt from what the store holds now: each item's line
- * as planning writes it, from its entry or session as it is now, and a session's prompts and time
- * as they were at the recall. An item forgotten or gone since is left out, its ref in `missing`;
- * nothing hidden is ever shown.
+ * as planning writes it, from its entry or session as it is now, a session's prompts and time as
+ * they were at the recall, and a message's excerpt from where it started. An item forgotten or gone
+ * since is left out, its ref in `missing`; nothing hidden is ever shown.
  */
 export function rebuildRecall(
   db: Database,
@@ -843,6 +1038,13 @@ export function rebuildRecall(
       else missing.push(item.ref);
       continue;
     }
+    if (item.kind === 'event') {
+      // An event never changes: its excerpt is cut again where it started. A forgotten one is gone.
+      const event = getEvent(db, item.ref);
+      if (event) lines.set(item.ref, messageLine(event, item.excerpt ?? 0));
+      else missing.push(item.ref);
+      continue;
+    }
     const at = item.ref.indexOf(':');
     const source = item.ref.slice(0, at);
     const id = item.ref.slice(at + 1);
@@ -895,8 +1097,8 @@ export function promptHash(prompt: string): string {
 
 /**
  * Record a recall, with or without items (a prompt that matched nothing is worth knowing too), and
- * return its id. Only ids, scores, and sizes are kept: the text can always be rebuilt from what is
- * still visible.
+ * return its id. Only ids, scores, sizes, and where excerpts start are kept: the text can always be
+ * rebuilt from what is still visible.
  */
 export function recordRecall(
   db: Database,
@@ -919,13 +1121,14 @@ export function recordRecall(
     promptHash: plan.prompt ? promptHash(plan.prompt) : null,
     budget: plan.budget,
     tokens: plan.tokens,
-    items: plan.items.map(({ rank, layer, kind, ref, score, tokens }) => ({
+    items: plan.items.map(({ rank, layer, kind, ref, score, tokens, excerpt }) => ({
       rank,
       layer,
       kind,
       ref,
       score,
       tokens,
+      excerpt,
     })),
   };
   transaction(db, () => insertRecall(db, record), { immediate: true });
@@ -952,11 +1155,20 @@ export function insertRecall(db: Database, r: RecallRecord): void {
     r.tokens,
   );
   const insert = db.prepare(
-    `INSERT INTO recall_item (recall_id, rank, layer, kind, ref, score, tokens)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO recall_item (recall_id, rank, layer, kind, ref, score, tokens, excerpt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const item of r.items) {
-    insert.run(r.id, item.rank, item.layer, item.kind, item.ref, item.score, item.tokens);
+    insert.run(
+      r.id,
+      item.rank,
+      item.layer,
+      item.kind,
+      item.ref,
+      item.score,
+      item.tokens,
+      item.excerpt ?? null,
+    );
   }
 }
 
@@ -987,6 +1199,8 @@ export interface RecallItemRecord {
   ref: string;
   score: number | null;
   tokens: number;
+  /** Where an event's excerpt starts, in code points (version 11); null for other kinds. */
+  excerpt: number | null;
 }
 
 export interface RecallRecord {
@@ -1035,7 +1249,8 @@ interface RecallRow {
 
 function withItems(db: Database, rows: RecallRow[]): RecallRecord[] {
   const items = db.prepare(
-    'SELECT rank, layer, kind, ref, score, tokens FROM recall_item WHERE recall_id = ? ORDER BY rank',
+    `SELECT rank, layer, kind, ref, score, tokens, excerpt FROM recall_item
+     WHERE recall_id = ? ORDER BY rank`,
   );
   return rows.map((r) => ({
     id: r.id,
@@ -1120,8 +1335,8 @@ export function recallSession(
 
 /**
  * The refs of a recall's items that its session went on to use, as the archive shows so far: an
- * entry id, a session id, or a thread id, in a later tool call or reply of the agent in that
- * session.
+ * entry id, a session id, a thread id, or an event id, in a later tool call or reply of the agent
+ * in that session.
  */
 export function usedRefs(
   db: Database,

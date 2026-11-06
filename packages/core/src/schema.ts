@@ -61,9 +61,11 @@
  *   forgotten_entry and excluded_event when the database is opened (BACKFILL_EFFECTS).
  * - change_log: append-only sequence of the entries and tombstones this store has received or
  *   written, filled by triggers; replication cursors point into it.
- * - recall / recall_item: each time this store handed an agent entries, sessions, or threads
- *   unasked (see recall.ts), and what it handed, by id, with each item's layer, score, and size. Only ids and
- *   a hash of the prompt, never text, so that a forget hides nothing a recall could still show.
+ * - recall / recall_item: each time this store handed an agent entries, sessions, threads, or past
+ *   messages unasked (see recall.ts), and what it handed, by id, with each item's layer, score, and
+ *   size, and for a message where its excerpt starts in its text (`excerpt`, a code-point offset;
+ *   version 11, which also allowed the kind `event` and the layer `messages`). Only ids, numbers,
+ *   and a hash of the prompt, never text, so that a forget hides nothing a recall could still show.
  *   Append-only: triggers reject updates and deletes.
  * - api_token: hub access tokens (name and SHA-256 hash; the token itself is never stored), each
  *   the credential of a device or an agent of the owner (`kind`), with what it may do (`preset`:
@@ -466,11 +468,12 @@ CREATE INDEX IF NOT EXISTS recall_session ON recall (source, session_id, seq);
 CREATE TABLE IF NOT EXISTS recall_item (
   recall_id TEXT    NOT NULL REFERENCES recall(id),
   rank      INTEGER NOT NULL,
-  layer     TEXT    NOT NULL CHECK (layer IN ('cognition', 'project', 'sessions', 'prompt')),
-  kind      TEXT    NOT NULL CHECK (kind IN ('entry', 'session', 'thread')),
+  layer     TEXT    NOT NULL CHECK (layer IN ('cognition', 'project', 'sessions', 'prompt', 'messages')),
+  kind      TEXT    NOT NULL CHECK (kind IN ('entry', 'session', 'thread', 'event')),
   ref       TEXT    NOT NULL,
   score     REAL,
   tokens    INTEGER NOT NULL,
+  excerpt   INTEGER CHECK (excerpt IS NULL OR (kind = 'event' AND excerpt >= 0)),
   PRIMARY KEY (recall_id, rank)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS recall_item_ref ON recall_item (ref);

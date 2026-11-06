@@ -241,10 +241,10 @@ function hubThread(r: ThreadResult, facts: LocalFacts): ThreadResult {
 /** The hub's recall, without the items this device has forgotten, in its items and its text. */
 function hubRecall(r: RecallResult, facts: LocalFacts): RecallResult {
   const hidden = r.items
-    .filter((i) => i.kind === 'entry' && facts.forgotten(i.id))
+    .filter((i) => (i.kind === 'entry' || i.kind === 'event') && facts.forgotten(i.id))
     .map((i) => i.id);
   if (hidden.length === 0) return r;
-  const lines = r.text.split('\n').filter((l) => !hidden.some((id) => l.startsWith(`- ${id}`)));
+  const lines = r.text.split('\n').filter((l) => !hidden.some((id) => l.startsWith(`- ${id} `)));
   // A heading left with no items under it goes too, with the blank line before it.
   const kept: string[] = [];
   lines.forEach((l, i) => {

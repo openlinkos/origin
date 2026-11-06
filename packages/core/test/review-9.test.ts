@@ -119,7 +119,7 @@ describe('places that were mirrored before the tables existed', () => {
       const logged: string[] = [];
       const upgraded = openDatabase(path.join(home, 'origin.db'), { log: (m) => logged.push(m) });
       try {
-        expect(upgraded.prepare('PRAGMA user_version').get()).toEqual({ user_version: 10 });
+        expect(upgraded.prepare('PRAGMA user_version').get()).toEqual({ user_version: 11 });
         expect(logged.join('\n')).toMatch(/version 10/);
         expect(placeOf(upgraded, 's1')).toMatchObject({ project: 'demo-app', signal: 'git' });
         const roots = upgraded.prepare('SELECT project FROM project_root').all() as Array<{

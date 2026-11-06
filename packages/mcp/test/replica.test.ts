@@ -554,6 +554,24 @@ describe('reading along references on a connected device', () => {
       facts,
     ) as RecallResult;
     expect(none).toMatchObject({ items: [], text: '' });
+    // A past message the device has forgotten goes too; one whose id merely starts the same stays.
+    const heading = 'Past messages that match the task (agent, day, who):';
+    const kept = '- fake:x10 (fake, 2026-10-20, assistant) Kept.';
+    const messages = mergeGet(
+      null,
+      {
+        ...recall([], ''),
+        occasion: 'request',
+        items: [
+          { ...item(1, 'fake:x1'), layer: 'messages', kind: 'event' as const },
+          { ...item(2, 'fake:x10'), layer: 'messages', kind: 'event' as const },
+        ],
+        text: `${header}\n\n${heading}\n- fake:x1 (fake, 2026-10-20, user) Gone.\n${kept}`,
+      },
+      facts,
+    ) as RecallResult;
+    expect(ids(messages.items)).toEqual(['fake:x10']);
+    expect(messages.text).toBe(`${header}\n\n${heading}\n${kept}`);
   });
 
   it("pages a session with the device's count of what follows, or the hub's", () => {

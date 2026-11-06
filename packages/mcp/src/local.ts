@@ -44,6 +44,7 @@ import {
   prepareProposal,
   proposalError,
   proposalJson,
+  type RecallItemKind,
   type RecallItemRecord,
   rawLocator,
   readRawLine,
@@ -319,8 +320,8 @@ export interface ThreadResult {
 export interface RecallItemView {
   rank: number;
   layer: string;
-  kind: 'entry' | 'session' | 'thread';
-  /** An entry id, a thread id, or a session id, with the session's `source`. */
+  kind: RecallItemKind;
+  /** An entry id, a thread id, an event id (a past message), or a session id, with its `source`. */
   id: string;
   source?: string;
   score: number | null;
@@ -1100,7 +1101,7 @@ function recallResult(db: Database, id: string): RecallResult {
   const used = session ? usedRefs(db, recall) : null;
   const item = (i: RecallItemRecord): RecallItemView => {
     const at = i.kind === 'session' ? i.ref.indexOf(':') : -1;
-    // A thread's item names the thread, an entry's the entry, a session's the session and source.
+    // A session's item names the session and its source; the others name what they are.
     return {
       rank: i.rank,
       layer: i.layer,

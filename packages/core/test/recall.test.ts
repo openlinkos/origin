@@ -6,11 +6,14 @@ import {
   correct,
   type Database,
   type EntryKind,
+  estimateTokens,
+  excerptStart,
   forget,
   getRecall,
   importedEntryId,
   listRecalls,
   matchTerms,
+  messageExcerpt,
   openDatabase,
   openMemoryDatabase,
   ownRecalls,
@@ -605,6 +608,385 @@ describe('recall with a prompt', () => {
   });
 });
 
+describe('recall of past messages', () => {
+  /** A day as recall lines write it, in local time. */
+  const dayOf = (ts: number) => {
+    const d = new Date(ts);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+  const prompt = 'How did we rotate the zephyr signing keys last time?';
+  const asked = (input: Partial<RecallInput> = {}) =>
+    inRepo({ occasion: 'prompt', prompt, ...input });
+  const messages = (input: RecallInput) =>
+    planRecall(db, input)
+      .items.filter((i) => i.layer === 'messages')
+      .map((i) => i.ref);
+
+  /** A conversation of Claude's in the repository: the user's prompt and the agent's reply. */
+  async function keys(): Promise<void> {
+    say('claude', {
+      id: 'k1-1',
+      session: 'k1',
+      ts: NOW - 3 * DAY,
+      role: 'user',
+      text: 'Rotate the zephyr signing keys before the audit',
+      cwd: REPO,
+    });
+    say('claude', {
+      id: 'k1-2',
+      session: 'k1',
+      ts: NOW - 3 * DAY + 60_000,
+      role: 'assistant',
+      text: 'Done: the zephyr signing keys were rotated with the vault script.',
+      cwd: REPO,
+    });
+    await sync('claude');
+  }
+
+  /** Lines of the helpers' fake source, which can say who wrote what and what a session is. */
+  async function fakeLines(lines: object[]): Promise<void> {
+    const dir = path.join(logs, 'fake');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(
+      path.join(dir, 'a.jsonl'),
+      lines.map((l) => `${JSON.stringify({ project: 'origin', cwd: REPO, ...l })}\n`).join(''),
+    );
+    await syncSource({ db, home }, fakeAdapter(dir));
+  }
+
+  it("hands over another agent's past message in this project, one line with its id", async () => {
+    await seed();
+    await keys();
+    const plan = planRecall(db, asked());
+    expect(plan.items.map((i) => `${i.layer}:${i.kind}:${i.ref}`)).toEqual([
+      'messages:event:claude:k1-1',
+    ]);
+    const item = plan.items[0];
+    expect(item?.score).toBeGreaterThan(0);
+    expect(item?.excerpt).toBe(0);
+    expect(item?.line).toBe(
+      `- claude:k1-1 (claude, ${dayOf(NOW - 3 * DAY)}, user) Rotate the zephyr signing keys before the audit`,
+    );
+    const text = recallText(plan, 'rcl_000000000001');
+    expect(text).toContain(
+      'entries and past messages from the user’s cross-agent memory that match this prompt',
+    );
+    expect(text).toContain('a message for its full text and the turns around it');
+    expect(text).toContain(
+      '\n\nPast messages that match this prompt (agent, day, who):\n- claude:k1-1',
+    );
+    expect(plan.tokens).toBeLessThanOrEqual(600);
+    // A brief at the start of a session has none, and says nothing of them.
+    const brief = recallText(planRecall(db, inRepo()), 'rcl_000000000002');
+    expect(brief).not.toContain('message');
+  });
+
+  it('hands them after the entries a prompt matches, and for a task an agent asks about', async () => {
+    await seed();
+    await keys();
+    const entry = note('Zephyr signing keys rotate every quarter', 'origin', 'knowledge');
+    const plan = planRecall(db, asked());
+    expect(plan.items.map((i) => `${i.layer}:${i.ref}`)).toEqual([
+      `prompt:${entry}`,
+      'messages:claude:k1-1',
+    ]);
+    const request = planRecall(db, inRepo({ occasion: 'request', sessionId: null, prompt }));
+    expect(request.items.map((i) => i.layer)).toEqual([
+      'project',
+      'sessions',
+      'sessions',
+      'messages',
+    ]);
+    expect(request.budget).toBe(1500);
+    expect(recallText(request, 'rcl_000000000001')).toContain(
+      'Past messages that match the task (agent, day, who):',
+    );
+    // No project, no past messages: they are always a project's.
+    expect(
+      messages(inRepo({ occasion: 'request', prompt, cwd: null, root: null, project: null })),
+    ).toEqual([]);
+  });
+
+  it('leaves out other projects, another checkout of the same name, and this very session', async () => {
+    await seed();
+    say('claude', {
+      id: 'o1',
+      session: 'o',
+      ts: NOW - 3 * DAY,
+      role: 'user',
+      text: 'Rotate the zephyr signing keys of the mirror',
+      cwd: '/work/mirrors',
+    });
+    say('zcode', {
+      id: 'x1',
+      session: 'x',
+      ts: NOW - 3 * DAY,
+      role: 'user',
+      text: 'Rotate the zephyr signing keys here too',
+      cwd: OTHER,
+    });
+    say('zcode', {
+      id: 'x2',
+      session: 'x',
+      ts: NOW - 3 * DAY + 1,
+      role: 'assistant',
+      text: 'Done.',
+      cwd: OTHER,
+    });
+    await sync('claude', 'zcode');
+    expect(messages(asked())).toEqual([]);
+    expect(messages(asked({ cwd: OTHER, root: OTHER }))).toEqual(['zcode:x1']);
+    await keys();
+    expect(messages(asked())).toEqual(['claude:k1-1']);
+    expect(messages(asked({ source: 'claude', sessionId: 'k1' }))).toEqual([]);
+  });
+
+  it('leaves out a forgotten message, and what the session was handed since its brief', async () => {
+    await seed();
+    await keys();
+    // Another prompt of the user's, so that k1 stays their conversation once k1-1 is forgotten.
+    say('claude', {
+      id: 'k1-3',
+      session: 'k1',
+      ts: NOW - 3 * DAY + 120_000,
+      role: 'user',
+      text: 'Thanks, that is all for today',
+      cwd: REPO,
+    });
+    await sync('claude');
+    const first = planRecall(db, asked());
+    expect(first.items.map((i) => i.ref)).toEqual(['claude:k1-1']);
+    recordRecall(db, first);
+    // The session's other message comes next, then nothing, until the next brief.
+    const second = planRecall(db, asked());
+    expect(second.items.map((i) => i.ref)).toEqual(['claude:k1-2']);
+    recordRecall(db, second);
+    expect(planRecall(db, asked()).items).toEqual([]);
+    recordRecall(db, planRecall(db, inRepo()));
+    expect(messages(asked())).toEqual(['claude:k1-1']);
+    forget(db, 'claude:k1-1', { reason: 'asked to', author: 'test' });
+    expect(messages(asked({ sessionId: 'later' }))).toEqual(['claude:k1-2']);
+  });
+
+  it("leaves out sub-agents, headless runs, and other people's words", async () => {
+    await seed();
+    const ts = NOW - 3 * DAY;
+    await fakeLines([
+      // A sub-agent's session, and a headless run.
+      {
+        id: 'c1',
+        session: 'child',
+        ts,
+        role: 'user',
+        text: 'Rotate the zephyr signing keys now',
+        kinds: [{ session: 'child', kind: 'child', signal: 'test' }],
+      },
+      {
+        id: 'c2',
+        session: 'child',
+        ts: ts + 1,
+        role: 'assistant',
+        text: 'Zephyr signing keys rotated.',
+      },
+      {
+        id: 'h1',
+        session: 'run',
+        ts,
+        role: 'user',
+        text: 'Rotate the zephyr signing keys for the nightly job',
+        kinds: [{ session: 'run', kind: 'headless', signal: 'test' }],
+      },
+      {
+        id: 'h2',
+        session: 'run',
+        ts: ts + 1,
+        role: 'assistant',
+        text: 'Zephyr signing keys rotated.',
+      },
+      // A meeting: another person's words alone.
+      {
+        id: 'p1',
+        session: 'meeting',
+        ts,
+        role: 'user',
+        text: 'Rotate the zephyr signing keys, please',
+        author: 'person',
+        speaker: 'Sam',
+      },
+      {
+        id: 'p2',
+        session: 'meeting',
+        ts: ts + 1,
+        role: 'assistant',
+        text: 'Zephyr signing keys noted.',
+      },
+      // The owner's conversation, where someone else asked and the agent answered.
+      { id: 'm1', session: 'mixed', ts, role: 'user', text: 'Plan the quarterly audit' },
+      {
+        id: 'm2',
+        session: 'mixed',
+        ts: ts + 1,
+        role: 'user',
+        text: 'Rotate the zephyr signing keys today',
+        author: 'person',
+        speaker: 'Sam',
+      },
+      {
+        id: 'm3',
+        session: 'mixed',
+        ts: ts + 2,
+        role: 'assistant',
+        text: 'Agreed: the zephyr signing keys first.',
+      },
+    ]);
+    expect(messages(asked())).toEqual(['fake:m3']);
+  });
+
+  it('hands at most one message of a session, and three in all', async () => {
+    await seed();
+    for (const s of ['a', 'b', 'c', 'd']) {
+      say('claude', {
+        id: `${s}1`,
+        session: s,
+        ts: NOW - 3 * DAY,
+        role: 'user',
+        text: `Check the release of ${s}`,
+        cwd: REPO,
+      });
+      // Session a has two messages that match, the others one each.
+      for (const n of s === 'a' ? [2, 3] : [2]) {
+        say('claude', {
+          id: `${s}${n}`,
+          session: s,
+          ts: NOW - 3 * DAY + n,
+          role: 'assistant',
+          text: 'The zephyr signing keys are rotated.',
+          cwd: REPO,
+        });
+      }
+    }
+    await sync('claude');
+    const got = messages(asked());
+    expect(got).toHaveLength(3);
+    expect(new Set(got.map((ref) => ref.slice(0, -1))).size).toBe(3);
+  });
+
+  it('needs the same evidence as an entry: one word alone does not match', async () => {
+    await seed();
+    say('claude', {
+      id: 'w1',
+      session: 'w',
+      ts: NOW - 3 * DAY,
+      role: 'user',
+      text: 'Why is the build called zephyr?',
+      cwd: REPO,
+    });
+    await sync('claude');
+    expect(messages(asked())).toEqual([]);
+  });
+
+  it('is rebuilt from where its excerpt started, and a forgotten message is missing', async () => {
+    await seed();
+    const reply = `${'We looked at the build output first. '.repeat(8)}Then the zephyr signing keys were rotated with the vault script.\n\n${'Other notes follow here. '.repeat(30)}`;
+    say('claude', {
+      id: 'v1',
+      session: 'v',
+      ts: NOW - 3 * DAY,
+      role: 'user',
+      text: 'What changed in the release?',
+      cwd: REPO,
+    });
+    say('claude', {
+      id: 'v2',
+      session: 'v',
+      ts: NOW - 3 * DAY + 1,
+      role: 'assistant',
+      text: reply,
+      cwd: REPO,
+    });
+    await sync('claude');
+    const plan = planRecall(db, asked());
+    const item = plan.items[0];
+    expect(item).toMatchObject({ layer: 'messages', kind: 'event', ref: 'claude:v2' });
+    const start = item?.excerpt as number;
+    expect(start).toBeGreaterThan(0);
+    // About 12 tokens before the word, at the start of a word.
+    expect([...reply].slice(start).join('')).toMatch(
+      /^We looked at the build output first\. Then the zephyr/,
+    );
+    expect(item?.line).toMatch(
+      /^- claude:v2 \(claude, \d{4}-\d\d-\d\d, assistant\) …We looked at the build output first\. Then the zephyr signing keys .*…$/,
+    );
+    expect(estimateTokens(item?.line.slice(item.line.indexOf(') ') + 2) ?? '')).toBeLessThanOrEqual(
+      60,
+    );
+
+    const id = recordRecall(db, plan);
+    const recall = getRecall(db, id) as RecallRecord;
+    expect(recall.items).toEqual([
+      {
+        rank: 1,
+        layer: 'messages',
+        kind: 'event',
+        ref: 'claude:v2',
+        score: item?.score,
+        tokens: item?.tokens,
+        excerpt: start,
+      },
+    ]);
+    // Only ids and numbers: the message's text is not in the record.
+    expect(JSON.stringify(db.prepare('SELECT * FROM recall_item').all())).not.toContain('zephyr');
+    const rebuilt = rebuildRecall(db, recall);
+    expect(rebuilt.text).toBe(recallText(plan, id));
+    expect(rebuilt.lines.get('claude:v2')).toBe(item?.line);
+
+    // The agent opened it.
+    say('codex', {
+      id: 'n1',
+      session: 'now',
+      ts: NOW + 1,
+      role: 'assistant',
+      kind: 'tool_use',
+      text: 'origin get {"id":"claude:v2"}',
+      cwd: REPO,
+    });
+    await sync('codex');
+    expect(usedRefs(db, recall)).toEqual(new Set(['claude:v2']));
+
+    forget(db, 'claude:v2', { reason: 'asked to', author: 'test' });
+    const after = rebuildRecall(db, recall);
+    expect(after.missing).toEqual(['claude:v2']);
+    expect(after.text).toBe('');
+  });
+
+  it('cuts an excerpt a little before the word it is about, at the start of a word', () => {
+    expect(excerptStart('Rotate the keys', 'rotate')).toBe(0);
+    expect(excerptStart('Nothing here', 'zephyr')).toBe(0);
+    const text = `${'alpha beta gamma '.repeat(10)}zephyr ${'tail '.repeat(100)}`;
+    const start = excerptStart(text, 'zephyr');
+    expect(start).toBeGreaterThan(0);
+    expect(text[start - 1]).toBe(' ');
+    expect(start).toBeGreaterThan(text.indexOf('zephyr') - 52);
+    const excerpt = messageExcerpt(text, start);
+    expect(excerpt.startsWith('…')).toBe(true);
+    expect(excerpt.endsWith('…')).toBe(true);
+    expect(excerpt).toContain('zephyr');
+    expect(estimateTokens(excerpt)).toBeLessThanOrEqual(60);
+    // As a whole word where it is one, not inside another.
+    const words = `zephyrs ${'x '.repeat(60)}zephyr`;
+    expect(excerptStart(words, 'zephyr')).toBeGreaterThan(words.indexOf(' zephyr') - 52);
+    expect(excerptStart('zephyrs blew', 'zephyr')).toBe(0);
+    expect(messageExcerpt('a  b\n\nc', 0)).toBe('a b c');
+    // CJK: the lead is counted in tokens, one per letter, and the offset in code points.
+    const cjk = `𠀀${'这是一段很长的前文内容'.repeat(3)}签名密钥已经轮换`;
+    const at = excerptStart(cjk, '签名');
+    expect([...cjk].slice(at).join('')).toMatch(/签名密钥已经轮换$/);
+    expect([...cjk].length - at).toBe(12 + 8);
+    expect(messageExcerpt(cjk, at)).toBe(`…${[...cjk].slice(at).join('')}`);
+  });
+});
+
 describe('the scope of a recall', () => {
   it('is the work tree that holds the directory, looked up on disk only where asked', () => {
     const repo = path.join(logs, 'acme');
@@ -662,5 +1044,45 @@ describe('replicating recalls', () => {
     ]) {
       expect(() => parseReplicaRecall(bad)).toThrow(/Invalid/);
     }
+  });
+
+  it('carries where a past message’s excerpt starts, and takes recalls without it', async () => {
+    await seed();
+    note('Approve releases only when the user asks', 'origin');
+    const id = recordRecall(db, planRecall(db, inRepo()));
+    const sent = JSON.parse(JSON.stringify(ownRecalls(db, 0)[0]?.recall));
+    expect(sent.items[0]).toMatchObject({ kind: 'entry', excerpt: null });
+    const message = {
+      rank: 2,
+      layer: 'messages',
+      kind: 'event',
+      ref: 'claude:s1-2',
+      score: 3.5,
+      tokens: 20,
+    };
+    const withMessage = { ...sent, items: [sent.items[0], { ...message, excerpt: 17 }] };
+    const hub = openMemoryDatabase();
+    try {
+      expect(receiveRecall(hub, parseReplicaRecall(withMessage))).toBe('applied');
+      expect(getRecall(hub, id)?.items[1]).toEqual({ ...message, excerpt: 17 });
+      expect(receiveRecall(hub, parseReplicaRecall(withMessage))).toBe('exists');
+      const moved = { ...sent, items: [sent.items[0], { ...message, excerpt: 18 }] };
+      expect(() => receiveRecall(hub, parseReplicaRecall(moved))).toThrow(/different content/);
+    } finally {
+      hub.close();
+    }
+    // A device of an earlier version sends no excerpt at all.
+    const old = { ...sent, items: sent.items.map(({ excerpt: _, ...i }: { excerpt: null }) => i) };
+    expect(parseReplicaRecall(old).items[0]).toMatchObject({ kind: 'entry', excerpt: null });
+    expect(parseReplicaRecall({ ...sent, items: [sent.items[0], message] }).items[1]).toMatchObject(
+      { kind: 'event', excerpt: null },
+    );
+    for (const excerpt of [-1, 1.5, '3', 2e6]) {
+      const bad = { ...sent, items: [sent.items[0], { ...message, excerpt }] };
+      expect(() => parseReplicaRecall(bad)).toThrow(/Invalid/);
+    }
+    // Only a message has an excerpt.
+    const entry = { ...sent, items: [{ ...sent.items[0], excerpt: 3 }] };
+    expect(() => parseReplicaRecall(entry)).toThrow(/Invalid/);
   });
 });

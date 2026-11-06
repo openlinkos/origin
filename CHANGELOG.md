@@ -11,6 +11,15 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 - `digest` reads, so read-only agents have it too. On a device connected to a hub, it is the hub's digest of the device's day, less what the device has forgotten, or the device's own when the hub does not answer in time; on a relay, the call and `origin digest` go to the hub. `origin digest --json` prints what the tool returns.
 - The store format does not change.
 
+### Past messages in recall
+
+- Recall hands over what was said, not only what was written down: with each prompt, after the entries that match it, up to three past messages of the project's conversations that match it the same way, your prompts and your agents' replies, each from a different session and none from the session itself. Each is one line: its event id, its agent, its day, and who wrote it, and an excerpt around the rarest of the prompt's words it holds; `get` on the id opens the whole message and the turns around it. A sub-agent's session, a headless run, and other people's words are never quoted, and nothing forgotten is.
+- `brief` with `about` hands over the past messages that match the task the same way.
+- A prompt's matches may now take about 600 tokens (they took 400), and a brief an agent asks for about 1,500 (it took 1,200), to make room for them.
+- A recall records a past message by its id and where its excerpt starts, never by its text: `origin show rcl_…`, `get` on a recall, and the admin UI show it as it is now, linked, or that it was forgotten since.
+- A search within a project, as recall makes for each word it looks up, checks each match's project where that reads less than listing the project's events first; on a store of 200,000 events, this took looking past messages up from about a second to a few tens of milliseconds.
+- **Upgrading.** The store format moves from version 10 to version 11: the first command after the upgrade, or the hub as it starts, makes the table of recall items again, keeping every row. Upgrade the hub before its devices: a hub of 0.5 refuses a recall that lists a past message, and a device's sync says so and keeps that recall, and those after it, until the hub is upgraded.
+
 ### Removed
 
 - `origin distill` is removed, with `ORIGIN_DISTILL_COMMAND` and its guide page. Origin stores and serves your memory and runs no model; consolidating memory is left to agents that read it through the MCP tools and propose entries with `propose`. Proposals, and accepting or rejecting them in the CLI and the admin UI, are unchanged.

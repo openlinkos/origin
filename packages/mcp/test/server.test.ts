@@ -153,6 +153,26 @@ describe('origin MCP server', () => {
     expect(nowhere.text).toContain('Pass `cwd`');
   });
 
+  it('hands over the past messages that match the task an agent asks about', async () => {
+    await call('search', {}); // ingest
+    const r = await call('brief', {
+      cwd: '/home/dana/code/demo',
+      about: 'Why did we pick SQLite with trigram search?',
+    });
+    expect(r.json.text).toContain('a message for its full text and the turns around it');
+    expect(r.json.text).toMatch(
+      /\n\nPast messages that match the task \(agent, day, who\):\n- fake:e2 \(fake, \d{4}-\d\d-\d\d, assistant\) Done: SQLite with FTS5 trigram search\.$/,
+    );
+    expect(getRecall(db, r.json.recall)?.items).toEqual([
+      expect.objectContaining({ layer: 'messages', kind: 'event', ref: 'fake:e2', excerpt: 0 }),
+    ]);
+    const opened = (await call('get', { id: r.json.recall })).json;
+    expect(opened.items).toEqual([
+      expect.objectContaining({ layer: 'messages', kind: 'event', id: 'fake:e2' }),
+    ]);
+    expect(opened.text).toBe(r.json.text);
+  });
+
   it("knows the agents Origin reads behind their MCP clients' names", () => {
     expect(sourceOfAgent('claude-code')).toBe('claude-code');
     expect(sourceOfAgent('codex-mcp-client')).toBe('codex');

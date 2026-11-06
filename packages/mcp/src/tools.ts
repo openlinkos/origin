@@ -44,7 +44,7 @@ export const TOOL_SPECS = {
   brief: {
     title: 'Brief',
     description:
-      "What the user's memory holds for where you work, one line per item: their preferences and boundaries, the project's latest decisions and facts, and its latest sessions with any agent (a parent line adds its child count and workflow names); with `about`, also the entries that match it. Call it when you start a task, unless you were already given an Origin recall.",
+      "What the user's memory holds for where you work, one line per item: their preferences and boundaries, the project's latest decisions and facts, and its latest sessions with any agent (a parent line adds its child count and workflow names); with `about`, also the entries that match it and the past messages of the project's sessions that match it, each with its event id. Call it when you start a task, unless you were already given an Origin recall.",
     inputSchema: {
       cwd: z
         .string()

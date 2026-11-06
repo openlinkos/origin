@@ -33,6 +33,7 @@ import { fakeAdapter, line } from './helpers.js';
 import {
   downgradeToV5,
   downgradeToV6,
+  downgradeToV10,
   legacyStore,
   schemaOf,
   store040,
@@ -378,7 +379,7 @@ describe('a store of version 5', () => {
 
     db = openDatabase(file);
     expect(userVersion(db)).toBe(STORE_VERSION);
-    expect(STORE_VERSION).toBe(10);
+    expect(STORE_VERSION).toBe(11);
     expect({
       proposals: db.prepare('SELECT * FROM proposal').all(),
       sources: db.prepare('SELECT * FROM proposal_source').all(),
@@ -440,6 +441,75 @@ describe('a store of version 6', () => {
       ['ui', 'login'],
     ]);
     expect(() => db.prepare('DELETE FROM audit_log').run()).toThrow(/append-only/);
+    const fresh = openDatabase(path.join(tmp, 'fresh.db'));
+    expect(schemaOf(db)).toEqual(schemaOf(fresh));
+    fresh.close();
+    db.close();
+  });
+});
+
+describe('a store of version 10', () => {
+  it('keeps its recall items, which can now be past messages with an excerpt (version 11)', () => {
+    let db = openDatabase(file);
+    db.prepare(
+      `INSERT INTO recall (id, at, origin, occasion, budget, tokens)
+       VALUES ('rcl_000000000001', 1000, 'laptop', 'prompt', 400, 60)`,
+    ).run();
+    const item = db.prepare(
+      `INSERT INTO recall_item (recall_id, rank, layer, kind, ref, score, tokens)
+       VALUES ('rcl_000000000001', ?, ?, ?, ?, ?, 20)`,
+    );
+    item.run(1, 'prompt', 'entry', 'ent_000000000001', 2.5);
+    item.run(2, 'sessions', 'thread', 'thr_0123456789ab', null);
+    const before = db.prepare('SELECT * FROM recall_item ORDER BY rank').all();
+    db.close();
+    downgradeToV10(file);
+    const v10 = new DatabaseSync(file);
+    expect(userVersion(v10)).toBe(10);
+    expect(() =>
+      v10
+        .prepare(
+          `INSERT INTO recall_item (recall_id, rank, layer, kind, ref, score, tokens)
+           VALUES ('rcl_000000000001', 3, 'messages', 'event', 'fake:1', 1, 20)`,
+        )
+        .run(),
+    ).toThrow(/CHECK/);
+    v10.close();
+
+    const logged: string[] = [];
+    db = openDatabase(file, { log: (m) => logged.push(m) });
+    expect(userVersion(db)).toBe(STORE_VERSION);
+    expect(STORE_VERSION).toBe(11);
+    expect(logged.join('\n')).toMatch(/Upgrading the store to version 11/);
+    // Every row kept, with no excerpt.
+    expect(db.prepare('SELECT * FROM recall_item ORDER BY rank').all()).toEqual(before);
+    expect(before).toEqual([
+      expect.objectContaining({ rank: 1, kind: 'entry', excerpt: null }),
+      expect.objectContaining({ rank: 2, kind: 'thread', excerpt: null }),
+    ]);
+    // A past message, with where its excerpt starts; no other kind has one.
+    db.prepare(
+      `INSERT INTO recall_item (recall_id, rank, layer, kind, ref, score, tokens, excerpt)
+       VALUES ('rcl_000000000001', 3, 'messages', 'event', 'fake:1', 1.5, 20, 42)`,
+    ).run();
+    const bad = db.prepare(
+      `INSERT INTO recall_item (recall_id, rank, layer, kind, ref, score, tokens, excerpt)
+       VALUES ('rcl_000000000001', 4, ?, ?, 'x', NULL, 1, ?)`,
+    );
+    expect(() => bad.run('prompt', 'entry', 3)).toThrow(/CHECK/);
+    expect(() => bad.run('messages', 'event', -1)).toThrow(/CHECK/);
+    expect(() => bad.run('later', 'event', null)).toThrow(/CHECK/);
+    expect(db.prepare('SELECT ref, excerpt FROM recall_item WHERE kind = ?').get('event')).toEqual({
+      ref: 'fake:1',
+      excerpt: 42,
+    });
+    expect(() => db.prepare('UPDATE recall_item SET excerpt = 1').run()).toThrow(/append-only/);
+    expect(() => db.prepare('DELETE FROM recall_item').run()).toThrow(/append-only/);
+    expect(
+      db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'recall_item_ref'")
+        .get(),
+    ).toBeDefined();
     const fresh = openDatabase(path.join(tmp, 'fresh.db'));
     expect(schemaOf(db)).toEqual(schemaOf(fresh));
     fresh.close();

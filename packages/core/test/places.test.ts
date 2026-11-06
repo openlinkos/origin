@@ -514,11 +514,11 @@ describe('places.jsonl', () => {
     }
   });
 
-  it('is store format 10 and starts empty', () => {
-    expect(STORE_VERSION).toBe(10);
+  it('is store format 11 and starts empty', () => {
+    expect(STORE_VERSION).toBe(11);
     const db = open(tempDir('origin-place-ver-'));
     try {
-      expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 10 });
+      expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 11 });
       expect((db.prepare('SELECT COUNT(*) AS n FROM session_place').get() as { n: number }).n).toBe(
         0,
       );

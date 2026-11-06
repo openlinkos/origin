@@ -582,6 +582,7 @@ export const en = {
   'recall.layer.project': 'Project',
   'recall.layer.sessions': 'Recent session',
   'recall.layer.prompt': 'Match',
+  'recall.layer.messages': 'Past message',
   'recall.gone.forgotten': 'forgotten since',
   'recall.gone.missing': 'not on this store',
   'recall.tokens': 'Size',

@@ -566,6 +566,7 @@ export const zh: Messages = {
   'recall.layer.project': '项目',
   'recall.layer.sessions': '最近的会话',
   'recall.layer.prompt': '匹配',
+  'recall.layer.messages': '过往消息',
   'recall.gone.forgotten': '之后已遗忘',
   'recall.gone.missing': '不在本库中',
   'recall.tokens': '大小',

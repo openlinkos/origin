@@ -121,6 +121,50 @@ export function downgradeToV1(file: string): void {
   }
 }
 
+/**
+ * Undo version 11: recall_item as version 5 made it, without the kind `event`, the layer
+ * `messages`, or `excerpt`, its rows, index, and triggers kept. Throws on an item version 10 cannot
+ * hold.
+ */
+function undoV11(db: DatabaseSync): void {
+  db.exec(`
+CREATE TABLE recall_item_v10 (
+  recall_id TEXT    NOT NULL REFERENCES recall(id),
+  rank      INTEGER NOT NULL,
+  layer     TEXT    NOT NULL CHECK (layer IN ('cognition', 'project', 'sessions', 'prompt')),
+  kind      TEXT    NOT NULL CHECK (kind IN ('entry', 'session', 'thread')),
+  ref       TEXT    NOT NULL,
+  score     REAL,
+  tokens    INTEGER NOT NULL,
+  PRIMARY KEY (recall_id, rank)
+) WITHOUT ROWID;
+INSERT INTO recall_item_v10 (recall_id, rank, layer, kind, ref, score, tokens)
+  SELECT recall_id, rank, layer, kind, ref, score, tokens FROM recall_item;
+DROP TABLE recall_item;
+ALTER TABLE recall_item_v10 RENAME TO recall_item;
+CREATE INDEX recall_item_ref ON recall_item (ref);
+CREATE TRIGGER recall_item_no_update BEFORE UPDATE ON recall_item BEGIN
+  SELECT RAISE(ABORT, 'recall_item is append-only');
+END;
+CREATE TRIGGER recall_item_no_delete BEFORE DELETE ON recall_item BEGIN
+  SELECT RAISE(ABORT, 'recall_item is append-only');
+END;`);
+}
+
+/**
+ * Turn a store of the latest version, closed, back into a store of version 10: recall items that
+ * cannot be past messages (see undoV11).
+ */
+export function downgradeToV10(file: string): void {
+  const db = new DatabaseSync(file);
+  try {
+    undoV11(db);
+    db.exec('PRAGMA user_version = 10');
+  } finally {
+    db.close();
+  }
+}
+
 /** The table version 10 added: parent sessions. Dropping it drops its index. */
 function dropParents(db: DatabaseSync): void {
   db.exec('DROP TABLE IF EXISTS session_parent');
@@ -148,6 +192,7 @@ function dropAuthorship(db: DatabaseSync): void {
 export function downgradeToV7(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    undoV11(db);
     dropParents(db);
     dropPlaces(db);
     dropAuthorship(db);
@@ -165,6 +210,7 @@ export function downgradeToV7(file: string): void {
 export function downgradeToV5(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    undoV11(db);
     dropParents(db);
     dropPlaces(db);
     dropAuthorship(db);
@@ -224,6 +270,7 @@ END;`);
 export function downgradeToV6(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    undoV11(db);
     dropParents(db);
     dropPlaces(db);
     dropAuthorship(db);

@@ -185,7 +185,51 @@ export const MIGRATIONS: Migration[] = [
       deriveThreads(ctx.db);
     },
   },
+  {
+    // Recall hands over past messages too (see recall.ts): an item may be an event, in the layer
+    // `messages`, with where its excerpt starts. A CHECK constraint cannot be changed in place, so
+    // recall_item is made again, rows, index, and triggers with it, as version 5 did. A store
+    // without recall tables yet gets them from the schema after the migrations.
+    version: 11,
+    name: 'recall items that are past messages',
+    up: ({ db }) => {
+      if (!hasTable(db, 'recall_item')) return;
+      const excerpt = hasColumn(db, 'recall_item', 'excerpt') ? 'excerpt' : 'NULL';
+      db.exec(recallItemV11(excerpt));
+    },
+  },
 ];
+
+/**
+ * recall_item again, whose items may now be past messages, with where each one's excerpt starts;
+ * its triggers and index go with it. `excerpt` is what the old rows hold for it (none, NULL).
+ */
+function recallItemV11(excerpt: string): string {
+  return `
+CREATE TABLE recall_item_v11 (
+  recall_id TEXT    NOT NULL REFERENCES recall(id),
+  rank      INTEGER NOT NULL,
+  layer     TEXT    NOT NULL CHECK (layer IN ('cognition', 'project', 'sessions', 'prompt', 'messages')),
+  kind      TEXT    NOT NULL CHECK (kind IN ('entry', 'session', 'thread', 'event')),
+  ref       TEXT    NOT NULL,
+  score     REAL,
+  tokens    INTEGER NOT NULL,
+  excerpt   INTEGER CHECK (excerpt IS NULL OR (kind = 'event' AND excerpt >= 0)),
+  PRIMARY KEY (recall_id, rank)
+) WITHOUT ROWID;
+INSERT INTO recall_item_v11 (recall_id, rank, layer, kind, ref, score, tokens, excerpt)
+  SELECT recall_id, rank, layer, kind, ref, score, tokens, ${excerpt} FROM recall_item;
+DROP TABLE recall_item;
+ALTER TABLE recall_item_v11 RENAME TO recall_item;
+CREATE INDEX IF NOT EXISTS recall_item_ref ON recall_item (ref);
+CREATE TRIGGER IF NOT EXISTS recall_item_no_update BEFORE UPDATE ON recall_item BEGIN
+  SELECT RAISE(ABORT, 'recall_item is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS recall_item_no_delete BEFORE DELETE ON recall_item BEGIN
+  SELECT RAISE(ABORT, 'recall_item is append-only');
+END;
+`;
+}
 
 /**
  * Version 9: where a session belongs. Written here, not imported from schema.ts. A new store is
