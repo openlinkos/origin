@@ -101,7 +101,7 @@ export function proposalsPage(ctx: Ctx, b: ProposalBoard & { filter: ProposalBoa
           title: f.status === 'pending' ? t('proposals.nonePending') : t('proposals.none'),
           text: t('proposals.noneHelp'),
           action: linkButton(ctx, {
-            href: docsUrl(ctx, 'guide/distill'),
+            href: docsUrl(ctx, 'guide/concepts#proposals'),
             label: t('proposals.howItWorks'),
             size: 'sm',
           }),

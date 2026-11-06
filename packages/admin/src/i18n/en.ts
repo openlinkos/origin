@@ -697,7 +697,7 @@ export const en = {
     'Nothing it covers is hidden on this store: what it hid is held elsewhere, or another record changed it.',
 
   'proposals.help':
-    'Entries agents proposed rather than saved: what they inferred and you have not confirmed, and what origin distill had Claude Code consolidate. Accepting writes the entry as you; rejecting forgets the proposal, as a record with your reason that a restore lifts.',
+    'Entries agents proposed rather than saved: what they inferred and you have not confirmed, and what they wrote when consolidating your memory for you. Accepting writes the entry as you; rejecting forgets the proposal, as a record with your reason that a restore lifts.',
   'proposals.status': 'Status',
   'proposals.status.pending': 'Pending',
   'proposals.status.accepted': 'Accepted',
@@ -708,8 +708,8 @@ export const en = {
   'proposals.nonePending': 'No proposals wait for review',
   'proposals.none': 'No proposals',
   'proposals.noneHelp':
-    'Agents propose entries with the propose tool, and origin distill has Claude Code read a day of your work and propose what is worth keeping.',
-  'proposals.howItWorks': 'How consolidation works',
+    'Agents propose entries with the propose tool: what they infer and you have not confirmed, and what they find worth keeping when they read your work through Origin. Each waits here for you to accept or reject it.',
+  'proposals.howItWorks': 'How proposals work',
   'proposal.rejectedNotice':
     'Rejected {when} by {author}. What it proposed shows on the page of the record that rejected it, where you can restore it:',
   'proposal.sourcesHelp': 'The events it rests on',

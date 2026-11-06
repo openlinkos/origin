@@ -669,7 +669,7 @@ export const zh: Messages = {
     '它覆盖的内容在这个存储上都没有被隐藏：这些内容在别的存储上，或者已被其他记录改变。',
 
   'proposals.help':
-    'Agent 提出而没有直接保存的条目：它们推断出、你尚未确认的内容，以及 origin distill 让 Claude Code 整理出的内容。接受会以你的身份写下条目；拒绝会遗忘这条提议，并留下一条带有你的原因的记录，恢复这条记录即可撤销。',
+    'Agent 提出而没有直接保存的条目：它们推断出、你尚未确认的内容，以及它们替你整理记忆时写下的内容。接受会以你的身份写下条目；拒绝会遗忘这条提议，并留下一条带有你的原因的记录，恢复这条记录即可撤销。',
   'proposals.status': '状态',
   'proposals.status.pending': '待审',
   'proposals.status.accepted': '已接受',
@@ -680,8 +680,8 @@ export const zh: Messages = {
   'proposals.nonePending': '没有等待审阅的提议',
   'proposals.none': '没有提议',
   'proposals.noneHelp':
-    'Agent 用 propose 工具提议条目；origin distill 会让 Claude Code 读你一天的工作，提议值得保留的内容。',
-  'proposals.howItWorks': '整理记忆如何进行',
+    'Agent 用 propose 工具提议条目：它们推断出、你尚未确认的内容，以及它们通过 Origin 读你的工作时发现值得保留的内容。每条提议都在这里等你接受或拒绝。',
+  'proposals.howItWorks': '提议如何工作',
   'proposal.rejectedNotice':
     '已于 {when} 由 {author} 拒绝。它提议的内容显示在拒绝它的那条记录的页面上，你可以在那里恢复它：',
   'proposal.sourcesHelp': '它依据的事件',
