@@ -6,14 +6,20 @@ sourceHash: sha256-893580dc
 
 Origin 所有值得注意的改动都列在这里。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；1.0 之前，次版本可能改变存储格式或公开接口，它的说明会写明需要怎么做。六个包（`@openlinkos/origin` 以及 `@openlinkos/origin-core`、`-adapters`、`-mcp`、`-admin` 和 OpenClaw 插件 `-openclaw`）以同一个版本号一起发布。英文版更新日志（`CHANGELOG.md`）是 GitHub 发布说明的来源。
 
-## [Unreleased] {#unreleased}
+## [0.6.0] - 2026-11-06 {#_0-6-0-2026-11-06}
+
+随每个提示交给 Agent 的不只是条目，还有你过往的消息；让 ZCode、Cursor 和 OpenClaw 的 Agent 也获得召回；用 `digest` 回顾一天；告诉事件行的写入方某一行为什么被拒；并让一个可能永远不结束的检索能够结束。
+
+**升级。** 库格式从版本 10 升级到版本 11：升级后的第一条命令，或者启动中的中枢，会重新建立召回项的表，保留每一行；只需片刻。请先升级中枢，再升级它的设备：0.5 的中枢会拒绝列出过往消息的召回，设备的同步会报告这一点，并保留这次召回及其后的召回，直到中枢升级。然后重启你的 Agent，或者它们的 Origin MCP server：0.5.0 的 `origin mcp` 不会写入已升级的库，会退出，让它的客户端启动新的版本。然后在每台设备上：
+
+- 运行 `origin agents connect`，再加上 `--yes` 运行一次，加上 ZCode 和 Cursor 的召回 hook。ZCode 只在 `hooks.enabled` 为 true 时运行 hook：Origin 的 hook 是那里仅有的 hook 时，Origin 会把它打开，否则说明这一点。然后为每个 Agent 开始一个新会话。
+- 在 OpenClaw 上更新插件（`openclaw plugins update "@openlinkos/origin-openclaw@0.6.0"`）并重启 Gateway：接入中枢时，它会在你自己的回合中给你的 Agent 提供 Origin 的读取工具。
 
 ### 每日摘要 {#daily-digest}
 
 - 新的 MCP 工具 `digest` 和 `origin digest` 只从库中读取，不调用任何模型，回顾一个日历日：当天的合计，按项目和按 Agent 分列；当天的顶层会话，最近的在前，每个会话附上你当天的提示、按工具统计的工具调用，以及它的编辑调用改过的文件，子会话的工作也计入其中；当天写下的条目和提出的提议；以及当天的遗忘和恢复，只列 id。被遗忘的内容既不计数也不显示。每个会话、条目和提议都带着它的 id，可以交给 `get` 或 `origin show`。
 - 日子默认是今天，可用 `day`（`--day`）指定别的日子，按作答进程的时区计算，或者按 `time_zone` 指定的时区；`project` 和 `source` 缩小范围，`limit` 限制每个列表的条数（默认 50，最多 200）。各 Agent 哪些工具算作编辑文件，见来源的文档。
 - `digest` 只读，所以只读的 Agent 也能用。在已接入中枢的设备上，它是中枢对这台设备的那一天的摘要，去掉设备已遗忘的内容；中枢没有及时作答时，则是设备自己的摘要；在中继上，这个调用和 `origin digest` 都交给中枢。`origin digest --json` 打印的就是这个工具返回的内容。
-- 存储格式没有变化。
 
 ### 召回中的过往消息 {#past-messages-in-recall}
 
@@ -22,7 +28,6 @@ Origin 所有值得注意的改动都列在这里。版本号遵循[语义化版
 - 一个提示的匹配现在最多约 600 个 token（原来是 400），Agent 请求的简报最多约 1,500 个（原来是 1,200），为过往消息留出位置。
 - 召回记录过往消息时只记它的 id 和摘录从哪里开始，从不记它的文本：`origin show rcl_…`、对召回调用 `get`，以及管理界面，都按它现在的样子显示，带链接，或者显示它之后已被遗忘。
 - 在一个项目内的检索（召回查找每个词时就是这样检索的），在逐条检查匹配所属的项目读得更少时，就逐条检查，而不是先列出这个项目的所有事件；在有 200,000 个事件的库上，查找过往消息的用时因此从约一秒降到几十毫秒。
-- **升级。** 库格式从版本 10 升级到版本 11：升级后的第一条命令，或者启动中的中枢，会重新建立召回项的表，保留每一行。请先升级中枢，再升级它的设备：0.5 的中枢会拒绝列出过往消息的召回，设备的同步会报告这一点，并保留这次召回及其后的召回，直到中枢升级。
 
 ### 更多 Agent 获得召回 {#recall-in-more-agents}
 
@@ -31,7 +36,6 @@ Origin 所有值得注意的改动都列在这里。版本号遵循[语义化版
 - OpenClaw 的 Agent 通过 OpenClaw 插件读取 Origin。有中枢时，插件把五个工具交给它记录的 Agent：`origin_brief`、`origin_search`、`origin_get`、`origin_timeline` 和 `origin_digest`，但只在 OpenClaw 判定为其所有者私有记忆受众的轮次中提供：绝不提供给 Agent 在共享对话中答复的人，也不在别人的轮次中，不在 cron、心跳或其他脱离会话的运行中，因为 Origin 保存的会话未经脱敏。这些工具需要 OpenClaw 2026.10.6 或更高版本；在更早的版本上，插件一个也不提供，并说明原因。它们接受 MCP 工具 `brief`、`search`、`get`、`timeline` 和 `digest` 的参数，并把每次调用交给中枢的 `/mcp`，使用插件的中枢令牌；令牌像投递时一样从 Gateway 的配置中读取，所以始终是 SecretRef。`origin_brief` 为 Agent 给出它的会话所归项目的简报，即这一轮的记忆受众所指明的 Agent id，除非 `projectBy` 或 `project` 另有规定；它的说明让 Agent 在任务可能建立在以往工作之上时调用它。插件的清单把这些工具加进 OpenClaw 的 `coding`、`messaging` 和 `full` 工具配置档；新选项 `tools: false` 则一个也不提供。像以前一样用 `--force --accept-capabilities` 安装新版本的插件；不需要重启 Gateway。
 - Origin 的 hook 由别的 Agent 运行时什么都不做：Grok Build 和 Cursor 会运行 `~/.claude/settings.json` 中的 hook，Grok 运行它们时，曾以 `claude-code` 的名义记录下没有交给任何会话的召回。以前记录下的保持原样。
 - `origin agents` 会说明 Codex 何时还没有信任 Origin 的 hook，以及 ZCode 的 hook 何时处于关闭状态。
-- 运行 `origin agents connect`，再加上 `--yes` 运行一次，加上新的 hook，然后为每个 Agent 开始一个新会话。
 
 ### 发给中枢的事件行 {#event-lines-sent-to-a-hub}
 

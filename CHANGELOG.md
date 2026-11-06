@@ -2,14 +2,20 @@
 
 All notable changes to Origin are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the store format or a public interface, and its notes say what to do. The six packages (`@openlinkos/origin` and `@openlinkos/origin-core`, `-adapters`, `-mcp`, `-admin`, and `-openclaw`, the plugin for OpenClaw) are released together under one version.
 
-## [Unreleased]
+## [0.6.0] - 2026-11-06
+
+Hands agents your past messages with each prompt, not only entries; brings recall to ZCode, Cursor, and OpenClaw's agents; recaps a day with `digest`; tells a writer of event lines why a line was refused; and ends a search that could run forever.
+
+**Upgrading.** The store format moves from version 10 to version 11: the first command after the upgrade, or the hub as it starts, makes the table of recall items again, keeping every row; it takes a moment. Upgrade the hub before its devices: a hub of 0.5 refuses a recall that lists a past message, and a device's sync says so and keeps that recall, and those after it, until the hub is upgraded. Then restart your agents, or their Origin MCP servers: an `origin mcp` of 0.5.0 refuses to write to the upgraded store and exits, so that its client starts the new one. Then, on each device:
+
+- Run `origin agents connect`, and then with `--yes`, to add the recall hooks of ZCode and Cursor. ZCode runs hooks only while `hooks.enabled` is true: Origin turns it on when its hooks are the only ones there, and otherwise says so. Start a new session of each agent.
+- On OpenClaw, update the plugin (`openclaw plugins update "@openlinkos/origin-openclaw@0.6.0"`) and restart the Gateway: with a hub, it gives your agents Origin's read tools in your own turns.
 
 ### Daily digest
 
 - The new MCP tool `digest`, and `origin digest`, recap one calendar day from the store alone, with no model call: the day's totals, by project and by agent; its top-level sessions, most recent first, each with your prompts that day, its tool calls by tool, and the files its edit calls changed, with the work of its child sessions counted in; the entries written and the proposals made that day; and its forgets and restores, by id only. Nothing forgotten is counted or shown. Every session, entry, and proposal comes with its id, for `get` or `origin show`.
 - The day is today unless `day` (`--day`) names another, in the time zone of the process that answers, or the one `time_zone` names; `project` and `source` narrow it, and `limit` caps each list (50, at most 200). Which tools count as file edits, per agent, is in the documentation of sources.
 - `digest` reads, so read-only agents have it too. On a device connected to a hub, it is the hub's digest of the device's day, less what the device has forgotten, or the device's own when the hub does not answer in time; on a relay, the call and `origin digest` go to the hub. `origin digest --json` prints what the tool returns.
-- The store format does not change.
 
 ### Past messages in recall
 
@@ -18,7 +24,6 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 - A prompt's matches may now take about 600 tokens (they took 400), and a brief an agent asks for about 1,500 (it took 1,200), to make room for them.
 - A recall records a past message by its id and where its excerpt starts, never by its text: `origin show rcl_…`, `get` on a recall, and the admin UI show it as it is now, linked, or that it was forgotten since.
 - A search within a project, as recall makes for each word it looks up, checks each match's project where that reads less than listing the project's events first; on a store of 200,000 events, this took looking past messages up from about a second to a few tens of milliseconds.
-- **Upgrading.** The store format moves from version 10 to version 11: the first command after the upgrade, or the hub as it starts, makes the table of recall items again, keeping every row. Upgrade the hub before its devices: a hub of 0.5 refuses a recall that lists a past message, and a device's sync says so and keeps that recall, and those after it, until the hub is upgraded.
 
 ### Recall in more agents
 
@@ -27,7 +32,6 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 - OpenClaw's agents read Origin through the plugin for OpenClaw. With a hub, it gives the agents it records five tools, `origin_brief`, `origin_search`, `origin_get`, `origin_timeline`, and `origin_digest`, only in the turns OpenClaw resolves as its owner's private memory audience: never to the people an agent answers in a shared conversation, nor in someone else's turn, nor in a cron, heartbeat, or other detached run, since Origin keeps your sessions unredacted. The tools need OpenClaw 2026.10.6 or later; on an older one the plugin gives none and says so. They take the parameters of the MCP tools `brief`, `search`, `get`, `timeline`, and `digest` and hand each call to the hub's `/mcp` with the plugin's hub token, read from the Gateway's config as deliveries read it, so the token stays a SecretRef. `origin_brief` briefs an agent on the project its sessions are filed under, its agent id, as the turn's memory audience names it, unless `projectBy` or `project` says otherwise, and its description has the agent call it when a task may build on earlier work. The plugin's manifest adds the tools to OpenClaw's `coding`, `messaging`, and `full` tool profiles; the new option `tools: false` gives none. Install the new version of the plugin with `--force --accept-capabilities`, as before; the Gateway need not restart.
 - Origin's hooks do nothing when another agent runs them: Grok Build and Cursor run the hooks in `~/.claude/settings.json`, and Grok's runs of them recorded recalls under `claude-code` that no session was handed. Those recorded before stay as they are.
 - `origin agents` says when Codex has not trusted Origin's hooks yet, and when ZCode's hooks are off.
-- Run `origin agents connect`, and then with `--yes`, to add the new hooks, and start a new session of each agent.
 
 ### Event lines sent to a hub
 
@@ -246,6 +250,7 @@ The first release.
 - `origin backup <dir>` copies a store consistently while agents keep writing.
 - Requires Node.js 22.16 or later.
 
+[0.6.0]: https://github.com/openlinkos/origin/releases/tag/v0.6.0
 [0.5.0]: https://github.com/openlinkos/origin/releases/tag/v0.5.0
 [0.4.0]: https://github.com/openlinkos/origin/releases/tag/v0.4.0
 [0.3.0]: https://github.com/openlinkos/origin/releases/tag/v0.3.0
