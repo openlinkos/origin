@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   dbPath,
+  forget,
   insertRecall,
   openDatabase,
   remember,
@@ -62,7 +63,17 @@ beforeEach(async () => {
         promptHash: null,
         budget: 400,
         tokens: 40,
-        items: [{ rank: 1, layer: 'prompt', kind: 'entry', ref: entry, score: 2, tokens: 20 }],
+        items: [
+          {
+            rank: 1,
+            layer: 'prompt',
+            kind: 'entry',
+            ref: entry,
+            score: 2,
+            tokens: 20,
+            excerpt: null,
+          },
+        ],
       }),
     { immediate: true },
   );
@@ -123,6 +134,68 @@ describe('origin show <session id>', () => {
     out = [];
     expect(await main(['show', 's1', '--source', 'twin'])).toBe(0);
     expect(out.join('\n')).toContain('Session     s1  twin, project demo');
+  });
+});
+
+describe('origin show <recall id>', () => {
+  it('prints each item as it is now, a past message by the excerpt it was handed', async () => {
+    const db = openDatabase(dbPath(home));
+    transaction(
+      db,
+      () =>
+        insertRecall(db, {
+          id: 'rcl_0000000000b2',
+          at: 3005,
+          origin: 'laptop',
+          source: 'fake',
+          sessionId: 's0',
+          occasion: 'prompt',
+          project: 'demo',
+          cwd: null,
+          promptHash: null,
+          budget: 600,
+          tokens: 60,
+          items: [
+            {
+              rank: 1,
+              layer: 'prompt',
+              kind: 'entry',
+              ref: entry,
+              score: 2,
+              tokens: 20,
+              excerpt: null,
+            },
+            {
+              rank: 2,
+              layer: 'messages',
+              kind: 'event',
+              ref: 'fake:b2',
+              score: 1.5,
+              tokens: 20,
+              excerpt: 6,
+            },
+            {
+              rank: 3,
+              layer: 'messages',
+              kind: 'event',
+              ref: 'fake:b4',
+              score: 1.25,
+              tokens: 20,
+              excerpt: 0,
+            },
+          ],
+        }),
+      { immediate: true },
+    );
+    forget(db, 'fake:b4', { reason: 'test', author: 'test' });
+    db.close();
+    expect(await main(['show', 'rcl_0000000000b2'])).toBe(0);
+    const text = out.join('\n');
+    expect(text).toMatch(
+      / {2}2\. messages, score 1\.50 {2}fake:b2\n {5}fake, \d{4}-\d\d-\d\d, assistant: …the client caches with an LRU\./,
+    );
+    expect(text).toMatch(/ {2}3\. messages, score 1\.25 {2}fake:b4\n {5}\(forgotten since\)/);
+    expect(text).not.toContain('TTL is an option now.');
   });
 });
 

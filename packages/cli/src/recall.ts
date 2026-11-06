@@ -123,7 +123,9 @@ function printPreview(plan: RecallPlan): void {
   const where = plan.project ? `project ${plan.project}` : 'no project';
   console.log(`Preview ${who}, ${where} (${plan.root ?? plan.cwd}); nothing is recorded.`);
   if (plan.items.length === 0) {
-    console.log(plan.prompt ? 'No entry matches this prompt.' : 'Nothing to hand over here.');
+    console.log(
+      plan.prompt ? 'No entry or past message matches this prompt.' : 'Nothing to hand over here.',
+    );
     return;
   }
   console.log(`\n${recallText(plan, 'rcl_preview')}\n`);

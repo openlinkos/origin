@@ -55,12 +55,13 @@ import {
   listSessions,
   listTokens,
   makeRelay,
+  messageExcerpt,
   NAME_RE,
   OriginError,
   openDatabase,
   originHome,
   parseTime,
-  type RecallItemKind,
+  type RecallItemRecord,
   type RecallRecord,
   rawLocator,
   readRawLine,
@@ -1353,16 +1354,22 @@ function showRecall(ctx: Ctx, id: string): number {
     console.log(
       `  ${item.rank}. ${item.layer}${score}${used.has(item.ref) ? ', used' : ''}  ${item.ref}`,
     );
-    console.log(`     ${recallItemText(ctx, item.kind, item.ref)}`);
+    console.log(`     ${recallItemText(ctx, item)}`);
   }
   return 0;
 }
 
 /**
- * What a recall item is now: an entry's summary (or what became of it), a session's name, or a
- * thread's, with its sessions.
+ * What a recall item is now: an entry's summary (or what became of it), a session's name, a
+ * thread's, with its sessions, or a past message's agent, day, writer, and excerpt.
  */
-function recallItemText(ctx: Ctx, kind: RecallItemKind, ref: string): string {
+function recallItemText(ctx: Ctx, item: RecallItemRecord): string {
+  const { kind, ref } = item;
+  if (kind === 'event') {
+    const e = getEvent(ctx.db, ref);
+    if (!e) return isEventForgotten(ctx.db, ref) ? '(forgotten since)' : '(not on this store)';
+    return `${e.source}, ${fmtDate(e.ts)}, ${e.role}: ${messageExcerpt(e.text, item.excerpt ?? 0)}`;
+  }
   if (kind === 'thread') {
     const card = describeThread(ctx.db, ref);
     if (!card) return '(no longer a thread here)';
