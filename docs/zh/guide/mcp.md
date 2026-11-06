@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-bbbfcca6
+sourceHash: sha256-580d244d
 ---
 
 # MCP 工具
@@ -74,12 +74,12 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 
 ## brief {#brief}
 
-用户的记忆中与 Agent 工作之处有关的内容，每项一行：一份简报，包括用户的偏好与边界、项目最新的决定和事实、这个项目里用户最近与任意 Agent 的对话；加上 `about` 时，还有与它匹配的条目。它就是 Agent 的 hook 会拿到的内容（见[召回](./recall.md)），供 hook 无法交出内容的 Agent 使用，也以同样的方式记录为一次召回。
+用户的记忆中与 Agent 工作之处有关的内容，每项一行：一份简报，包括用户的偏好与边界、项目最新的决定和事实、这个项目里用户最近与任意 Agent 的对话；加上 `about` 时，还有与它匹配的条目和这个项目各会话中的过往消息，消息以它的事件 id 和一段摘录给出。它就是 Agent 的 hook 会拿到的内容（见[召回](./recall.md)），供 hook 无法交出内容的 Agent 使用，也以同样的方式记录为一次召回。
 
 | 参数 | 类型 | 默认值 | 含义 |
 |---|---|---|---|
 | `cwd` | 字符串 | server 运行所在的目录 | Agent 的工作目录：包含它的 git 工作树，或者这个目录本身，就是项目。中枢看不到 Agent 的磁盘，所以按原样使用这个目录，而且必须提供 |
-| `about` | 字符串 | 无 | 任务是关于什么的，用用户的话说：会加上与它匹配的条目 |
+| `about` | 字符串 | 无 | 任务是关于什么的，用用户的话说：会加上与它匹配的条目和过往消息 |
 
 它返回 `{ recall, text }`：召回的 id，以及各项内容，上面有一行说明如何阅读；如果用户的记忆中还没有这个项目的内容，就是一行这样的说明。在已接入中枢的设备上，`brief` 只读取设备的库；中继把它交给中枢，以自己运行所在的工作树作为 `cwd`，中枢把这次召回记录为为该设备所做。
 
@@ -90,7 +90,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 ```json
 {
   "recall": "rcl_8b2f4e1a9c0d",
-  "text": "Origin recall rcl_8b2f4e1a9c0d: a brief from the user's cross-agent memory (project demo-app), one line each. Origin's `get` opens any id here: an entry for its text and sources, a session or thread for its turns or sessions and what was written there. Entries can be outdated; the user's words in this session come first.\n\nThe user's preferences and boundaries:\n- ent_5f0c2a9e41b7 Run the full test suite before pushing\n\nProject demo-app:\n- ent_3f9a1c2b7d4e (2026-10-20) Releases are tagged from master once CI passes on Ubuntu and Windows.\n\nLatest sessions in demo-app, any agent (source, time, session id):\n- thr_4c1e9a7b2d30 (2 sessions: claude-code, codex; 2026-10-20 – 2026-10-22): Release workflow; last prompt: tag v0.5.0 once CI is green"
+  "text": "Origin recall rcl_8b2f4e1a9c0d: a brief from the user's cross-agent memory (project demo-app), one line each. Origin's `get` opens any id here: an entry for its text and sources, a session or thread for its turns or sessions and what was written there, a message for its full text and the turns around it. Entries and messages can be outdated; the user's words in this session come first.\n\nThe user's preferences and boundaries:\n- ent_5f0c2a9e41b7 Run the full test suite before pushing\n\nProject demo-app:\n- ent_3f9a1c2b7d4e (2026-10-20) Releases are tagged from master once CI passes on Ubuntu and Windows.\n\nLatest sessions in demo-app, any agent (source, time, session id):\n- thr_4c1e9a7b2d30 (2 sessions: claude-code, codex; 2026-10-20 – 2026-10-22): Release workflow; last prompt: tag v0.5.0 once CI is green\n\nPast messages that match the task (agent, day, who):\n- codex:019a2f6d-8c1b-7e4a-9d3f-5b0e2a7c4d18:o31 (codex, 2026-10-14, assistant) The release workflow now waits for both CI runs: it tags from master only when Ubuntu and Windows are green, and a red run blocks the tag."
 }
 ```
 
@@ -446,7 +446,7 @@ Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话�
 - **事件**：事件本身，带有它的 `cwd`、`git_branch`、`agent_version` 和 `session_title`，以及从 `offset` 开始、最多 20,000 个字符的正文，并给出 `total_chars`（正文全长）和 `next_offset`（下一页的起点，读到末尾时为 null）。它的第一页（`offset` 为 0）还带有它近旁的内容：`turn`，即 `{ number, prompt }`，它所在的轮次和开启这一轮的提示的存根，在第一条提示之前则为 null；`replies_to`，它的 Agent 记录的、它所接续的事件的存根（Claude Code 的 `parentUuid`），没有则为 null；`around`，即 `{ before, after }`，同一会话中它前后各两个可见事件的存根，除非它本身是工具调用或工具结果，否则只取消息；以及 `cited_by`，以存根列出最多 10 个引用它的当前条目。
 - **会话**：一张卡片，带有会话的各字段、它的 `cwd`，以及 `turns`（轮数）；`prompts`，它前 20 轮的起点，每个为 `{ turn, id, time, text }`，以及 `more_prompts`，即这些之后还有多少轮；`thread`，即 `{ id, sessions }`，它所在的线索及其会话数，没有则为 null；`entries`，以存根列出最多 10 个从中写下的当前条目（引用了它的事件的条目），从新到旧；`recalls`，最多 10 次它拿到的召回，从新到旧，每次为 `{ id, occasion, time, items }`，`items` 是它交出的内容中仍然可见的数量；`before` 和 `after`，同一项目中按开始时间紧挨在它前后的会话，不限 Agent，没有则为 null；`parent`，即 `{ source, session, title }`，当这个会话是子会话时；以及 `children`，有子会话时每个子会话一行 `{ source, session, title, via, group }`，按工作流运行分组。这里的 `children` 是这个列表，不是时间线一行上的计数；没有父会话或子会话时，`parent` 和 `children` 都省略。要读某一轮，用 [`timeline`](#timeline)。
 - **线索**：`{ thread, project, title, started, ended, sessions, more_sessions, agents, branches, entries, last_prompt }`：它的 id，它的项目和名称（取自它的第一个会话），开始和结束的时间，它的前 20 个会话 `sessions`（从旧到新）以及之后还有多少个，它的会话所属的 `agents` 和所在的工作分支 `branches`，`entries`，以存根列出最多 10 个从其中任一会话写下的当前条目（从新到旧），以及 `last_prompt`，即有提示的会话中最近那一个的最新提示的存根，带有它的 `session`，没有则为 null。
-- **召回**：`{ id, time, occasion, agent, session, device, project, directory, budget, tokens, items, text }`：它在何时、为哪个 Agent、哪个会话和哪台设备、在哪里而做，它的预算和用掉的 token，它的各项，每项为 `{ rank, layer, kind, id, score, used }`（`kind` 为 `entry`、`session` 或 `thread`，会话还有 `source`；`used` 表示会话后来是否用到了这一项，会话还不知道时为 null），以及 `text`，即 Agent 拿到的内容，按库现在的样子重建。此后被遗忘的内容在两者中都会略去。
+- **召回**：`{ id, time, occasion, agent, session, device, project, directory, budget, tokens, items, text }`：它在何时、为哪个 Agent、哪个会话和哪台设备、在哪里而做，它的预算和用掉的 token，它的各项，每项为 `{ rank, layer, kind, id, score, used }`（`kind` 为 `entry`、`session`、`thread` 或 `event`（过往消息），会话还有 `source`；`used` 表示会话后来是否用到了这一项，会话还不知道时为 null），以及 `text`，即 Agent 拿到的内容，按库现在的样子重建。此后被遗忘的内容在两者中都会略去。
 - **提议**：`{ id, status, kind, text, confidence, project, valid_from, valid_to, note, time, agent, session, event, sources, missing_sources, accepted_as }`：它提议的内容；`status`，`pending` 或 `accepted`；它在何时、由哪个 `agent`、在哪个 `session`（按 `timeline` 列出的样子）中提出，以及读出它的 `event`；`sources`，它引用的事件，以存根给出，带有各自的 `quote` 和 `session`，`missing_sources` 是其中本库尚未持有的数目；`accepted_as`，它成为的条目（当前版本）的存根，或 null。被拒绝的提议会返回错误（``Proposal <id> was rejected (tmb_…); restoring that forget makes it pending again.``），引用了被遗忘事件的提议也一样（`Proposal <id> has been forgotten.`）。
 
 当前条目就是列表中会显示的条目：没有被取代、没有被遗忘、也没有到期。被遗忘的内容从不出现在存根中，也不被计数。在连接了中枢的设备上，事件、会话、线索、召回或提议来自其中一个库，带的是那个库的存根：设备有这个 id 时用设备的，否则用中枢的，并去掉设备已遗忘的内容。

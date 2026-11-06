@@ -30,7 +30,7 @@ Origin 以**人**而不是工具为中心：
 - **MCP server**（`origin mcp`），十二个工具：`brief`、`search`、`timeline`、`changes`、`digest`、`get`、`sources`、`follow`、`remember`、`propose`、`correct`、`forget`。它会自动同步，Agent 看到的总是最新会话。
 - **条目**分三类：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。每条都带来源、置信度和版本历史。
 - **导入原生记忆**：Claude Code、ZCode 和 Grok Build 为自己保存的记忆文件会被导入为条目，每条都引用它所来自的文件版本：Agent 修改一条记忆，条目随之更新；删除一条记忆，条目随之结束。
-- **召回**：会话开始时和每个提示时，Agent 会拿到它工作之处有用的内容：你的偏好、项目最新的决定和事实、你在这个项目里最近与任意 Agent 的会话，以及提示所涉及的条目，每项一行，挑选时不调用模型。Claude Code 和 Codex 通过 hook 获得，其他 Agent 通过 `brief` 工具获得；`origin agents connect` 会把这些设置好。每一次召回都有记录，所以你能看到 Agent 拿到了什么、有没有用上。
+- **召回**：会话开始时和每个提示时，Agent 会拿到它工作之处有用的内容：你的偏好、项目最新的决定和事实、你在这个项目里最近与任意 Agent 的会话，以及提示所涉及的条目和过往消息，每项一行，挑选时不调用模型。Claude Code 和 Codex 通过 hook 获得，其他 Agent 通过 `brief` 工具获得；`origin agents connect` 会把这些设置好。每一次召回都有记录，所以你能看到 Agent 拿到了什么、有没有用上。
 - **线索与变更流**：属于同一件工作的会话，无论出自一个还是多个 Agent，都会按 Agent 的 `follow` 调用和 git 分支归入一条线索；`changes` 告诉 Agent 自它上次查看以来有什么进入了你的记忆。
 - **提议**：Agent 推断而非听到的内容，用 `propose` 提议出来，而不是直接保存；替你整理记忆的 Agent 也是这样，例如通过 MCP 工具读你的工作的个人 Agent。你在 CLI 或管理界面中逐条接受或拒绝：被接受的提议成为一条引用其依据的条目，拒绝则像遗忘一样留下记录。Origin 自己只存储和提供数据，不调用任何模型。
 - **按相关度排序的全文检索**：覆盖会话和条目，支持中文子串检索（SQLite FTS5 trigram）。
