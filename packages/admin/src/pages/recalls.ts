@@ -1,4 +1,10 @@
-import { entrySummary, RECALL_OCCASIONS, type RecallOccasion } from '@openlinkos/origin-core';
+import {
+  entrySummary,
+  messageExcerpt,
+  RECALL_LAYERS,
+  RECALL_OCCASIONS,
+  type RecallOccasion,
+} from '@openlinkos/origin-core';
 import type { Ctx } from '../context.js';
 import { clip, fmtNumber, time } from '../context.js';
 import { type HtmlValue, href, html, type SafeHtml } from '../html.js';
@@ -12,7 +18,15 @@ import {
   type RecallView,
   SESSION_RANGES,
 } from '../service.js';
-import { badge, copyButton, empty, linkButton, sessionHref, sessionName } from './components.js';
+import {
+  badge,
+  copyButton,
+  empty,
+  eventTag,
+  linkButton,
+  sessionHref,
+  sessionName,
+} from './components.js';
 import { docsUrl, renderPage } from './layout.js';
 import {
   agentTag,
@@ -37,7 +51,7 @@ import {
  */
 
 /** Each layer of a recall in its colour slot; the header and headings in their own. */
-const LAYER_SLOTS = { cognition: 4, project: 1, sessions: 6, prompt: 2 } as const;
+const LAYER_SLOTS = { cognition: 4, project: 1, sessions: 6, prompt: 2, messages: 3 } as const;
 
 /** When a recall was made, as a tag. */
 function occasionTag(ctx: Ctx, r: Pick<RecallView, 'occasion'>): SafeHtml {
@@ -207,11 +221,19 @@ export function recallsPage(ctx: Ctx, b: RecallBoard & { filter: RecallBoardFilt
   });
 }
 
-/** What an item is now: an entry's summary or a session's name, linked, or why it is not shown. */
+/**
+ * What an item is now: an entry's summary, a session's name, or a past message's excerpt as it was
+ * handed over, linked, or why it is not shown.
+ */
 function itemCell(ctx: Ctx, i: RecallItemView): SafeHtml {
   const t = ctx.t;
   if (i.gone) {
     return html`<span class="admin-faint">${t(`recall.gone.${i.gone}`)}</span><span class="admin-cell-sub ol-mono">${i.ref}</span>`;
+  }
+  if (i.event) {
+    const e = i.event;
+    return html`<a class="admin-cell-title" href="${href('event', { id: e.id })}">${messageExcerpt(e.text, i.excerpt ?? 0)}</a>
+      <span class="admin-cell-sub">${eventTag(ctx, e)} ${whenShort(ctx, e.ts)} <span class="ol-mono">${e.id}</span></span>`;
   }
   if (i.entry) {
     const e = i.entry;
@@ -238,12 +260,10 @@ export function recallPage(ctx: Ctx, d: RecallDetail): void {
   const r = d.recall;
   const n = (v: number) => fmtNumber(v, ctx.lang);
   const used = d.items.filter((i) => i.used).length;
-  const layers = (['cognition', 'project', 'sessions', 'prompt'] as const)
-    .map((layer) => ({
-      layer,
-      tokens: r.items.filter((i) => i.layer === layer).reduce((sum, i) => sum + i.tokens, 0),
-    }))
-    .filter((l) => l.tokens > 0);
+  const layers = RECALL_LAYERS.map((layer) => ({
+    layer,
+    tokens: r.items.filter((i) => i.layer === layer).reduce((sum, i) => sum + i.tokens, 0),
+  })).filter((l) => l.tokens > 0);
   const header = Math.max(0, r.tokens - layers.reduce((sum, l) => sum + l.tokens, 0));
   const budget = html`<div class="admin-budget">
     <div class="admin-budget-head"><span>${t('recall.budget')}</span><span><b>${n(r.tokens)}</b> / ${n(r.budget)} token</span></div>

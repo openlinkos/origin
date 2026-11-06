@@ -532,6 +532,8 @@ export interface RecallItemView extends RecallItemRecord {
   session: SessionRow | null;
   /** A thread item's thread, as it is now. */
   thread: ThreadMention | null;
+  /** A past message's event, unless it was forgotten or is not on this store. */
+  event: EventRow | null;
   /** Why the item cannot be shown, if it cannot: forgotten here, or unknown to this store. */
   gone: 'forgotten' | 'missing' | null;
 }
@@ -2087,6 +2089,7 @@ export class AdminService {
         let entry: Entry | null = null;
         let session: SessionRow | null = null;
         let thread: ThreadMention | null = null;
+        let event: EventRow | null = null;
         let gone: RecallItemView['gone'] = null;
         if (item.kind === 'entry') {
           entry = getEntry(this.db, item.ref);
@@ -2094,12 +2097,16 @@ export class AdminService {
         } else if (item.kind === 'thread') {
           thread = this.threadMention(item.ref);
           if (!thread) gone = 'missing';
+        } else if (item.kind === 'event') {
+          // A visible event only: a forgotten one is never shown here.
+          event = getEvent(this.db, item.ref);
+          if (!event) gone = isEventForgotten(this.db, item.ref) ? 'forgotten' : 'missing';
         } else {
           const at = item.ref.indexOf(':');
           session = getSession(this.db, item.ref.slice(0, at), item.ref.slice(at + 1));
           if (!session) gone = 'missing';
         }
-        return { ...item, used: used.has(item.ref), entry, session, thread, gone };
+        return { ...item, used: used.has(item.ref), entry, session, thread, event, gone };
       }),
       sessionRow: view.session
         ? getSession(this.db, view.session.source, view.session.sessionId)

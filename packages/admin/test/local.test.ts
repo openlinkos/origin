@@ -7,6 +7,7 @@ import {
   ADMIN_SESSION_MAX_MS,
   createAdminSession,
   type Database,
+  forget,
   getEntry,
   getEvent,
   initStoreName,
@@ -442,6 +443,7 @@ describe('origin ui: pages', () => {
           kind: 'entry',
           ref: entry.id,
           score: 3.25,
+          excerpt: null,
           line: '',
           tokens: 30,
         },
@@ -451,6 +453,7 @@ describe('origin ui: pages', () => {
           kind: 'entry',
           ref: 'ent_000000000000',
           score: 1.5,
+          excerpt: null,
           line: '',
           tokens: 30,
         },
@@ -497,6 +500,60 @@ describe('origin ui: pages', () => {
     expect(session.text).toContain('1 used');
 
     expect((await b.get('/admin/recall?id=rcl_000000000000')).status).toBe(404);
+  });
+
+  it('show a past message a recall handed over as it was handed, until it is forgotten', async () => {
+    const message = 'fake:evt-asst-1';
+    const id = recordRecall(db, {
+      occasion: 'prompt',
+      source: 'fake',
+      sessionId: SESSION,
+      cwd: '/work/demo',
+      root: null,
+      project: 'demo',
+      prompt: 'Keep the schema simple.',
+      at: Date.UTC(2026, 9, 20, 9, 0, 1),
+      budget: 600,
+      tokens: 80,
+      items: [
+        {
+          rank: 1,
+          layer: 'messages',
+          kind: 'event',
+          ref: message,
+          score: 2.5,
+          excerpt: 0,
+          line: '',
+          tokens: 20,
+        },
+      ],
+    } satisfies RecallPlan);
+    const local = await serveLocal();
+    const b = await local.signedIn();
+    const one = await b.get(`/admin/recall?id=${id}`);
+    expect(one.status).toBe(200);
+    expect(pageProblems(one.text)).toEqual([]);
+    // Linked to the event's page, escaped, under its layer.
+    expect(one.text).toContain(
+      `<a class="admin-cell-title" href="/admin/event?id=${encodeURIComponent(message)}">&lt;img src=x onerror=alert(1)&gt;</a>`,
+    );
+    expect(one.text).toContain('Past message');
+    expect(one.text).toMatch(
+      /Past messages that match this prompt \(agent, day, who\):\n- fake:evt-asst-1 \(fake, \d{4}-\d\d-\d\d, assistant\) &lt;img src=x onerror=alert\(1\)&gt;<\/pre>/,
+    );
+    const session = await b.get(`/admin/session?source=fake&id=${SESSION}`);
+    expect(pageProblems(session.text)).toEqual([]);
+    expect(session.text).toContain(
+      `<a href="/admin/event?id=${encodeURIComponent(message)}">&lt;img src=x onerror=alert(1)&gt;</a>`,
+    );
+
+    // Forgotten, its text is shown nowhere on the recall's page (invariant 2).
+    forget(db, message, { reason: 'test', author: 'user@laptop' });
+    const after = await b.get(`/admin/recall?id=${id}`);
+    expect(after.status).toBe(200);
+    expect(pageProblems(after.text)).toEqual([]);
+    expect(after.text).toContain('forgotten since');
+    expect(after.text).not.toContain('onerror');
   });
 
   it('render the local store with no hub-only page or link', async () => {
@@ -976,6 +1033,7 @@ describe('origin ui: threads', () => {
           kind: 'thread',
           ref: thread,
           score: null,
+          excerpt: null,
           line: '',
           tokens: 20,
         },

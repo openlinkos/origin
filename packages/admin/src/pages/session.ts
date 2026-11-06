@@ -4,7 +4,12 @@
  * to a row per call, and the agent's last reply as Markdown. Command echoes and injected context are
  * small notes, and each item links to its event's page for provenance.
  */
-import { type EventRow, entrySummary, type ThreadCard } from '@openlinkos/origin-core';
+import {
+  type EventRow,
+  entrySummary,
+  messageExcerpt,
+  type ThreadCard,
+} from '@openlinkos/origin-core';
 import type { Ctx } from '../context.js';
 import { clip, fmtNumber, fmtSpan, fmtSpanShort, time } from '../context.js';
 import { type HtmlValue, href, html, type SafeHtml } from '../html.js';
@@ -288,7 +293,9 @@ function recallCard(ctx: Ctx, r: SessionTrace['recalls'][number]): SafeHtml {
                 ? html`<a href="${sessionHref(i.session)}">${sessionName(ctx, i.session, 120)}</a>`
                 : i.thread
                   ? threadLink(ctx, i.thread)
-                  : i.ref
+                  : i.event
+                    ? html`<a href="${href('event', { id: i.event.id })}">${messageExcerpt(i.event.text, i.excerpt ?? 0)}</a>`
+                    : i.ref
         }</span>
         ${i.score === null ? '' : html`<span class="admin-faint admin-num">${i.score.toFixed(2)}</span>`}
         ${used.has(i.ref) ? html`<span class="admin-good">${t('recall.usedYes')}</span>` : ''}
