@@ -16,6 +16,7 @@ import {
   storeName,
   syncFile,
 } from '@openlinkos/origin-core';
+import { type HookIO, runByAnother } from './hook-caller.js';
 import { setUpFrames } from './hub/bucket.js';
 import { type HubConfig, readHubConfig } from './hub/config.js';
 import { relayFileWithHub } from './hub/relay.js';
@@ -118,10 +119,7 @@ async function toHub(send: (doFetch: typeof fetch) => Promise<void>): Promise<vo
   }
 }
 
-export interface HookIO {
-  /** The hook's event, as the agent writes it on standard input. */
-  stdin(): string;
-}
+export type { HookIO };
 
 const STDIN: HookIO = { stdin: () => fs.readFileSync(0, 'utf8') };
 
@@ -147,6 +145,8 @@ async function runHook(agent: string, io: HookIO): Promise<number> {
       console.error('origin sync: the hook event on standard input is not JSON; nothing was read.');
       return 0;
     }
+    // Another agent running this agent's hooks (see hook-caller.ts): its sessions are found by looking.
+    if (runByAnother(agent, event, io.env)) return 0;
     // Only files this agent's adapter would ingest, and that are there: nothing else opens the store.
     const files = locatedFiles(adapter, hookFiles(event));
     if (files.length === 0) return 0;

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-580d244d
+sourceHash: sha256-4aa71a0d
 ---
 
 # MCP 工具

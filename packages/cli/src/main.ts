@@ -174,7 +174,7 @@ Usage:
   origin proposals [--project <name>] [--status pending|accepted|rejected|all] [--limit 50]   Entries agents proposed, for you to review
   origin accept    <proposal-id> [--yes]                 Accept a proposal: write its entry (needs --yes)
   origin reject    <proposal-id> --reason <text> [--yes] Reject a proposal: forget it, as a record (needs --yes)
-  origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   What an agent would be handed there; --hook <agent> answers its hooks
+  origin recall    [--cwd <dir>] [--project <name>] [--prompt <text>] [--agent <id>]   What an agent would be handed there; --hook <agent> answers its hooks
   origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   What agents were handed, newest first
   origin projects                                        Known project names
   origin sessions  reproject [--dry-run]                 Resolve each session to its main project

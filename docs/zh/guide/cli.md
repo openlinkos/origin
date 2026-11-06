@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-877b3650
+sourceHash: sha256-63673b72
 ---
 
 # 命令参考
@@ -22,7 +22,7 @@ origin restore   <tombstone-id> --reason <text> [--yes]  带回一次遗忘隐�
 origin proposals [--project <name>] [--status pending|accepted|rejected|all] [--limit 50]   Agent 提出、等你审阅的条目
 origin accept    <proposal-id> [--yes]                 接受一条提议：写下它的条目（需要 --yes）
 origin reject    <proposal-id> --reason <text> [--yes] 拒绝一条提议：遗忘它，并留下记录（需要 --yes）
-origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   Agent 在该目录会拿到什么；--hook <agent> 用于回应它的 hook
+origin recall    [--cwd <dir>] [--project <name>] [--prompt <text>] [--agent <id>]   Agent 在该目录会拿到什么；--hook <agent> 用于回应它的 hook
 origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   Agent 拿到过什么，从新到旧
 origin projects                                        已知的项目名
 origin sessions  reproject [--dry-run]                 把每个会话解析到它的主项目
@@ -199,7 +199,7 @@ Open any id: origin show <id>
 
 ## 召回 {#recall}
 
-`origin recall` 显示 Agent 在当前目录（或 `--cwd` 指定的目录）会拿到什么：新会话的简报，或者加上 `--prompt` 时与提示匹配的条目和过往消息。`--agent` 按该 Agent 会拿到的样子显示，不含它自己加载的记忆。它不做任何记录。`origin agents connect` 会设置好这些 hook（见[接入 Agent](./connect-agents.md#connect-them-all-at-once)）。Claude Code 和 Codex 的 hook 运行 `origin recall --hook claude-code` 或 `--hook codex`，它从标准输入读取 hook 的事件，记录交出的内容，并输出给 Agent。`origin recalls` 按从新到旧列出 Agent 拿到过什么（加 `--all` 还会列出什么都没交出的召回），`origin show rcl_…` 显示一次召回，包括它回应的提示和本会话之后用上的项。见[召回](./recall.md)。
+`origin recall` 显示 Agent 在当前目录（或 `--cwd` 指定的目录）会拿到什么，或者用 `--project` 按名称指定项目，显示不在任何目录中工作的 Agent 会拿到什么：新会话的简报，或者加上 `--prompt` 时与提示匹配的条目和过往消息。`--agent` 按该 Agent 会拿到的样子显示，不含它自己加载的记忆。它不做任何记录。`origin agents connect` 会设置好这些 hook（见[接入 Agent](./connect-agents.md#connect-them-all-at-once)）。Claude Code、Codex、ZCode 和 Cursor 的召回 hook 运行 `origin recall --hook <agent>`，它从标准输入读取 hook 的事件，记录交出的内容，并输出给 Agent；由别的 Agent 运行时（比如 Grok Build 和 Cursor 会运行 Claude Code 的 hook），它什么都不做。`origin recalls` 按从新到旧列出 Agent 拿到过什么（加 `--all` 还会列出什么都没交出的召回），`origin show rcl_…` 显示一次召回，包括它回应的提示和本会话之后用上的项。见[召回](./recall.md)。
 
 ## 从 hook 采集 {#ingesting-from-hooks}
 

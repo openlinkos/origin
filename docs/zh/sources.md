@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-f014b8b8
+sourceHash: sha256-ab2c1c58
 ---
 
 # 会话来源
@@ -62,6 +62,7 @@ sourceHash: sha256-f014b8b8
 - **保留期：** 观察到的清理标记（`~/.cursor/projects/.agent-data-cleanup-<date>`）表明 CLI 数据会被定期清除。
 - **命令名：** `agent` 是主要的 CLI 命令（`cursor-agent` 是它的别名）。其他工具可能会在 `PATH` 上安装另一个名为 `agent` 的程序，因此检测时不应只依赖名称。
 - **原生记忆：** 编辑器的 Memories 功能已在 2.1.x 中移除；只有云端 Automations 仍保留一个 `MEMORIES.md`。
+- **Hook**（2026 年 11 月对照磁盘上的 3.27 版编辑器核对，见 [hooks](https://cursor.com/docs/hooks)）：`~/.cursor/hooks.json` 的 `version` 为 1，在每个事件下以 `{ command, timeout }` 列出 hook，超时以秒计。每个事件都带有 `conversation_id`（对话在编辑器数据库和它的 transcript 中的 id）、`generation_id`、`hook_event_name`（Cursor 的 camelCase 名称）、`cursor_version`、`workspace_roots`（各工作区文件夹 URI 的路径，在 Windows 上是 `/c:/…`）、`user_email` 和 `transcript_path`，没有 `cwd`；子 Agent 的事件还带有 `parent_agent_id`。`beforeSubmitPrompt` 还带有 `prompt` 和 `attachments`，并从 hook 的输出中读取 `additional_context`。`sessionStart` 在对话创建期间运行，不等待它，它返回的内容只有在对话届时已经就绪时才会保留。Cursor 也会运行 `~/.claude/settings.json` 中的 hook，在它自己的事件上（`SessionStart` 在 `sessionStart`，`UserPromptSubmit` 在 `beforeSubmitPrompt`），传入同样的字段。Origin 的召回 hook 在 `beforeSubmitPrompt` 运行（见[召回](architecture.md#recall)）。
 
 **Origin 映射：**
 
@@ -78,6 +79,7 @@ sourceHash: sha256-f014b8b8
 - **位置：** `~/.zcode/cli/db/db.sqlite`，WAL 模式（以及 `-wal` / `-shm`）。文档称 schema 属于实现细节；`schema_migration` 表记录了它的迁移。
 - **格式：** SQLite 表 `session`（`id`、`project_id`、`parent_id`、`directory`、`title`、`version`、`task_type`、…）、`message`（`id`、`session_id`、`sequence`、`time_created`、`time_updated`、`data`）和 `part`（`id`、`message_id`、`session_id`、`sequence`、`time_created`、`time_updated`、`data`），另有 `todo`、`tool_usage`、`model_usage`、工作流相关的表等。`sequence` 给一个会话的消息、一条消息的部件排序。`data` 保存 JSON：消息的 `role`、`time`（`created`，回复结束后还有 `completed`）、`error`、`path.cwd`、`semantics.transcriptVisibility`（ZCode 为模型添加的提醒、通知和摘要为 `hidden`）、`semantics.origin`，即用户消息是谁写的（`real_user`；ZCode 自己添加的则为 `agent_runtime` 和 `system`），以及 `semantics.kind`（`user_prompt`、`todo_reminder`、`background_notification`、`compact_summary`、…）；部件的 `type`（`text`、`reasoning`、`tool`、`file`、`step-start`、`step-finish`、`timeline`、`compaction`），文本部件带 `text` 和 `synthetic`，工具部件带 `tool`、`callID` 和 `state`（`status`、`input`、`output` 或 `error`、`time`）。子 Agent 和工作流步骤作为带有 `parent_id` 的独立会话运行：会话的 `task_type` 为 `interactive` 表示与用户的对话，`selection_side_chat` 表示就某段选中内容开的旁聊，`subagent_child` 和 `workflow_child` 表示子 Agent 和工作流步骤的会话，ZCode 照样把它们的提示标为 `real_user`。原始的模型输入输出还会写入 `~/.zcode/cli/rollout/model-io-*.jsonl`。
 - **行会被原地修改：** 回复流式输出时，它的消息和部件会改变；ZCode 压缩会话时，过了很久的部件也会再变。
+- **Hook**（2026 年 11 月对照 3.17 版应用及其 0.17 版 CLI 核对，见 [hooks](https://zcode.z.ai/en/docs/hooks)）：`~/.zcode/cli/config.json` 中的 `hooks.events` 在每个事件下列出 matcher 组，与 Claude Code 相同；只有 `hooks.enabled` 为 true 时 ZCode 才运行它们，默认不是。它的 schema 很严格，只要拒绝一项，就会关掉所有 hook：`command` hook 接受 `type`、`command`、`timeoutMs`（默认 60 秒）和少数几个选项，不接受 `args`，那只属于 `process` hook。事件带有 Claude Code 的字段 `hook_event_name`、`session_id`（会话的 id，与数据库中一致）、`permission_mode` 和 `transcript_path`（ZCode 为 hook 写的临时文件，不是会话的日志），旁边是它自己的 `hookEventName`、`sessionId`、`agentName`、`cwd`、`mode`、`model`，在 `SessionStart` 还有 `source`（`startup` 或 `resume`）；`UserPromptSubmit` 还带有 `prompt` 和 `attachmentsSummary`。hook 在子 Agent 的会话和工作流步骤的会话中也会运行，它们的 id 是 `sess_subagent_agent_<uuid>` 和 `sess_dwf-<run>-<actor>`。ZCode 读取 `hookSpecificOutput.additionalContext`（带上它所问的 `hookEventName`）或顶层的 `additionalContext`，忽略普通输出。`SessionStart` 在会话第一轮之前运行，会话恢复时再运行一次。每个 hook 都会得到 `ZCODE_SESSION_ID` 和 `ZCODE_PROJECT_DIR`，以及 Claude Code 对应的变量名。
 
 **Origin 映射：**
 
@@ -100,6 +102,7 @@ sourceHash: sha256-f014b8b8
 - **消息是谁写的：** 用户消息的 `_meta` 说明它是怎样来的：`promptIndex`，它在会话的提示中的序号；`interjection`，在一轮进行中发出；`hostTurn`，由 Grok 的宿主发起的一轮；`hideFromScrollback`，不放进对话记录，用于 Grok 自己发出的后续提示，Grok 照样把它们编进提示的序号。子 Agent 的提示也有 `promptIndex`。
 - **标题：** `summary.json` 是一个 JSON 对象，每一轮都被原地重写：`info`（`id`、`cwd`）、`generated_title`、`session_summary`、`title_is_manual`、`created_at`、`updated_at`、`num_messages`、`agent_name`、`session_kind` 等。`generated_title` 保存 Grok 显示的标题：在第一条提示之后生成，并在最初的几轮中再生成一两次；或者是用 `/rename` 给出的标题，它会设置 `title_is_manual`，此后自动标题不再改动它，直到 `/rename --auto` 把它清空。`session_summary` 为较旧的客户端镜像这个标题，并在 `generated_title` 为空时显示。
 - **原生记忆：** 实验性功能，默认关闭（`GROK_MEMORY=1`）。以 Markdown 形式存放在 `~/.grok/memory/` 下（全局的 `MEMORY.md`，加上按 git remote 哈希区分的各工作区目录），或者存放在 `~/.grok/memory-v2/` 下。会被导入，见[原生记忆](#native-memories)。
+- **Hook**（2026 年 11 月对照 1.0.70 版及其用户指南的 `10-hooks.md` 核对）：除了自己的 hook，Grok 默认还会运行 `~/.claude/settings.json` 中的 hook，以及 `~/.cursor/hooks.json` 中按 matcher 组写的 hook；Cursor 自己格式的项，它列为暂时无法运行的 hook。在 `~/.grok/config.toml` 的 `[compat.claude]` 或 `[compat.cursor]` 下写 `hooks = false` 可以停止这样做。事件带有 camelCase 字段 `hookEventName`（Grok 的 snake_case 名称）、`sessionId`、`cwd`、`workspaceRoot` 和 `permissionMode`，旁边是 Claude Code 的 snake_case 字段（`hook_event_name`，用 Claude 的名称，`session_id`、`transcript_path`……），每个 hook 都会得到 `GROK_HOOK_EVENT`、`GROK_SESSION_ID` 和 `GROK_WORKSPACE_ROOT`。在 `SessionStart`，Grok 只读取 `systemMessage`，把它显示出来，不交给模型；在 `UserPromptSubmit`，放行的 hook 输出的内容会被丢弃。所以 hook 交不出任何内容给它的模型；Origin 不为它添加 hook，Grok 自己调用 `brief`。
 - **互通：** Grok 默认合并 `~/.claude.json`、Cursor 的 `mcp.json` 和项目 `.mcp.json` 中的 MCP server，因此为 Claude Code 注册 Origin 之后，Grok 也能使用它。`grok inspect` 列出合并后的 server；`grok mcp list` 只显示 Grok 自己配置的。
 
 **Origin 映射：**

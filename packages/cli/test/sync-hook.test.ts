@@ -126,6 +126,7 @@ afterEach(async () => {
 const run = (agent: string, event: unknown) =>
   hook(['sync', '--hook', agent], {
     stdin: () => (typeof event === 'string' ? event : JSON.stringify(event)),
+    env: {},
   });
 
 const stop = (file: string | null) => ({
@@ -250,6 +251,32 @@ describe('origin sync --hook', () => {
     expect(err.some((e) => e.includes('no ingest hook for "cursor"'))).toBe(true);
     // Nothing to read, so no store was opened, let alone created.
     expect(fs.existsSync(dbPath(home))).toBe(false);
+  });
+
+  it("does nothing when another agent runs Claude Code's hook", async () => {
+    // Grok Build, by its environment, and by the camelCase fields it sends beside Claude's.
+    const grok = { ...stop(transcript), hookEventName: 'stop', workspaceRoot: 'D:demoproject' };
+    expect(await run('claude-code', grok)).toBe(0);
+    expect(
+      await hook(['sync', '--hook', 'claude-code'], {
+        stdin: () => JSON.stringify(stop(transcript)),
+        env: { GROK_HOOK_EVENT: 'stop' },
+      }),
+    ).toBe(0);
+    // Cursor, by the version it sends with every event.
+    const cursor = {
+      ...stop(transcript),
+      conversation_id: SESSION,
+      hook_event_name: 'stop',
+      cursor_version: '3.27.22',
+    };
+    expect(await run('claude-code', cursor)).toBe(0);
+    expect(out).toEqual([]);
+    expect(err).toEqual([]);
+    expect(fs.existsSync(dbPath(home))).toBe(false);
+    // Claude Code itself, with the same transcript, is ingested.
+    expect(await run('claude-code', stop(transcript))).toBe(0);
+    expect(readStore(sessionsOf)).toEqual([SESSION]);
   });
 
   it('runs through the whole CLI too, and leaves origin sync as it was', async () => {
@@ -427,6 +454,7 @@ describe('the hook module', () => {
       '@openlinkos/origin-core',
     ]);
     expect([...seen].map((f) => path.relative(src, f).split(path.sep).join('/')).sort()).toEqual([
+      'hook-caller.ts',
       'hub/bucket.ts',
       'hub/config.ts',
       'hub/relay.ts',

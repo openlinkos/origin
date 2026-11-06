@@ -22,7 +22,11 @@ All notable changes to Origin are listed here. Versions follow [Semantic Version
 
 ### Recall in more agents
 
-- `brief` takes a `project`, for agents that work in no directory, such as OpenClaw's, whose sessions are filed under their agent id: `{ "project": "main" }` briefs on that project's entries and sessions. With a `cwd` too, the project's name is the one given; with neither, the server's own directory, as before.
+- ZCode and Cursor get recall through their hooks. `origin agents connect` adds `origin recall --hook zcode` at `SessionStart` and `UserPromptSubmit` to `hooks.events` in `~/.zcode/cli/config.json`, and `origin recall --hook cursor` at `beforeSubmitPrompt` to `~/.cursor/hooks.json`, next to the hooks already there. ZCode runs hooks only while `hooks.enabled` is true: Origin turns it on when its hooks are the only ones there, and otherwise says so and leaves it to you. Cursor often loses what a hook hands over when a conversation starts, so its first prompt brings the brief, with the prompt's matches. A ZCode sub-agent or workflow step, and a Cursor sub-agent, get nothing.
+- `brief` takes a `project`, for agents that work in no directory, such as OpenClaw's, whose sessions are filed under their agent id: `{ "project": "main" }` briefs on that project's entries and sessions. With a `cwd` too, the project's name is the one given; with neither, the server's own directory, as before. `origin recall --project <name>` previews it.
+- Origin's hooks do nothing when another agent runs them: Grok Build and Cursor run the hooks in `~/.claude/settings.json`, and Grok's runs of them recorded recalls under `claude-code` that no session was handed. Those recorded before stay as they are.
+- `origin agents` says when Codex has not trusted Origin's hooks yet, and when ZCode's hooks are off.
+- Run `origin agents connect`, and then with `--yes`, to add the new hooks, and start a new session of each agent.
 
 ### Removed
 

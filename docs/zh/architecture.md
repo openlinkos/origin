@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-39f0a7c8
+sourceHash: sha256-c19ae7b6
 ---
 
 # 架构
@@ -600,9 +600,11 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 
 **Hook。** Claude Code 和 Codex 发送同样的 hook 事件，也读取同样的回答；`origin agents connect` 把 hook 加到它们的设置中，并把 Origin 的 MCP server 注册到每个已安装的 Agent，事先显示要做的修改，并备份每个文件。它添加两类 hook，按命令识别，再次运行时会补上 Agent 缺少的 hook，所以由早先版本连接的 Agent 也会得到新的 hook：召回 hook，即 `SessionStart` 和 `UserPromptSubmit` 时的 `origin recall --hook <agent>`，Agent 会等待它（最多 10 秒）；以及采集 hook，即 `Stop` 和 `SubagentStop` 时、在 Claude Code 中还有 `PostCompact` 时的 `origin sync --hook <agent>`，它们在后台运行（见[实时采集](#live-ingestion)）。Codex 只有在用户用 `/hooks` 信任了新的或改动过的 hook 之后才会运行它。`origin agents disconnect` 移除这两类 hook，别的什么都不动。`origin recall` 只加载核心和适配器，以便快速启动，而且从不妨碍 Agent：出现任何故障时，它什么都不输出，在标准错误中说明原因，并以 0 退出；它最多等待 3 秒获取库的写锁。它只读取本设备的库，所以其他设备上写下的条目暂时不会被召回；中继不保存条目，不交出任何内容。
 
+**其他 Agent 的 hook。** ZCode 发送 Claude Code 的事件，旁边附带 camelCase 字段，也读取同样的回答，回答中写明它所问的事件；它的 hook 在 `~/.zcode/cli/config.json` 的 `hooks.events` 下，只有 `hooks.enabled` 为 true 时才会运行，`origin agents connect` 只在 Origin 的 hook 是那里仅有的 hook 时才打开它。ZCode 把子 Agent 和每个工作流步骤作为单独的会话运行，会话 id 表明了这一点（`sess_subagent_agent_…`、`sess_dwf-<run>-<actor>`），这些会话什么都拿不到。Cursor 的 hook 在 `~/.cursor/hooks.json` 的 `beforeSubmitPrompt` 中，它得到的是对话的 id 和工作区文件夹，而不是工作目录：第一个文件夹就是目录，回答是 `additional_context`。Cursor 在创建对话时运行 `sessionStart` hook，并不等待它，常常丢掉它返回的内容，所以对话的第一条提示带来简报以及与提示匹配的内容，记录为时机为 `start` 的一次召回；子 Agent 的对话写明了它的父对话，什么都拿不到。召回记录的是 Agent 的来源 id，以及归档中所用的会话 id（ZCode 的 `sess_…`、Cursor 的对话 id）。Grok Build 和 Cursor 也会运行 `~/.claude/settings.json` 中的 hook，Grok Build 还会运行 `~/.cursor/hooks.json` 中的 hook，传入的是它们自己的事件：Origin 的 hook，无论召回还是采集，只为写明的那个 Agent 工作；事件或环境表明是别的 Agent 时（Grok Build 的 `GROK_HOOK_EVENT`，或同时带有 `hookEventName` 和 `workspaceRoot`；Cursor 的 `cursor_version`；ZCode 同时带有的 `hookEventName` 和 `agentName`），它什么都不做，也不打开库。Grok Build 在会话开始时和随提示都不读取 hook 返回的任何内容，所以不设 hook：它按 server 的说明调用 `brief`。`origin agents` 还会说明 Codex 何时尚未信任任何 hook，这一点在 Codex 的配置中没有 `trusted_hash` 时可以判断出来。
+
 **通过 MCP。** `brief` 交出一份简报，加上 `about` 时还有与它匹配的条目和过往消息，记录为时机为 `request` 的一次召回。由 Agent 运行的 server 作答：在设备上根据设备的库作答，已接入中枢的设备也不询问中枢，与 hook 一致；中继把它交给中枢，以自己的工作树作为目录，中枢看不到 Agent 的磁盘，所以按原样使用这个目录，并把这次召回记录为为该设备所做。MCP 调用不说明会话，所以这类召回不记录会话，并且可能交出 Agent 自己会话中的消息；它的会话是日志中有某个工具结果含有这次召回 id 的那个会话，归档之后才能找到。
 
-**按项目名称。** 不在任何目录中工作的 Agent，比如 OpenClaw 的 Agent，或者访问中枢 `/mcp` 的机器人，给 `brief` 传 `project` 而不是 `cwd`。这时召回针对这个名称，没有目录也没有工作树，也不使用 server 自己的目录：条目和会话按它们所归的项目划入范围（OpenClaw Agent 的会话归在它的 Agent id 之下）。同时给出 `cwd` 时，`project` 指定项目，`cwd` 给出它的目录，对于记录了目录的会话和导入的条目，仍由目录决定。中继把这样的调用原样交给中枢。
+**按项目名称。** 不在任何目录中工作的 Agent，比如 OpenClaw 的 Agent，或者访问中枢 `/mcp` 的机器人，给 `brief` 传 `project` 而不是 `cwd`。这时召回针对这个名称，没有目录也没有工作树，也不使用 server 自己的目录：条目和会话按它们所归的项目划入范围（OpenClaw Agent 的会话归在它的 Agent id 之下）。同时给出 `cwd` 时，`project` 指定项目，`cwd` 给出它的目录，对于记录了目录的会话和导入的条目，仍由目录决定。中继把这样的调用原样交给中枢，`origin recall --project` 预览的是同样的简报。
 
 ## 个人中枢 {#personal-hub}
 

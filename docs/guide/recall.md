@@ -2,7 +2,7 @@
 
 When a session starts, and with each prompt you send, Origin can hand your agent what it already knows that matters there: a short brief of your preferences, the project's decisions and facts, and its latest sessions with any of your agents; then the entries your prompt is about, and what you and your agents said about it in the project's earlier sessions. It works through the agent's hooks, calls no model, and records every time it hands something over, so you can see what an agent was given and whether it used it.
 
-Claude Code and Codex get recall through their hooks. Other agents ask for it through Origin's MCP server (see [Other agents](#other-agents)).
+Claude Code, Codex, ZCode, and Cursor get recall through their hooks. Other agents ask for it through Origin's MCP server (see [Other agents](#other-agents)).
 
 ## What an agent is handed
 
@@ -40,7 +40,7 @@ Past messages that match this prompt (agent, day, who):
 
 ## Set up the hooks
 
-`origin agents connect` adds them, with Origin's MCP server, to every agent installed that takes them: it shows what it would change, and changes it with `--yes`, backing up each file first (see [Connect your agents](./connect-agents.md#connect-them-all-at-once)). Start a new session of each agent afterwards; Codex runs new hooks only once you trust them, with `/hooks`.
+`origin agents connect` adds them, with Origin's MCP server, to every agent installed that takes them: it shows what it would change, and changes it with `--yes`, backing up each file first (see [Connect your agents](./connect-agents.md#connect-them-all-at-once)). Start a new session of each agent afterwards; Codex runs new hooks only once you trust them, with `/hooks`. ZCode runs hooks only while `hooks.enabled` is true in its config: `origin agents connect` turns it on when Origin's are the only hooks there, and otherwise says so and leaves it to you, since it would run your other hooks too.
 
 It adds the ingest hooks too, which hand nothing over: when a turn ends, a sub-agent stops, or Claude Code has compacted the conversation, they run `origin sync --hook` in the background, which reads the session's new lines into your store, and sends them on to your hub, so that briefs, searches, and other sessions' `changes` have them a moment later (see [Live ingestion](../architecture.md#live-ingestion)).
 
@@ -70,9 +70,40 @@ To add them by hand, put these hooks in `~/.claude/settings.json` for Claude Cod
 
 `/hooks` in either agent lists them. Keep Origin registered as an MCP server too, so that the agent can `get` what it is handed. A recall hook takes a fraction of a second, and the agent waits for it; an ingest hook runs in the background (`"async": true`), so the agent never waits for it. If anything goes wrong, a hook hands nothing over, ingests nothing, and the agent carries on.
 
+ZCode and Cursor take the recall hooks only; their new lines are picked up by looking. For ZCode, put them in `~/.zcode/cli/config.json`, next to the rest of its settings, in ZCode's own shape: the timeout in milliseconds, and nothing else in each hook, since ZCode turns every hook off when it refuses one.
+
+```json
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "SessionStart": [
+        { "hooks": [{ "type": "command", "command": "origin recall --hook zcode", "timeoutMs": 10000 }] }
+      ],
+      "UserPromptSubmit": [
+        { "hooks": [{ "type": "command", "command": "origin recall --hook zcode", "timeoutMs": 10000 }] }
+      ]
+    }
+  }
+}
+```
+
+For Cursor, put the hook in `~/.cursor/hooks.json`. It runs with each prompt: Cursor often loses what a hook hands over when a session starts, so the first prompt of a conversation brings its brief, with the prompt's matches. Grok Build reads this file too, and lists Origin's entry as a Cursor hook it cannot run yet; `[compat.cursor] hooks = false` in `~/.grok/config.toml` stops it reading the file.
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [{ "command": "origin recall --hook cursor", "timeout": 10 }]
+  }
+}
+```
+
+Some agents run hooks written for others: Grok Build and Cursor run those in `~/.claude/settings.json`. Origin's hooks tell the agent that runs them by what it sends, and do nothing for another, so that no recall is recorded under another agent's name. A session an agent runs for itself, a ZCode sub-agent or workflow step, or a Cursor sub-agent, gets nothing either.
+
 ## Other agents
 
-Agents whose hooks cannot hand anything over, Grok Build, ZCode, and Cursor, ask for a brief themselves: Origin's MCP server has a `brief` tool, and its instructions tell agents to call it with their working directory when they start a task. They get the same brief, and with `about`, the entries and past messages that match the task (see [MCP tools](./mcp.md#brief)). No setup is needed beyond [registering Origin](./connect-agents.md). Such a recall is recorded like a hook's; its session is found later, from the recall's id in the agent's log.
+Grok Build reads nothing its hooks hand over when a session starts or with a prompt, so it asks for a brief itself: Origin's MCP server has a `brief` tool, and its instructions tell agents to call it with their working directory when they start a task. So do agents that work in no directory, such as OpenClaw's agents or a bot on your [hub](./hub.md), with the `project` they work for: an OpenClaw agent's sessions are filed under its agent id. They get the same brief, and with `about`, the entries and past messages that match the task (see [MCP tools](./mcp.md#brief)). No setup is needed beyond [registering Origin](./connect-agents.md). Such a recall is recorded like a hook's; its session is found later, from the recall's id in the agent's log.
 
 ## Preview
 
@@ -82,6 +113,7 @@ Agents whose hooks cannot hand anything over, Grok Build, ZCode, and Cursor, ask
 origin recall                                        # the brief a new session here would get
 origin recall --prompt "should we drop the v1 routes?"
 origin recall --agent claude-code --cwd ~/code/acme  # as Claude Code would get it, without its own memories
+origin recall --project main                         # as an agent that works in no directory gets it
 ```
 
 ## See what was handed over

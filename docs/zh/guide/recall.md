@@ -1,12 +1,12 @@
 ---
-sourceHash: sha256-e2d14494
+sourceHash: sha256-f8554268
 ---
 
 # 召回
 
 会话开始时，以及你每发出一个提示时，Origin 可以把它已经知道、而在当下有用的内容交给你的 Agent：先是一份简报，包括你的偏好、项目的决定和事实，以及这个项目最近与你的各个 Agent 的会话；然后是与你的提示相关的条目，以及你和你的 Agent 在这个项目以前的会话中就此说过的话。它通过 Agent 的 hook 工作，不调用任何模型，并记录下每一次交出的内容，所以你能看到 Agent 拿到了什么、有没有用上。
 
-Claude Code 和 Codex 通过它们的 hook 获得召回。其他 Agent 通过 Origin 的 MCP server 请求（见[其他 Agent](#other-agents)）。
+Claude Code、Codex、ZCode 和 Cursor 通过它们的 hook 获得召回。其他 Agent 通过 Origin 的 MCP server 请求（见[其他 Agent](#other-agents)）。
 
 ## Agent 会拿到什么 {#what-an-agent-is-handed}
 
@@ -44,7 +44,7 @@ Past messages that match this prompt (agent, day, who):
 
 ## 设置 hook {#set-up-the-hooks}
 
-`origin agents connect` 会把它们连同 Origin 的 MCP server 一起，加到每个已安装且支持的 Agent 中：它先显示会改什么，加上 `--yes` 才修改，每个文件改之前都会先备份（见[接入 Agent](./connect-agents.md#connect-them-all-at-once)）。改完之后，为每个 Agent 开始一个新会话；Codex 只有在你用 `/hooks` 信任新的 hook 之后才会运行它们。
+`origin agents connect` 会把它们连同 Origin 的 MCP server 一起，加到每个已安装且支持的 Agent 中：它先显示会改什么，加上 `--yes` 才修改，每个文件改之前都会先备份（见[接入 Agent](./connect-agents.md#connect-them-all-at-once)）。改完之后，为每个 Agent 开始一个新会话；Codex 只有在你用 `/hooks` 信任新的 hook 之后才会运行它们。ZCode 只在它的配置中 `hooks.enabled` 为 true 时运行 hook：Origin 的 hook 是那里仅有的 hook 时，`origin agents connect` 会把它打开；否则它会说明这一点，交给你决定，因为打开后你的其他 hook 也会运行。
 
 它也会加上采集 hook，这些 hook 不交出任何内容：在一轮结束、子 Agent 停止，或者 Claude Code 压缩了对话之后，它们在后台运行 `origin sync --hook`，把会话新增的行读进你的库，再发给你的中枢，这样片刻之后，简报、搜索和其他会话的 `changes` 就都有了这些内容（见[实时采集](../architecture.md#live-ingestion)）。
 
@@ -74,9 +74,40 @@ Past messages that match this prompt (agent, day, who):
 
 在两个 Agent 中用 `/hooks` 都可以看到它们。同时保留 Origin 的 MCP server 注册，这样 Agent 才能用 `get` 获取拿到的条目。召回 hook 用时不到一秒，Agent 会等它；采集 hook 在后台运行（`"async": true`），Agent 从不等待它。出现任何问题时，hook 不交出任何内容，也不采集任何内容，Agent 照常继续。
 
+ZCode 和 Cursor 只设召回 hook；它们新增的行靠查看来收取。对 ZCode，把 hook 放进 `~/.zcode/cli/config.json`，与它的其他设置并列，并按 ZCode 自己的格式写：超时以毫秒计，每个 hook 中不放别的字段，因为 ZCode 只要拒绝一个 hook，就会关掉所有 hook。
+
+```json
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "SessionStart": [
+        { "hooks": [{ "type": "command", "command": "origin recall --hook zcode", "timeoutMs": 10000 }] }
+      ],
+      "UserPromptSubmit": [
+        { "hooks": [{ "type": "command", "command": "origin recall --hook zcode", "timeoutMs": 10000 }] }
+      ]
+    }
+  }
+}
+```
+
+对 Cursor，把 hook 放进 `~/.cursor/hooks.json`。它随每个提示运行：会话开始时 hook 交出的内容，Cursor 常常会丢掉，所以对话的第一条提示带来它的简报，以及与这条提示匹配的条目。Grok Build 也读取这个文件，并把 Origin 的这一项列为它暂时无法运行的 Cursor hook；在 `~/.grok/config.toml` 中写上 `[compat.cursor] hooks = false`，它就不再读取这个文件。
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [{ "command": "origin recall --hook cursor", "timeout": 10 }]
+  }
+}
+```
+
+有些 Agent 会运行为别的 Agent 写的 hook：Grok Build 和 Cursor 会运行 `~/.claude/settings.json` 中的 hook。Origin 的 hook 根据运行它的 Agent 发来的内容判断是谁，遇到别的 Agent 就什么都不做，这样就不会有召回记在别的 Agent 名下。Agent 为自己运行的会话，即 ZCode 的子 Agent 或工作流步骤，以及 Cursor 的子 Agent，同样什么都拿不到。
+
 ## 其他 Agent {#other-agents}
 
-hook 无法交出内容的 Agent，也就是 Grok Build、ZCode 和 Cursor，会自己请求简报：Origin 的 MCP server 有一个 `brief` 工具，它的说明会告诉 Agent 在开始任务时带上工作目录调用它。它们拿到同样的简报，加上 `about` 时还有与任务匹配的条目和过往消息（见 [MCP 工具](./mcp.md#brief)）。除了[注册 Origin](./connect-agents.md)，不需要别的设置。这样的召回与 hook 的一样有记录；它的会话之后根据 Agent 日志中的召回 id 找到。
+Grok Build 在会话开始时和随提示都不读取 hook 交出的任何内容，所以它自己请求简报：Origin 的 MCP server 有一个 `brief` 工具，它的说明会告诉 Agent 在开始任务时带上工作目录调用它。不在任何目录中工作的 Agent 也是这样，比如 OpenClaw 的 Agent，或者你[中枢](./hub.md)上的机器人，它们带上自己为之工作的 `project`：OpenClaw Agent 的会话归在它的 Agent id 之下。它们拿到同样的简报，加上 `about` 时还有与任务匹配的条目和过往消息（见 [MCP 工具](./mcp.md#brief)）。除了[注册 Origin](./connect-agents.md)，不需要别的设置。这样的召回与 hook 的一样有记录；它的会话之后根据 Agent 日志中的召回 id 找到。
 
 ## 预览 {#preview}
 
@@ -86,6 +117,7 @@ hook 无法交出内容的 Agent，也就是 Grok Build、ZCode 和 Cursor，会
 origin recall                                        # the brief a new session here would get
 origin recall --prompt "should we drop the v1 routes?"
 origin recall --agent claude-code --cwd ~/code/acme  # as Claude Code would get it, without its own memories
+origin recall --project main                         # as an agent that works in no directory gets it
 ```
 
 ## 查看交出了什么 {#see-what-was-handed-over}

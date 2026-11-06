@@ -18,7 +18,7 @@ origin restore   <tombstone-id> --reason <text> [--yes]  Bring back what a forge
 origin proposals [--project <name>] [--status pending|accepted|rejected|all] [--limit 50]   Entries agents proposed, for you to review
 origin accept    <proposal-id> [--yes]                 Accept a proposal: write its entry (needs --yes)
 origin reject    <proposal-id> --reason <text> [--yes] Reject a proposal: forget it, as a record (needs --yes)
-origin recall    [--cwd <dir>] [--prompt <text>] [--agent <id>]   What an agent would be handed there; --hook <agent> answers its hooks
+origin recall    [--cwd <dir>] [--project <name>] [--prompt <text>] [--agent <id>]   What an agent would be handed there; --hook <agent> answers its hooks
 origin recalls   [--since <t>] [--agent <id>] [--session <id>] [--all] [--limit 50]   What agents were handed, newest first
 origin projects                                        Known project names
 origin sessions  reproject [--dry-run]                 Resolve each session to its main project
@@ -194,7 +194,7 @@ On a device connected to a hub, `origin digest` reads the device's own store, as
 
 ## Recall
 
-`origin recall` shows what an agent would be handed in the current directory, or in `--cwd`: the brief of a new session, or, with `--prompt`, the entries and past messages a prompt matches. `--agent` shows it as that agent would get it, without the memories it loads itself. It records nothing. `origin agents connect` sets up the hooks (see [Connect your agents](./connect-agents.md#connect-them-all-at-once)). Claude Code's and Codex's hooks run `origin recall --hook claude-code` or `--hook codex`, which reads the hook's event on standard input, records what it hands over, and prints it for the agent. `origin recalls` lists what agents were handed, newest first (`--all` also lists recalls that handed nothing over), and `origin show rcl_…` shows one, with the prompt it answered and the items the session went on to use. See [Recall](./recall.md).
+`origin recall` shows what an agent would be handed in the current directory, or in `--cwd`, or for a project by name with `--project`, as an agent that works in no directory gets it: the brief of a new session, or, with `--prompt`, the entries and past messages a prompt matches. `--agent` shows it as that agent would get it, without the memories it loads itself. It records nothing. `origin agents connect` sets up the hooks (see [Connect your agents](./connect-agents.md#connect-them-all-at-once)). The recall hooks of Claude Code, Codex, ZCode, and Cursor run `origin recall --hook <agent>`, which reads the hook's event on standard input, records what it hands over, and prints it for the agent; run by another agent, as Grok Build and Cursor run Claude Code's hooks, it does nothing. `origin recalls` lists what agents were handed, newest first (`--all` also lists recalls that handed nothing over), and `origin show rcl_…` shows one, with the prompt it answered and the items the session went on to use. See [Recall](./recall.md).
 
 ## Ingesting from hooks
 
