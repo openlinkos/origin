@@ -87,7 +87,7 @@ Codex、Cursor、ZCode、Grok Build 的接入方式见[接入 Agent](https://ori
 - [核心概念](https://origin.openlinkos.com/zh/guide/concepts)：会话、线索、条目、版本、有效期、导入的记忆与遗忘
 - [接入 Agent](https://origin.openlinkos.com/zh/guide/connect-agents)：Claude Code、Codex、Cursor、ZCode、Grok Build，以及它们可用的 MCP 工具
 - [接入你自己的来源](https://origin.openlinkos.com/zh/guide/sources)：以事件行带来其他任何程序的会话
-- [接入 OpenClaw](https://origin.openlinkos.com/zh/guide/openclaw)：把 OpenClaw 上各个 Agent 的会话写进 Origin 的插件
+- [接入 OpenClaw](https://origin.openlinkos.com/zh/guide/openclaw)：把 OpenClaw 上各个 Agent 的会话写进 Origin、并让它们读取 Origin 的插件
 - [个人中枢](https://origin.openlinkos.com/zh/guide/hub)：自托管，让你所有的机器和云端 Agent 共享一份记忆
 - [管理界面](https://origin.openlinkos.com/zh/guide/admin)：在浏览器中管理中枢：启用、登录、放在 TLS 之后，或保持私有访问
 - [隐私与数据](https://origin.openlinkos.com/zh/guide/privacy)：Origin 保存了什么、遗忘如何生效、如何清除全部数据
@@ -146,7 +146,7 @@ packages/
 ├── mcp/        @openlinkos/origin-mcp       MCP 工具、stdio 与 HTTP server、已接入设备上的合并读取
 ├── admin/      @openlinkos/origin-admin     中枢的管理界面：服务器端渲染的页面与 JSON API
 ├── cli/        @openlinkos/origin           origin 命令与中枢（`origin serve`）
-└── openclaw/   @openlinkos/origin-openclaw  OpenClaw 插件：把它上面各个 Agent 的会话写成事件行
+└── openclaw/   @openlinkos/origin-openclaw  OpenClaw 插件：把它上面各个 Agent 的会话写成事件行，并把 Origin 的读取工具交给它们
 docs/                                        文档站点（VitePress）
 ├── guide/                                   使用指南（英文；中文版在 docs/zh/ 下）
 ├── architecture.md                          设计、数据模型、不变量

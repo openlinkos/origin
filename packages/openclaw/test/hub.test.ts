@@ -174,6 +174,7 @@ describe('delivery to a hub', () => {
     expect(rec.config.target).toMatchObject({ kind: 'hub', token: null });
     expect(logs.map((l) => l.message)).toEqual([
       expect.stringMatching(/^origin: recording every agent/),
+      expect.stringMatching(/^origin: giving every agent Origin's read tools from http/),
       expect.stringContaining("has not resolved the hub token's SecretRef yet"),
     ]);
     await hooks.get('agent_end')!({ messages: firstTurn(), success: true }, agentCtx());

@@ -1,10 +1,20 @@
 {
   "id": "origin",
   "name": "Origin",
-  "description": "Writes this Gateway's agent sessions to Origin, a cross-agent personal memory, as event lines: into a directory an Origin device reads, or to your Origin hub.",
+  "description": "Writes this Gateway's agent sessions to Origin, a cross-agent personal memory, as event lines: into a directory an Origin device reads, or to your Origin hub. With a hub, it gives the agents Origin's read tools.",
   "categories": ["memory"],
   "activation": {
     "onStartup": true
+  },
+  "contracts": {
+    "tools": ["origin_brief", "origin_search", "origin_get", "origin_timeline", "origin_digest"]
+  },
+  "toolMetadata": {
+    "origin_brief": { "profiles": ["coding", "messaging", "full"] },
+    "origin_search": { "profiles": ["coding", "messaging", "full"] },
+    "origin_get": { "profiles": ["coding", "messaging", "full"] },
+    "origin_timeline": { "profiles": ["coding", "messaging", "full"] },
+    "origin_digest": { "profiles": ["coding", "messaging", "full"] }
   },
   "configContracts": {
     "secretInputs": {
@@ -62,6 +72,10 @@
       "label": "Reconcile on session end",
       "help": "Read the end of an ended session's transcript and send what was missed. Needs conversation access.",
       "advanced": true
+    },
+    "tools": {
+      "label": "Origin tools for agents",
+      "help": "Give the agents Origin's read tools (origin_brief, origin_search, origin_get, origin_timeline, origin_digest), which your hub answers with the hub token. On with a hub; set false to turn them off."
     },
     "spoolDir": {
       "label": "State directory",
@@ -138,6 +152,9 @@
       "reconcileOnEnd": {
         "type": "boolean",
         "default": false
+      },
+      "tools": {
+        "type": "boolean"
       },
       "spoolDir": {
         "type": "string",

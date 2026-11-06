@@ -57,6 +57,46 @@ export interface PluginApi {
   /** Resolves a user path, such as `~/…`, as OpenClaw resolves paths in its config. */
   resolvePath?: (input: string) => string;
   on: (hookName: string, handler: HookHandler, opts?: HookOptions) => void;
+  /**
+   * Registers an agent tool, or a factory OpenClaw calls with each run's tool context, which returns
+   * the tool for that run or null to leave it out; a factory's tool is named in `opts.name`, as the
+   * manifest's `contracts.tools` lists it. Written out from OpenClaw 2026.10.6's documentation of
+   * plugin tools (plugins/building-plugins, plugins/tool-plugins).
+   */
+  registerTool?: (tool: AgentTool | ToolFactory, opts?: ToolOptions) => void;
+}
+
+/** Options of `api.registerTool`. */
+export interface ToolOptions {
+  name?: string;
+  /** A tool the operator must allow (`tools.allow`) before a model sees it. */
+  optional?: boolean;
+}
+
+/**
+ * A tool's factory: called with the run's tool context, read as `unknown` and checked field by
+ * field, since a host may leave any field out (it holds `agentId`, `sessionKey`, `sessionId`, and
+ * `messageChannel`, among others, when the run has them).
+ */
+export type ToolFactory = (ctx: unknown) => AgentTool | null;
+
+/**
+ * An agent tool, as OpenClaw's agent loop runs it: `parameters` is a JSON Schema, and `execute`
+ * takes the call's id first. A tool that fails throws: the model gets the error's message as the
+ * call's result, marked as an error.
+ */
+export interface AgentTool {
+  name: string;
+  label: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  execute: (toolCallId: string, params: unknown, signal?: AbortSignal) => Promise<AgentToolResult>;
+}
+
+/** What a tool returns: the text the model reads, and `details`, which OpenClaw keeps and grades. */
+export interface AgentToolResult {
+  content: Array<{ type: 'text'; text: string }>;
+  details: Record<string, unknown>;
 }
 
 /** The default export OpenClaw's loader reads. */

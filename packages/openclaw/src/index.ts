@@ -6,12 +6,14 @@ import { DirSink, HubSink, type Sink } from './delivery.js';
 import { asRecord, speakerName, str } from './lines.js';
 import { type Log, pluginLog } from './log.js';
 import { Recorder, type TurnSource } from './recorder.js';
+import { registerTools } from './tools.js';
 import type { HookHandler, PluginApi, PluginDefinition } from './types.js';
 
 /**
  * Origin's plugin for OpenClaw (docs/guide/openclaw.md): it writes the sessions of a Gateway's
  * agents to Origin as event lines, into a directory an Origin device on the same host reads, or to
- * an Origin hub. It depends on nothing but Node: OpenClaw loads its default export.
+ * an Origin hub; with a hub, it also gives the agents Origin's read tools, which the hub answers
+ * (tools.ts). It depends on nothing but Node: OpenClaw loads its default export.
  */
 
 export const PLUGIN_ID = 'origin';
@@ -21,15 +23,19 @@ export interface RegisterOptions {
   sink?: Sink;
   now?: () => number;
   env?: NodeJS.ProcessEnv;
+  /** Replaces `fetch` for the tools' calls to the hub, for tests. */
+  fetch?: typeof fetch;
 }
 
 /**
- * Register the plugin's hooks, and return its recorder; null when it records nothing: a load that
- * is not the Gateway's own (`registrationMode` other than `full`), or a config that is not valid,
- * which it says once.
+ * Register the plugin's hooks and tools, and return its recorder. The Gateway's own load
+ * (`registrationMode` `full`) registers both; a load to list or run plugins' tools
+ * (`tool-discovery`) registers the tools alone, and returns null; any other load, nothing. Nor does
+ * a config that is not valid, which the Gateway's load says once.
  */
 export function registerOrigin(api: PluginApi, opts: RegisterOptions = {}): Recorder | null {
-  if (api.registrationMode !== undefined && api.registrationMode !== 'full') return null;
+  const mode = api.registrationMode ?? 'full';
+  if (mode !== 'full' && mode !== 'tool-discovery') return null;
   const log = pluginLog(api.logger);
   const env = opts.env ?? process.env;
   const parsed = parseConfig(api.pluginConfig, {
@@ -40,10 +46,23 @@ export function registerOrigin(api: PluginApi, opts: RegisterOptions = {}): Reco
     tokenLater: typeof api.runtime?.config?.current === 'function',
   });
   if (!parsed.ok) {
-    log.error(`not recording: ${parsed.error} (plugins.entries.${api.id ?? PLUGIN_ID}.config)`);
+    if (mode === 'full') {
+      log.error(`not recording: ${parsed.error} (plugins.entries.${api.id ?? PLUGIN_ID}.config)`);
+    }
     return null;
   }
   const config = parsed.config;
+  const tools = registerTools(
+    api,
+    config,
+    {
+      token: currentToken(api, config.target.kind === 'hub' ? config.target.token : null),
+      fetchImpl: opts.fetch,
+    },
+    // Said in the Gateway's own load only.
+    mode === 'full' ? log : undefined,
+  );
+  if (mode !== 'full') return null;
   const turns: TurnSource = hasConversationAccess(api.config, api.id ?? PLUGIN_ID)
     ? 'agent_end'
     : 'messages';
@@ -87,9 +106,12 @@ export function registerOrigin(api: PluginApi, opts: RegisterOptions = {}): Reco
         : 'from the message hooks (no conversation access: set hooks.allowConversationAccess for agent_end)'
     }`,
   );
+  if (tools.length > 0 && config.target.kind === 'hub') {
+    log.info(`giving ${who} Origin's read tools from ${config.target.url}: ${tools.join(', ')}`);
+  }
   if (config.target.kind === 'hub' && config.target.token === null) {
     log.info(
-      "the Gateway has not resolved the hub token's SecretRef yet: the plugin reads it from the Gateway's config each time it delivers, and keeps the lines in its spool until then",
+      "the Gateway has not resolved the hub token's SecretRef yet: the plugin reads it from the Gateway's config each time it delivers or an agent calls a tool, and keeps the lines in its spool until then",
     );
   }
   return recorder;
@@ -185,20 +207,13 @@ function pluginEntry(config: unknown, id: string): Record<string, unknown> | nul
 }
 
 /**
- * The hub token, read at each delivery: the one in the Gateway's config as it runs now, SecretRefs
- * resolved (`api.runtime.config.current()`), so that a token changed since the plugin was
- * registered, or a SecretRef the Gateway resolved after it, as on a reload, is the one used; else
- * the token the plugin was registered with. Null while there is neither. Says once when there is a
- * token after there was none.
+ * The hub token, read each time it is used, by a delivery or a tool: the one in the Gateway's config
+ * as it runs now, SecretRefs resolved (`api.runtime.config.current()`), so that a token changed
+ * since the plugin was registered, or a SecretRef the Gateway resolved after it, as on a reload, is
+ * the one used; else the token the plugin was registered with. Null while there is neither.
  */
-function liveToken(
-  api: PluginApi,
-  registered: string | null,
-  url: string,
-  log: Log,
-): () => string | null {
+function currentToken(api: PluginApi, registered: string | null): () => string | null {
   const id = api.id ?? PLUGIN_ID;
-  let had = registered !== null;
   return () => {
     let token: string | null = null;
     try {
@@ -208,7 +223,21 @@ function liveToken(
     } catch {
       token = null;
     }
-    token ??= registered;
+    return token ?? registered;
+  };
+}
+
+/** The token at each delivery (currentToken); says once when there is one after there was none. */
+function liveToken(
+  api: PluginApi,
+  registered: string | null,
+  url: string,
+  log: Log,
+): () => string | null {
+  const read = currentToken(api, registered);
+  let had = registered !== null;
+  return () => {
+    const token = read();
     if (token && !had) {
       had = true;
       log.info(`the Gateway resolved the hub token: delivering to ${url}`);
@@ -301,7 +330,7 @@ const plugin: PluginDefinition = {
   id: PLUGIN_ID,
   name: 'Origin',
   description:
-    "Writes this Gateway's agent sessions to Origin, a cross-agent personal memory, as event lines.",
+    "Writes this Gateway's agent sessions to Origin, a cross-agent personal memory, as event lines, and gives its agents Origin's read tools.",
   register(api: PluginApi): void {
     registerOrigin(api);
   },

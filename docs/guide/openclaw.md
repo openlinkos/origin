@@ -1,8 +1,8 @@
 # Connect OpenClaw
 
-[OpenClaw](https://docs.openclaw.ai) runs agents in its Gateway, often on a server where no Origin device runs, and keeps their transcripts in a database of its own. Origin's plugin for OpenClaw, `@openlinkos/origin-openclaw`, sees each turn inside the Gateway as it ends and writes it to Origin as [event lines](./sources.md): to your [personal hub](./hub.md), or into a directory that an Origin device on the same host reads. The sessions of your OpenClaw agents then show in Origin like any agent's.
+[OpenClaw](https://docs.openclaw.ai) runs agents in its Gateway, often on a server where no Origin device runs, and keeps their transcripts in a database of its own. Origin's plugin for OpenClaw, `@openlinkos/origin-openclaw`, sees each turn inside the Gateway as it ends and writes it to Origin as [event lines](./sources.md): to your [personal hub](./hub.md), or into a directory that an Origin device on the same host reads. The sessions of your OpenClaw agents then show in Origin like any agent's. With a hub, the plugin also gives those agents Origin's read tools, so that they are briefed on their own work and can look up the rest of your memory (see [Read Origin from your agents](#read-origin-from-your-agents)).
 
-The plugin was checked against OpenClaw 2026.10.6: its hooks and their payloads, its plugin manifest, and its install command as that version has them.
+The plugin was checked against OpenClaw 2026.10.6: its hooks and their payloads, its plugin manifest, and its install command as that version has them; its tools follow that version's documentation of plugin tools.
 
 ## What it sends
 
@@ -33,7 +33,7 @@ cd packages/openclaw && pnpm pack --pack-destination /tmp
 openclaw plugins install npm-pack:/tmp/openlinkos-origin-openclaw-*.tgz --force --accept-capabilities
 ```
 
-`openclaw plugins install ./packages/openclaw --force --accept-capabilities` installs the built directory instead, and `-l` links it rather than copying it. `--force` confirms that you trust a source outside ClawHub, and `--accept-capabilities` approves the capability review OpenClaw asks for with a plugin from such a source. Its id in OpenClaw is `origin`. Then configure it as below; `openclaw plugins inspect origin --runtime --json` shows the hooks it registered.
+`openclaw plugins install ./packages/openclaw --force --accept-capabilities` installs the built directory instead, and `-l` links it rather than copying it. `--force` confirms that you trust a source outside ClawHub, and `--accept-capabilities` approves the capability review OpenClaw asks for with a plugin from such a source. Its id in OpenClaw is `origin`. Then configure it as below; `openclaw plugins inspect origin --runtime --json` shows the hooks and tools it registered. Installing a new version applies to the running Gateway; the Gateway need not restart.
 
 ## Configure
 
@@ -70,10 +70,11 @@ The plugin's settings go in the Gateway's config, `~/.openclaw/openclaw.json`, u
 | `project` | | One project for every session, instead of `projectBy` |
 | `includeTools` | `true` | Send tool calls and their results |
 | `reconcileOnEnd` | `false` | When a session ends, read the end of its transcript, up to 200 messages, and send what was never sent; needs conversation access |
+| `tools` | `true` with a hub | Give the agents Origin's read tools (see [below](#read-origin-from-your-agents)); `false` gives none. Without a hub, there are none |
 | `spoolDir` | `origin-openclaw/` in OpenClaw's state directory | Where the plugin keeps the lines it could not deliver yet, and the record of those it sent |
 | `timeoutMs` | `5000` | How long one delivery to the hub may take, in milliseconds |
 
-OpenClaw applies a change to this block by reloading the plugin; the Gateway need not restart. On a reload, OpenClaw registers the plugin before it resolves a SecretRef, so the plugin reads the hub token from the Gateway's config as it runs, SecretRefs resolved, each time it delivers: until the Gateway has resolved the token, the lines wait in the spool, and the log says once when it has, in a line that starts with `origin: the Gateway resolved the hub token`. A token you change in the config is used from the next delivery on. A plugin whose settings are not valid records nothing and says why, once, in the Gateway's log, in a line that starts with `origin: not recording`; a valid one logs a line that starts with `origin: recording`.
+OpenClaw applies a change to this block by reloading the plugin; the Gateway need not restart. On a reload, OpenClaw registers the plugin before it resolves a SecretRef, so the plugin reads the hub token from the Gateway's config as it runs, SecretRefs resolved, each time it delivers or an agent calls one of its tools: until the Gateway has resolved the token, the lines wait in the spool, the tools say so to the agent, and the log says once when it has, in a line that starts with `origin: the Gateway resolved the hub token`. A token you change in the config is used from the next delivery on. A plugin whose settings are not valid records nothing and says why, once, in the Gateway's log, in a line that starts with `origin: not recording`; a valid one logs a line that starts with `origin: recording`.
 
 ### With or without conversation access
 
@@ -90,7 +91,7 @@ Create an agent's token on the hub, named after the Gateway's host, and give it 
 origin token create openclaw-us --agent   # on the hub, or: docker exec origin-hub origin token create openclaw-us --agent
 ```
 
-The token's name is the device the lines are recorded under: the hub keeps them as files of the source `openclaw` sent by `openclaw-us`, beside what your devices send. Give each Gateway a token of its own. Keep the token out of `openclaw.json`: as a SecretRef, as above, the Gateway resolves it from 1Password, and the plugin reads it, resolved, from the Gateway's config; or put it in an environment variable of the Gateway's service and name that variable:
+The token's name is the device the lines are recorded under: the hub keeps them as files of the source `openclaw` sent by `openclaw-us`, beside what your devices send. Give each Gateway a token of its own. The plugin's read tools call the hub with the same token, so it must not be `--readonly`, which the hub lets read but not send lines. Keep the token out of `openclaw.json`: as a SecretRef, as above, the Gateway resolves it from 1Password, and the plugin reads it, resolved, from the Gateway's config; or put it in an environment variable of the Gateway's service and name that variable:
 
 ```json
 { "hub": "https://hub.example.com", "tokenEnv": "ORIGIN_HUB_TOKEN" }
@@ -118,7 +119,35 @@ origin search "migration lock" --source openclaw        # its messages, among ev
 
 On the hub, the sessions appear in the [admin UI](./admin.md) under `openclaw`, and agents connected to the hub find them through `search`, `timeline`, and `get`. A line's provenance leads to the hub's mirror of the file it was sent in, `raw/devices/openclaw-us/openclaw/…`, and through `origin show` to the line as the plugin wrote it.
 
-An OpenClaw agent that reaches your hub's MCP server works in no directory, so it asks `brief` for the project its sessions are filed under, its agent id unless you set `projectBy` or `project`: `{ "project": "main" }` (see [MCP tools](./mcp.md#brief)).
+With a hub, your OpenClaw agents read it too, through the plugin's tools (see [below](#read-origin-from-your-agents)). An agent that reaches your hub's MCP server some other way also works in no directory, so it asks `brief` for the project its sessions are filed under, its agent id unless you set `projectBy` or `project`: `{ "project": "main" }` (see [MCP tools](./mcp.md#brief)).
+
+## Read Origin from your agents
+
+With a hub, the plugin gives the agents it records five tools, the [MCP tools](./mcp.md) of Origin's that read:
+
+| Tool | What it does | MCP tool |
+|---|---|---|
+| `origin_brief` | What your memory holds for the agent's project: your preferences, the project's latest decisions and facts, and its latest sessions with any agent; with `about`, also the entries and past messages that match the task | `brief` |
+| `origin_search` | Full-text search over your entries and archived sessions | `search` |
+| `origin_get` | Opens any id Origin hands over, with what is next to it | `get` |
+| `origin_timeline` | Sessions in a time range, or the events of one session, a page at a time | `timeline` |
+| `origin_digest` | What happened on one day, from the store alone | `digest` |
+
+Each takes the parameters of its MCP tool and hands the call to your hub's MCP endpoint, `POST /mcp`, with the hub and the token of the plugin's config: the token it delivers lines with, read from the Gateway's config at each call, so a SecretRef stays a SecretRef. This is why the plugin brings tools of its own rather than having you add the hub to OpenClaw's `mcp.servers`: OpenClaw 2026.10.6 resolves no SecretRef in an MCP server's headers, so the token would sit in `openclaw.json` as plain text. The tools write nothing but the recall the hub records for each brief, as for any agent's (see [Recall](./recall.md)): made for the agent `openclaw`, the plugin's `source`, on the device its token is named after.
+
+- **Briefed on its own project.** `origin_brief` takes no directory: it briefs an agent on the project the plugin files the agent's sessions under, by the same rule, its agent id unless you set `projectBy` or `project`. The agent may name another `project`, and pass `about`, what the task is about. The tool's description has the agent call it when it starts a task that may build on earlier work, and before it answers a question about past work, decisions, or your preferences; the ids it lists open with `origin_get`.
+- **For the agents it records.** An agent that `agents` leaves out does not get the tools. To keep them from an agent the plugin records, deny them in OpenClaw's tool policy for that agent.
+- **In OpenClaw's tool profiles.** The plugin's manifest adds the tools to the `coding`, `messaging`, and `full` profiles, so an agent with one of these sees them. With `minimal`, or an allowlist of your own in `tools.allow`, add their names, or the plugin's id `origin` for all five, to `tools.allow` or `tools.alsoAllow`. If you set `plugins.allow`, it must name `origin`, as it must for the plugin to record.
+- **When they cannot answer**, they fail with a line the agent reads: the hub refused the token (`401`), cannot be reached, did not answer within 15 seconds, or the Gateway has not resolved the token yet. The token is never in it.
+- **To give no tools**, set `tools` to `false`.
+
+To check, list what the plugin registered, then ask an agent, in a new session, about earlier work, such as "what did we decide about the deploy?":
+
+```bash
+openclaw plugins inspect origin --runtime --json   # the hooks, and the five origin_ tools
+```
+
+The agent calls `origin_brief`, or `origin_search`, and answers from what it is handed. On the hub, `origin show <recall id>` shows what a brief handed over, by the id the brief begins with.
 
 ## Who wrote each message
 
@@ -153,6 +182,9 @@ The context OpenClaw adds to a turn stays a `meta` line with neither field, whic
 | Symptom | What to check |
 |---|---|
 | Nothing reaches Origin | The Gateway's log: `origin: not recording: …` says what to fix in the config; `openclaw plugins inspect origin --runtime --json` lists the hooks it registered |
+| An agent has no `origin_brief` | `openclaw plugins inspect origin --runtime --json` lists the tools, and the Gateway's log has a line that starts with `origin: giving`; the agent is among `agents`; OpenClaw's tool policy lets the tools through for it (see [Read Origin from your agents](#read-origin-from-your-agents)) |
+| A tool fails with `Origin's hub refused the plugin's token (401)` | The token is wrong or was revoked: create a new one on the hub |
+| A tool fails with `Origin cannot be read yet` | The Gateway has not resolved the token's SecretRef: fix it, as for deliveries |
 | The log says `origin: recording … from the message hooks` | Conversation access is off: set `hooks.allowConversationAccess` to `true` in the entry, beside `config`, not inside it |
 | `cannot deliver to …: the hub answered 401` | The token is wrong or was revoked: create a new one on the hub |
 | `cannot deliver to …: the Gateway has not resolved the hub token's SecretRef yet` | The Gateway could not resolve the token's SecretRef, such as a 1Password reference it cannot read: fix it; the lines wait in the spool and are sent once it resolves |

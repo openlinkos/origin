@@ -156,11 +156,13 @@ describe('register', () => {
     [{ dir: '/x', agents: [] }, '"agents"'],
     [{ dir: '/x', triggers: 'user' }, '"triggers"'],
     [{ dir: '/x', includeTools: 'yes' }, '"includeTools"'],
+    [{ hub: 'https://hub.example.com', token: 't', tools: 'on' }, '"tools"'],
     [{ dir: '/x', hubUrl: 'typo' }, 'unknown config key hubUrl'],
   ])('registers nothing and says why, once, for %j', (pluginConfig, message) => {
-    const { api, hooks, logs } = fakeApi({ pluginConfig, stateDir: state });
+    const { api, hooks, tools, logs } = fakeApi({ pluginConfig, stateDir: state });
     plugin.register(api);
     expect(hooks.size).toBe(0);
+    expect(tools.size).toBe(0);
     expect(logs).toHaveLength(1);
     expect(logs[0]!.level).toBe('error');
     expect(logs[0]!.message).toContain('not recording');
@@ -169,9 +171,13 @@ describe('register', () => {
 
   it('records nothing in loads other than the Gateway own', () => {
     for (const mode of ['discovery', 'cli-metadata', 'setup-only', 'tool-discovery']) {
-      const { api, hooks, logs } = fakeApi({ pluginConfig: dirConfig(), registrationMode: mode });
+      const { api, hooks, tools, logs } = fakeApi({
+        pluginConfig: dirConfig(),
+        registrationMode: mode,
+      });
       plugin.register(api);
       expect(hooks.size).toBe(0);
+      expect(tools.size).toBe(0);
       expect(logs).toEqual([]);
     }
   });
@@ -190,6 +196,7 @@ describe('register', () => {
       project: 'ops',
       includeTools: false,
       reconcileOnEnd: true,
+      tools: false,
       spoolDir: path.join(state, 'spool-here'),
       timeoutMs: 3000,
     };
@@ -210,6 +217,7 @@ describe('register', () => {
       project: 'ops',
       includeTools: false,
       reconcileOnEnd: true,
+      tools: false,
       stateDir: path.join(state, 'spool-here'),
       timeoutMs: 3000,
     });

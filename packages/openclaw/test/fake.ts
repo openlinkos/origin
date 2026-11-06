@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Batch, SendResult, Sink } from '../src/delivery.js';
-import type { HookHandler, PluginApi } from '../src/types.js';
+import type { HookHandler, PluginApi, ToolFactory, ToolOptions } from '../src/types.js';
 
 /** Synthetic data only: these sessions, agents, and messages are made up. */
 export const T = Date.parse('2026-11-02T01:30:00Z');
@@ -98,14 +98,16 @@ export interface FakeApi {
   listeners: Set<(update: unknown) => void>;
   /** Persist a message, as OpenClaw does: every transcript listener hears of it. */
   persist: (update: unknown) => void;
+  /** The tool factories registered (`api.registerTool`), by the name each was registered under. */
+  tools: Map<string, { factory: ToolFactory; opts: ToolOptions | undefined }>;
   /** Dispose of this instance of the plugin, as OpenClaw does when it reloads it. */
   dispose: () => void;
 }
 
 /**
- * An OpenClaw `api`, as `register` receives it (2026.10.6), that records the hooks and transcript
- * listeners registered. `current` stands for `api.runtime.config.current()`, which hosts without it
- * lack.
+ * An OpenClaw `api`, as `register` receives it (2026.10.6), that records the hooks, transcript
+ * listeners, and tools registered. `current` stands for `api.runtime.config.current()`, which hosts
+ * without it lack.
  */
 export function fakeApi(
   opts: {
@@ -117,9 +119,12 @@ export function fakeApi(
     current?: () => unknown;
     /** False for a host without transcript updates. */
     events?: boolean;
+    /** False for a host without `api.registerTool`. */
+    registerTool?: boolean;
   } = {},
 ): FakeApi {
   const hooks = new Map<string, HookHandler>();
+  const tools: FakeApi['tools'] = new Map();
   const logs: FakeApi['logs'] = [];
   const listeners = new Set<(update: unknown) => void>();
   const disposers: Array<() => void> = [];
@@ -159,10 +164,21 @@ export function fakeApi(
     on: (name, handler) => {
       hooks.set(name, handler);
     },
+    ...(opts.registerTool === false
+      ? {}
+      : {
+          registerTool: (tool, toolOpts) => {
+            if (typeof tool !== 'function' || !toolOpts?.name) {
+              throw new Error('the fake host takes tool factories with a name only');
+            }
+            tools.set(toolOpts.name, { factory: tool, opts: toolOpts });
+          },
+        }),
   };
   return {
     api,
     hooks,
+    tools,
     logs,
     listeners,
     persist: (update) => {

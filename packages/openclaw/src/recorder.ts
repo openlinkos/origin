@@ -1,4 +1,4 @@
-import type { Config } from './config.js';
+import { type Config, projectOf } from './config.js';
 import { type Batch, Deliverer, type Sink, Spool } from './delivery.js';
 import { linesPath } from './files.js';
 import {
@@ -100,8 +100,7 @@ export class Recorder {
     const agentId = str(c.agentId) ?? agentOfSessionKey(sessionKey) ?? 'unknown';
     if (this.config.agents && !this.config.agents.includes(agentId)) return null;
     const channel = str(c.channel) ?? str(c.messageProvider) ?? str(c.channelId);
-    const project =
-      this.config.project ?? (this.config.projectBy === 'channel' ? (channel ?? agentId) : agentId);
+    const project = projectOf(this.config, agentId, channel) ?? agentId;
     const meta: Record<string, string> = { agentId };
     const add = (k: string, v: string | null) => {
       if (v) meta[k] = v;

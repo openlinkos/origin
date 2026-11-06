@@ -87,7 +87,7 @@ The full documentation lives in [`docs/`](docs/) and is published at [origin.ope
 - [Concepts](docs/guide/concepts.md): sessions, threads, entries, versions, validity, imported memories, and forgetting
 - [Connect your agents](docs/guide/connect-agents.md): Claude Code, Codex, Cursor, ZCode, Grok Build, and the MCP tools they get
 - [Bring your own source](docs/guide/sources.md): bring the sessions of any other program, as event lines
-- [Connect OpenClaw](docs/guide/openclaw.md): the plugin that writes your OpenClaw agents' sessions to Origin
+- [Connect OpenClaw](docs/guide/openclaw.md): the plugin that writes your OpenClaw agents' sessions to Origin, and lets them read it
 - [Personal hub](docs/guide/hub.md): one memory across your machines and cloud agents, self-hosted
 - [Admin UI](docs/guide/admin.md): manage your hub in a browser: enable it, sign in, put it behind TLS, or keep it private
 - [Privacy and your data](docs/guide/privacy.md): what Origin stores, how forgetting works, how to remove everything
@@ -146,7 +146,7 @@ packages/
 ├── mcp/        @openlinkos/origin-mcp       MCP tools, stdio and HTTP servers, merged reads on a connected device
 ├── admin/      @openlinkos/origin-admin     the hub's admin UI: server-rendered pages and a JSON API
 ├── cli/        @openlinkos/origin           the `origin` command and the hub (`origin serve`)
-└── openclaw/   @openlinkos/origin-openclaw  the plugin for OpenClaw, which writes its agents' sessions as event lines
+└── openclaw/   @openlinkos/origin-openclaw  the plugin for OpenClaw, which writes its agents' sessions as event lines and gives them Origin's read tools
 docs/                                        documentation site (VitePress)
 ├── guide/                                   user guides (English; Chinese under docs/zh/)
 ├── architecture.md                          design, data model, invariants

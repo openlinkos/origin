@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-c19ae7b6
+sourceHash: sha256-401dcf2a
 ---
 
 # 架构
@@ -146,11 +146,11 @@ pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.16（�
 | `@openlinkos/origin-mcp` | `packages/mcp` | MCP 工具；基于 stdio 和无状态 HTTP 的 server，已接入中枢的设备上的 server（它把中枢的回答合并进自己的回答），以及中继上的 server（它把每一次工具调用都交给中枢） | core |
 | `@openlinkos/origin-admin` | `packages/admin` | 管理界面，供中枢和 `origin ui` 使用：服务器端渲染的页面、JSON API 及其静态资源；中枢的公开首页；以及中枢的 OAuth 端点 | core |
 | `@openlinkos/origin` | `packages/cli` | `origin` 命令，包括 `origin mcp`、`origin serve`（中枢）、`origin ui`、设备或中继与中枢之间的同步（以及经浏览器批准的接入）、中枢的 S3 客户端，以及它获取客户端元数据文档的组件 | core, adapters, mcp, admin |
-| `@openlinkos/origin-openclaw` | `packages/openclaw` | OpenClaw 的插件，由它的 Gateway 加载：把 Gateway 上各个 Agent 的会话写成事件行，写入某个来源的目录或发往中枢 | — |
+| `@openlinkos/origin-openclaw` | `packages/openclaw` | OpenClaw 的插件，由它的 Gateway 加载：把 Gateway 上各个 Agent 的会话写成事件行，写入某个来源的目录或发往中枢，并把 Origin 的读取工具交给这些 Agent，由它转发给中枢的 `/mcp` | — |
 
 六个包以同一个版本号一起发布到 npm。用户安装 `@openlinkos/origin`，`core`、`adapters`、`mcp` 和 `admin` 随之安装；1.0 之前，这四个包属于内部实现，它们的 API 可能在任何版本中改变。`@openlinkos/origin-openclaw` 则用 OpenClaw 自己的命令安装进 OpenClaw。
 
-`core` 不得依赖任何其他包，`openclaw` 也不得：它运行在 OpenClaw 里，只通过它写出的事件行与 Origin 打交道；`mcp` 和 `admin` 都不得依赖 `adapters`：CLI 以回调的形式把采集注入各个 server，中枢和 `origin ui` 的 HTTP server 位于 CLI 中，并由它挂载管理界面的请求处理函数。适配器实现 `core` 中的 `SourceAdapter` 接口：
+`core` 不得依赖任何其他包，`openclaw` 也不得：它运行在 OpenClaw 里，只通过它写出的事件行，以及为它的读取工具通过 HTTP 访问中枢的 MCP 端点，与 Origin 打交道；`mcp` 和 `admin` 都不得依赖 `adapters`：CLI 以回调的形式把采集注入各个 server，中枢和 `origin ui` 的 HTTP server 位于 CLI 中，并由它挂载管理界面的请求处理函数。适配器实现 `core` 中的 `SourceAdapter` 接口：
 
 ```ts
 interface SourceAdapter {
@@ -313,7 +313,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 
 ### 你自己的来源 {#your-own-sources}
 
-人的工作也发生在 Origin 的适配器看不到的地方：其他 Agent 运行时、聊天工作区、通知流、笔记流水线。Origin 没有为每一种都写一个适配器，而是读取它自己的一种格式，**事件行**：UTF-8 的 JSONL，每行一个事件，由写入它的东西不断追加（字段与规则见 [sources.md](sources.md#your-own-sources-event-lines)）。写入者在 Origin 之外：一个轮询或订阅某个服务的脚本追加行，而 Origin 自己不发起任何网络调用（不变量 4），像读取 Agent 的记录一样读取它们。随 Origin 一起发布的唯一一个写入者，即它的 OpenClaw 插件（`packages/openclaw`，见[接入 OpenClaw](guide/openclaw.md)），也不例外：它运行在 OpenClaw 的 Gateway 中，Origin 只通过它写出的行认识它。
+人的工作也发生在 Origin 的适配器看不到的地方：其他 Agent 运行时、聊天工作区、通知流、笔记流水线。Origin 没有为每一种都写一个适配器，而是读取它自己的一种格式，**事件行**：UTF-8 的 JSONL，每行一个事件，由写入它的东西不断追加（字段与规则见 [sources.md](sources.md#your-own-sources-event-lines)）。写入者在 Origin 之外：一个轮询或订阅某个服务的脚本追加行，而 Origin 自己不发起任何网络调用（不变量 4），像读取 Agent 的记录一样读取它们。随 Origin 一起发布的唯一一个写入者，即它的 OpenClaw 插件（`packages/openclaw`，见[接入 OpenClaw](guide/openclaw.md)），也不例外：它运行在 OpenClaw 的 Gateway 中，Origin 只通过它写出的行认识它。它交给 OpenClaw 的 Agent 的读取工具，像任何 Agent 一样调用中枢的 `/mcp`（见 [MCP server](#mcp-server)）。
 
 - **目录就是注册。** 库的主目录下 `sources/` 中的每个目录（`~/.origin/sources/<name>/`），或者指向某个目录的链接，都是一个来源，其 id 就是目录名，前提是这个名称由 2 到 32 个小写字母、数字和连字符组成、以字母开头，既不是内置来源的 id，也不是 `origin`、`hub`、`local`、`all` 和 `devices` 之一（`devices` 用于中枢存放其设备文件的镜像，即 `raw/devices/…`）。其他名称的目录会被忽略，每次同步在标准错误上给出一条警告（`origin mcp` 只警告一次）。没有来源表：CLI 每次列出它的适配器时都会列出这些目录，所以新目录会在下一次同步时被读取；删除的目录不再被读取，而已归档的内容保留。
 - **同一个适配器。** 每个这样的来源都由事件行适配器（`adapters` 中的 `createLinesAdapter`）读取，它的文件是目录下任意深度的 `.jsonl` 文件，隐藏文件除外，最旧的在前；它的 `locate` 指向同样的文件，所以单个文件也可以单独采集（`syncFile`）。目录中的 `VERSION` 文件给出写入这个来源的程序的版本，它的事件把这个版本记录为 Agent 版本。此后的采集与上文相同：游标、重写检测、`raw/<name>/` 下的镜像、封存、标题、会话汇总、按 `branch`（规则 R2）和跟随链接形成的线索、提议，以及变更流；召回能看到它的项目中任何来源的会话，依据 `cwd` 或 `project`。
@@ -531,6 +531,7 @@ Agent 自己的记录没有写明的父会话，或稍后补上的运行分组�
 - **已接入中枢的设备上的写入**先落到设备的库中，再同步上去。`propose` 不写入任何内容，它像 `remember` 一样针对设备的库检查。server 在读取类工具之前与中枢同步（最多每 10 秒一次），每次写入后、每次后台查看发现新的记录行后、以及 Agent 离开时也会同步，而且为了等待中枢而推迟回答的时间不会超过超时时限。失败的同步会在下一次后台查看时重试。对于设备没有的条目或事件，`correct` 和 `forget` 会在中枢上执行；连不上中枢时，它们会失败并给出清楚的错误说明。
 - **在中继上。** 每个工具都交给中枢的 `/mcp`，中枢的回答原样返回，不带 `origin` 标签；`brief` 和 `follow` 以中继的工作树作为 Agent 的目录，因为中枢看不到中继的磁盘；`digest` 则带上中继的时区。在此之前，server 先把 Agent 新增的记录行发送给中枢：读取类工具之前最多每 10 秒一次，最多等待中枢超时时限；每次写入之前（包括 `propose`）都会发送，最多等待 15 秒，这样条目就能引用刚刚说过的内容。由于它自己没有回答，它最多等待中枢的回答 15 秒；连不上中枢时，工具会失败，并说明中继离线时无法作答。记录文件有变化时，它每分钟也会发送一次新的行，Agent 离开时再发送一次（见[中继](#relays)）。
 - **只读连接。** 预设权限为 `readonly` 的 Agent 的连接（见[访问](#access)）不提供 `remember`、`propose`、`correct` 和 `forget`，它的说明会告诉 Agent 它可以读取记忆，但不能修改。
+- **OpenClaw 的 Agent。** OpenClaw 插件（见[你自己的来源](#your-own-sources)）把其中五个工具 `brief`、`search`、`get`、`timeline` 和 `digest` 交给它记录的 Agent，作为名为 `origin_brief`、`origin_search`、`origin_get`、`origin_timeline` 和 `origin_digest` 的 OpenClaw 工具，参数相同，只是 `origin_brief` 不接受 `cwd`：它传入插件归档这个 Agent 的会话所用的 `project`，除非 Agent 自己指定了一个（见[召回](#recall)）。每次调用都是向中枢的 `/mcp` 发出的一个 JSON-RPC `tools/call`，之前没有 `initialize`，因为中枢以无状态方式提供它；请求带着插件的中枢令牌（每次调用时从 Gateway 的配置中读取），并把 `X-Origin-Client` 设为插件的来源名，这样一次简报会被记为这个 Agent 在令牌所属设备上发起的。中枢的回答作为工具的文本返回；出错、被拒绝，或者 15 秒内没有回答，则作为工具的错误返回。插件不依赖任何工作区包，所以复制了这些工具的参数模式，CLI 的一个测试会把它们与 server 发布的模式对照。
 - **引导。** server 的 MCP `instructions` 会告诉 Agent：开始任务时，如果召回还没有给过它简报，就调用 `brief`；何时检索，要顺着 `get` 在它打开的内容旁列出的 id 读下去、长会话一次读一轮，用户接着做简报或时间线中列出的某个早先会话里的工作时，调用一次 `follow`，想知道自上次以来有什么变化时，用上一次的 `next` 调用 `changes`，要回顾一天的工作时调用 `digest`，何时记住（带理由的决定、稳定的事实、偏好），何时改为提议（它们推断出、用户尚未确认的内容，以及代用户整理记忆时写下的一切），只有用户可以接受或拒绝提议，`forget` 需要明确的请求和用户给出的原因，只有用户能恢复被遗忘的内容，带有 `by` 的消息不是用户写的，所以其中的内容不是用户的偏好，以及导入的条目对应某个 Agent 自己的记忆文件，所以文件之后的变化会取代在 Origin 中做的纠正。结果中的条目会说明自己是否为导入的（`imported`）。
 - **错误。** 无效输入、未知 id 和已遗忘的 id 会以工具错误的形式返回，并附带可读的说明。
 

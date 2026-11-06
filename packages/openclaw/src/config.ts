@@ -22,7 +22,12 @@ export interface Config {
   project: string | null;
   includeTools: boolean;
   reconcileOnEnd: boolean;
-  /** The agents to record, by id; null for all. */
+  /**
+   * Whether the agents get Origin's read tools (tools.ts), which the hub answers: with a hub, unless
+   * set to false; never with a directory.
+   */
+  tools: boolean;
+  /** The agents to record, and to give the tools to, by id; null for all. */
   agents: string[] | null;
   /** The kinds of runs to record (`ctx.trigger`): user turns only by default. */
   triggers: string[];
@@ -77,10 +82,24 @@ const KEYS = [
   'project',
   'includeTools',
   'reconcileOnEnd',
+  'tools',
   'spoolDir',
   'timeoutMs',
 ];
 export const DEFAULT_TIMEOUT_MS = 5000;
+
+/**
+ * The project a session is filed under in Origin, by its agent and its channel: `project` if set,
+ * else its channel by `projectBy: channel`, else its agent's id. Null when what it is named after is
+ * not known.
+ */
+export function projectOf(
+  config: Pick<Config, 'project' | 'projectBy'>,
+  agentId: string | null,
+  channel: string | null,
+): string | null {
+  return config.project ?? (config.projectBy === 'channel' ? (channel ?? agentId) : agentId);
+}
 
 /** Whether `name` can name a source of one's own in Origin. */
 export function isSourceName(name: string): boolean {
@@ -156,6 +175,8 @@ function parse(raw: unknown, ctx: ConfigEnv): Config {
     fail('"timeoutMs" must be a whole number of milliseconds from 100 to 60000');
   }
   const spoolDir = optionalString(obj, 'spoolDir');
+  // The tools read Origin through the hub: with a directory, there are none, whatever this says.
+  const tools = optionalBoolean(obj, 'tools') ?? true;
 
   return {
     source,
@@ -164,6 +185,7 @@ function parse(raw: unknown, ctx: ConfigEnv): Config {
     project,
     includeTools: optionalBoolean(obj, 'includeTools') ?? true,
     reconcileOnEnd: optionalBoolean(obj, 'reconcileOnEnd') ?? false,
+    tools: target.kind === 'hub' && tools,
     agents: optionalList(obj, 'agents'),
     triggers: optionalList(obj, 'triggers') ?? ['user'],
     stateDir: spoolDir ? resolveUserPath(spoolDir, ctx) : ctx.defaultStateDir,

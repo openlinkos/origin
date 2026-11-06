@@ -1,12 +1,12 @@
 ---
-sourceHash: sha256-06aba679
+sourceHash: sha256-29e07e67
 ---
 
 # 接入 OpenClaw
 
-[OpenClaw](https://docs.openclaw.ai) 在它的 Gateway 中运行 Agent，常常是在一台没有运行 Origin 设备的服务器上，并把它们的记录保存在自己的数据库里。Origin 的 OpenClaw 插件 `@openlinkos/origin-openclaw` 在 Gateway 内部看到每一轮对话结束，把它作为[事件行](./sources.md)写进 Origin：发给你的[个人中枢](./hub.md)，或者写进同一台主机上某个 Origin 设备读取的目录。这样，你的 OpenClaw Agent 的会话就会像任何 Agent 的会话一样出现在 Origin 中。
+[OpenClaw](https://docs.openclaw.ai) 在它的 Gateway 中运行 Agent，常常是在一台没有运行 Origin 设备的服务器上，并把它们的记录保存在自己的数据库里。Origin 的 OpenClaw 插件 `@openlinkos/origin-openclaw` 在 Gateway 内部看到每一轮对话结束，把它作为[事件行](./sources.md)写进 Origin：发给你的[个人中枢](./hub.md)，或者写进同一台主机上某个 Origin 设备读取的目录。这样，你的 OpenClaw Agent 的会话就会像任何 Agent 的会话一样出现在 Origin 中。有中枢时，插件还会把 Origin 的读取工具交给这些 Agent，让它们拿到关于自己工作的简报，并能查阅你记忆中的其余内容（见[让 Agent 读取 Origin](#read-origin-from-your-agents)）。
 
-这个插件对照 OpenClaw 2026.10.6 核对过：它的钩子及其载荷、插件清单和安装命令，都按这个版本的样子使用。
+这个插件对照 OpenClaw 2026.10.6 核对过：它的钩子及其载荷、插件清单和安装命令，都按这个版本的样子使用；它的工具遵循这个版本关于插件工具的文档。
 
 ## 它发送什么 {#what-it-sends}
 
@@ -37,7 +37,7 @@ cd packages/openclaw && pnpm pack --pack-destination /tmp
 openclaw plugins install npm-pack:/tmp/openlinkos-origin-openclaw-*.tgz --force --accept-capabilities
 ```
 
-`openclaw plugins install ./packages/openclaw --force --accept-capabilities` 则安装构建好的目录，加 `-l` 会链接它而不是复制。`--force` 确认你信任一个 ClawHub 之外的来源，`--accept-capabilities` 通过 OpenClaw 对这类来源的插件要求的能力审查。它在 OpenClaw 中的 id 是 `origin`。然后按下文配置它；`openclaw plugins inspect origin --runtime --json` 会列出它注册的钩子。
+`openclaw plugins install ./packages/openclaw --force --accept-capabilities` 则安装构建好的目录，加 `-l` 会链接它而不是复制。`--force` 确认你信任一个 ClawHub 之外的来源，`--accept-capabilities` 通过 OpenClaw 对这类来源的插件要求的能力审查。它在 OpenClaw 中的 id 是 `origin`。然后按下文配置它；`openclaw plugins inspect origin --runtime --json` 会列出它注册的钩子和工具。安装新版本会应用到正在运行的 Gateway，不需要重启 Gateway。
 
 ## 配置 {#configure}
 
@@ -74,10 +74,11 @@ openclaw plugins install npm-pack:/tmp/openlinkos-origin-openclaw-*.tgz --force 
 | `project` | | 所有会话共用的一个项目名，代替 `projectBy` |
 | `includeTools` | `true` | 发送工具调用及其结果 |
 | `reconcileOnEnd` | `false` | 会话结束时，读取它的记录的末尾，最多 200 条消息，把从未发送过的发出去；需要会话访问权限 |
+| `tools` | 有中枢时为 `true` | 把 Origin 的读取工具交给 Agent（见[下文](#read-origin-from-your-agents)）；`false` 则一个也不给。没有中枢时没有工具 |
 | `spoolDir` | OpenClaw 状态目录中的 `origin-openclaw/` | 插件保存尚未投递的行以及已发送记录的地方 |
 | `timeoutMs` | `5000` | 一次向中枢投递最多可以花多久，单位为毫秒 |
 
-修改这一段配置后，OpenClaw 会重新加载插件来应用它，不需要重启 Gateway。重新加载时，OpenClaw 在解析 SecretRef 之前就注册插件，所以插件每次发送时都从 Gateway 正在运行的配置（其中的 SecretRef 已解析）读取中枢令牌：在 Gateway 解析出令牌之前，这些行在暂存区中等待；解析出来时，日志会说一次，那一行以 `origin: the Gateway resolved the hub token` 开头。你在配置中改了令牌，从下一次发送起就用新的令牌。设置无效的插件什么也不记录，并在 Gateway 的日志中说明原因，只说一次，那一行以 `origin: not recording` 开头；设置有效时，它会记一行以 `origin: recording` 开头的日志。
+修改这一段配置后，OpenClaw 会重新加载插件来应用它，不需要重启 Gateway。重新加载时，OpenClaw 在解析 SecretRef 之前就注册插件，所以插件每次发送、每次有 Agent 调用它的工具时，都从 Gateway 正在运行的配置（其中的 SecretRef 已解析）读取中枢令牌：在 Gateway 解析出令牌之前，这些行在暂存区中等待，工具会把这一点告诉 Agent；解析出来时，日志会说一次，那一行以 `origin: the Gateway resolved the hub token` 开头。你在配置中改了令牌，从下一次发送起就用新的令牌。设置无效的插件什么也不记录，并在 Gateway 的日志中说明原因，只说一次，那一行以 `origin: not recording` 开头；设置有效时，它会记一行以 `origin: recording` 开头的日志。
 
 ### 有或没有会话访问权限 {#with-or-without-conversation-access}
 
@@ -94,7 +95,7 @@ openclaw plugins install npm-pack:/tmp/openlinkos-origin-openclaw-*.tgz --force 
 origin token create openclaw-us --agent   # on the hub, or: docker exec origin-hub origin token create openclaw-us --agent
 ```
 
-令牌的名字就是记录这些行时所用的设备：中枢把它们保存为由 `openclaw-us` 发送的来源 `openclaw` 的文件，与你的设备发来的内容放在一起。给每个 Gateway 一个自己的令牌。不要把令牌写进 `openclaw.json`：像上面那样写成 SecretRef，Gateway 会从 1Password 解析它，插件从 Gateway 的配置中读取解析后的令牌；或者把它放进 Gateway 服务的一个环境变量，并写上这个变量的名字：
+令牌的名字就是记录这些行时所用的设备：中枢把它们保存为由 `openclaw-us` 发送的来源 `openclaw` 的文件，与你的设备发来的内容放在一起。给每个 Gateway 一个自己的令牌。插件的读取工具用同一个令牌调用中枢，所以它不能是 `--readonly` 的：中枢允许这种令牌读取，但不接收它发来的行。不要把令牌写进 `openclaw.json`：像上面那样写成 SecretRef，Gateway 会从 1Password 解析它，插件从 Gateway 的配置中读取解析后的令牌；或者把它放进 Gateway 服务的一个环境变量，并写上这个变量的名字：
 
 ```json
 { "hub": "https://hub.example.com", "tokenEnv": "ORIGIN_HUB_TOKEN" }
@@ -122,7 +123,35 @@ origin search "migration lock" --source openclaw        # its messages, among ev
 
 在中枢上，这些会话出现在[管理界面](./admin.md)的 `openclaw` 之下，接入中枢的 Agent 可以通过 `search`、`timeline` 和 `get` 找到它们。一行的出处指向中枢为发送它的文件保存的镜像 `raw/devices/openclaw-us/openclaw/…`，通过 `origin show` 能看到插件写下的那一行原文。
 
-访问你中枢 MCP server 的 OpenClaw Agent 不在任何目录中工作，所以它向 `brief` 请求的是它的会话所归的项目，除非你设置了 `projectBy` 或 `project`，那就是它的 Agent id：`{ "project": "main" }`（见 [MCP 工具](./mcp.md#brief)）。
+有中枢时，你的 OpenClaw Agent 也能通过插件的工具读取它（见[下文](#read-origin-from-your-agents)）。以其他方式访问你中枢 MCP server 的 Agent 同样不在任何目录中工作，所以它向 `brief` 请求的是它的会话所归的项目，除非你设置了 `projectBy` 或 `project`，那就是它的 Agent id：`{ "project": "main" }`（见 [MCP 工具](./mcp.md#brief)）。
+
+## 让 Agent 读取 Origin {#read-origin-from-your-agents}
+
+有中枢时，插件会把五个工具交给它记录的 Agent，也就是 Origin 那些只读的 [MCP 工具](./mcp.md)：
+
+| 工具 | 作用 | MCP 工具 |
+|---|---|---|
+| `origin_brief` | 你的记忆中关于这个 Agent 的项目的内容：你的偏好、项目最新的决定和事实、它最近与任意 Agent 的会话；带 `about` 时，还有与任务匹配的条目和过往消息 | `brief` |
+| `origin_search` | 对你的条目和已归档会话做全文检索 | `search` |
+| `origin_get` | 打开 Origin 给出的任意 id，以及与它相邻的内容 | `get` |
+| `origin_timeline` | 一段时间内的会话，或者一个会话的事件，一次一页 | `timeline` |
+| `origin_digest` | 某一天发生了什么，只从库中读取 | `digest` |
+
+每个工具都接受它对应的 MCP 工具的参数，并把调用交给你中枢的 MCP 端点 `POST /mcp`，使用插件配置中的中枢和令牌：就是它投递行时用的令牌，每次调用时从 Gateway 的配置中读取，所以 SecretRef 始终是 SecretRef。正因如此，插件自带工具，而不是让你把中枢加进 OpenClaw 的 `mcp.servers`：OpenClaw 2026.10.6 不解析 MCP server 请求头中的 SecretRef，令牌就只能以明文写在 `openclaw.json` 里。这些工具什么也不写，只有中枢为每次简报记下的召回，与任何 Agent 的一样（见[召回](./recall.md)）：记为 Agent `openclaw`（插件的 `source`）在以令牌命名的设备上发起。
+
+- **按自己的项目获得简报。** `origin_brief` 不接受目录：它按同样的规则，为 Agent 给出插件归档它的会话所用的那个项目的简报，即它的 Agent id，除非你设置了 `projectBy` 或 `project`。Agent 可以指定另一个 `project`，也可以传入 `about`，说明任务是关于什么的。这个工具的说明让 Agent 在开始一个可能建立在以往工作之上的任务时，以及在回答关于以往工作、决定或你的偏好的问题之前调用它；它列出的 id 可以用 `origin_get` 打开。
+- **只给它记录的 Agent。** `agents` 没有列出的 Agent 拿不到这些工具。要让插件记录的某个 Agent 拿不到它们，就在 OpenClaw 中为这个 Agent 设置工具策略，拒绝它们。
+- **在 OpenClaw 的工具配置档中。** 插件的清单把这些工具加进 `coding`、`messaging` 和 `full` 三个配置档，所以使用其中之一的 Agent 能看到它们。使用 `minimal`，或者在 `tools.allow` 中有你自己的允许列表时，把它们的名字，或者代表全部五个工具的插件 id `origin`，加进 `tools.allow` 或 `tools.alsoAllow`。如果你设置了 `plugins.allow`，它必须包含 `origin`，这与插件要记录时的要求相同。
+- **无法作答时**，工具会失败，并给出一行 Agent 能读懂的说明：中枢拒绝了令牌（`401`）、连不上中枢、中枢 15 秒内没有作答，或者 Gateway 还没有解析出令牌。其中从不包含令牌。
+- **不提供工具时**，把 `tools` 设为 `false`。
+
+要检查，先列出插件注册了什么，然后在一个新会话中向 Agent 问一个关于以往工作的问题，例如“关于部署我们是怎么决定的？”：
+
+```bash
+openclaw plugins inspect origin --runtime --json   # the hooks, and the five origin_ tools
+```
+
+Agent 会调用 `origin_brief` 或 `origin_search`，并根据拿到的内容作答。在中枢上，`origin show <recall id>` 会显示一次简报交出了什么，召回 id 就是简报开头的那个 id。
 
 ## 每条消息是谁写的 {#who-wrote-each-message}
 
@@ -157,6 +186,9 @@ OpenClaw 为一轮对话附加的上下文仍是一行 `meta`，两个字段都�
 | 现象 | 检查什么 |
 |---|---|
 | Origin 什么也没收到 | Gateway 的日志：`origin: not recording: …` 说明了配置中要改什么；`openclaw plugins inspect origin --runtime --json` 列出它注册的钩子 |
+| Agent 没有 `origin_brief` | `openclaw plugins inspect origin --runtime --json` 列出了这些工具，Gateway 的日志中有一行以 `origin: giving` 开头；这个 Agent 在 `agents` 之列；OpenClaw 的工具策略允许它使用这些工具（见[让 Agent 读取 Origin](#read-origin-from-your-agents)） |
+| 工具失败，提示 `Origin's hub refused the plugin's token (401)` | 令牌不对或已被吊销：在中枢上创建一个新令牌 |
+| 工具失败，提示 `Origin cannot be read yet` | Gateway 还没有解析出令牌的 SecretRef：修正它，与投递时一样 |
 | 日志中有 `origin: recording … from the message hooks` | 没有会话访问权限：在插件条目中、与 `config` 并列（而不是在它里面）把 `hooks.allowConversationAccess` 设为 `true` |
 | `cannot deliver to …: the hub answered 401` | 令牌不对或已被吊销：在中枢上创建一个新令牌 |
 | `cannot deliver to …: the Gateway has not resolved the hub token's SecretRef yet` | Gateway 无法解析令牌的 SecretRef，例如它读不到的 1Password 引用：修正它；这些行在暂存区中等待，解析出来后就会发出 |

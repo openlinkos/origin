@@ -28,6 +28,7 @@ Origin 所有值得注意的改动都列在这里。版本号遵循[语义化版
 
 - ZCode 和 Cursor 通过它们的 hook 获得召回。`origin agents connect` 把 `SessionStart` 和 `UserPromptSubmit` 时的 `origin recall --hook zcode` 加到 `~/.zcode/cli/config.json` 的 `hooks.events` 中，把 `beforeSubmitPrompt` 时的 `origin recall --hook cursor` 加到 `~/.cursor/hooks.json` 中，与已有的 hook 并列。ZCode 只在 `hooks.enabled` 为 true 时运行 hook：Origin 的 hook 是那里仅有的 hook 时，Origin 会把它打开，否则说明这一点，交给你决定。对话开始时 hook 交出的内容，Cursor 常常会丢掉，所以它的第一条提示带来简报，以及与这条提示匹配的内容。ZCode 的子 Agent 或工作流步骤，以及 Cursor 的子 Agent，什么都拿不到。
 - `brief` 接受 `project`，供不在任何目录中工作的 Agent 使用，比如 OpenClaw 的 Agent，它们的会话归在各自的 Agent id 之下：`{ "project": "main" }` 给出这个项目的条目和会话的简报。同时给出 `cwd` 时，项目名称以给出的为准；两者都没有时，与以前一样使用 server 自己的目录。`origin recall --project <name>` 可以预览。
+- OpenClaw 的 Agent 通过 OpenClaw 插件读取 Origin。有中枢时，插件把五个工具交给它记录的 Agent：`origin_brief`、`origin_search`、`origin_get`、`origin_timeline` 和 `origin_digest`。它们接受 MCP 工具 `brief`、`search`、`get`、`timeline` 和 `digest` 的参数，并把每次调用交给中枢的 `/mcp`，使用插件的中枢令牌；令牌像投递时一样从 Gateway 的配置中读取，所以始终是 SecretRef。`origin_brief` 为 Agent 给出它的会话所归项目的简报，即它的 Agent id，除非 `projectBy` 或 `project` 另有规定；它的说明让 Agent 在任务可能建立在以往工作之上时调用它。插件的清单把这些工具加进 OpenClaw 的 `coding`、`messaging` 和 `full` 工具配置档；新选项 `tools: false` 则一个也不提供。像以前一样用 `--force --accept-capabilities` 安装新版本的插件；不需要重启 Gateway。
 - Origin 的 hook 由别的 Agent 运行时什么都不做：Grok Build 和 Cursor 会运行 `~/.claude/settings.json` 中的 hook，Grok 运行它们时，曾以 `claude-code` 的名义记录下没有交给任何会话的召回。以前记录下的保持原样。
 - `origin agents` 会说明 Codex 何时还没有信任 Origin 的 hook，以及 ZCode 的 hook 何时处于关闭状态。
 - 运行 `origin agents connect`，再加上 `--yes` 运行一次，加上新的 hook，然后为每个 Agent 开始一个新会话。
