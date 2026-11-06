@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Batch, SendResult, Sink } from '../src/delivery.js';
-import type { HookHandler, PluginApi, ToolFactory, ToolOptions } from '../src/types.js';
+import type { HookHandler, PluginApi, ToolFactoryV2, ToolOptions } from '../src/types.js';
 
 /** Synthetic data only: these sessions, agents, and messages are made up. */
 export const T = Date.parse('2026-11-02T01:30:00Z');
@@ -98,8 +98,8 @@ export interface FakeApi {
   listeners: Set<(update: unknown) => void>;
   /** Persist a message, as OpenClaw does: every transcript listener hears of it. */
   persist: (update: unknown) => void;
-  /** The tool factories registered (`api.registerTool`), by the name each was registered under. */
-  tools: Map<string, { factory: ToolFactory; opts: ToolOptions | undefined }>;
+  /** The versioned tool factories registered (`api.registerTool`), by the name of each. */
+  tools: Map<string, { factory: ToolFactoryV2; opts: ToolOptions | undefined }>;
   /** Dispose of this instance of the plugin, as OpenClaw does when it reloads it. */
   dispose: () => void;
 }
@@ -121,6 +121,8 @@ export function fakeApi(
     events?: boolean;
     /** False for a host without `api.registerTool`. */
     registerTool?: boolean;
+    /** OpenClaw's version (`api.runtime.version`), 2026.10.6 by default; null for none. */
+    version?: string | null;
   } = {},
 ): FakeApi {
   const hooks = new Map<string, HookHandler>();
@@ -141,7 +143,7 @@ export function fakeApi(
     pluginConfig: opts.pluginConfig,
     logger: { debug: log('debug'), info: log('info'), warn: log('warn'), error: log('error') },
     runtime: {
-      version: '2026.10.6',
+      ...(opts.version === null ? {} : { version: opts.version ?? '2026.10.6' }),
       state: { resolveStateDir: () => opts.stateDir ?? path.join(os.tmpdir(), 'unused-openclaw') },
       ...(opts.current ? { config: { current: opts.current } } : {}),
       ...(opts.events === false
@@ -168,10 +170,12 @@ export function fakeApi(
       ? {}
       : {
           registerTool: (tool, toolOpts) => {
-            if (typeof tool !== 'function' || !toolOpts?.name) {
-              throw new Error('the fake host takes tool factories with a name only');
+            const factory = tool as ToolFactoryV2;
+            if (factory?.contextVersion !== 2 || typeof factory.create !== 'function') {
+              throw new Error('the fake host takes versioned tool factories only');
             }
-            tools.set(toolOpts.name, { factory: tool, opts: toolOpts });
+            if (!toolOpts?.name) throw new Error('a tool factory needs a name');
+            tools.set(toolOpts.name, { factory, opts: toolOpts });
           },
         }),
   };

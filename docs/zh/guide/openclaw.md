@@ -1,10 +1,10 @@
 ---
-sourceHash: sha256-29e07e67
+sourceHash: sha256-4ff992f6
 ---
 
 # 接入 OpenClaw
 
-[OpenClaw](https://docs.openclaw.ai) 在它的 Gateway 中运行 Agent，常常是在一台没有运行 Origin 设备的服务器上，并把它们的记录保存在自己的数据库里。Origin 的 OpenClaw 插件 `@openlinkos/origin-openclaw` 在 Gateway 内部看到每一轮对话结束，把它作为[事件行](./sources.md)写进 Origin：发给你的[个人中枢](./hub.md)，或者写进同一台主机上某个 Origin 设备读取的目录。这样，你的 OpenClaw Agent 的会话就会像任何 Agent 的会话一样出现在 Origin 中。有中枢时，插件还会把 Origin 的读取工具交给这些 Agent，让它们拿到关于自己工作的简报，并能查阅你记忆中的其余内容（见[让 Agent 读取 Origin](#read-origin-from-your-agents)）。
+[OpenClaw](https://docs.openclaw.ai) 在它的 Gateway 中运行 Agent，常常是在一台没有运行 Origin 设备的服务器上，并把它们的记录保存在自己的数据库里。Origin 的 OpenClaw 插件 `@openlinkos/origin-openclaw` 在 Gateway 内部看到每一轮对话结束，把它作为[事件行](./sources.md)写进 Origin：发给你的[个人中枢](./hub.md)，或者写进同一台主机上某个 Origin 设备读取的目录。这样，你的 OpenClaw Agent 的会话就会像任何 Agent 的会话一样出现在 Origin 中。有中枢时，插件还会在你自己与这些 Agent 的对话轮次中把 Origin 的读取工具交给它们，让它们拿到关于自己工作的简报，并能查阅你记忆中的其余内容；在它们答复别人的轮次中则从不给出（见[让 Agent 读取 Origin](#read-origin-from-your-agents)）。
 
 这个插件对照 OpenClaw 2026.10.6 核对过：它的钩子及其载荷、插件清单和安装命令，都按这个版本的样子使用；它的工具遵循这个版本关于插件工具的文档。
 
@@ -123,11 +123,11 @@ origin search "migration lock" --source openclaw        # its messages, among ev
 
 在中枢上，这些会话出现在[管理界面](./admin.md)的 `openclaw` 之下，接入中枢的 Agent 可以通过 `search`、`timeline` 和 `get` 找到它们。一行的出处指向中枢为发送它的文件保存的镜像 `raw/devices/openclaw-us/openclaw/…`，通过 `origin show` 能看到插件写下的那一行原文。
 
-有中枢时，你的 OpenClaw Agent 也能通过插件的工具读取它（见[下文](#read-origin-from-your-agents)）。以其他方式访问你中枢 MCP server 的 Agent 同样不在任何目录中工作，所以它向 `brief` 请求的是它的会话所归的项目，除非你设置了 `projectBy` 或 `project`，那就是它的 Agent id：`{ "project": "main" }`（见 [MCP 工具](./mcp.md#brief)）。
+有中枢时，你的 OpenClaw Agent 也能在你自己的轮次中通过插件的工具读取它（见[下文](#read-origin-from-your-agents)）。以其他方式访问你中枢 MCP server 的 Agent 同样不在任何目录中工作，所以它向 `brief` 请求的是它的会话所归的项目，除非你设置了 `projectBy` 或 `project`，那就是它的 Agent id：`{ "project": "main" }`（见 [MCP 工具](./mcp.md#brief)）。
 
 ## 让 Agent 读取 Origin {#read-origin-from-your-agents}
 
-有中枢时，插件会把五个工具交给它记录的 Agent，也就是 Origin 那些只读的 [MCP 工具](./mcp.md)：
+有中枢时，插件会在 OpenClaw 判定为你自己的轮次中，把五个工具交给它记录的 Agent，也就是 Origin 那些只读的 [MCP 工具](./mcp.md)（见下文）：
 
 | 工具 | 作用 | MCP 工具 |
 |---|---|---|
@@ -139,7 +139,8 @@ origin search "migration lock" --source openclaw        # its messages, among ev
 
 每个工具都接受它对应的 MCP 工具的参数，并把调用交给你中枢的 MCP 端点 `POST /mcp`，使用插件配置中的中枢和令牌：就是它投递行时用的令牌，每次调用时从 Gateway 的配置中读取，所以 SecretRef 始终是 SecretRef。正因如此，插件自带工具，而不是让你把中枢加进 OpenClaw 的 `mcp.servers`：OpenClaw 2026.10.6 不解析 MCP server 请求头中的 SecretRef，令牌就只能以明文写在 `openclaw.json` 里。这些工具什么也不写，只有中枢为每次简报记下的召回，与任何 Agent 的一样（见[召回](./recall.md)）：记为 Agent `openclaw`（插件的 `source`）在以令牌命名的设备上发起。
 
-- **按自己的项目获得简报。** `origin_brief` 不接受目录：它按同样的规则，为 Agent 给出插件归档它的会话所用的那个项目的简报，即它的 Agent id，除非你设置了 `projectBy` 或 `project`。Agent 可以指定另一个 `project`，也可以传入 `about`，说明任务是关于什么的。这个工具的说明让 Agent 在开始一个可能建立在以往工作之上的任务时，以及在回答关于以往工作、决定或你的偏好的问题之前调用它；它列出的 id 可以用 `origin_get` 打开。
+- **只在你自己的轮次中。** Origin 原样保存你的会话，不做任何脱敏，所以这些工具只在 OpenClaw 判定为其所有者私有记忆受众（memory audience）的轮次中提供，也就是 OpenClaw 自己的记忆插件所用的那个受众：绝不提供给 Agent 在共享对话（例如群聊）中答复的人，也不在别人的轮次中，不在 cron、心跳或其他脱离会话的运行中，也不在 OpenClaw 无法证明受众的任何轮次中提供。这由 OpenClaw 判定，就像它判定谁是它的所有者一样（见[每条消息是谁写的](#who-wrote-each-message)）；插件不会根据发送者或会话键去猜。如果在中枢作答期间这一轮失去了这种授权，例如它的会话被重置，工具会失败，Agent 拿不到答复中的任何内容。这需要 OpenClaw 2026.10.6 或更高版本，它会为插件工具解析记忆受众：在更早的版本上，插件不注册任何工具，并在 Gateway 的日志中说明一次，那一行以 `origin: the read tools need an OpenClaw that resolves memory audiences` 开头。
+- **按自己的项目获得简报。** `origin_brief` 不接受目录：它按同样的规则，为 Agent 给出插件归档它的会话所用的那个项目的简报，即这一轮的记忆受众所指明的 Agent id，除非你设置了 `projectBy` 或 `project`。Agent 可以指定另一个 `project`，也可以传入 `about`，说明任务是关于什么的。这个工具的说明让 Agent 在开始一个可能建立在以往工作之上的任务时，以及在回答关于以往工作、决定或你的偏好的问题之前调用它；它列出的 id 可以用 `origin_get` 打开。
 - **只给它记录的 Agent。** `agents` 没有列出的 Agent 拿不到这些工具。要让插件记录的某个 Agent 拿不到它们，就在 OpenClaw 中为这个 Agent 设置工具策略，拒绝它们。
 - **在 OpenClaw 的工具配置档中。** 插件的清单把这些工具加进 `coding`、`messaging` 和 `full` 三个配置档，所以使用其中之一的 Agent 能看到它们。使用 `minimal`，或者在 `tools.allow` 中有你自己的允许列表时，把它们的名字，或者代表全部五个工具的插件 id `origin`，加进 `tools.allow` 或 `tools.alsoAllow`。如果你设置了 `plugins.allow`，它必须包含 `origin`，这与插件要记录时的要求相同。
 - **无法作答时**，工具会失败，并给出一行 Agent 能读懂的说明：中枢拒绝了令牌（`401`）、连不上中枢、中枢 15 秒内没有作答，或者 Gateway 还没有解析出令牌。其中从不包含令牌。
@@ -151,7 +152,7 @@ origin search "migration lock" --source openclaw        # its messages, among ev
 openclaw plugins inspect origin --runtime --json   # the hooks, and the five origin_ tools
 ```
 
-Agent 会调用 `origin_brief` 或 `origin_search`，并根据拿到的内容作答。在中枢上，`origin show <recall id>` 会显示一次简报交出了什么，召回 id 就是简报开头的那个 id。
+请你自己从 OpenClaw 认作其所有者的账号、在你自己的聊天中提问：在群里，或者由别人提问时，Agent 没有 Origin 的工具。Agent 会调用 `origin_brief` 或 `origin_search`，并根据拿到的内容作答。在中枢上，`origin show <recall id>` 会显示一次简报交出了什么，召回 id 就是简报开头的那个 id。
 
 ## 每条消息是谁写的 {#who-wrote-each-message}
 
@@ -186,7 +187,7 @@ OpenClaw 为一轮对话附加的上下文仍是一行 `meta`，两个字段都�
 | 现象 | 检查什么 |
 |---|---|
 | Origin 什么也没收到 | Gateway 的日志：`origin: not recording: …` 说明了配置中要改什么；`openclaw plugins inspect origin --runtime --json` 列出它注册的钩子 |
-| Agent 没有 `origin_brief` | `openclaw plugins inspect origin --runtime --json` 列出了这些工具，Gateway 的日志中有一行以 `origin: giving` 开头；这个 Agent 在 `agents` 之列；OpenClaw 的工具策略允许它使用这些工具（见[让 Agent 读取 Origin](#read-origin-from-your-agents)） |
+| Agent 没有 `origin_brief` | 这一轮是你自己的：OpenClaw 只在它判定为其所有者私有受众的轮次中提供这些工具，群聊、别人的聊天、cron 和心跳运行中都没有。然后：`openclaw plugins inspect origin --runtime --json` 列出了这些工具，Gateway 的日志中有一行以 `origin: giving` 开头；这个 Agent 在 `agents` 之列；OpenClaw 的工具策略允许它使用这些工具（见[让 Agent 读取 Origin](#read-origin-from-your-agents)） |
 | 工具失败，提示 `Origin's hub refused the plugin's token (401)` | 令牌不对或已被吊销：在中枢上创建一个新令牌 |
 | 工具失败，提示 `Origin cannot be read yet` | Gateway 还没有解析出令牌的 SecretRef：修正它，与投递时一样 |
 | 日志中有 `origin: recording … from the message hooks` | 没有会话访问权限：在插件条目中、与 `config` 并列（而不是在它里面）把 `hooks.allowConversationAccess` 设为 `true` |

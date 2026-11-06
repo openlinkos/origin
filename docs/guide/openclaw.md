@@ -1,6 +1,6 @@
 # Connect OpenClaw
 
-[OpenClaw](https://docs.openclaw.ai) runs agents in its Gateway, often on a server where no Origin device runs, and keeps their transcripts in a database of its own. Origin's plugin for OpenClaw, `@openlinkos/origin-openclaw`, sees each turn inside the Gateway as it ends and writes it to Origin as [event lines](./sources.md): to your [personal hub](./hub.md), or into a directory that an Origin device on the same host reads. The sessions of your OpenClaw agents then show in Origin like any agent's. With a hub, the plugin also gives those agents Origin's read tools, so that they are briefed on their own work and can look up the rest of your memory (see [Read Origin from your agents](#read-origin-from-your-agents)).
+[OpenClaw](https://docs.openclaw.ai) runs agents in its Gateway, often on a server where no Origin device runs, and keeps their transcripts in a database of its own. Origin's plugin for OpenClaw, `@openlinkos/origin-openclaw`, sees each turn inside the Gateway as it ends and writes it to Origin as [event lines](./sources.md): to your [personal hub](./hub.md), or into a directory that an Origin device on the same host reads. The sessions of your OpenClaw agents then show in Origin like any agent's. With a hub, the plugin also gives those agents Origin's read tools in your own turns with them, so that they are briefed on their own work and can look up the rest of your memory, and never in a turn they answer someone else in (see [Read Origin from your agents](#read-origin-from-your-agents)).
 
 The plugin was checked against OpenClaw 2026.10.6: its hooks and their payloads, its plugin manifest, and its install command as that version has them; its tools follow that version's documentation of plugin tools.
 
@@ -119,11 +119,11 @@ origin search "migration lock" --source openclaw        # its messages, among ev
 
 On the hub, the sessions appear in the [admin UI](./admin.md) under `openclaw`, and agents connected to the hub find them through `search`, `timeline`, and `get`. A line's provenance leads to the hub's mirror of the file it was sent in, `raw/devices/openclaw-us/openclaw/…`, and through `origin show` to the line as the plugin wrote it.
 
-With a hub, your OpenClaw agents read it too, through the plugin's tools (see [below](#read-origin-from-your-agents)). An agent that reaches your hub's MCP server some other way also works in no directory, so it asks `brief` for the project its sessions are filed under, its agent id unless you set `projectBy` or `project`: `{ "project": "main" }` (see [MCP tools](./mcp.md#brief)).
+With a hub, your OpenClaw agents read it too, in your own turns, through the plugin's tools (see [below](#read-origin-from-your-agents)). An agent that reaches your hub's MCP server some other way also works in no directory, so it asks `brief` for the project its sessions are filed under, its agent id unless you set `projectBy` or `project`: `{ "project": "main" }` (see [MCP tools](./mcp.md#brief)).
 
 ## Read Origin from your agents
 
-With a hub, the plugin gives the agents it records five tools, the [MCP tools](./mcp.md) of Origin's that read:
+With a hub, the plugin gives the agents it records five tools, the [MCP tools](./mcp.md) of Origin's that read, in the turns OpenClaw resolves as your own (see below):
 
 | Tool | What it does | MCP tool |
 |---|---|---|
@@ -135,7 +135,8 @@ With a hub, the plugin gives the agents it records five tools, the [MCP tools](.
 
 Each takes the parameters of its MCP tool and hands the call to your hub's MCP endpoint, `POST /mcp`, with the hub and the token of the plugin's config: the token it delivers lines with, read from the Gateway's config at each call, so a SecretRef stays a SecretRef. This is why the plugin brings tools of its own rather than having you add the hub to OpenClaw's `mcp.servers`: OpenClaw 2026.10.6 resolves no SecretRef in an MCP server's headers, so the token would sit in `openclaw.json` as plain text. The tools write nothing but the recall the hub records for each brief, as for any agent's (see [Recall](./recall.md)): made for the agent `openclaw`, the plugin's `source`, on the device its token is named after.
 
-- **Briefed on its own project.** `origin_brief` takes no directory: it briefs an agent on the project the plugin files the agent's sessions under, by the same rule, its agent id unless you set `projectBy` or `project`. The agent may name another `project`, and pass `about`, what the task is about. The tool's description has the agent call it when it starts a task that may build on earlier work, and before it answers a question about past work, decisions, or your preferences; the ids it lists open with `origin_get`.
+- **Only in your own turns.** Origin keeps your sessions as they were, nothing redacted, so the tools are offered only in a turn OpenClaw resolves as its owner's private memory audience, the one its own memory plugins use: never to the people an agent answers in a shared conversation, such as a group chat, nor in a turn of someone else's, nor in a cron, heartbeat, or other detached run, nor in any turn whose audience OpenClaw cannot prove. OpenClaw decides this, as it decides who its owner is (see [Who wrote each message](#who-wrote-each-message)); the plugin does not guess it from the sender or the session key. If the turn loses that authority while the hub answers, as when its session is reset, the tool fails and the agent gets nothing of the answer. This needs OpenClaw 2026.10.6 or later, which resolves memory audiences for plugin tools: on an older one the plugin registers no tools and says so once in the Gateway's log, in a line that starts with `origin: the read tools need an OpenClaw that resolves memory audiences`.
+- **Briefed on its own project.** `origin_brief` takes no directory: it briefs an agent on the project the plugin files the agent's sessions under, by the same rule, its agent id, as the turn's memory audience names it, unless you set `projectBy` or `project`. The agent may name another `project`, and pass `about`, what the task is about. The tool's description has the agent call it when it starts a task that may build on earlier work, and before it answers a question about past work, decisions, or your preferences; the ids it lists open with `origin_get`.
 - **For the agents it records.** An agent that `agents` leaves out does not get the tools. To keep them from an agent the plugin records, deny them in OpenClaw's tool policy for that agent.
 - **In OpenClaw's tool profiles.** The plugin's manifest adds the tools to the `coding`, `messaging`, and `full` profiles, so an agent with one of these sees them. With `minimal`, or an allowlist of your own in `tools.allow`, add their names, or the plugin's id `origin` for all five, to `tools.allow` or `tools.alsoAllow`. If you set `plugins.allow`, it must name `origin`, as it must for the plugin to record.
 - **When they cannot answer**, they fail with a line the agent reads: the hub refused the token (`401`), cannot be reached, did not answer within 15 seconds, or the Gateway has not resolved the token yet. The token is never in it.
@@ -147,7 +148,7 @@ To check, list what the plugin registered, then ask an agent, in a new session, 
 openclaw plugins inspect origin --runtime --json   # the hooks, and the five origin_ tools
 ```
 
-The agent calls `origin_brief`, or `origin_search`, and answers from what it is handed. On the hub, `origin show <recall id>` shows what a brief handed over, by the id the brief begins with.
+Ask it yourself, from an account OpenClaw takes for its owner, in a chat of your own: in a group, or asked by someone else, the agent has no Origin tools. The agent calls `origin_brief`, or `origin_search`, and answers from what it is handed. On the hub, `origin show <recall id>` shows what a brief handed over, by the id the brief begins with.
 
 ## Who wrote each message
 
@@ -182,7 +183,7 @@ The context OpenClaw adds to a turn stays a `meta` line with neither field, whic
 | Symptom | What to check |
 |---|---|
 | Nothing reaches Origin | The Gateway's log: `origin: not recording: …` says what to fix in the config; `openclaw plugins inspect origin --runtime --json` lists the hooks it registered |
-| An agent has no `origin_brief` | `openclaw plugins inspect origin --runtime --json` lists the tools, and the Gateway's log has a line that starts with `origin: giving`; the agent is among `agents`; OpenClaw's tool policy lets the tools through for it (see [Read Origin from your agents](#read-origin-from-your-agents)) |
+| An agent has no `origin_brief` | The turn is your own: OpenClaw offers the tools only in turns it resolves as its owner's private audience, not in groups, other people's chats, or cron and heartbeat runs. Then: `openclaw plugins inspect origin --runtime --json` lists the tools, and the Gateway's log has a line that starts with `origin: giving`; the agent is among `agents`; OpenClaw's tool policy lets the tools through for it (see [Read Origin from your agents](#read-origin-from-your-agents)) |
 | A tool fails with `Origin's hub refused the plugin's token (401)` | The token is wrong or was revoked: create a new one on the hub |
 | A tool fails with `Origin cannot be read yet` | The Gateway has not resolved the token's SecretRef: fix it, as for deliveries |
 | The log says `origin: recording … from the message hooks` | Conversation access is off: set `hooks.allowConversationAccess` to `true` in the entry, beside `config`, not inside it |

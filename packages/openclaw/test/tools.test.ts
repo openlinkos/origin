@@ -113,13 +113,28 @@ function start(
     ...more,
   });
   registerOrigin(fake.api);
-  /** The tool a run with this context gets, or null when it gets none. */
-  const tool = (name: string, ctx: unknown = agentCtx()): AgentTool | null => {
+  /** The tool a turn with this tool context gets, or null when it gets none. */
+  const tool = (name: string, ctx: unknown = owner()): AgentTool | null => {
     const registered = fake.tools.get(name);
     if (!registered) throw new Error(`${name} is not registered`);
-    return registered.factory(ctx);
+    return registered.factory.create(ctx);
   };
   return { ...fake, tool };
+}
+
+/**
+ * A version 2 tool context, as OpenClaw 2026.10.6 gives one for a turn it resolved as the owner's
+ * own (synthetic): the run's fields, `memoryAudience`, and the guards, which pass.
+ */
+function owner(over: Record<string, unknown> = {}, agentId = 'xiaohan'): Record<string, unknown> {
+  return {
+    ...agentCtx(),
+    messageChannel: 'telegram',
+    memoryAudience: { kind: 'owner-private', agentId },
+    assertInvocationCurrent: () => undefined,
+    assertMemoryAudienceCurrent: () => undefined,
+    ...over,
+  };
 }
 
 /** Run a tool as OpenClaw does, with the call's id first. */
@@ -129,7 +144,7 @@ const run = (tool: AgentTool | null, params: unknown, signal?: AbortSignal) => {
 };
 
 describe('registration', () => {
-  it('registers the five read tools the manifest declares, each as a factory under its name', () => {
+  it('registers the five read tools the manifest declares, each as a versioned factory under its name', () => {
     const { tools, hooks, logs } = start();
     expect(TOOL_NAMES).toEqual([
       'origin_brief',
@@ -141,12 +156,15 @@ describe('registration', () => {
     expect([...tools.keys()]).toEqual(TOOL_NAMES);
     expect(manifest.contracts.tools).toEqual(TOOL_NAMES);
     expect(Object.keys(manifest.toolMetadata)).toEqual(TOOL_NAMES);
-    for (const { opts } of tools.values()) expect(opts?.optional).toBeUndefined();
+    for (const { factory, opts } of tools.values()) {
+      expect(factory.contextVersion).toBe(2);
+      expect(opts?.optional).toBeUndefined();
+    }
     // The recorder is there too.
     expect(hooks.has('agent_end')).toBe(true);
     expect(logs.filter((l) => l.level === 'info').map((l) => l.message)).toEqual([
       expect.stringMatching(/^origin: recording every agent/),
-      `origin: giving every agent Origin's read tools from ${hub.url}: origin_brief, origin_search, origin_get, origin_timeline, origin_digest`,
+      `origin: giving every agent Origin's read tools from ${hub.url}, in the owner's own turns: origin_brief, origin_search, origin_get, origin_timeline, origin_digest`,
     ]);
   });
 
@@ -198,18 +216,175 @@ describe('registration', () => {
     expect(bad.logs).toEqual([]);
   });
 
-  it('serves only the agents the plugin records', () => {
+  it('serves only the agents the plugin records, by the agent of the memory audience', () => {
     const { tool } = start({ agents: ['xiaohan'] });
-    expect(tool('origin_search', agentCtx())).not.toBeNull();
-    expect(tool('origin_search', agentCtx({ agentId: 'other' }))).toBeNull();
-    // An agent known only by its session key, or not at all.
+    expect(tool('origin_search', owner())).not.toBeNull();
+    expect(tool('origin_search', owner({}, 'other'))).toBeNull();
+    // The audience's agent comes first.
+    expect(tool('origin_search', owner({ agentId: 'other' }))).not.toBeNull();
+    expect(tool('origin_search', owner({ agentId: 'xiaohan' }, 'other'))).toBeNull();
+    // An audience that names no agent: the run's, or its session key's, or none.
+    const anonymous = { kind: 'owner-private' };
     expect(
-      tool('origin_search', { sessionKey: 'agent:xiaohan:telegram:direct:42' }),
+      tool('origin_search', owner({ agentId: undefined, memoryAudience: anonymous })),
     ).not.toBeNull();
-    expect(tool('origin_search', {})).toBeNull();
-    expect(tool('origin_search', null)).toBeNull();
+    expect(
+      tool('origin_search', owner({ agentId: 'other', memoryAudience: anonymous })),
+    ).toBeNull();
+    expect(
+      tool('origin_search', {
+        assertInvocationCurrent: () => undefined,
+        memoryAudience: anonymous,
+        sessionKey: 'agent:xiaohan:telegram:direct:42',
+      }),
+    ).not.toBeNull();
+    expect(
+      tool('origin_search', {
+        assertInvocationCurrent: () => undefined,
+        memoryAudience: anonymous,
+      }),
+    ).toBeNull();
     // Without `agents`, every agent.
-    expect(start().tool('origin_search', agentCtx({ agentId: 'other' }))).not.toBeNull();
+    expect(start().tool('origin_search', owner({}, 'other'))).not.toBeNull();
+  });
+});
+
+describe("only in the owner's own turns", () => {
+  const conversation = {
+    kind: 'conversation',
+    agentId: 'xiaohan',
+    sessionKey: 'agent:xiaohan:telegram:group:7',
+    sessionId: 'sess-2',
+  };
+
+  it('offers every tool in a turn OpenClaw resolved as the owner-private audience', () => {
+    const { tool } = start();
+    for (const name of TOOL_NAMES) expect(tool(name, owner())?.name).toBe(name);
+  });
+
+  it("offers none for a conversation's audience, or a turn without one, whoever sent it", () => {
+    const { tool, logs } = start();
+    for (const name of TOOL_NAMES) {
+      expect(tool(name, owner({ memoryAudience: conversation }))).toBeNull();
+      expect(tool(name, owner({ memoryAudience: conversation, senderIsOwner: true }))).toBeNull();
+      // A cron, heartbeat, or detached run, or someone else's turn: no audience.
+      expect(tool(name, owner({ memoryAudience: undefined }))).toBeNull();
+      expect(tool(name, owner({ memoryAudience: undefined, senderIsOwner: true }))).toBeNull();
+      expect(tool(name, owner({ memoryAudience: { kind: 'owner' } }))).toBeNull();
+      expect(tool(name, owner({ memoryAudience: 'owner-private' }))).toBeNull();
+    }
+    expect(logs.filter((l) => l.level === 'warn')).toEqual([]);
+  });
+
+  it('offers none without a context, or with one that lacks the invocation guard, and says so once', () => {
+    const { tool, tools, logs } = start();
+    for (const name of TOOL_NAMES) {
+      expect(tools.get(name)?.factory.create(undefined)).toBeNull();
+      expect(tool(name, null)).toBeNull();
+      expect(tool(name, 'agent:xiaohan:main')).toBeNull();
+      // A context of an older version: the run's fields and even an audience, but no guard.
+      expect(tool(name, { ...agentCtx(), senderIsOwner: true })).toBeNull();
+      expect(tool(name, owner({ assertInvocationCurrent: undefined }))).toBeNull();
+    }
+    expect(logs.filter((l) => l.level === 'warn').map((l) => l.message)).toEqual([
+      'origin: the read tools need an OpenClaw that resolves memory audiences, and this one built a tool without its invocation guard: its agents get no Origin tools',
+    ]);
+  });
+
+  it('checks both guards right before the call and before releasing the answer', async () => {
+    const order: string[] = [];
+    const ctx = owner({
+      assertInvocationCurrent: () => order.push('invocation'),
+      assertMemoryAudienceCurrent: () => order.push('audience'),
+    });
+    hub.respond = (c) => {
+      order.push('hub');
+      return {
+        body: {
+          jsonrpc: '2.0',
+          id: c.body.id,
+          result: { content: [{ type: 'text', text: 'ok' }] },
+        },
+      };
+    };
+    await run(start().tool('origin_search', ctx), {});
+    expect(order).toEqual(['invocation', 'audience', 'hub', 'invocation', 'audience']);
+  });
+
+  it.each([
+    ['assertInvocationCurrent', 'the tool invocation is no longer current'],
+    ['assertMemoryAudienceCurrent', 'the session changed incarnation'],
+  ])('withholds the answer when %s throws after the call', async (guard, reason) => {
+    let live = true;
+    const ctx = owner({
+      [guard]: () => {
+        if (!live) throw new Error(reason);
+      },
+    });
+    const secret = 'the owner said the vault code is in drawer 3';
+    hub.respond = (c) => {
+      live = false;
+      return {
+        body: {
+          jsonrpc: '2.0',
+          id: c.body.id,
+          result: { content: [{ type: 'text', text: secret }] },
+        },
+      };
+    };
+    const { tool } = start();
+    const err = await run(tool('origin_brief', ctx), {}).catch((e: Error) => e);
+    expect(hub.calls).toHaveLength(1);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe(
+      `this turn may no longer read the owner's memory in Origin: ${reason}`,
+    );
+    expect(JSON.stringify(err)).not.toContain('drawer');
+    expect((err as Error).stack ?? '').not.toContain('drawer');
+
+    // The hub's error is withheld too.
+    live = true;
+    hub.respond = (c) => {
+      live = false;
+      return {
+        body: {
+          jsonrpc: '2.0',
+          id: c.body.id,
+          result: { content: [{ type: 'text', text: secret }], isError: true },
+        },
+      };
+    };
+    const refused = await run(tool('origin_get', ctx), { id: 'ent_1' }).catch((e: Error) => e);
+    expect((refused as Error).message).not.toContain('drawer');
+    expect((refused as Error).message).toContain('may no longer read');
+  });
+
+  it('calls no hub when a guard already throws', async () => {
+    const ctx = owner({
+      assertMemoryAudienceCurrent: () => {
+        throw new Error('revoked');
+      },
+    });
+    await expect(run(start().tool('origin_search', ctx), {})).rejects.toThrow(
+      "this turn may no longer read the owner's memory in Origin: revoked",
+    );
+    expect(hub.calls).toEqual([]);
+  });
+
+  it('registers no tools on an OpenClaw older than 2026.10.6, and says so once', () => {
+    const old = start({}, { version: '2026.9.30' });
+    expect(old.tools.size).toBe(0);
+    expect(old.hooks.has('agent_end')).toBe(true);
+    expect(old.logs.filter((l) => l.level === 'warn').map((l) => l.message)).toEqual([
+      'origin: the read tools need an OpenClaw that resolves memory audiences (2026.10.6 or later), and this one is 2026.9.30: its agents get no Origin tools',
+    ]);
+    expect(old.logs.some((l) => l.message.includes('giving'))).toBe(false);
+    // A later one, a pre-release of the first, or one that does not say: the tools, still gated.
+    for (const version of ['2026.10.9', '2027.1.2', '2026.10.6-beta.1', null, 'dev']) {
+      const host = start({}, { version });
+      expect([...host.tools.keys()]).toEqual(TOOL_NAMES);
+      expect(host.tool('origin_search', agentCtx())).toBeNull();
+    }
   });
 });
 
@@ -227,19 +402,24 @@ describe('origin_brief', () => {
   });
 
   it('follows projectBy and project, and the agent may name another project and what it is about', async () => {
+    const anonymous = { kind: 'owner-private' };
+    const bare = { assertInvocationCurrent: () => undefined, memoryAudience: anonymous };
     await run(start({ projectBy: 'channel' }).tool('origin_brief'), {});
     await run(
-      start({ projectBy: 'channel' }).tool('origin_brief', {
-        agentId: 'xiaohan',
-        messageChannel: 'feishu',
-      }),
+      start({ projectBy: 'channel' }).tool('origin_brief', owner({ messageChannel: 'feishu' })),
       {},
     );
-    await run(start({ projectBy: 'channel' }).tool('origin_brief', { agentId: 'xiaohan' }), {
-      about: '  the deploy lock ',
-    });
+    await run(
+      start({ projectBy: 'channel' }).tool('origin_brief', { ...bare, agentId: 'xiaohan' }),
+      {
+        about: '  the deploy lock ',
+      },
+    );
     await run(start({ project: 'ops' }).tool('origin_brief'), {});
-    await run(start().tool('origin_brief', { sessionKey: 'agent:scout:main' }), {});
+    // The agent of the memory audience, else the run's, else its session key's.
+    await run(start().tool('origin_brief', owner({ agentId: 'other' }, 'scout')), {});
+    await run(start().tool('origin_brief', { ...bare, agentId: 'reader' }), {});
+    await run(start().tool('origin_brief', { ...bare, sessionKey: 'agent:scout:main' }), {});
     await run(start().tool('origin_brief'), {
       project: 'demo-app',
       about: 'the release',
@@ -251,14 +431,20 @@ describe('origin_brief', () => {
       ['brief', { project: 'xiaohan', about: 'the deploy lock' }],
       ['brief', { project: 'ops' }],
       ['brief', { project: 'scout' }],
+      ['brief', { project: 'reader' }],
+      ['brief', { project: 'scout' }],
       ['brief', { project: 'demo-app', about: 'the release' }],
     ]);
   });
 
   it('asks for a project when the run does not say which agent it is', async () => {
     const { tool } = start();
-    await expect(run(tool('origin_brief', {}), { about: 'x' })).rejects.toThrow(/pass `project`/);
-    await run(tool('origin_brief', {}), { project: 'named' });
+    const bare = {
+      assertInvocationCurrent: () => undefined,
+      memoryAudience: { kind: 'owner-private' },
+    };
+    await expect(run(tool('origin_brief', bare), { about: 'x' })).rejects.toThrow(/pass `project`/);
+    await run(tool('origin_brief', bare), { project: 'named' });
     expect(hub.args()).toEqual([['brief', { project: 'named' }]]);
   });
 });

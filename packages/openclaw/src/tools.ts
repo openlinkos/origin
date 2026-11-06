@@ -8,7 +8,7 @@ import type { AgentTool, AgentToolResult, PluginApi } from './types.js';
  * Origin's read tools for OpenClaw's agents: `origin_brief`, `origin_search`, `origin_get`,
  * `origin_timeline`, and `origin_digest`, each a call of the hub's MCP tool of the same name (see
  * docs/guide/openclaw.md#read-origin-from-your-agents), with the hub and the token the plugin
- * delivers with. Their parameters are those of the MCP tools, as Origin's MCP server publishes them
+ * delivers with, offered only in the turns OpenClaw resolves as the owner's own (originTool). Their parameters are those of the MCP tools, as Origin's MCP server publishes them
  * (packages/cli/test/openclaw-tools.test.ts keeps them the same), except that `origin_brief` has no
  * `cwd`: it briefs on the project the plugin files the agent's sessions under, unless the agent
  * names another.
@@ -177,13 +177,21 @@ export interface ToolsOptions {
   token: () => string | null;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /** Called when OpenClaw asks for a tool with a context lacking version 2's guard (originTool). */
+  onUnguardedContext?: () => void;
 }
 
+/** The first OpenClaw whose plugin tools get the memory audience of a turn (ToolContextV2). */
+export const AUDIENCE_VERSION = '2026.10.6';
+
+const NEED_AUDIENCES = 'the read tools need an OpenClaw that resolves memory audiences';
+
 /**
- * Register the read tools with OpenClaw, each as a factory that OpenClaw calls with a run's tool
- * context: the tool is left out of the runs of agents the plugin does not record (`agents`).
- * Returns the names registered; none when the config gives the agents no tools (no hub, or `tools`
- * set to false). A host that cannot take them is said once, in `log`.
+ * Register the read tools with OpenClaw, each as a versioned factory (`contextVersion: 2`) that
+ * OpenClaw calls with a run's tool context: the tool is offered only in a turn OpenClaw resolved as
+ * the owner's own (originTool). Returns the names registered; none when the config gives the
+ * agents no tools (no hub, or `tools` set to false), or when the host cannot register them or is
+ * older than AUDIENCE_VERSION (said once, in `log`). The tools are never offered without that gate.
  */
 export function registerTools(
   api: PluginApi,
@@ -196,10 +204,31 @@ export function registerTools(
     log?.warn('this OpenClaw cannot register tools: its agents get no Origin tools');
     return [];
   }
+  const host = hostVersion(api);
+  if (host && olderThan(host, AUDIENCE_VERSION)) {
+    log?.warn(
+      `${NEED_AUDIENCES} (${AUDIENCE_VERSION} or later), and this one is ${host}: its agents get no Origin tools`,
+    );
+    return [];
+  }
+  let said = false;
+  const own: ToolsOptions = {
+    ...opts,
+    onUnguardedContext: () => {
+      if (said) return;
+      said = true;
+      log?.warn(
+        `${NEED_AUDIENCES}, and this one built a tool without its invocation guard: its agents get no Origin tools`,
+      );
+    },
+  };
   const registered: string[] = [];
   for (const spec of ORIGIN_TOOLS) {
     try {
-      api.registerTool((ctx: unknown) => originTool(spec, config, ctx, opts), { name: spec.name });
+      api.registerTool(
+        { contextVersion: 2, create: (context: unknown) => originTool(spec, config, context, own) },
+        { name: spec.name },
+      );
       registered.push(spec.name);
     } catch (err) {
       log?.warn(`could not register ${spec.name}: ${(err as Error)?.message ?? err}`);
@@ -208,20 +237,47 @@ export function registerTools(
   return registered;
 }
 
-/** The tool for the run whose tool context is `ctx`, or null if its agent is not one to serve. */
+/**
+ * The tool for the turn whose version 2 tool context is `context` (ToolContextV2), or null. Origin's
+ * archive is the owner's, kept raw: the tool is offered only when OpenClaw resolved the turn's
+ * memory audience as the owner's own (`owner-private`), never for a conversation's audience, nor
+ * when it has none, as in a cron, heartbeat, or detached run, or a turn of someone else's; the
+ * audience is OpenClaw's to prove, not inferred here from `senderIsOwner` or the session key. A
+ * context without `assertInvocationCurrent` is not version 2's: no tool. Nor for an agent the
+ * plugin does not record (`agents`). The guards are called right before the call to the hub,
+ * which records a brief's recall, and again right after it, before anything the hub answered is
+ * released: if either throws, the tool's error says so, without the hub's answer.
+ */
 export function originTool(
   spec: OriginTool,
   config: Config,
-  ctx: unknown,
+  context: unknown,
   opts: ToolsOptions,
 ): AgentTool | null {
   if (config.target.kind !== 'hub') return null;
-  const c = asRecord(ctx) ?? {};
+  const c = asRecord(context);
+  if (!c) return null;
+  const invocationCurrent = c.assertInvocationCurrent;
+  if (typeof invocationCurrent !== 'function') {
+    opts.onUnguardedContext?.();
+    return null;
+  }
+  const audience = asRecord(c.memoryAudience);
+  if (audience?.kind !== 'owner-private') return null;
+  const audienceCurrent = c.assertMemoryAudienceCurrent;
+  const assertCurrent = (): void => {
+    try {
+      invocationCurrent.call(c);
+      if (typeof audienceCurrent === 'function') audienceCurrent.call(c);
+    } catch (err) {
+      throw new Error(
+        `this turn may no longer read the owner's memory in Origin: ${(err as Error)?.message ?? err}`,
+      );
+    }
+  };
   const sessionKey = str(c.sessionKey);
   const agentId =
-    str(c.agentId) ??
-    (sessionKey ? agentOfSessionKey(sessionKey) : null) ??
-    str(asRecord(c.memoryAudience)?.agentId);
+    str(audience.agentId) ?? str(c.agentId) ?? (sessionKey ? agentOfSessionKey(sessionKey) : null);
   if (config.agents && !(agentId && config.agents.includes(agentId))) return null;
   const channel =
     str(c.messageChannel) ?? str(c.channel) ?? str(c.messageProvider) ?? str(c.channelId);
@@ -234,6 +290,7 @@ export function originTool(
     parameters: spec.parameters,
     execute: async (_toolCallId, params, signal): Promise<AgentToolResult> => {
       const args = argsFor(spec, asRecord(params) ?? {}, project);
+      assertCurrent();
       const answer = await callHubTool({
         url,
         token: opts.token(),
@@ -244,6 +301,7 @@ export function originTool(
         signal,
         fetchImpl: opts.fetchImpl,
       });
+      assertCurrent();
       if (!answer.ok) throw new Error(answer.error);
       return {
         content: answer.texts.map((text) => ({ type: 'text', text })),
@@ -251,6 +309,31 @@ export function originTool(
       };
     },
   };
+}
+
+/** OpenClaw's version (`api.runtime.version`), or null when the host does not say. */
+function hostVersion(api: PluginApi): string | null {
+  try {
+    return str(api.runtime?.version);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether OpenClaw's version `version` (`2026.10.6`, `2026.10.6-beta.1`) is older than `floor`, by
+ * year, month, and day; false for one it cannot read, whose tools are gated all the same.
+ */
+export function olderThan(version: string, floor: string): boolean {
+  const parse = (v: string) => /^v?(\d+)\.(\d+)\.(\d+)/.exec(v.trim())?.slice(1).map(Number);
+  const a = parse(version);
+  const b = parse(floor);
+  if (!a || !b) return false;
+  for (const [i, n] of a.entries()) {
+    const m = b[i] ?? 0;
+    if (n !== m) return n < m;
+  }
+  return false;
 }
 
 /**

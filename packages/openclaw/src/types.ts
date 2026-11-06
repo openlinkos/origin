@@ -61,9 +61,10 @@ export interface PluginApi {
    * Registers an agent tool, or a factory OpenClaw calls with each run's tool context, which returns
    * the tool for that run or null to leave it out; a factory's tool is named in `opts.name`, as the
    * manifest's `contracts.tools` lists it. Written out from OpenClaw 2026.10.6's documentation of
-   * plugin tools (plugins/building-plugins, plugins/tool-plugins).
+   * plugin tools (plugins/building-plugins, plugins/tool-plugins). This plugin registers versioned
+   * factories (ToolFactoryV2) only.
    */
-  registerTool?: (tool: AgentTool | ToolFactory, opts?: ToolOptions) => void;
+  registerTool?: (tool: AgentTool | ToolFactory | ToolFactoryV2, opts?: ToolOptions) => void;
 }
 
 /** Options of `api.registerTool`. */
@@ -79,6 +80,36 @@ export interface ToolOptions {
  * `messageChannel`, among others, when the run has them).
  */
 export type ToolFactory = (ctx: unknown) => AgentTool | null;
+
+/**
+ * A versioned factory, `OpenClawPluginToolFactory<2>`: OpenClaw calls `create` with a version 2
+ * tool context (ToolContextV2), read as `unknown` and checked field by field.
+ */
+export interface ToolFactoryV2 {
+  contextVersion: 2;
+  create: (context: unknown) => AgentTool | null;
+}
+
+/**
+ * The part of `OpenClawPluginToolContext<2>` the read tools use, besides the run's `agentId`,
+ * `sessionKey`, and `messageChannel`: `assertInvocationCurrent`, which the version requires, and,
+ * for an admitted session turn whose audience the host can prove, `memoryAudience` with
+ * `assertMemoryAudienceCurrent`. Each guard throws once its authority has ended; a tool that holds
+ * them across awaited work calls both immediately before it releases data or has an effect.
+ */
+export interface ToolContextV2 {
+  assertInvocationCurrent: () => void;
+  memoryAudience?: MemoryAudience;
+  assertMemoryAudienceCurrent?: () => void;
+}
+
+/**
+ * Whose memory a turn may use, as the host resolved it: the owner's own (`owner-private`), or a
+ * conversation's, such as one with other people (`conversation`).
+ */
+export type MemoryAudience =
+  | { kind: 'owner-private'; agentId: string }
+  | { kind: 'conversation'; agentId: string; sessionKey: string; sessionId: string };
 
 /**
  * An agent tool, as OpenClaw's agent loop runs it: `parameters` is a JSON Schema, and `execute`
