@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,6 +13,7 @@ import {
   rawLocator,
   readMirror,
   readRawLine,
+  type SourceFile,
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -22,6 +24,7 @@ import {
   parseGrokLine,
   parseGrokTitleLine,
 } from '../src/index.js';
+import { addPurge, linesAfter, PURGE, purgedInPlaceOf } from './purge.js';
 
 const fixtures = fileURLToPath(new URL('./fixtures/grok/', import.meta.url));
 const SESSION = '01a0f000-0000-7000-8000-000000000001';
@@ -304,6 +307,52 @@ describe('grok session titles', () => {
     rewrite({ generated_title: 'Whole again' });
     await syncSource({ db, home: originHome }, adapter);
     expect(title(db)).toBe('Whole again');
+    db.close();
+  });
+
+  it('goes on after a purged title line as before, holding a digest of the title, not the title', async () => {
+    rewrite({ session_kind: 'subagent' });
+    const adapter = createGrokAdapter({ home: grokHome });
+    const file = (await adapter.discover()).find((f) => f.relPath === TITLE_REL) as SourceFile;
+    const [last] = linesAfter(file, null) as [string];
+    const marker = purgedInPlaceOf(adapter, file, last);
+    const digest = createHash('sha256').update('Upload retry').digest('hex').slice(0, 16);
+    expect(JSON.parse(marker)).toEqual({
+      origin_purged: PURGE,
+      title_digest: digest,
+      session_kind: 'subagent',
+    });
+    expect(marker).not.toContain('Upload');
+    expect(linesAfter(file, marker)).toEqual([]);
+
+    // Another turn, with the same title: still nothing.
+    rewrite({ num_messages: 30 });
+    expect(linesAfter(file, marker)).toEqual([]);
+    rewrite({ generated_title: 'Retry with backoff' });
+    const after = linesAfter(file, marker);
+    expect(after).toEqual(linesAfter(file, last));
+    expect(after.map((l) => JSON.parse(l).generated_title)).toEqual(['Retry with backoff']);
+  });
+
+  it('writes no title of a purged session into the store, and syncs on from the marker', async () => {
+    const db = openMemoryDatabase();
+    addPurge(db, [['session', 'grok', SESSION]]);
+    const adapter = createGrokAdapter({ home: grokHome });
+    expect(await syncSource({ db, home: originHome }, adapter)).toMatchObject({
+      eventsAdded: 0,
+      parseErrors: 0,
+    });
+    expect(listSessions(db)).toEqual([]);
+    expect(titleLines(db)).toEqual([expect.objectContaining({ origin_purged: PURGE })]);
+
+    rewrite({ generated_title: 'Retry with backoff' });
+    await syncSource({ db, home: originHome }, adapter);
+    expect(listSessions(db)).toEqual([]);
+    expect(titleLines(db).map((l) => l.origin_purged)).toEqual([PURGE, PURGE]);
+    // Nothing more until the title changes again.
+    rewrite({ num_messages: 31 });
+    await syncSource({ db, home: originHome }, adapter);
+    expect(titleLines(db)).toHaveLength(2);
     db.close();
   });
 

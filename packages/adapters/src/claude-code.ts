@@ -11,6 +11,7 @@ import type {
 } from '@openlinkos/origin-core';
 import {
   markdownFiles,
+  memoryContinuation,
   memoryStream,
   parseMemoryLine,
   readFrontMatterMemory,
@@ -102,6 +103,9 @@ export function createClaudeCodeAdapter(opts: ClaudeCodeAdapterOptions = {}): So
       }
       return parsed;
     },
+    // The memory streams are the generated sources.
+    continuation: (line, ctx) =>
+      ctx.relPath.startsWith(MEMORY_PREFIX) ? memoryContinuation(line) : null,
   };
 }
 

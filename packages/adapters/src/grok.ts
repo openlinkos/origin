@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,7 @@ import {
   frontMatter,
   type MemoryContent,
   markdownFiles,
+  memoryContinuation,
   memoryStream,
   parseMemoryLine,
   readFrontMatterMemory,
@@ -166,6 +168,13 @@ export function createGrokAdapter(opts: GrokAdapterOptions = {}): SourceAdapter 
           ? parseGrokTitleLine(row, parsed)
           : parseGrokLine(row, parsed);
       }),
+    continuation(line, ctx) {
+      if (ctx.relPath.startsWith(MEMORY_PREFIX)) return memoryContinuation(line);
+      if (!ctx.relPath.endsWith(`/${TITLES}`)) return null;
+      const fields = JSON.parse(line) as Record<string, unknown>;
+      if (typeof fields !== 'object' || fields === null || Array.isArray(fields)) return null;
+      return titleContinuation(fields);
+    },
   };
 }
 
@@ -307,12 +316,35 @@ function titleLines(summary: string, last: string | null): string[] {
   if (last !== null) {
     try {
       const before = JSON.parse(last) as Record<string, unknown>;
-      if (displayTitle(before) === title && sessionKind(before) === kind) return [];
+      // A line a purge replaced holds the digest of the title it removed (see titleContinuation).
+      const same =
+        typeof before.origin_purged === 'string'
+          ? before.title_digest === titleDigest(title)
+          : displayTitle(before) === title;
+      if (same && sessionKind(before) === kind) return [];
     } catch {
       // an unreadable last line: write the title out again
     }
   }
   return [JSON.stringify(fields)];
+}
+
+/**
+ * What titleLines reads of a title line, for the line that takes its place when a purge removes it
+ * (see SourceAdapter.continuation): the kind of session, and the digest of the title rather than
+ * the title, which the purge removed. So the stream writes a title out again only once it changes.
+ */
+function titleContinuation(fields: Record<string, unknown>): Record<string, unknown> {
+  const kind = sessionKind(fields);
+  return {
+    title_digest: titleDigest(displayTitle(fields)),
+    ...(kind ? { session_kind: kind } : {}),
+  };
+}
+
+/** The first 16 hex digits of the SHA-256 of a title, or null for none. */
+function titleDigest(title: string | null): string | null {
+  return title === null ? null : createHash('sha256').update(title).digest('hex').slice(0, 16);
 }
 
 /** The kind of session a title line says it is (`session_kind`), or null for none. */

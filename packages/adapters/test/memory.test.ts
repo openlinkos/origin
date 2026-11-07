@@ -9,7 +9,11 @@ import {
   importedEntryId,
   listEntries,
   listSessions,
+  localRawFiles,
   openDatabase,
+  readMirror,
+  type SourceAdapter,
+  type SourceFile,
   setStoreName,
   syncSource,
 } from '@openlinkos/origin-core';
@@ -25,6 +29,9 @@ import {
   readFrontMatterMemory,
   readPlainMemory,
 } from '../src/memory.js';
+import { addPurge, linesAfter, PURGE, purgedInPlaceOf } from './purge.js';
+
+const parseLine = (line: string) => JSON.parse(line) as MemoryLine;
 
 let tmp: string;
 let db: Database;
@@ -323,5 +330,97 @@ describe('agents', () => {
       ['/home/dev/demo-app', `observations/_inbox/${session}__t000001-000001__n000.md`],
     ]);
     expect(importedEntryId('x')).toMatch(/^ent_[0-9a-f]{24}$/);
+  });
+});
+
+describe('a memory stream whose last line a purge removed', () => {
+  const secret = '---\nname: token\nmetadata:\n  type: reference\n---\n\nThe token is hunter2.\n';
+  /** Each agent with a memory directory, by where its memory files go. */
+  const agents: Array<[string, (root: string) => { adapter: SourceAdapter; dir: string }]> = [
+    [
+      'Claude Code',
+      (root) => ({
+        adapter: createClaudeCodeAdapter({ projectsDir: root }),
+        dir: path.join(root, '-home-dev-demo-app', 'memory'),
+      }),
+    ],
+    [
+      'ZCode',
+      (root) => ({
+        adapter: createZCodeAdapter({ home: root, keepOpenMs: 0 }),
+        dir: path.join(root, 'cli', 'memories', 'projects', `demo-app-${'0'.repeat(16)}`, 'memory'),
+      }),
+    ],
+    [
+      'Grok Build',
+      (root) => ({
+        adapter: createGrokAdapter({ home: root }),
+        dir: path.join(root, 'memory-v2', 'global', 'topics'),
+      }),
+    ],
+  ];
+
+  it.each(agents)(
+    'goes on as before in %s, and writes no purged version again',
+    async (_, setUp) => {
+      const { adapter, dir } = setUp(path.join(tmp, 'agent'));
+      put(path.join(dir, 'a.md'), feedback, T0);
+      put(path.join(dir, 'b.md'), secret, T0 + 1000);
+      const file = (await adapter.discover()).find((f) => f.relPath.startsWith('memory/'));
+      if (!file) throw new Error('no memory stream');
+      const [, last] = linesAfter(file, null) as [string, string];
+      const marker = purgedInPlaceOf(adapter, file, last);
+      expect(marker).not.toContain('hunter2');
+      expect(JSON.parse(marker)).toEqual({ origin_purged: PURGE, state: JSON.parse(last).state });
+      expect(linesAfter(file, marker)).toEqual([]);
+
+      put(path.join(dir, 'a.md'), `${feedback}\nRevised.\n`, T0 + 2000);
+      put(path.join(dir, 'b.md'), secret.replace('hunter2', 'rotated'), T0 + 3000);
+      put(path.join(dir, 'c.md'), '---\nname: c\n---\n\nA third note.\n', T0 + 4000);
+      const after = linesAfter(file, marker);
+      expect(after).toEqual(linesAfter(file, last));
+      expect(after.map((l) => path.posix.basename(parseLine(l).file))).toEqual([
+        'a.md',
+        'b.md',
+        'c.md',
+      ]);
+      expect(after.join('\n')).not.toContain('hunter2');
+    },
+  );
+
+  it('keeps the purged version out of the store, and syncs on from the marker', async () => {
+    const projects = path.join(tmp, 'projects');
+    const dir = path.join(projects, '-home-dev-demo-app', 'memory');
+    put(path.join(dir, 'a.md'), feedback, T0);
+    put(path.join(dir, 'b.md'), secret, T0 + 1000);
+    const adapter = createClaudeCodeAdapter({ projectsDir: projects });
+    const file = (await adapter.discover())[0] as SourceFile;
+    const [, last] = linesAfter(file, null) as [string, string];
+    addPurge(db, [['event', '', `claude-code:memory:${parseLine(last).id}`]]);
+    const origin = path.join(tmp, 'origin');
+
+    expect(await syncSource({ db, home: origin }, adapter)).toMatchObject({
+      linesRead: 2,
+      purged: 1,
+      parseErrors: 0,
+    });
+    expect(listEntries(db).map((e) => e.text)).toEqual([expect.stringContaining('Conventional')]);
+    const mirror = () => {
+      const raw = localRawFiles(db).find((f) => f.relPath === file.relPath);
+      return readMirror(db, origin, raw?.id ?? 0, 0, raw?.bytes ?? 0).toString('utf8');
+    };
+    const [, marker] = mirror().split('\n') as [string, string];
+    expect(marker.trimEnd()).toBe(
+      JSON.stringify({ origin_purged: PURGE, state: JSON.parse(last).state }),
+    );
+
+    put(path.join(dir, 'c.md'), '---\nname: c\n---\n\nA third note.\n', T0 + 4000);
+    expect(await syncSource({ db, home: origin }, adapter)).toMatchObject({
+      linesRead: 1,
+      eventsAdded: 1,
+    });
+    expect(listEntries(db)).toHaveLength(2);
+    expect(mirror().split('\n')).toHaveLength(4);
+    expect(mirror()).not.toContain('hunter2');
   });
 });

@@ -28,6 +28,9 @@ import { projectFromCwd, truncate } from './util.js';
  */
 export const CURSOR_SOURCE_ID = 'cursor';
 
+/** The path prefix of the editor's conversations, the generated sources. */
+const EDITOR_PREFIX = 'editor/';
+
 const TOOL_USE_MAX = 2000;
 const TOOL_RESULT_MAX = 4000;
 /** A message still being generated this long after its conversation last changed will not change. */
@@ -248,7 +251,7 @@ export function createCursorAdapter(opts: CursorAdapterOptions = {}): SourceAdap
             const quiet = t - changed > CURSOR_SETTLE_MS ? 'quiet' : 'active';
             out.push({
               absPath: `${vscdb}#${c.composerId}`,
-              relPath: `editor/${c.composerId}.jsonl`,
+              relPath: `${EDITOR_PREFIX}${c.composerId}.jsonl`,
               generated: {
                 token: `${count}:${changed}:${quiet}`,
                 mtimeMs: changed,
@@ -273,8 +276,15 @@ export function createCursorAdapter(opts: CursorAdapterOptions = {}): SourceAdap
       if (ctx.relPath === 'places.jsonl' || ctx.relPath.endsWith('/places.jsonl')) {
         return parseWithPlaces(line, ctx, () => null);
       }
-      if (ctx.relPath.startsWith('editor/')) return parseCursorEditorLine(line);
+      if (ctx.relPath.startsWith(EDITOR_PREFIX)) return parseCursorEditorLine(line);
       return parseTranscript(line, ctx, userTimes);
+    },
+    continuation(line, ctx) {
+      if (!ctx.relPath.startsWith(EDITOR_PREFIX)) return null;
+      // A conversation's lines go on after the last message written out, as compareBubbles orders
+      // them: only the fields it reads are kept.
+      const { createdAt, bubbleId } = JSON.parse((JSON.parse(line) as EditorLine).value) as Bubble;
+      return { value: JSON.stringify({ createdAt, bubbleId } satisfies Bubble) };
     },
   };
 }

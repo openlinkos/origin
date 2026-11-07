@@ -8,14 +8,17 @@ import {
   getSessionParent,
   listEvents,
   listSessions,
+  localRawFiles,
   openMemoryDatabase,
   rawLocator,
   readMirror,
   readRawLine,
+  type SourceFile,
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createZCodeAdapter, parseZCodeLine, ZCODE_SETTLE_MS } from '../src/index.js';
+import { addPurge, linesAfter, PURGE, purgedInPlaceOf } from './purge.js';
 
 const SESSION = 'ses_0199f0a1-7c2e-7d3a-9b4c-5e6f7a8b9c0d';
 const T0 = Date.parse('2026-10-20T01:00:00Z');
@@ -318,6 +321,50 @@ describe('zcode adapter', () => {
       fs.rmSync(hubHome, { recursive: true, force: true });
     }
     device.close();
+  });
+
+  it('goes on after a purged last line as before, and writes nothing purged again', async () => {
+    seed(conversation);
+    const a = adapter();
+    const [file] = (await a.discover()) as [SourceFile];
+    const [, , last] = linesAfter(file, null) as [string, string, string];
+    const marker = purgedInPlaceOf(a, file, last);
+    expect(JSON.parse(marker)).toEqual({ origin_purged: PURGE, message: { sequence: 2 } });
+    expect(marker).not.toContain('todo');
+    expect(linesAfter(file, marker)).toEqual([]);
+
+    conversation.add(user(), [{ type: 'text', text: 'Now the download client.' }]);
+    const after = linesAfter(file, marker);
+    expect(after).toEqual(linesAfter(file, last));
+    expect(after.map((l) => JSON.parse(l).message.sequence)).toEqual([3]);
+  });
+
+  it('keeps a purged message out of the store, and syncs on from the marker', async () => {
+    seed(conversation);
+    const origin = openMemoryDatabase();
+    addPurge(origin, [['event', '', `zcode:${SESSION}:2.0`]]);
+    expect(await syncSource({ db: origin, home: originHome }, adapter())).toMatchObject({
+      linesRead: 3,
+      eventsAdded: 7,
+      purged: 1,
+      parseErrors: 0,
+    });
+    conversation.add(user(), [{ type: 'text', text: 'Now the download client.' }]);
+    expect(await syncSource({ db: origin, home: originHome }, adapter())).toMatchObject({
+      linesRead: 1,
+      eventsAdded: 1,
+    });
+    const ids = listEvents(origin, { sessionId: SESSION }).map((e) => e.id);
+    expect(ids).toHaveLength(8);
+    expect(ids).not.toContain(`zcode:${SESSION}:2.0`);
+    expect(ids.at(-1)).toBe(`zcode:${SESSION}:3.0`);
+    const [raw] = localRawFiles(origin);
+    const mirrored = readMirror(origin, originHome, raw!.id, 0, raw!.bytes).toString('utf8');
+    expect(mirrored.split('\n')[2]?.trimEnd()).toBe(
+      JSON.stringify({ origin_purged: PURGE, message: { sequence: 2 } }),
+    );
+    expect(mirrored).not.toContain('todo');
+    origin.close();
   });
 
   it('finds nothing without a ZCode database', async () => {

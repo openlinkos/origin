@@ -26,13 +26,20 @@ import { distinctRelPath, mirrorRelPath, parseRawPath, rawDir, remotePath } from
 import {
   applyPlaceFacts,
   isOriginPlacesFile,
+  isPlacesRel,
   parsePlaceLine,
   placesSourceFile,
   recordExplicitPlace,
   rememberPlaceHead,
 } from './places.js';
 import { deriveProposal } from './proposals.js';
-import { blankBytes, isSkippedLine, type PurgedLookup, purgedLookup } from './purged.js';
+import {
+  blankBytes,
+  continuationLine,
+  isSkippedLine,
+  type PurgedLookup,
+  purgedLookup,
+} from './purged.js';
 import { deriveFollow, refreshThreads } from './threads.js';
 import { NAME_RE } from './tokens.js';
 import type {
@@ -512,7 +519,10 @@ function appendLines(
     agentVersion: string | null;
     /** On a hub, the device that sent the file; unset for this store's own files. */
     device?: string;
-    /** This chunk is Origin's generated places file, not a file a person wrote. */
+    /**
+     * This store's generated source (SourceFile.generated): with the path `places.jsonl`, Origin's
+     * places file, not a file a person wrote.
+     */
     generated?: boolean;
   },
   newTailHash: string,
@@ -531,9 +541,11 @@ function appendLines(
   const purged = purgedLookup(ctx.db);
   const blocked = purged.any ? purged.file(adapter.id, raw.path) : null;
   let mirrored = chunk;
-  const blank = (start: number, end: number) => {
+  /** Blank a line, or put `text`, as long as the line, in its place. */
+  const blank = (start: number, end: number, text?: string) => {
     if (mirrored === chunk) mirrored = Buffer.from(chunk);
-    blankBytes(mirrored, start, end);
+    if (text === undefined) blankBytes(mirrored, start, end);
+    else mirrored.write(text, start, 'utf8');
     stats.purged = (stats.purged ?? 0) + 1;
   };
   // Where the line being parsed starts and ends in `chunk` (line breaks are single bytes).
@@ -590,8 +602,15 @@ function appendLines(
       continue;
     }
     if (!parsed) continue;
-    if (purged.any && removedBy(purged, adapter.id, parsed, originPlaces) !== null) {
-      blank(lineStart, lineEnd);
+    const by = purged.any ? removedBy(purged, adapter.id, parsed, originPlaces) : null;
+    if (by !== null) {
+      // The last line of this store's own generated source, which next() goes on from, gets the
+      // adapter's continuation instead (a hub never calls next(), nor do Origin's places).
+      const continued =
+        parse.generated === true && !originPlaces && i === lines.length - 1
+          ? continuationLine(adapter, line, parse.relPath, by, lineEnd - lineStart)
+          : null;
+      blank(lineStart, lineEnd, continued ?? undefined);
       if (originPlaces) {
         const spaces = ' '.repeat(lineEnd - lineStart);
         rememberPlaceHead(ctx.db, adapter.id, parse.device ?? '', spaces, true);
@@ -1188,6 +1207,18 @@ function generatedContent(ctx: IngestContext, file: SourceFile, raw: RawFileRow 
     raw && raw.lines_ingested > 0
       ? readMirrorLine(ctx.db, ctx.home, raw.id, raw.lines_ingested)
       : null;
+  // A last line a purge blanked, as it does when the adapter cannot say how to go on from it (see
+  // continuationLine): the stream ends there rather than write again what the purge removed.
+  // Origin's places file compares its lines by key, and goes on from a blank one.
+  if (
+    last !== null &&
+    last.trim().length === 0 &&
+    !isPlacesRel(file.relPath) &&
+    purgedLookup(ctx.db).any
+  ) {
+    ctx.log?.(`warning ${file.relPath}: a purge removed its last line; nothing more is read`);
+    return { size: start, mtimeMs: source.mtimeMs, read: () => Buffer.alloc(0) };
+  }
   const lines = source.next(last, TRANSACTION_BYTES);
   if (lines.some((line) => line.includes('\n'))) {
     throw new OriginError('A generated line contains a line break.');

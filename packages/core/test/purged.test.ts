@@ -284,6 +284,99 @@ describe('a file a purge blocked', () => {
   });
 });
 
+describe('a generated source whose last line a purge removed', () => {
+  /** Rows of a database, each written out as one fake line with its number `n`. */
+  let rows: Array<{
+    n: number;
+    id: string;
+    session: string;
+    ts: number;
+    role: 'user';
+    text: string;
+  }>;
+  /** The last line each call of next() went on from. */
+  let asked: Array<string | null>;
+  const row = (n: number, text: string) => ({
+    n,
+    id: String(n),
+    session: 's1',
+    ts: n * 1000,
+    role: 'user' as const,
+    text,
+  });
+  /** The source writes out the rows after the last line's `n`; a purge keeps `continuation`. */
+  const generated = (continuation: SourceAdapter['continuation']): SourceAdapter => ({
+    ...fakeAdapter(logs),
+    async discover() {
+      return [
+        {
+          absPath: 'db#1',
+          relPath: 'db/1.jsonl',
+          generated: {
+            token: `rows:${rows.length}`,
+            mtimeMs: 1,
+            next(last) {
+              asked.push(last);
+              const after = last === null ? 0 : (JSON.parse(last) as { n: number }).n;
+              return rows.filter((r) => r.n > after).map((r) => JSON.stringify(r));
+            },
+          },
+        },
+      ];
+    },
+    continuation,
+  });
+
+  beforeEach(() => {
+    rows = [row(1, 'kept'), row(2, 'a purged row'), row(3, 'the last purged row')];
+    asked = [];
+  });
+
+  it('goes on from the continuation the adapter gives, and writes nothing purged again', async () => {
+    const adapter = generated((l) => ({ n: (JSON.parse(l) as { n: number }).n }));
+    const prg = addPurge([
+      ['event', '', 'fake:2'],
+      ['event', '', 'fake:3'],
+    ]);
+    const r = await syncSource({ db, home }, adapter);
+    expect(r).toMatchObject({ linesRead: 3, eventsAdded: 1, parseErrors: 0, purged: 2 });
+    // A purged line within the batch is blanked; the last one holds where the source goes on.
+    const lines = mirrorText(db, home, rawFileId('db#1')).split('\n');
+    const written = rows.map((x) => JSON.stringify(x));
+    expect(lines.slice(0, 2)).toEqual([written[0], ' '.repeat(written[1]!.length)]);
+    expect(Buffer.byteLength(lines[2]!)).toBe(Buffer.byteLength(written[2]!));
+    expect(lines[2]!.trimEnd()).toBe(`${PURGED_MARKER}"${prg}","n":3}`);
+    expect(asked).toEqual([null, lines[2]]);
+
+    rows.push(row(4, 'later'));
+    const later = await syncSource({ db, home }, adapter);
+    expect(later).toMatchObject({ linesRead: 1, eventsAdded: 1 });
+    expect(later).not.toHaveProperty('purged');
+    expect(asked.slice(2)).toEqual([lines[2], JSON.stringify(rows[3])]);
+    expect(eventIds()).toEqual(['fake:1', 'fake:4']);
+    expect(mirrorText(db, home, rawFileId('db#1'))).not.toContain('purged row');
+  });
+
+  it('ends a source it cannot go on from, rather than write again what was purged', async () => {
+    // A continuation longer than the line it would replace does not fit.
+    const adapter = generated(() => ({ n: 3, pad: 'x'.repeat(200) }));
+    addPurge([['event', '', 'fake:3']]);
+    const log: string[] = [];
+    const r = await syncSource({ db, home, log: (m) => log.push(m) }, adapter);
+    expect(r).toMatchObject({ linesRead: 3, eventsAdded: 2, purged: 1 });
+    expect(mirrorText(db, home, rawFileId('db#1')).split('\n')[2]?.trim()).toBe('');
+    expect(log).toContain(
+      'warning db/1.jsonl: a purge removed its last line; nothing more is read',
+    );
+    expect(asked).toEqual([null]);
+
+    rows.push(row(4, 'later'));
+    expect(await syncSource({ db, home }, adapter)).toMatchObject({ linesRead: 0 });
+    expect(asked).toEqual([null]);
+    expect(eventIds()).toEqual(['fake:1', 'fake:2']);
+  });
+});
+
 describe('parsing mirrored lines again', () => {
   it('brings back none of what a purge removed', async () => {
     fs.writeFileSync(

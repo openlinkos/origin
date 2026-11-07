@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-f32faaa7
+sourceHash: sha256-3fc89c73
 ---
 
 # 架构
@@ -160,6 +160,7 @@ interface SourceAdapter {
   discover(): Promise<SourceFile[]>; // { absPath, relPath, compression?: 'zstd', generated? }
   locate?(absPath: string): SourceFile | null; // the file discover() would list at absPath, or null
   parseLine(line: string, ctx: ParseContext): ParsedLine | null; // deterministic; throws on malformed input
+  continuation?(line: string, ctx: { relPath: string }): Record<string, unknown> | null; // pure
 }
 // ctx: { absPath, relPath, lineNo, fileMtimeMs, readLine(n) }; readLine returns an earlier line of
 // the same file as ingested, for an adapter that needs, say, a file's first line on a hub.
@@ -168,6 +169,10 @@ interface SourceAdapter {
 // locate: pure, so the file need not exist; for one file named from outside, such as the transcript
 // an agent's hook names, with the relPath discover() gives, so that a file has one mirror however
 // it is found.
+// continuation: for an adapter with generated sources, the fields of one of their lines that
+// next() reads. A purge that removes a generated mirror's last line puts
+// {"origin_purged":"<purge>", …those fields} in its place, padded to its length; next() goes on
+// from it as from the line, and parsing skips it.
 ```
 
 ## 存储 {#storage}

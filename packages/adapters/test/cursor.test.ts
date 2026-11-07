@@ -10,6 +10,7 @@ import {
   openMemoryDatabase,
   rawLocator,
   readRawLine,
+  type SourceFile,
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -19,6 +20,7 @@ import {
   cursorTimestamp,
   parseCursorEditorLine,
 } from '../src/index.js';
+import { linesAfter, PURGE, purgedInPlaceOf } from './purge.js';
 
 const fixtures = fileURLToPath(new URL('./fixtures/cursor/', import.meta.url));
 const TRANSCRIPT = '7c1e2a90-1b2c-4d5e-8f90-a1b2c3d4e5f6';
@@ -272,6 +274,26 @@ describe('cursor adapter', () => {
       'Hel',
     ]);
     db.close();
+  });
+
+  it('goes on after a purged last line as before, and writes nothing purged again', async () => {
+    seed(editor);
+    const a = adapter();
+    const file = (await a.discover()).find((f) => f.generated) as SourceFile;
+    const [, , , last] = linesAfter(file, null) as [string, string, string, string];
+    const marker = purgedInPlaceOf(a, file, last);
+    expect(JSON.parse(marker)).toEqual({
+      origin_purged: PURGE,
+      value: JSON.stringify({ createdAt: iso(T0 + 4000), bubbleId: 'b4' }),
+    });
+    expect(marker).not.toContain('pnpm test');
+    expect(linesAfter(file, marker)).toEqual([]);
+
+    bubble(editor, 'b5', { type: 1, text: 'Fix the failing test.', createdAt: iso(T0 + 5000) });
+    conversation(editor, ['b1', 'b2', 'b3', 'b4', 'b5']);
+    const after = linesAfter(file, marker);
+    expect(after).toEqual(linesAfter(file, last));
+    expect(after.map((l) => JSON.parse(l).key)).toEqual([`bubbleId:${CONVERSATION}:b5`]);
   });
 
   it('gives a hub the same events from the pushed mirror', async () => {

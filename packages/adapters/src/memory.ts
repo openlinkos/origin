@@ -167,6 +167,16 @@ export function memoryLines(
   return out;
 }
 
+/**
+ * What memoryLines reads of a stream's line, the directory's `state` after it (see
+ * SourceAdapter.continuation): with it in place of a line a purge removed, the stream goes on as
+ * before, and does not write that version of the file again.
+ */
+export function memoryContinuation(line: string): Record<string, unknown> | null {
+  const { state } = JSON.parse(line) as Partial<MemoryLine>;
+  return typeof state === 'object' && state !== null && !Array.isArray(state) ? { state } : null;
+}
+
 /** What an adapter reads from one version of a memory file, or null if it holds no memory. */
 export type MemoryContent = Omit<NonNullable<NativeMemory['entry']>, 'project'> | null;
 

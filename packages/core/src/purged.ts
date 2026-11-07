@@ -1,5 +1,6 @@
 import type { Database, Statement } from './database.js';
 import { mirrorState, readMirror } from './mirror.js';
+import type { SourceAdapter } from './types.js';
 
 /**
  * What purges removed, looked up wherever data arrives, so that none of it comes back: from a
@@ -104,6 +105,33 @@ export const PURGED_MARKER = '{"origin_purged":';
 export function isSkippedLine(line: string): boolean {
   const text = line.trim();
   return text.length === 0 || text.startsWith(PURGED_MARKER);
+}
+
+/**
+ * The line that takes the place of `line`, the last line of a generated mirror, when purge
+ * `purgeId` removes it: PURGED_MARKER with the purge's id, then what the adapter's next() reads of
+ * the line (SourceAdapter.continuation), padded with spaces to `bytes`, the length of the line it
+ * replaces. Null when the adapter has no continuation for the line or it does not fit; the line is
+ * then blanked, and the stream does not go on from it (see generatedContent in ingest.ts).
+ */
+export function continuationLine(
+  adapter: SourceAdapter,
+  line: string,
+  relPath: string,
+  purgeId: string,
+  bytes: number = Buffer.byteLength(line),
+): string | null {
+  let fields: Record<string, unknown> | null | undefined;
+  try {
+    fields = adapter.continuation?.(line, { relPath });
+  } catch {
+    return null;
+  }
+  if (typeof fields !== 'object' || fields === null || Array.isArray(fields)) return null;
+  const rest = Object.entries(fields).filter(([key]) => key !== 'origin_purged');
+  const text = JSON.stringify({ origin_purged: purgeId, ...Object.fromEntries(rest) });
+  const size = Buffer.byteLength(text);
+  return size <= bytes ? text + ' '.repeat(bytes - size) : null;
 }
 
 /** Blank bytes in place: each becomes a space, except a line break, so line numbers stay. */

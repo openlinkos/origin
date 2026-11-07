@@ -15,6 +15,7 @@ import type {
 } from '@openlinkos/origin-core';
 import {
   markdownFiles,
+  memoryContinuation,
   memoryStream,
   parseMemoryLine,
   readFrontMatterMemory,
@@ -41,6 +42,7 @@ import { projectFromCwd, truncate } from './util.js';
 export const ZCODE_SOURCE_ID = 'zcode';
 
 const MEMORY_PREFIX = 'memory/';
+const SESSIONS_PREFIX = 'sessions/';
 
 const TOOL_USE_MAX = 2000;
 const TOOL_RESULT_MAX = 4000;
@@ -287,7 +289,7 @@ export function createZCodeAdapter(opts: ZCodeAdapterOptions = {}): SourceAdapte
       for (const s of sessions) {
         out.push({
           absPath: `${dbPath}#${s.id}`,
-          relPath: `sessions/${s.id}.jsonl`,
+          relPath: `${SESSIONS_PREFIX}${s.id}.jsonl`,
           generated: {
             // New messages, a message that changed, or one that has now settled by waiting.
             token: `${s.messages}:${s.maxSequence}:${s.lastUpdated}:${
@@ -306,6 +308,13 @@ export function createZCodeAdapter(opts: ZCodeAdapterOptions = {}): SourceAdapte
           ? parseMemoryLine(row, parsed, (_file, content) => readFrontMatterMemory(content))
           : parseZCodeLine(row, parsed),
       ),
+    continuation(line, ctx) {
+      if (ctx.relPath.startsWith(MEMORY_PREFIX)) return memoryContinuation(line);
+      if (!ctx.relPath.startsWith(SESSIONS_PREFIX)) return null;
+      // A session's lines go on after the sequence of the last message written out.
+      const sequence = (JSON.parse(line) as Partial<ZCodeLine>).message?.sequence;
+      return typeof sequence === 'number' ? { message: { sequence } } : null;
+    },
   };
 
   /**

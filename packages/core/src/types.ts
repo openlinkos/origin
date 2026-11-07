@@ -274,6 +274,15 @@ export interface SourceAdapter {
   locate?(absPath: string): SourceFile | null;
   /** Parse one line; null means the line yields nothing (still counted). Thrown errors are caught and counted by the ingester. */
   parseLine(line: string, ctx: ParseContext): ParsedLine | null;
+  /**
+   * For an adapter with generated sources: what their `next()` reads of `line`, one of the lines
+   * it wrote to the source at `relPath`, as fields in the same places as in the line; null when
+   * it reads nothing of such a line, or the line is not one it wrote. When a purge removes the
+   * last line of a generated mirror, Origin puts `{"origin_purged":"<purge>", …those fields}` in
+   * its place, padded with spaces to its length: next() goes on from that just as from the line,
+   * and nothing parses it. Pure, like parseLine; a thrown error counts as null.
+   */
+  continuation?(line: string, ctx: { relPath: string }): Record<string, unknown> | null;
 }
 
 export interface SessionRow {

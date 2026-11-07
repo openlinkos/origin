@@ -389,6 +389,7 @@ export {
   rejectProposal,
 } from './proposals.js';
 export {
+  continuationLine,
   isPurgedId,
   isPurgedSession,
   isSkippedLine,
