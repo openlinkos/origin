@@ -313,6 +313,29 @@ export {
 } from './password.js';
 export { dbPath, originHome, parseRawPath, rawDir, remotePath, sourcesDir } from './paths.js';
 export {
+  missingObjects,
+  PG_CLIENT_OBJECTS,
+  PG_CREATE_DATABASE,
+  PG_LOCK_TAG,
+  PG_MIN_SERVER_VERSION,
+  PG_OBJECTS,
+  PG_PREFLIGHT_SQL,
+  PG_PRESENT_SQL,
+  type PgObject,
+  type PgPreflight,
+  preflightProblem,
+} from './pg/schema.js';
+export {
+  forbiddenIn,
+  type StatementKind,
+  TRANSLATIONS_KEPT,
+  type TransactionControl,
+  TranslateError,
+  type Translation,
+  Translator,
+  translate,
+} from './pg/translate.js';
+export {
   type AgentFacts,
   comparePath,
   entryProjectMatchSql,
