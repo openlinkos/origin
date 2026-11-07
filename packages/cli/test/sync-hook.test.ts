@@ -464,6 +464,7 @@ describe('the hook module', () => {
       'hub/sync.ts',
       'sources.ts',
       'sync-hook.ts',
+      'sync-worker.ts',
     ]);
   });
 });

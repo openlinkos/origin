@@ -1,17 +1,11 @@
-import {
-  MessageChannel,
-  type MessagePort,
-  receiveMessageOnPort,
-  Worker,
-} from 'node:worker_threads';
+import { SyncWorker, SyncWorkerError } from '../sync-worker.js';
 
 /**
  * Synchronous HTTP requests, for the hub's bucket (see s3.ts): node:sqlite is synchronous, and
  * sealed frames are written and read inside write transactions, so the frame store cannot wait for
- * a promise. A worker thread runs `fetch`; the calling thread posts it a request and blocks on
- * `Atomics.wait` until the worker has posted the response and raised a flag, then takes the
- * response with `receiveMessageOnPort` (the technique of the synckit package). The caller's event
- * loop stands still meanwhile: on a hub, no other request is served during a frame's transfer.
+ * a promise. A worker thread runs `fetch`, and the calling thread blocks until it answers (see
+ * sync-worker.ts). The caller's event loop stands still meanwhile: on a hub, no other request is
+ * served during a frame's transfer.
  *
  * Outside transactions, as `origin raw upload` moves frames, the same requests can also be sent
  * without blocking (requestAsync), on the calling thread, several at once.
@@ -77,15 +71,10 @@ export async function fetchResponse(req: SyncRequest, timeoutMs: number): Promis
 }
 
 /**
- * The worker: runs each request with its own timeout, posts the response or the error, and then
- * raises the request's flag. Plain JavaScript, evaluated as a CommonJS script, so that it needs no
- * file of its own next to the compiled code.
+ * The worker's handler (see sync-worker.ts): runs each request with its own timeout, and answers
+ * with the response, its body moved rather than copied, or with the error.
  */
-const WORKER_SOURCE = `
-const { workerData } = require('node:worker_threads');
-const port = workerData.port;
-port.on('message', async ({ id, flag, request, timeoutMs }) => {
-  let reply;
+const HANDLER_SOURCE = `async ({ request, timeoutMs }, { transfer }) => {
   try {
     const res = await fetch(request.url, {
       method: request.method,
@@ -95,21 +84,16 @@ port.on('message', async ({ id, flag, request, timeoutMs }) => {
       signal: AbortSignal.timeout(timeoutMs),
     });
     const body = new Uint8Array(await res.arrayBuffer());
-    reply = { id, status: res.status, headers: Object.fromEntries(res.headers), body };
+    transfer.push(body.buffer);
+    return { status: res.status, headers: Object.fromEntries(res.headers), body };
   } catch (err) {
     const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
     const cause = err && err.cause && err.cause.message ? ': ' + err.cause.message : '';
-    reply = { id, error: timedOut ? 'timed out' : String((err && err.message) || err) + cause, timedOut };
+    return { error: timedOut ? 'timed out' : String((err && err.message) || err) + cause, timedOut };
   }
-  port.postMessage(reply, reply.body ? [reply.body.buffer] : []);
-  const view = new Int32Array(flag);
-  Atomics.store(view, 0, 1);
-  Atomics.notify(view, 0);
-});
-`;
+}`;
 
 interface Reply {
-  id: number;
   status?: number;
   headers?: Record<string, string>;
   body?: Uint8Array;
@@ -118,9 +102,7 @@ interface Reply {
 }
 
 export class SyncHttp implements HttpClient {
-  private worker: Worker | null = null;
-  private port: MessagePort | null = null;
-  private nextId = 1;
+  private readonly worker = new SyncWorker({ source: HANDLER_SOURCE });
   private readonly graceMs: number;
 
   /** `timeoutMs`: how long one request may take, from sending it to its last response byte. */
@@ -133,36 +115,37 @@ export class SyncHttp implements HttpClient {
 
   /** Send a request and wait for its response, blocking this thread. */
   request(req: SyncRequest, timeoutMs = this.timeoutMs): SyncResponse {
-    const port = this.start();
-    const id = this.nextId++;
-    const flag = new SharedArrayBuffer(4);
     // A view is cloned with its whole buffer: send only its own bytes.
     const body =
       req.body && (req.body.byteOffset !== 0 || req.body.byteLength !== req.body.buffer.byteLength)
         ? new Uint8Array(req.body)
         : req.body;
-    port.postMessage({ id, flag, request: { ...req, body }, timeoutMs });
-    Atomics.wait(new Int32Array(flag), 0, 0, Math.max(0, timeoutMs + this.graceMs));
-    for (;;) {
-      const received = receiveMessageOnPort(port);
-      if (!received) break;
-      const reply = received.message as Reply;
-      // A reply to an earlier request that this thread stopped waiting for: dropped.
-      if (reply.id !== id) continue;
-      if (reply.error !== undefined) throw new SyncHttpError(reply.error, reply.timedOut === true);
-      return {
-        status: reply.status as number,
-        headers: reply.headers ?? {},
-        body: Buffer.from(
-          (reply.body as Uint8Array).buffer,
-          (reply.body as Uint8Array).byteOffset,
-          (reply.body as Uint8Array).byteLength,
-        ),
-      };
+    let reply: Reply;
+    try {
+      reply = this.worker.call<Reply>(
+        { request: { ...req, body }, timeoutMs },
+        { timeoutMs: Math.max(0, timeoutMs + this.graceMs) },
+      );
+    } catch (err) {
+      if (!(err instanceof SyncWorkerError)) throw err;
+      // The worker has been stopped, and the next request starts a new one. No answer even after
+      // the worker's own timeout: it is stuck. A worker that died or stopped beating did not time
+      // out, so the bucket tries again.
+      if (err.reason === 'timeout') {
+        throw new SyncHttpError(
+          `timed out after ${timeoutMs} ms (no answer from the worker)`,
+          true,
+        );
+      }
+      throw new SyncHttpError(err.message);
     }
-    // No answer even after the worker's own timeout: it is stuck or gone. Start a new one.
-    this.close();
-    throw new SyncHttpError(`timed out after ${timeoutMs} ms (no answer from the worker)`, true);
+    if (reply.error !== undefined) throw new SyncHttpError(reply.error, reply.timedOut === true);
+    const answered = reply.body as Uint8Array;
+    return {
+      status: reply.status as number,
+      headers: reply.headers ?? {},
+      body: Buffer.from(answered.buffer, answered.byteOffset, answered.byteLength),
+    };
   }
 
   /** Send a request without blocking, on this thread rather than the worker's. */
@@ -172,36 +155,6 @@ export class SyncHttp implements HttpClient {
 
   /** Stop the worker; the next request starts a new one. */
   close(): void {
-    const worker = this.worker;
-    this.worker = null;
-    this.port?.close();
-    this.port = null;
-    void worker?.terminate();
-  }
-
-  private start(): MessagePort {
-    if (this.worker && this.port) return this.port;
-    const { port1, port2 } = new MessageChannel();
-    const worker = new Worker(WORKER_SOURCE, {
-      eval: true,
-      workerData: { port: port2 },
-      transferList: [port2],
-    });
-    // Neither keeps the process alive: a hub, or a command, exits when it is done.
-    worker.unref();
-    port1.unref();
-    worker.on('error', () => this.forget(worker));
-    worker.on('exit', () => this.forget(worker));
-    this.worker = worker;
-    this.port = port1;
-    return port1;
-  }
-
-  private forget(worker: Worker): void {
-    if (this.worker === worker) {
-      this.worker = null;
-      this.port?.close();
-      this.port = null;
-    }
+    this.worker.close();
   }
 }
