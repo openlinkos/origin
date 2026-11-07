@@ -6,7 +6,9 @@ import { OriginError } from './errors.js';
 import {
   BucketFrameStore,
   FileFrameStore,
+  type FrameWrite,
   fileSize,
+  forgetCachedFrame,
   frameKey,
   frameStore,
   framesPath,
@@ -154,9 +156,30 @@ function sealedNow(db: Database, rawFileId: number): number {
  */
 const READ_ATTEMPTS = 5;
 
-/** The uncompressed content of one sealed frame. */
+/** How long a read waits before it reads again a frame that did not decompress. */
+const TORN_READ_PAUSE_MS = 20;
+
+/**
+ * The uncompressed content of one sealed frame. A purge in another process may be writing the
+ * frame's slot (see blankMirror): a frame that does not decompress, or to the wrong size, is read
+ * again, up to READ_ATTEMPTS times TORN_READ_PAUSE_MS apart, before it is taken for damage.
+ */
 function readFrame(home: string, mirror: string, c: Chunk): Buffer {
-  return decompressFrame(mirror, c, frameStore(home).read(mirror, c.frame_offset, c.frame_length));
+  for (let attempt = 1; ; attempt++) {
+    const frame = frameStore(home).read(mirror, c.frame_offset, c.frame_length);
+    try {
+      return decompressFrame(mirror, c, frame);
+    } catch (err) {
+      forgetCachedFrame(home, mirror, c.frame_offset);
+      if (attempt >= READ_ATTEMPTS) throw err;
+      pause(TORN_READ_PAUSE_MS);
+    }
+  }
+}
+
+/** Block this thread for `ms` milliseconds (node:sqlite and the frame stores are synchronous). */
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /** A sealed frame's content, checked against what `raw_chunk` records. */
@@ -762,6 +785,8 @@ export async function uploadFrames(
     (async (key: string, data: Buffer) => objects.put(key, data));
   const get = objects.getAsync?.bind(objects) ?? (async (key: string) => objects.get(key));
   const concurrency = Math.max(1, Math.floor(opts.concurrency ?? UPLOAD_CONCURRENCY));
+  const purges = db.hasTable('purge');
+  const purgedBefore = purges ? latestPurge(db) : 0;
   const result: FrameUpload = {
     mirrors: 0,
     frames: 0,
@@ -888,9 +913,224 @@ export async function uploadFrames(
   };
   progress();
   await Promise.all(Array.from({ length: concurrency }, work));
+  // A purge that blanked lines meanwhile may have replaced a frame in the bucket before an older
+  // copy of it was uploaded: its mirrors are blanked again (see completePurges in purge.ts).
+  if (purges && latestPurge(db) > purgedBefore) {
+    const queued = db
+      .prepare(
+        `INSERT INTO purge_pending (raw_file_id, since)
+         SELECT l.raw_file_id, MAX(p.seq) FROM purge_line l JOIN purge p ON p.id = l.purge_id
+          WHERE p.seq > ? GROUP BY l.raw_file_id
+         ON CONFLICT DO NOTHING`,
+      )
+      .run(purgedBefore).changes;
+    if (queued > 0) {
+      const mirrors = `${queued} mirror${queued === 1 ? '' : 's'}`;
+      opts.log?.(`a purge ran meanwhile: ${mirrors} queued to be blanked again`);
+    }
+  }
   const order = new Map(mirrors.map((m, i) => [m.mirror, i]));
   result.removable.sort((a, b) => (order.get(a.mirror) ?? 0) - (order.get(b.mirror) ?? 0));
   return result;
+}
+
+/**
+ * The compressions fitFrame tries, in order: level, and whether the frame carries a checksum. The
+ * first is how frames are sealed; blanked content most often fits at once.
+ */
+const FIT_LEVELS: Array<[number, boolean]> = [
+  [3, true],
+  [3, false],
+  [9, true],
+  [19, true],
+  [19, false],
+  [22, true],
+];
+
+/** A skippable zstd frame: its magic number, its size, and that many zero bytes. */
+const SKIPPABLE_MAGIC = 0x184d2a50;
+const SKIPPABLE_HEADER = 8;
+
+function skippable(bytes: number): Buffer {
+  const frame = Buffer.alloc(bytes);
+  frame.writeUInt32LE(SKIPPABLE_MAGIC, 0);
+  frame.writeUInt32LE(bytes - SKIPPABLE_HEADER, 4);
+  return frame;
+}
+
+/**
+ * A frame of exactly `slot` bytes holding `content`, to take the place of a sealed frame of that
+ * length (see blankMirror): compressed at the levels FIT_LEVELS lists until one leaves no room, or
+ * room for a skippable frame after it, which every reader of zstd passes over. Each candidate is
+ * decompressed and compared with `content` before it is taken. Null when none fits.
+ */
+export function fitFrame(content: Buffer, slot: number): Buffer | null {
+  for (const [level, checksum] of FIT_LEVELS) {
+    const compressed = zlib.zstdCompressSync(content, {
+      params: {
+        [zlib.constants.ZSTD_c_compressionLevel]: level,
+        [zlib.constants.ZSTD_c_checksumFlag]: checksum ? 1 : 0,
+      },
+    });
+    const gap = slot - compressed.length;
+    if (gap !== 0 && gap < SKIPPABLE_HEADER) continue;
+    const frame = gap === 0 ? compressed : Buffer.concat([compressed, skippable(gap)]);
+    let back: Buffer;
+    try {
+      back = zlib.zstdDecompressSync(frame);
+    } catch {
+      continue;
+    }
+    if (back.equals(content)) return frame;
+  }
+  return null;
+}
+
+/** What blankMirror changed. */
+export interface MirrorBlanking {
+  /** Sealed frames replaced, and lines blanked (or replaced) in them and in the tail. */
+  frames: number;
+  lines: number;
+  /** Whether the open tail was written. */
+  tail: boolean;
+}
+
+/**
+ * Blank lines of a mirror in place, as a purge does (see completePurges in purge.ts): each byte of
+ * them but the line break becomes a space, so that the content keeps its size, its line numbers,
+ * and every other line (invariant 3). `ranges` are `[first, count]` line ranges in order. A line
+ * blank already, or one a purge replaced (PURGED_MARKER), is left as it is; the mirror's last line,
+ * if blanked, is replaced instead with what `continueWith` gives for it, if anything, of exactly
+ * its length (a generated source's continuation). Sealed frames are compressed again into their
+ * own slots (fitFrame) and replaced through the frame store, so that `raw_chunk` stays as it is;
+ * the open tail is written over in place, which can be done again after a crash. Must run under
+ * the write lock. Throws an OriginError, and changes nothing, when a frame does not fit its slot.
+ */
+export function blankMirror(
+  db: Database,
+  home: string,
+  rawFileId: number,
+  ranges: Array<[number, number]>,
+  continueWith?: (line: string, bytes: number) => string | null,
+): MirrorBlanking {
+  const st = mirrorState(db, rawFileId);
+  if (!st) throw new OriginError(`Unknown raw file ${rawFileId}.`);
+  repairMirror(home, st);
+  const out: MirrorBlanking = { frames: 0, lines: 0, tail: false };
+  const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
+  const blanked = (n: number): boolean => {
+    let lo = 0;
+    let hi = sorted.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const [first, count] = sorted[mid] as [number, number];
+      if (n < first) hi = mid - 1;
+      else if (n >= first + count) lo = mid + 1;
+      else return true;
+    }
+    return false;
+  };
+  const overlaps = (from: number, to: number): boolean =>
+    sorted.some(([first, count]) => first <= to && first + count - 1 >= from);
+  /** Blank the lines of `buf`, whose first line is `first`; returns how many changed. */
+  const edit = (buf: Buffer, first: number): number => {
+    let changed = 0;
+    let n = first;
+    for (let start = 0; start < buf.length; n++) {
+      const nl = buf.indexOf(0x0a, start);
+      const end = nl < 0 ? buf.length : nl;
+      if (n <= st.lines && blanked(n)) {
+        const text = buf.toString('utf8', start, end);
+        const trimmed = text.trim();
+        const replacement =
+          n === st.lines && continueWith && trimmed.length > 0 && !trimmed.startsWith(PURGED)
+            ? continueWith(text.endsWith('\r') ? text.slice(0, -1) : text, end - start)
+            : null;
+        if (replacement !== null && Buffer.byteLength(replacement) === end - start) {
+          buf.write(replacement, start, 'utf8');
+          changed++;
+        } else if (trimmed.length > 0 && !trimmed.startsWith(PURGED)) {
+          for (let i = start; i < end; i++) buf[i] = 0x20;
+          changed++;
+        }
+      }
+      start = end + 1;
+    }
+    return changed;
+  };
+
+  const writes: FrameWrite[] = [];
+  const chunks = db
+    .prepare(`SELECT ${CHUNK_COLUMNS} FROM raw_chunk WHERE raw_file_id = ? ORDER BY first_line`)
+    .all(rawFileId) as unknown as Chunk[];
+  const store = frameStore(home);
+  for (const c of chunks) {
+    if (!overlaps(c.first_line, c.first_line + c.line_count - 1)) continue;
+    // Every stored copy of the frame, past any kept in memory: a bucket's copy and a file's may
+    // differ (see BucketFrameStore.copies), and each is left with the purged lines blank.
+    const copies =
+      store instanceof BucketFrameStore
+        ? store.copies(st.mirror, c.frame_offset, c.frame_length)
+        : [store.read(st.mirror, c.frame_offset, c.frame_length)];
+    let base: Buffer | null = null;
+    let content: Buffer | null = null;
+    for (const [i, copy] of copies.entries()) {
+      try {
+        content = decompressFrame(st.mirror, c, copy);
+        base = copy;
+        break;
+      } catch (err) {
+        if (i === copies.length - 1) throw err;
+      }
+    }
+    if (!base || !content) continue;
+    const changed = edit(content, c.first_line);
+    if (changed === 0 && copies.length === 1) continue;
+    const frame = changed > 0 ? fitFrame(content, c.frame_length) : base;
+    if (!frame) {
+      throw new OriginError(
+        `The frame at ${c.frame_offset} of the mirror ${st.mirror} does not fit its place once its purged lines are blank; this mirror still holds them.`,
+      );
+    }
+    writes.push({ offset: c.frame_offset, frame });
+    out.frames++;
+    out.lines += changed;
+  }
+  const tailLength = st.bytes - st.sealedBytes;
+  const tail =
+    tailLength > 0 && overlaps(st.sealedLines + 1, st.lines)
+      ? readRange(tailPath(home, st.mirror), 0, tailLength)
+      : null;
+  if (tail && tail.length !== tailLength) {
+    throw new OriginError(`The mirror ${st.mirror} is shorter than the database records.`);
+  }
+  const tailChanged = tail ? edit(tail, st.sealedLines + 1) : 0;
+  if (writes.length > 0) store.replace(st.mirror, writes);
+  if (tail && tailChanged > 0) {
+    // Only bytes of blanked lines change, and line breaks stay: a crash part way leaves lines
+    // either as they were or blank, and the purge blanks them again.
+    const fd = fs.openSync(tailPath(home, st.mirror), 'r+');
+    try {
+      for (let off = 0; off < tail.length; )
+        off += fs.writeSync(fd, tail, off, tail.length - off, off);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    out.tail = true;
+    out.lines += tailChanged;
+  }
+  return out;
+}
+
+/** How a line a purge replaced begins (PURGED_MARKER in purged.ts, which imports this module). */
+const PURGED = '{"origin_purged":';
+
+/** The seq of the store's latest purge, or 0. */
+function latestPurge(db: Database): number {
+  return Number(
+    (db.prepare('SELECT COALESCE(MAX(seq), 0) AS n FROM purge').get() as { n: number }).n,
+  );
 }
 
 /**

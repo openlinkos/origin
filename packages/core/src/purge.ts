@@ -5,9 +5,10 @@ import { transaction } from './db.js';
 import { idList, pairList } from './dialect.js';
 import { ConflictError, OriginError } from './errors.js';
 import { checkReason, IN_EFFECT } from './forgetting.js';
+import { BucketFrameStore, frameBucket, frameStore, replayFrameJournals } from './frames.js';
 import { storeName } from './identity.js';
 import { refreshSession } from './ingest.js';
-import { eachMirrorLine, readMirrorLine } from './mirror.js';
+import { blankMirror, eachMirrorLine, type MirrorBlanking, readMirrorLine } from './mirror.js';
 import { assertComplete } from './mode.js';
 import { mirrorRelPath, parseRawPath, remotePath } from './paths.js';
 import { isOriginPlacesFile, parsePlaceLine } from './places.js';
@@ -545,8 +546,49 @@ class Planner {
       else if (this.queue.roots.length > 0) this.takeChains(this.queue.roots.splice(0));
       else if (this.queue.events.length > 0) this.takeEvents(this.queue.events.splice(0));
       else if (this.queue.files.length > 0) this.takeFiles(this.queue.files.splice(0));
-      else break;
+      else if (!this.closeStored()) break;
     }
+  }
+
+  /** The stored events of sessions that keep some, by session: their raw lines. */
+  private readonly stored = new Map<
+    string,
+    Array<{ id: string; raw_file_id: number; raw_line: number }>
+  >();
+
+  /**
+   * P0 as the store records it: an event whose raw line is blanked goes too, even if parsing the
+   * line again no longer yields its id (as an older adapter's may not). Only sessions that keep
+   * events are read; a purged session goes whole. True if it added any.
+   */
+  private closeStored(): boolean {
+    const sessions = new Set<string>();
+    for (const e of this.events.values()) {
+      if (e.seq === null) continue;
+      const k = key(e.source, e.session);
+      if (!this.sessions.has(k)) sessions.add(k);
+    }
+    let added = false;
+    for (const k of sessions) {
+      let rows = this.stored.get(k);
+      if (!rows) {
+        const { source, sessionId } = unkey(k);
+        rows = this.db
+          .prepare(
+            'SELECT id, raw_file_id, raw_line FROM event WHERE source = ? AND session_id = ?',
+          )
+          .all(source, sessionId) as Array<{ id: string; raw_file_id: number; raw_line: number }>;
+        this.stored.set(k, rows);
+      }
+      for (const r of rows) {
+        if (this.events.has(r.id)) continue;
+        if (!this.lines.get(Number(r.raw_file_id))?.has(Number(r.raw_line))) continue;
+        this.addEvent(r.id);
+        this.closure.add(r.id);
+        added = true;
+      }
+    }
+    return added;
   }
 
   /** P3: a session's children, events, recalls, and the files that may hold its lines. */
@@ -1200,6 +1242,14 @@ export interface PurgeOptions {
   plan?: PurgePlan;
   /** The digest of the plan the owner saw, when the plan itself is not at hand. */
   digest?: string;
+  /**
+   * Blank the lines in the mirrors right after the purge commits (completePurges): the default.
+   * With false they wait in purge_pending.
+   */
+  complete?: boolean;
+  /** Stop starting mirrors after this long (see completePurges). */
+  budgetMs?: number;
+  log?: (message: string) => void;
   now?: number;
 }
 
@@ -1208,6 +1258,8 @@ export interface PurgeResult {
   record: PurgeRecord;
   /** The plan applied, made again under the write lock. */
   plan: PurgePlan;
+  /** What blanking the mirrors did, unless it was left for later (`complete: false`). */
+  mirrors: PurgeCompletion | null;
   /** Mirrors whose lines are still to be blanked (see completePurges). */
   pending: number;
 }
@@ -1220,31 +1272,59 @@ const EVENT_SEARCH = ['event_fts', 'message_fts', 'event_cjk'];
 const ENTRY_SEARCH = ['entry_fts'];
 
 /**
- * Up to this many events, or while they are less than one in MERGE_SHARE of the store's, a purge
- * removes each from the event search tables in place (FTS5 `secure-delete`), at about a
- * millisecond each on a large index. Beyond, it deletes them as usual and then merges each table
- * whole (`optimize`), which takes time in proportion to the index, not to what is deleted.
+ * While the events a purge deletes are fewer than one in REBUILD_SHARE of the store's, it removes
+ * each from the event search tables in place (FTS5 `secure-delete`): on a large index, that costs
+ * tens of milliseconds an event (about 15 at 200,000 events, 35 at a million), about what building
+ * the tables again costs for two to three thousand events. Beyond, it deletes them as usual and
+ * then builds those tables again from the events kept, which takes time in proportion to the
+ * store, not to what is deleted. Merging a table whole (`optimize`) would not do: the merged
+ * segment can keep the markers of deleted rows, and with them the terms of the text deleted.
  */
-const SECURE_DELETE_MAX = 2000;
-const MERGE_SHARE = 100;
+const REBUILD_SHARE = 2000;
 
 /**
- * Set how the search tables of SQLite drop what a purge deletes, so that none of it stays in
- * their segments: returns the tables to merge once the rows are deleted.
+ * Set the search tables of SQLite to drop what a purge deletes so that none of it stays in their
+ * segments; returns how to finish once the rows are deleted (finishSearchDeletes).
  */
-function prepareSearchDeletes(db: Database, events: number): string[] {
+function prepareSearchDeletes(db: Database, events: number): SearchDeletes {
   const total = Number(
     (db.prepare('SELECT COALESCE(MAX(seq), 0) AS n FROM event').get() as { n: number }).n,
   );
-  const merge = events > SECURE_DELETE_MAX && events * MERGE_SHARE >= total;
-  const out: string[] = [];
+  const rebuild = events > 0 && events * REBUILD_SHARE >= total;
+  const before = new Map<string, number>();
   for (const t of [...EVENT_SEARCH, ...ENTRY_SEARCH]) {
     if (!db.hasTable(t)) continue;
-    const secure = !(merge && EVENT_SEARCH.includes(t));
+    const setting = db.prepare(`SELECT v FROM ${t}_config WHERE k = 'secure-delete'`).get() as
+      | { v: number }
+      | undefined;
+    before.set(t, Number(setting?.v ?? 0));
+    const secure = !(rebuild && EVENT_SEARCH.includes(t));
     db.exec(`INSERT INTO ${t} (${t}, rank) VALUES ('secure-delete', ${secure ? 1 : 0})`);
-    if (!secure) out.push(t);
   }
-  return out;
+  return { rebuild, before };
+}
+
+interface SearchDeletes {
+  /** Whether the event search tables are built again rather than deleted from in place. */
+  rebuild: boolean;
+  /** Each table's `secure-delete` setting before the purge, to put back. */
+  before: Map<string, number>;
+}
+
+/** Build the event search tables again if so chosen, and put their settings back. */
+function finishSearchDeletes(db: Database, s: SearchDeletes): void {
+  if (s.rebuild) {
+    // As rebuildSearchIndexes does; the CJK index keeps no content to rebuild from.
+    db.exec(`INSERT INTO event_fts (event_fts) VALUES ('rebuild');
+      INSERT INTO message_fts (message_fts) VALUES ('rebuild');
+      INSERT INTO event_cjk (event_cjk) VALUES ('delete-all');
+      INSERT INTO event_cjk (rowid, text)
+        SELECT seq, t FROM (SELECT seq, origin_cjk(text, kind) AS t FROM event)
+        WHERE t IS NOT NULL;`);
+  }
+  for (const [t, v] of s.before) {
+    db.exec(`INSERT INTO ${t} (${t}, rank) VALUES ('secure-delete', ${v})`);
+  }
 }
 
 const DOOMED_SESSION = 'SELECT source, session_id FROM doomed_session';
@@ -1307,7 +1387,15 @@ export function purge(
   } finally {
     if (secure !== null) db.exec(`PRAGMA secure_delete = ${secure}`);
   }
-  if (sqlite) checkpoint(db);
+  if (opts.complete !== false) {
+    result.mirrors = completePurges(db, home, adapters, {
+      budgetMs: opts.budgetMs,
+      log: opts.log,
+    });
+    result.pending = result.mirrors.pending;
+  } else if (sqlite) {
+    checkpoint(db);
+  }
   return result;
 }
 
@@ -1415,10 +1503,9 @@ function applyPlan(
         db.prepare('SELECT MAX(seq) AS n FROM doomed_recall').get() as { n: number | null }
       ).n;
 
-      const merge = d === 'sqlite' ? prepareSearchDeletes(db, plan.events.length) : [];
+      const search = d === 'sqlite' ? prepareSearchDeletes(db, plan.events.length) : null;
       deleteRows(db, plan);
-      // A merge of the whole index leaves none of what was deleted in it.
-      for (const t of merge) db.exec(`INSERT INTO ${t} (${t}) VALUES ('optimize')`);
+      if (search) finishSearchDeletes(db, search);
       for (const f of plan.files) {
         if (!state.planner.files.get(f.rawFileId)?.places) continue;
         db.prepare('DELETE FROM place_head WHERE source = ? AND device = ?').run(
@@ -1509,7 +1596,7 @@ function applyPlan(
         seqFloor: floor === null ? null : Number(floor),
         receivedAt: null,
       };
-      return { id, record, plan, pending };
+      return { id, record, plan, mirrors: null, pending };
     } finally {
       clearWorkTables(db);
     }
@@ -1680,6 +1767,163 @@ function queueMirrors(db: Database, id: string, seq: number, plan: PurgePlan): n
     queue.run(f.rawFileId, seq);
   }
   return (db.prepare('SELECT COUNT(*) AS n FROM purge_pending').get() as { n: number }).n;
+}
+
+// --- Mirrors ---------------------------------------------------------------------------------
+
+/** What completePurges did. */
+export interface PurgeCompletion {
+  /** Mirrors whose purged lines are all blank now, and the frames and lines that changed. */
+  done: number;
+  frames: number;
+  lines: number;
+  /** Mirrors that failed this time, each with why (never content); they stay pending. */
+  failed: Array<{ rawFileId: number; mirror: string; error: string }>;
+  /** Mirrors still to do: failed, or left past the budget. */
+  pending: number;
+}
+
+/**
+ * Blank the lines purges removed in the mirrors that still hold them (`purge_pending`), one mirror
+ * per short write transaction, so that it can stop and go on (see blankMirror): first, under the
+ * write lock, a frame replacement a crash interrupted is completed. A mirror that fails (a frame
+ * that does not fit its slot, a bucket that cannot be reached) stays pending with its error and the
+ * count of attempts, and the others go on. A generated source's last line is replaced with where
+ * the source goes on from, which needs its adapter (see SourceAdapter.continuation). Stops
+ * starting mirrors after `budgetMs`. Then checkpoints the WAL.
+ */
+export function completePurges(
+  db: Database,
+  home: string,
+  adapters: PurgeAdapters,
+  opts: { budgetMs?: number; log?: (message: string) => void } = {},
+): PurgeCompletion {
+  const result: PurgeCompletion = { done: 0, frames: 0, lines: 0, failed: [], pending: 0 };
+  if (!db.hasTable('purge_pending')) return result;
+  const started = Date.now();
+  transaction(db, () => replayFrameJournals(home), { immediate: true });
+  const adapterOf = adapterLookup(adapters);
+  const ids = (
+    db.prepare('SELECT raw_file_id FROM purge_pending ORDER BY since, raw_file_id').all() as Array<{
+      raw_file_id: number;
+    }>
+  ).map((r) => Number(r.raw_file_id));
+  for (const id of ids) {
+    if (opts.budgetMs !== undefined && Date.now() - started > opts.budgetMs) break;
+    try {
+      const done = transaction(db, () => completeMirror(db, home, adapterOf, id), {
+        immediate: true,
+      });
+      if (done) {
+        result.done++;
+        result.frames += done.frames;
+        result.lines += done.lines;
+      }
+    } catch (err) {
+      const error = (err instanceof Error ? err.message : String(err)).slice(0, 500);
+      transaction(
+        db,
+        () =>
+          db
+            .prepare(
+              'UPDATE purge_pending SET attempts = attempts + 1, error = ? WHERE raw_file_id = ?',
+            )
+            .run(error, id),
+        { immediate: true },
+      );
+      const mirror =
+        (db.prepare('SELECT mirror FROM raw_file WHERE id = ?').get(id) as { mirror: string })
+          ?.mirror ?? '';
+      result.failed.push({ rawFileId: id, mirror, error });
+      opts.log?.(`warning ${mirror}: purged lines not blanked yet: ${error}`);
+    }
+  }
+  result.pending = Number(
+    (db.prepare('SELECT COUNT(*) AS n FROM purge_pending').get() as { n: number }).n,
+  );
+  checkpoint(db);
+  return result;
+}
+
+/** Blank the purged lines of one mirror, under the write lock; null if it is not pending now. */
+function completeMirror(
+  db: Database,
+  home: string,
+  adapterOf: (source: string) => SourceAdapter | null,
+  id: number,
+): MirrorBlanking | null {
+  if (!db.prepare('SELECT 1 AS one FROM purge_pending WHERE raw_file_id = ?').get(id)) return null;
+  const bucket = frameBucket(db);
+  if (bucket !== null && !(frameStore(home) instanceof BucketFrameStore)) {
+    throw new OriginError(
+      `This store keeps its sealed frames in ${bucket}: complete its purges where that bucket is configured.`,
+    );
+  }
+  const file = db.prepare(`SELECT ${RAW_FILE_COLUMNS} FROM raw_file WHERE id = ?`).get(id) as
+    | RawFile
+    | undefined;
+  if (!file) {
+    db.prepare('DELETE FROM purge_pending WHERE raw_file_id = ?').run(id);
+    return null;
+  }
+  const rows = db
+    .prepare(
+      `SELECT l.first_line, l.line_count, l.purge_id FROM purge_line l
+         JOIN purge p ON p.id = l.purge_id
+        WHERE l.raw_file_id = ? ORDER BY p.seq, l.first_line`,
+    )
+    .all(id) as Array<{ first_line: number; line_count: number; purge_id: string }>;
+  const lines = new Set<number>();
+  let lastBy: string | null = null;
+  for (const r of rows) {
+    for (let n = Number(r.first_line); n < Number(r.first_line) + Number(r.line_count); n++) {
+      lines.add(n);
+    }
+    const end = Number(r.first_line) + Number(r.line_count) - 1;
+    if (Number(r.first_line) <= file.lines_ingested && end >= file.lines_ingested) {
+      lastBy = r.purge_id;
+    }
+  }
+  // A mirror that an earlier version let two files share keeps the lines that an event of either
+  // still cites (see Raw mirrors in docs/architecture.md).
+  const sharing = db
+    .prepare('SELECT id FROM raw_file WHERE lower(mirror) = lower(?) AND id <> ?')
+    .all(file.mirror, id) as Array<{ id: number }>;
+  if (sharing.length > 0) {
+    for (const r of db
+      .prepare(
+        `SELECT DISTINCT raw_line FROM event WHERE raw_file_id IN (${idList(db.dialect, 'bigint')})`,
+      )
+      .all(JSON.stringify([id, ...sharing.map((s) => Number(s.id))])) as Array<{
+      raw_line: number;
+    }>) {
+      lines.delete(Number(r.raw_line));
+    }
+  }
+  const relPath = mirrorRelPath(file);
+  let continueWith: ((line: string, bytes: number) => string | null) | undefined;
+  const local = !file.path.startsWith('@') && !isOriginPlacesFile(relPath, file.path);
+  if (local && lastBy !== null && lines.has(file.lines_ingested)) {
+    const adapter = adapterOf(file.source);
+    if (!adapter) {
+      throw new OriginError(
+        `Blanking the last line of ${file.mirror} needs the ${file.source} adapter, to go on from it if it is generated.`,
+      );
+    }
+    const by = lastBy;
+    continueWith = (line, bytes) => continuationLine(adapter, line, relPath, by, bytes);
+  }
+  const done = blankMirror(db, home, id, lineRanges(lines), continueWith);
+  db.prepare('DELETE FROM purge_pending WHERE raw_file_id = ?').run(id);
+  return done;
+}
+
+/** The seq of this store's latest purge, or 0 (see backupStore). */
+export function latestPurgeSeq(db: Database): number {
+  if (!db.hasTable('purge')) return 0;
+  return Number(
+    (db.prepare('SELECT COALESCE(MAX(seq), 0) AS n FROM purge').get() as { n: number }).n,
+  );
 }
 
 // --- Records ---------------------------------------------------------------------------------

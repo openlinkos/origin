@@ -65,7 +65,13 @@ afterEach(() => {
 const adapter = () => fakeAdapter(logs);
 const sync = () => syncSource({ db, home }, adapter());
 const write = (file: string, text: string) => fs.appendFileSync(path.join(logs, file), text);
-const by = { reason: 'pasted a secret', author: 'user@laptop', channel: 'cli' as const };
+// The mirrors are left pending: blanking them is purge-mirrors.test.ts's.
+const by = {
+  reason: 'pasted a secret',
+  author: 'user@laptop',
+  channel: 'cli' as const,
+  complete: false,
+};
 const run = (selector: PurgeSelector, opts: Partial<typeof by> & { digest?: string } = {}) =>
   purge(db, home, [adapter()], selector, { ...by, ...opts });
 const count = (sql: string, ...params: unknown[]) =>

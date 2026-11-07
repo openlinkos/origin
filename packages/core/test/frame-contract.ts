@@ -1,7 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, it } from 'vitest';
-import { type FrameStore, type ObjectStore, OriginError, rawDir } from '../src/index.js';
+import {
+  type FrameStore,
+  journalDir,
+  type ObjectStore,
+  OriginError,
+  rawDir,
+} from '../src/index.js';
 
 /**
  * What every frame store must do (see frames.ts), whatever keeps the bytes. Run against the
@@ -44,6 +50,25 @@ export function frameStoreContract(
     store.write(MIRROR, 10, [b]);
     expect(store.read(MIRROR, 0, 10)).toEqual(a);
     expect(store.read(MIRROR, 10, 12)).toEqual(b);
+  });
+
+  it('replaces frames in place, each at its offset, leaving the others as they were', async () => {
+    const { store, home } = await make();
+    prepare(home, MIRROR);
+    const [a, b, c] = frames(10, 25, 7) as [Buffer, Buffer, Buffer];
+    store.write(MIRROR, 0, [a, b, c]);
+    const b2 = Buffer.alloc(25, 'x');
+    const c2 = Buffer.alloc(7, 'y');
+    store.replace(MIRROR, [
+      { offset: 10, frame: b2 },
+      { offset: 35, frame: c2 },
+    ]);
+    expect(store.read(MIRROR, 0, 10)).toEqual(a);
+    expect(store.read(MIRROR, 10, 25)).toEqual(b2);
+    expect(store.read(MIRROR, 35, 7)).toEqual(c2);
+    // No journal is left once the frames are in place.
+    const journals = fs.existsSync(journalDir(home)) ? fs.readdirSync(journalDir(home)) : [];
+    expect(journals.filter((n) => n.endsWith('.journal'))).toEqual([]);
   });
 
   it('throws an OriginError for a frame it does not hold', async () => {

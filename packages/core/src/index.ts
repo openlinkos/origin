@@ -141,15 +141,19 @@ export {
 export {
   BucketFrameStore,
   bucketFrameStore,
+  clearFrameCache,
   FileFrameStore,
   FRAME_CACHE_BYTES,
   type FrameStore,
+  type FrameWrite,
   fileFrameStore,
   frameBucket,
   frameKey,
   frameStore,
+  journalDir,
   type ObjectStore,
   releaseObjectStore,
+  replayFrameJournals,
   useObjectStore,
 } from './frames.js';
 export {
@@ -197,11 +201,14 @@ export {
   upgradeSteps,
 } from './migrations.js';
 export {
+  blankMirror,
   FRAME_BYTES,
   type FrameUpload,
   type FrameUploadOptions,
   type FrameUploadProgress,
+  fitFrame,
   IDLE_SEAL_MS,
+  type MirrorBlanking,
   type MirrorState,
   type MirrorUsage,
   mirrorState,
@@ -391,13 +398,16 @@ export {
 } from './proposals.js';
 // Purging: plan, apply, and complete.
 export {
+  completePurges,
   getPurge,
+  latestPurgeSeq,
   listPurges,
   PURGE_EVENTS_WARN,
   PURGE_ID_RE,
   PURGE_LIMITS,
   type PurgeAdapters,
   type PurgeChannel,
+  type PurgeCompletion,
   type PurgeCounts,
   type PurgeDetail,
   type PurgeFile,

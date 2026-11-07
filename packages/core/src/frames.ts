@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Database } from './db.js';
@@ -33,6 +34,19 @@ export interface FrameStore {
    * and any other error if the frame could not be reached.
    */
   read(mirror: string, offset: number, length: number): Buffer;
+  /**
+   * Under the write lock, put frames in place of recorded ones, each of exactly the length of the
+   * frame it replaces, at its offset: a purge blanks lines in sealed frames this way (see
+   * completePurges in purge.ts). Durable when it returns; a crash part way is completed by
+   * replayFrameJournals, so that no slot is left half written.
+   */
+  replace(mirror: string, writes: FrameWrite[]): void;
+}
+
+/** A frame put in place of a recorded one of the same length (FrameStore.replace). */
+export interface FrameWrite {
+  offset: number;
+  frame: Buffer;
 }
 
 /**
@@ -130,6 +144,158 @@ export function releaseObjectStore(home: string): void {
 }
 
 /**
+ * Forget the frames this process keeps in memory for the store at `home`: after another process
+ * replaced some of them (a purge), so that none of what they held is read from here again.
+ */
+export function clearFrameCache(home: string): void {
+  const store = inUse.get(path.resolve(home));
+  if (store instanceof BucketFrameStore) store.clearCache();
+}
+
+/** Forget one frame this process keeps in memory for the store at `home` (see readFrame). */
+export function forgetCachedFrame(home: string, mirror: string, offset: number): void {
+  const store = inUse.get(path.resolve(home));
+  if (store instanceof BucketFrameStore) store.forget(mirror, offset);
+}
+
+/**
+ * Frame journals: a replacement of frames in a file on disk is written here first, whole and
+ * flushed, then into the file, then the journal is removed. A crash between leaves a journal that
+ * replayFrameJournals applies again, so that a slot is never left half old and half new: neither
+ * could be decompressed. One journal per mirror, named after a digest of its name.
+ */
+export function journalDir(home: string): string {
+  return path.join(home, 'purge');
+}
+
+const JOURNAL_MAGIC = Buffer.from('OFJ1');
+
+/**
+ * A file a purge writes anew each time it replaced frames of a store that uses a bucket. A process
+ * that keeps frames in memory reads it before using one, and forgets them all when it changed: a
+ * hub serving reads never shows lines that a purge run by another process blanked.
+ */
+function stampPath(home: string): string {
+  return path.join(journalDir(home), 'frames.stamp');
+}
+
+function readStamp(home: string): string | null {
+  const file = stampPath(home);
+  // Most stores never purge: one stat that throws nothing when the file is absent.
+  if (!fs.statSync(file, { throwIfNoEntry: false })) return null;
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+function writeStamp(home: string): string {
+  const stamp = `${Date.now()} ${randomBytes(8).toString('hex')}`;
+  fs.mkdirSync(journalDir(home), { recursive: true });
+  fs.writeFileSync(stampPath(home), stamp);
+  return stamp;
+}
+
+function journalPath(home: string, mirror: string): string {
+  const digest = createHash('sha256').update(mirror).digest('hex').slice(0, 24);
+  return path.join(journalDir(home), `${digest}.journal`);
+}
+
+/** Replace frames in `<mirror>.zst`, through its journal (see journalDir). */
+function replaceInFile(home: string, mirror: string, writes: FrameWrite[]): void {
+  if (writes.length === 0) return;
+  const file = framesPath(home, mirror);
+  const size = fileSize(file);
+  for (const w of writes) {
+    if (w.offset < 0 || w.offset + w.frame.length > size) {
+      throw new OriginError(`The mirror ${mirror} does not hold the frame at ${w.offset}.`);
+    }
+  }
+  const header = Buffer.from(
+    JSON.stringify({ mirror, writes: writes.map((w) => [w.offset, w.frame.length]) }),
+  );
+  const length = Buffer.alloc(4);
+  length.writeUInt32LE(header.length, 0);
+  const body = Buffer.concat([JOURNAL_MAGIC, length, header, ...writes.map((w) => w.frame)]);
+  const digest = createHash('sha256').update(body).digest();
+  const journal = journalPath(home, mirror);
+  fs.mkdirSync(path.dirname(journal), { recursive: true });
+  const fd = fs.openSync(journal, 'w');
+  try {
+    writeAll(fd, Buffer.concat([body, digest]));
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  applyWrites(file, writes);
+  fs.rmSync(journal, { force: true });
+}
+
+/** Write each frame at its offset, then flush the file. */
+function applyWrites(file: string, writes: FrameWrite[]): void {
+  const fd = fs.openSync(file, 'r+');
+  try {
+    for (const w of writes) {
+      for (let off = 0; off < w.frame.length; ) {
+        off += fs.writeSync(fd, w.frame, off, w.frame.length - off, w.offset + off);
+      }
+    }
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Under the write lock: apply again the frame replacements a crash interrupted (see journalDir),
+ * and drop journals that were not written whole, whose replacement never began. Returns how many
+ * it applied.
+ */
+export function replayFrameJournals(home: string): number {
+  let names: string[];
+  try {
+    names = fs.readdirSync(journalDir(home)).filter((n) => n.endsWith('.journal'));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw err;
+  }
+  let applied = 0;
+  for (const name of names) {
+    const journal = path.join(journalDir(home), name);
+    const data = fs.readFileSync(journal);
+    const parsed = parseJournal(data);
+    if (parsed) {
+      applyWrites(framesPath(home, parsed.mirror), parsed.writes);
+      applied++;
+    }
+    fs.rmSync(journal, { force: true });
+  }
+  return applied;
+}
+
+function parseJournal(data: Buffer): { mirror: string; writes: FrameWrite[] } | null {
+  if (data.length < JOURNAL_MAGIC.length + 4 + 32) return null;
+  const body = data.subarray(0, data.length - 32);
+  const digest = createHash('sha256').update(body).digest();
+  if (!digest.equals(data.subarray(data.length - 32))) return null;
+  if (!body.subarray(0, 4).equals(JOURNAL_MAGIC)) return null;
+  const length = body.readUInt32LE(4);
+  const header = JSON.parse(body.toString('utf8', 8, 8 + length)) as {
+    mirror: string;
+    writes: Array<[number, number]>;
+  };
+  let at = 8 + length;
+  const writes = header.writes.map(([offset, size]) => {
+    const frame = body.subarray(at, at + size);
+    at += size;
+    return { offset, frame };
+  });
+  return { mirror: header.mirror, writes };
+}
+
+/**
  * Frames on disk, in `<mirror>.zst`, appended one after another: the layout of every store that
  * does not use a bucket.
  */
@@ -162,6 +328,10 @@ export class FileFrameStore implements FrameStore {
     }
     return frame;
   }
+
+  replace(mirror: string, writes: FrameWrite[]): void {
+    replaceInFile(this.home, mirror, writes);
+  }
 }
 
 export function fileFrameStore(home: string): FileFrameStore {
@@ -177,6 +347,8 @@ export function fileFrameStore(home: string): FileFrameStore {
 export class BucketFrameStore implements FrameStore {
   readonly location: string;
   private readonly cache: FrameCache;
+  /** The stamp of the latest purge that replaced frames of this store, as last seen. */
+  private stamp: string | null = null;
   constructor(
     readonly home: string,
     readonly objects: ObjectStore,
@@ -210,6 +382,7 @@ export class BucketFrameStore implements FrameStore {
 
   read(mirror: string, offset: number, length: number): Buffer {
     const key = frameKey(mirror, offset);
+    this.checkStamp();
     const cached = this.cache.get(key, length);
     if (cached) return cached;
     const local = readLocal(framesPath(this.home, mirror), offset, length);
@@ -227,6 +400,55 @@ export class BucketFrameStore implements FrameStore {
     }
     this.cache.set(key, frame);
     return frame;
+  }
+
+  replace(mirror: string, writes: FrameWrite[]): void {
+    // The bucket first: once the file on disk is gone (uploadFrames), it is all there is.
+    for (const w of writes) {
+      const key = frameKey(mirror, w.offset);
+      this.objects.put(key, w.frame);
+      this.cache.set(key, w.frame);
+    }
+    // Frames sealed before the store used the bucket may still be on disk, where they are read.
+    const local = framesPath(this.home, mirror);
+    const size = fileSize(local);
+    const onDisk = writes.filter((w) => w.offset + w.frame.length <= size);
+    if (onDisk.length > 0) replaceInFile(this.home, mirror, onDisk);
+    // Other processes that keep frames of this store in memory read them afresh from now on.
+    this.stamp = writeStamp(this.home);
+  }
+
+  /**
+   * Each stored copy of the frame of `length` bytes at `offset`, past the frames kept in memory:
+   * the bucket's, then the file's if it differs. They differ when an upload that ran during a
+   * purge put an older copy in the bucket (see uploadFrames), or a crash cut a replacement short.
+   */
+  copies(mirror: string, offset: number, length: number): Buffer[] {
+    const out: Buffer[] = [];
+    const stored = this.objects.get(frameKey(mirror, offset));
+    if (stored !== null && stored.length === length) out.push(stored);
+    const local = readLocal(framesPath(this.home, mirror), offset, length);
+    if (local && !out.some((b) => b.equals(local))) out.push(local);
+    if (out.length === 0) out.push(this.read(mirror, offset, length));
+    return out;
+  }
+
+  /** Forget the frames kept in memory: another process may have replaced some (a purge). */
+  clearCache(): void {
+    this.cache.clear();
+  }
+
+  /** Forget the frames kept in memory if another process replaced frames since they were read. */
+  private checkStamp(): void {
+    const now = readStamp(this.home);
+    if (now === this.stamp) return;
+    this.cache.clear();
+    this.stamp = now;
+  }
+
+  /** Forget one frame kept in memory, which did not decompress: it is fetched again. */
+  forget(mirror: string, offset: number): void {
+    this.cache.drop(frameKey(mirror, offset));
   }
 }
 
@@ -275,6 +497,15 @@ class FrameCache {
       if (this.bytes <= this.maxBytes) break;
       this.delete(oldest);
     }
+  }
+
+  clear(): void {
+    this.frames.clear();
+    this.bytes = 0;
+  }
+
+  drop(key: string): void {
+    this.delete(key);
   }
 
   /** Forget the frames of `mirror` at `offset` and past it. */

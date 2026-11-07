@@ -3,7 +3,7 @@ import path from 'node:path';
 import * as sqlite from 'node:sqlite';
 import { type Database, SqliteDatabase } from './database.js';
 import { OriginError } from './errors.js';
-import { forgetFrameBucket, frameBucket, framesPath } from './frames.js';
+import { clearFrameCache, forgetFrameBucket, frameBucket, framesPath } from './frames.js';
 import {
   allMirrorStates,
   copyFrames,
@@ -24,6 +24,11 @@ export interface BackupResult {
    * into the same directory is extended.
    */
   mirrorBytesCopied: number;
+  /**
+   * Mirrors that still hold lines a purge removed, not blanked yet (see completePurges): copied as
+   * they are, and copied again whole by the next backup into the same directory.
+   */
+  pendingMirrors: number;
 }
 
 type BackupFn = (
@@ -64,21 +69,30 @@ export async function backupStore(
     throw new OriginError('Back up into a directory outside the store.');
   }
   fs.mkdirSync(target, { recursive: true });
+  // Frames kept in memory may predate a purge in another process: read them all afresh.
+  clearFrameCache(home);
   // What a previous backup here holds, to extend it rather than copy everything again.
   const previous = new Map(snapshotMirrors(dest)?.map((m) => [m.state.rawFileId, m]));
+  const purgedBefore = snapshotPurges(dest);
   for (const f of [dest, `${dest}-wal`, `${dest}-shm`]) fs.rmSync(f, { force: true });
   await backup(db.handle, dest, { rate: 2 ** 31 - 1 });
   const mirrors = snapshotMirrors(dest);
-  if (!mirrors) throw new OriginError(`Cannot read the backed-up database ${dest}.`);
+  const purged = snapshotPurges(dest);
+  if (!mirrors || !purged) throw new OriginError(`Cannot read the backed-up database ${dest}.`);
   let copied = 0;
   for (const m of mirrors) {
     const before = previous.get(m.state.rawFileId);
+    // A purge since the previous backup, or one it copied before its lines were blanked, changed
+    // frames in place: they are copied whole again.
+    const changed =
+      (purged.newest.get(m.state.rawFileId) ?? 0) > (purgedBefore?.seq ?? 0) ||
+      (purgedBefore?.pending.has(m.state.rawFileId) ?? false);
     copied += copyMirror(
       db,
       home,
       target,
       m.state,
-      before && before.identity === m.identity ? before.state : undefined,
+      before && before.identity === m.identity && !changed ? before.state : undefined,
     );
   }
   // From a hub that keeps its sealed frames in a bucket, the frames were copied into the backup:
@@ -95,7 +109,49 @@ export async function backupStore(
     databaseBytes: fs.statSync(dest).size,
     mirrorFiles: mirrors.length,
     mirrorBytesCopied: copied,
+    pendingMirrors: purged.pending.size,
   };
+}
+
+/**
+ * What a database file records of purges: the latest purge's seq, the mirrors whose purged lines
+ * were not blanked yet, and by mirror, the latest purge that blanked lines of it. Null if there is
+ * no database or it cannot be read.
+ */
+function snapshotPurges(
+  file: string,
+): { seq: number; pending: Set<number>; newest: Map<number, number> } | null {
+  if (!fs.existsSync(file)) return null;
+  let copy: SqliteDatabase | null = null;
+  try {
+    copy = new SqliteDatabase(new sqlite.DatabaseSync(file));
+    if (!copy.hasTable('purge')) return { seq: 0, pending: new Set(), newest: new Map() };
+    const seq = Number(
+      (copy.prepare('SELECT COALESCE(MAX(seq), 0) AS n FROM purge').get() as { n: number }).n,
+    );
+    const pending = new Set(
+      (
+        copy.prepare('SELECT raw_file_id FROM purge_pending').all() as Array<{
+          raw_file_id: number;
+        }>
+      ).map((r) => Number(r.raw_file_id)),
+    );
+    const newest = new Map(
+      (
+        copy
+          .prepare(
+            `SELECT l.raw_file_id, MAX(p.seq) AS seq FROM purge_line l
+               JOIN purge p ON p.id = l.purge_id GROUP BY l.raw_file_id`,
+          )
+          .all() as Array<{ raw_file_id: number; seq: number }>
+      ).map((r) => [Number(r.raw_file_id), Number(r.seq)]),
+    );
+    return { seq, pending, newest };
+  } catch {
+    return null;
+  } finally {
+    copy?.close();
+  }
 }
 
 /**
