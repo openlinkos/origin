@@ -5,6 +5,7 @@ import { OriginError } from './errors.js';
 import { getSessionParent, isFoldedChild } from './parents.js';
 import { entryProjectMatchSql, projectEventSql, resolvedProjectSql } from './places.js';
 import { getProposal, type Proposal, VISIBLE_PROPOSAL } from './proposals.js';
+import { purgedLookup } from './purged.js';
 import {
   eventColumns,
   getSession,
@@ -160,9 +161,15 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
   }
   // One snapshot for every query, so that the cursor and the page agree.
   return transaction(db, () => {
+    // Once a purge deleted events, the end of the events is past every one it deleted
+    // (purge.seq_floor), so that a cursor never goes back over numbers it has passed.
+    const lastEvent = purgedLookup(db).any
+      ? `SELECT COALESCE(MAX(n), 0) FROM (
+           SELECT MAX(seq) AS n FROM event UNION ALL SELECT MAX(seq_floor) AS n FROM purge) AS f`
+      : 'SELECT COALESCE(MAX(seq), 0) FROM event';
     const ends = db
       .prepare(
-        `SELECT (SELECT COALESCE(MAX(seq), 0) FROM event) AS event,
+        `SELECT (${lastEvent}) AS event,
                 (SELECT COALESCE(MAX(seq), 0) FROM change_log) AS change`,
       )
       .get() as unknown as FeedCursor;

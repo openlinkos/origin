@@ -8,7 +8,9 @@ import { CURRENT_VERSION, type EntryKind } from './entries.js';
 import { storeName } from './identity.js';
 import { sessionFold } from './parents.js';
 import { comparePath, resolvedProjectSql, resolvePlace, underProjectAlias } from './places.js';
+import { RECALL_SEQ_FLOOR } from './purged.js';
 import { findNewest, searchEvents } from './search.js';
+import { getSetting } from './settings.js';
 import {
   getEvent,
   isOwnerConversation,
@@ -1135,10 +1137,17 @@ export function recordRecall(
 
 /** Insert a recall and its items. Must run inside a write transaction. */
 export function insertRecall(db: Database, r: RecallRecord): void {
+  // After a purge deleted the newest recalls, their numbers are not given out again.
+  const floor = db.dialect === 'sqlite' ? getSetting(db, RECALL_SEQ_FLOOR) : null;
   db.prepare(
-    `INSERT INTO recall (id, at, origin, source, session_id, occasion, project, cwd, prompt_hash,
-                         budget, tokens)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    floor === null
+      ? `INSERT INTO recall (id, at, origin, source, session_id, occasion, project, cwd,
+                             prompt_hash, budget, tokens)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      : `INSERT INTO recall (seq, id, at, origin, source, session_id, occasion, project, cwd,
+                             prompt_hash, budget, tokens)
+         VALUES (MAX(COALESCE((SELECT MAX(seq) FROM recall), 0), ${Number(floor) || 0}) + 1,
+                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     r.id,
     r.at,

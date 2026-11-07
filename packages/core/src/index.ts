@@ -391,16 +391,26 @@ export {
 } from './proposals.js';
 // Purging: plan, apply, and complete.
 export {
+  getPurge,
+  listPurges,
   PURGE_EVENTS_WARN,
   PURGE_ID_RE,
   PURGE_LIMITS,
   type PurgeAdapters,
+  type PurgeChannel,
   type PurgeCounts,
+  type PurgeDetail,
   type PurgeFile,
+  type PurgeMirror,
+  type PurgeOptions,
   type PurgePlan,
+  type PurgeRecord,
+  type PurgeResult,
   type PurgeSelector,
+  type PurgeTouched,
   type PurgeWarning,
   planPurge,
+  purge,
 } from './purge.js';
 export {
   continuationLine,

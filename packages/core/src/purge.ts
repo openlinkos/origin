@@ -1,15 +1,26 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { recordAudit } from './audit.js';
 import type { Database } from './database.js';
+import { transaction } from './db.js';
 import { idList, pairList } from './dialect.js';
-import { OriginError } from './errors.js';
-import { IN_EFFECT } from './forgetting.js';
+import { ConflictError, OriginError } from './errors.js';
+import { checkReason, IN_EFFECT } from './forgetting.js';
+import { storeName } from './identity.js';
+import { refreshSession } from './ingest.js';
 import { eachMirrorLine, readMirrorLine } from './mirror.js';
 import { assertComplete } from './mode.js';
-import { mirrorRelPath, remotePath } from './paths.js';
+import { mirrorRelPath, parseRawPath, remotePath } from './paths.js';
 import { isOriginPlacesFile, parsePlaceLine } from './places.js';
-import { continuationLine, isSkippedLine, type PurgedLookup, purgedLookup } from './purged.js';
+import {
+  continuationLine,
+  isSkippedLine,
+  type PurgedLookup,
+  purgedLookup,
+  RECALL_SEQ_FLOOR,
+} from './purged.js';
 import { type MirroredFile, mirroredLineParser } from './reparse.js';
-import { threadIdOf } from './threads.js';
+import { getSetting, setSetting } from './settings.js';
+import { refreshThreads, threadIdOf } from './threads.js';
 import type { ParsedLine, SourceAdapter } from './types.js';
 
 /**
@@ -1142,4 +1153,668 @@ function normalizeSelector(s: PurgeSelector): PurgeSelector {
     default:
       throw new OriginError('Unknown kind of purge selector.');
   }
+}
+
+// --- Apply -----------------------------------------------------------------------------------
+
+/** How a purge was asked for, as the audit log names it, or `hub` for one a hub sent. */
+export type PurgeChannel = 'cli' | 'ui' | 'api' | 'hub';
+
+/** What a purge kept but changed: forgets that cover less, recalls that list fewer items. */
+export interface PurgeTouched {
+  tombstones: string[];
+  recalls: string[];
+}
+
+/**
+ * A purge as a store records it (`purge`): who made it, through what, and why; what it selected;
+ * and how much it removed on this store. Ids and numbers, never text.
+ */
+export interface PurgeRecord {
+  seq: number;
+  id: string;
+  at: number;
+  /** The store that made it. */
+  origin: string;
+  author: string;
+  channel: PurgeChannel;
+  reason: string;
+  selector: PurgeSelector;
+  counts: PurgeCounts;
+  touched: PurgeTouched;
+  /** The highest event seq it deleted: no new event is given a seq at or below it. */
+  seqFloor: number | null;
+  /** When it came from the hub, for one a hub sent. */
+  receivedAt: number | null;
+}
+
+export interface PurgeOptions {
+  /** Why, as a forget says why: required. */
+  reason: string;
+  /** Who purges, as `user@<store>`. */
+  author: string;
+  channel: Exclude<PurgeChannel, 'hub'>;
+  /** Who the audit log names, if not the author: the admin UI's owner, say. */
+  actor?: string;
+  /** The plan the owner saw (planPurge): applied only if the store would still delete just that. */
+  plan?: PurgePlan;
+  /** The digest of the plan the owner saw, when the plan itself is not at hand. */
+  digest?: string;
+  now?: number;
+}
+
+export interface PurgeResult {
+  id: string;
+  record: PurgeRecord;
+  /** The plan applied, made again under the write lock. */
+  plan: PurgePlan;
+  /** Mirrors whose lines are still to be blanked (see completePurges). */
+  pending: number;
+}
+
+/** The guards a purge's write transaction lifts (see guard_lift in schema.ts). */
+const LIFTED = ['event', 'entry', 'entry_source', 'imported_entry', 'recall', 'recall_item'];
+
+/** The search tables of events, and of entries (see schema.ts). */
+const EVENT_SEARCH = ['event_fts', 'message_fts', 'event_cjk'];
+const ENTRY_SEARCH = ['entry_fts'];
+
+/**
+ * Up to this many events, or while they are less than one in MERGE_SHARE of the store's, a purge
+ * removes each from the event search tables in place (FTS5 `secure-delete`), at about a
+ * millisecond each on a large index. Beyond, it deletes them as usual and then merges each table
+ * whole (`optimize`), which takes time in proportion to the index, not to what is deleted.
+ */
+const SECURE_DELETE_MAX = 2000;
+const MERGE_SHARE = 100;
+
+/**
+ * Set how the search tables of SQLite drop what a purge deletes, so that none of it stays in
+ * their segments: returns the tables to merge once the rows are deleted.
+ */
+function prepareSearchDeletes(db: Database, events: number): string[] {
+  const total = Number(
+    (db.prepare('SELECT COALESCE(MAX(seq), 0) AS n FROM event').get() as { n: number }).n,
+  );
+  const merge = events > SECURE_DELETE_MAX && events * MERGE_SHARE >= total;
+  const out: string[] = [];
+  for (const t of [...EVENT_SEARCH, ...ENTRY_SEARCH]) {
+    if (!db.hasTable(t)) continue;
+    const secure = !(merge && EVENT_SEARCH.includes(t));
+    db.exec(`INSERT INTO ${t} (${t}, rank) VALUES ('secure-delete', ${secure ? 1 : 0})`);
+    if (!secure) out.push(t);
+  }
+  return out;
+}
+
+const DOOMED_SESSION = 'SELECT source, session_id FROM doomed_session';
+
+/**
+ * Purge: delete for good what the selector takes by the rules (see planPurge), record the purge,
+ * and queue the mirrors whose lines are to be blanked (see completePurges). The plan is made again
+ * inside one write transaction, parsing only what was appended since `opts.plan` was made; if a
+ * plan or a digest is given and the store would now delete anything else, it throws a
+ * ConflictError and deletes nothing. Throws an OriginError when the plan is refused or empty.
+ */
+export function purge(
+  db: Database,
+  home: string,
+  adapters: PurgeAdapters,
+  selector: PurgeSelector,
+  opts: PurgeOptions,
+): PurgeResult {
+  const reason = checkReason(opts.reason);
+  const author = typeof opts.author === 'string' ? opts.author.trim() : '';
+  if (!author) throw new OriginError('Say who purges: the author is required.');
+  if (!['cli', 'ui', 'api'].includes(opts.channel)) {
+    throw new OriginError('Unknown purge channel.');
+  }
+  const chosen = normalizeSelector(selector);
+  if (opts.plan && JSON.stringify(opts.plan.selector) !== JSON.stringify(chosen)) {
+    throw new OriginError('The plan given is for another selector.');
+  }
+  const expected = opts.digest ?? opts.plan?.digest;
+  // The slow part, parsing the mirrors, is done before taking the write lock.
+  const first = opts.plan ?? makePlan(db, home, adapters, chosen);
+  const parses = states.get(first)?.planner.files;
+  const sqlite = db.dialect === 'sqlite';
+  const secure = sqlite ? pragma(db, 'secure_delete') : null;
+  if (sqlite) db.exec('PRAGMA secure_delete = ON');
+  let result: PurgeResult;
+  try {
+    result = transaction(
+      db,
+      () => {
+        const plan = makePlan(db, home, adapters, chosen, parses);
+        if (expected !== undefined && expected !== plan.digest) {
+          throw new ConflictError(
+            'The store has changed since this purge was planned, and it would now delete something else: plan it again.',
+          );
+        }
+        if (plan.refusals.length > 0) throw new OriginError(plan.refusals.join(' '));
+        if (emptyPlan(plan)) {
+          throw new OriginError('Nothing to purge: the selector takes nothing this store holds.');
+        }
+        return applyPlan(db, plan, states.get(plan) as PlanState, {
+          ...opts,
+          reason,
+          author,
+          now: opts.now ?? Date.now(),
+        });
+      },
+      { immediate: true },
+    );
+  } finally {
+    if (secure !== null) db.exec(`PRAGMA secure_delete = ${secure}`);
+  }
+  if (sqlite) checkpoint(db);
+  return result;
+}
+
+function emptyPlan(p: PurgePlan): boolean {
+  return (
+    p.events.length === 0 &&
+    p.entries.length === 0 &&
+    p.sessions.length === 0 &&
+    p.recalls.length === 0 &&
+    p.recallItems.length === 0 &&
+    p.files.length === 0
+  );
+}
+
+function pragma(db: Database, name: string): number {
+  const row = db.prepare(`PRAGMA ${name}`).get() as Record<string, number> | undefined;
+  return Number(row ? Object.values(row)[0] : 0) || 0;
+}
+
+/**
+ * Move what the WAL holds into the database and empty it, so that no deleted page stays there.
+ * Best effort: a reader may hold it back, and the mirrors' completion tries again.
+ */
+export function checkpoint(db: Database): void {
+  if (db.dialect !== 'sqlite') return;
+  try {
+    db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+  } catch {
+    // A busy store checkpoints later.
+  }
+}
+
+/** The work tables of a purge: what it deletes, by id, in the transaction that deletes it. */
+function workTables(db: Database): void {
+  const temp = db.dialect === 'sqlite' ? '' : ' ON COMMIT DELETE ROWS';
+  db.exec(`CREATE TEMP TABLE IF NOT EXISTS doomed_event (
+  id TEXT PRIMARY KEY, seq BIGINT NOT NULL, listed INTEGER NOT NULL)${temp};
+CREATE TEMP TABLE IF NOT EXISTS doomed_entry (id TEXT PRIMARY KEY)${temp};
+CREATE TEMP TABLE IF NOT EXISTS doomed_session (
+  source TEXT NOT NULL, session_id TEXT NOT NULL, PRIMARY KEY (source, session_id))${temp};
+CREATE TEMP TABLE IF NOT EXISTS doomed_recall (id TEXT PRIMARY KEY, seq BIGINT NOT NULL)${temp};`);
+  clearWorkTables(db);
+}
+
+function clearWorkTables(db: Database): void {
+  db.exec(
+    'DELETE FROM doomed_event; DELETE FROM doomed_entry; DELETE FROM doomed_session; DELETE FROM doomed_recall;',
+  );
+}
+
+/** Apply a plan made under the write lock: the deletes, then the purge's record. */
+function applyPlan(
+  db: Database,
+  plan: PurgePlan,
+  state: PlanState,
+  opts: PurgeOptions & { now: number },
+): PurgeResult {
+  const d = db.dialect;
+  const id = `prg_${randomBytes(6).toString('hex')}`;
+  db.exec(
+    `INSERT INTO guard_lift (name) VALUES ${LIFTED.map((n) => `('${n}')`).join(', ')}
+       ON CONFLICT DO NOTHING`,
+  );
+  try {
+    if (d === 'sqlite') db.exec('PRAGMA defer_foreign_keys = ON');
+    workTables(db);
+    try {
+      db.prepare(`INSERT INTO doomed_session (source, session_id) ${pairList(d)}`).run(
+        JSON.stringify(plan.sessions.map((s) => [s.source, s.sessionId])),
+      );
+      // Events of a purged session are not listed one by one, except on a hub those a device
+      // sent: an entry citing one may arrive from elsewhere, and should find it purged.
+      db.prepare(
+        `INSERT INTO doomed_event (id, seq, listed)
+         SELECT e.id, e.seq, CASE WHEN EXISTS (SELECT 1 FROM doomed_session s
+                                     WHERE s.source = e.source AND s.session_id = e.session_id)
+                               AND NOT EXISTS (SELECT 1 FROM raw_file f
+                                     WHERE f.id = e.raw_file_id AND f.path LIKE '@%')
+                             THEN 0 ELSE 1 END
+           FROM event e WHERE e.id IN (${idList(d, 'text')})`,
+      ).run(JSON.stringify(plan.events));
+      db.prepare(
+        `INSERT INTO doomed_entry (id) SELECT id FROM entry WHERE id IN (${idList(d, 'text')})`,
+      ).run(JSON.stringify(plan.entries));
+      db.prepare(
+        `INSERT INTO doomed_recall (id, seq)
+         SELECT id, seq FROM recall WHERE id IN (${idList(d, 'text')})`,
+      ).run(JSON.stringify(plan.recalls));
+
+      const doomed = new Set(plan.sessions.map((s) => key(s.source, s.sessionId)));
+      const affected = affectedSessions(db, plan, state, doomed);
+      const threadOf = db.prepare(
+        'SELECT thread_id FROM session_thread WHERE source = ? AND session_id = ?',
+      );
+      const threads = new Set<string>();
+      for (const k of [...doomed, ...affected.keys()]) {
+        const { source, sessionId } = unkey(k);
+        const row = threadOf.get(source, sessionId) as { thread_id: string } | undefined;
+        if (row) threads.add(row.thread_id);
+      }
+      const floor = (
+        db.prepare('SELECT MAX(seq) AS n FROM doomed_event').get() as { n: number | null }
+      ).n;
+      const recallFloor = (
+        db.prepare('SELECT MAX(seq) AS n FROM doomed_recall').get() as { n: number | null }
+      ).n;
+
+      const merge = d === 'sqlite' ? prepareSearchDeletes(db, plan.events.length) : [];
+      deleteRows(db, plan);
+      // A merge of the whole index leaves none of what was deleted in it.
+      for (const t of merge) db.exec(`INSERT INTO ${t} (${t}) VALUES ('optimize')`);
+      for (const f of plan.files) {
+        if (!state.planner.files.get(f.rawFileId)?.places) continue;
+        db.prepare('DELETE FROM place_head WHERE source = ? AND device = ?').run(
+          f.source,
+          parseRawPath(f.path).device ?? '',
+        );
+      }
+      refreshAffected(db, plan, state, affected);
+      refreshThreads(db, [...doomed, ...affected.keys()].map(unkey));
+      db.exec(`DELETE FROM session_thread WHERE (source, session_id) IN (${DOOMED_SESSION})`);
+      // Items naming a thread that is gone with its sessions.
+      const touched = new Set(plan.recallItems.map((i) => i.recall));
+      let threadItems = 0;
+      const gone = [...threads].filter(
+        (t) => !db.prepare('SELECT 1 AS one FROM session_thread WHERE thread_id = ?').get(t),
+      );
+      if (gone.length > 0) {
+        const items = db
+          .prepare(
+            `SELECT recall_id, rank FROM recall_item
+              WHERE kind = 'thread' AND ref IN (${idList(d, 'text')})`,
+          )
+          .all(JSON.stringify(gone)) as Array<{ recall_id: string; rank: number }>;
+        const remove = db.prepare('DELETE FROM recall_item WHERE recall_id = ? AND rank = ?');
+        for (const i of items) {
+          if (remove.run(i.recall_id, i.rank).changes === 0) continue;
+          touched.add(i.recall_id);
+          threadItems++;
+        }
+      }
+
+      const counts: PurgeCounts = {
+        ...plan.counts,
+        recallItems: plan.counts.recallItems + threadItems,
+      };
+      const touchedOut: PurgeTouched = {
+        tombstones: plan.tombstones,
+        recalls: [...touched].filter((r) => !plan.recalls.includes(r)).sort(),
+      };
+      const origin = storeName(db);
+      const { seq } = db
+        .prepare(
+          `INSERT INTO purge (id, at, origin, author, channel, reason, selector, counts, touched,
+                              seq_floor)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           RETURNING seq`,
+        )
+        .get(
+          id,
+          opts.now,
+          origin,
+          opts.author,
+          opts.channel,
+          opts.reason,
+          JSON.stringify(plan.selector),
+          JSON.stringify(counts),
+          JSON.stringify(touchedOut),
+          floor,
+        ) as { seq: number };
+      recordPurged(db, id, plan);
+      const pending = queueMirrors(db, id, Number(seq), plan);
+      if (d === 'sqlite' && recallFloor !== null) {
+        const known = Number(getSetting(db, RECALL_SEQ_FLOOR) ?? 0);
+        if (recallFloor > known) setSetting(db, RECALL_SEQ_FLOOR, String(recallFloor));
+      }
+      recordAudit(
+        db,
+        {
+          actor: opts.actor ?? opts.author,
+          channel: opts.channel,
+          action: 'purge',
+          target: id,
+          detail: { ...counts },
+        },
+        opts.now,
+      );
+      const record: PurgeRecord = {
+        seq: Number(seq),
+        id,
+        at: opts.now,
+        origin,
+        author: opts.author,
+        channel: opts.channel,
+        reason: opts.reason,
+        selector: plan.selector,
+        counts,
+        touched: touchedOut,
+        seqFloor: floor === null ? null : Number(floor),
+        receivedAt: null,
+      };
+      return { id, record, plan, pending };
+    } finally {
+      clearWorkTables(db);
+    }
+  } finally {
+    db.exec('DELETE FROM guard_lift');
+  }
+}
+
+/**
+ * Sessions that stay but lose events, or the line that gave them their title: their counts,
+ * times, and titles are derived again. By key, with whether their title is derived again too.
+ */
+function affectedSessions(
+  db: Database,
+  plan: PurgePlan,
+  state: PlanState,
+  doomed: Set<string>,
+): Map<string, boolean> {
+  const affected = new Map<string, boolean>();
+  for (const r of db
+    .prepare(
+      `SELECT DISTINCT e.source, e.session_id FROM event e JOIN doomed_event d ON d.id = e.id
+        WHERE NOT EXISTS (SELECT 1 FROM doomed_session s
+                           WHERE s.source = e.source AND s.session_id = e.session_id)`,
+    )
+    .all() as Array<{ source: string; session_id: string }>) {
+    affected.set(key(r.source, r.session_id), false);
+  }
+  for (const f of plan.files) {
+    const parse = state.planner.files.get(f.rawFileId);
+    if (!parse) continue;
+    for (const [first, count] of f.lines) {
+      for (let n = first; n < first + count; n++) {
+        const title = parse.lines.get(n)?.title;
+        if (!title) continue;
+        const k = key(f.source, title.session);
+        if (!doomed.has(k)) affected.set(k, true);
+      }
+    }
+  }
+  return affected;
+}
+
+/**
+ * The titles the kept lines give the sessions to title again: per session, the latest, unless the
+ * user gave one, in which case the latest the user gave (as reparseTitles derives them).
+ */
+function titlesAfter(
+  plan: PurgePlan,
+  state: PlanState,
+  affected: Map<string, boolean>,
+): Map<string, { title: string; manual: boolean }> {
+  const blanked = new Map<number, Array<[number, number]>>();
+  for (const f of plan.files) blanked.set(f.rawFileId, f.lines);
+  const out = new Map<string, { title: string; manual: boolean }>();
+  for (const id of [...state.planner.reached].sort((a, b) => a - b)) {
+    const parse = state.planner.files.get(id);
+    if (!parse) continue;
+    const gone = blanked.get(id) ?? [];
+    for (const n of [...parse.lines.keys()].sort((a, b) => a - b)) {
+      const t = parse.lines.get(n)?.title;
+      if (!t) continue;
+      const k = key(parse.file.source, t.session);
+      if (!affected.get(k)) continue;
+      if (gone.some(([first, count]) => n >= first && n < first + count)) continue;
+      const current = out.get(k);
+      if (!current || t.manual || !current.manual) out.set(k, { title: t.text, manual: t.manual });
+    }
+  }
+  return out;
+}
+
+/** Derive again what stays of the sessions a purge changed. */
+function refreshAffected(
+  db: Database,
+  plan: PurgePlan,
+  state: PlanState,
+  affected: Map<string, boolean>,
+): void {
+  const any = db.prepare('SELECT 1 AS one FROM event WHERE source = ? AND session_id = ? LIMIT 1');
+  const drop = db.prepare('DELETE FROM session WHERE source = ? AND session_id = ?');
+  const retitle = db.prepare(
+    'UPDATE session SET title = ?, title_manual = ? WHERE source = ? AND session_id = ?',
+  );
+  const derived = [...affected.values()].some(Boolean)
+    ? titlesAfter(plan, state, affected)
+    : new Map<string, { title: string; manual: boolean }>();
+  for (const [k, title] of affected) {
+    const { source, sessionId } = unkey(k);
+    if (!any.get(source, sessionId)) {
+      drop.run(source, sessionId);
+      continue;
+    }
+    refreshSession(db, source, sessionId);
+    if (title) {
+      const t = derived.get(k);
+      retitle.run(t?.title ?? null, t?.manual ? 1 : 0, source, sessionId);
+    }
+  }
+}
+
+/** The deletes of a purge, children first, from the work tables. */
+function deleteRows(db: Database, plan: PurgePlan): void {
+  db.exec(`
+DELETE FROM recall_item WHERE kind = 'entry' AND ref IN (SELECT id FROM doomed_entry);
+DELETE FROM tombstone_effect WHERE kind = 'entry' AND item IN (SELECT id FROM doomed_entry);
+DELETE FROM forgotten_entry WHERE entry_id IN (SELECT id FROM doomed_entry);
+DELETE FROM entry_source WHERE entry_id IN (SELECT id FROM doomed_entry);
+DELETE FROM imported_entry WHERE entry_id IN (SELECT id FROM doomed_entry);
+DELETE FROM entry WHERE id IN (SELECT id FROM doomed_entry);
+
+DELETE FROM recall_item WHERE kind = 'event' AND ref IN (SELECT id FROM doomed_event);
+DELETE FROM tombstone_effect WHERE kind = 'event' AND item IN (SELECT id FROM doomed_event);
+DELETE FROM excluded_event WHERE event_id IN (SELECT id FROM doomed_event);
+DELETE FROM event_author WHERE seq IN (SELECT seq FROM doomed_event);
+DELETE FROM session_follow WHERE event_id IN (SELECT id FROM doomed_event);
+DELETE FROM proposal_source WHERE event_id IN (SELECT id FROM doomed_event)
+   OR proposal_id IN (SELECT id FROM proposal WHERE event_id IN (SELECT id FROM doomed_event));
+DELETE FROM proposal WHERE event_id IN (SELECT id FROM doomed_event);
+DELETE FROM event WHERE id IN (SELECT id FROM doomed_event);
+
+DELETE FROM session_place WHERE (source, session_id) IN (${DOOMED_SESSION});
+DELETE FROM session_kind WHERE (source, session_id) IN (${DOOMED_SESSION});
+DELETE FROM session_parent WHERE (source, session_id) IN (${DOOMED_SESSION})
+   OR (parent_source, parent_session_id) IN (${DOOMED_SESSION});
+DELETE FROM session_follow WHERE (source, session_id) IN (${DOOMED_SESSION})
+   OR (target_source, target_session_id) IN (${DOOMED_SESSION});
+DELETE FROM recall_item WHERE kind = 'session'
+   AND ref IN (SELECT source || ':' || session_id FROM doomed_session);
+DELETE FROM recall_item WHERE recall_id IN (SELECT id FROM doomed_recall);
+DELETE FROM recall WHERE id IN (SELECT id FROM doomed_recall);
+DELETE FROM session WHERE (source, session_id) IN (${DOOMED_SESSION});
+`);
+  const remove = db.prepare('DELETE FROM recall_item WHERE recall_id = ? AND rank = ?');
+  for (const i of plan.recallItems) remove.run(i.recall, i.rank);
+}
+
+/** What a purge removed, by id, so that it stays out on arrival (see purged.ts). */
+function recordPurged(db: Database, id: string, plan: PurgePlan): void {
+  const all = (kind: string, scope: string, ids: string, where = 'true') =>
+    db
+      .prepare(
+        `INSERT INTO purged (kind, scope, id, purge_id)
+         SELECT '${kind}', ${scope}, ${ids}, ? FROM doomed_${kind} WHERE ${where}
+         ON CONFLICT DO NOTHING`,
+      )
+      .run(id);
+  all('event', "''", 'id', 'listed = 1');
+  all('entry', "''", 'id');
+  all('session', 'source', 'session_id');
+  all('recall', "''", 'id');
+  const file = db.prepare(
+    `INSERT INTO purged (kind, scope, id, purge_id) VALUES ('file', ?, ?, ?) ON CONFLICT DO NOTHING`,
+  );
+  for (const f of plan.files) if (f.blocked) file.run(f.source, f.path, id);
+}
+
+/** Record the lines a purge blanks, and queue their mirrors; returns how many are queued. */
+function queueMirrors(db: Database, id: string, seq: number, plan: PurgePlan): number {
+  const line = db.prepare(
+    'INSERT INTO purge_line (raw_file_id, first_line, line_count, purge_id) VALUES (?, ?, ?, ?)',
+  );
+  const queue = db.prepare(
+    'INSERT INTO purge_pending (raw_file_id, since) VALUES (?, ?) ON CONFLICT DO NOTHING',
+  );
+  for (const f of plan.files) {
+    for (const [first, count] of f.lines) line.run(f.rawFileId, first, count, id);
+    queue.run(f.rawFileId, seq);
+  }
+  return (db.prepare('SELECT COUNT(*) AS n FROM purge_pending').get() as { n: number }).n;
+}
+
+// --- Records ---------------------------------------------------------------------------------
+
+interface PurgeRow {
+  seq: number;
+  id: string;
+  at: number;
+  origin: string;
+  author: string;
+  channel: PurgeChannel;
+  reason: string;
+  selector: string;
+  counts: string;
+  touched: string;
+  seq_floor: number | null;
+  received_at: number | null;
+}
+
+const PURGE_COLUMNS =
+  'seq, id, at, origin, author, channel, reason, selector, counts, touched, seq_floor, received_at';
+
+function purgeRecord(r: PurgeRow): PurgeRecord {
+  const touched = JSON.parse(r.touched) as Partial<PurgeTouched>;
+  return {
+    seq: Number(r.seq),
+    id: r.id,
+    at: Number(r.at),
+    origin: r.origin,
+    author: r.author,
+    channel: r.channel,
+    reason: r.reason,
+    selector: JSON.parse(r.selector) as PurgeSelector,
+    counts: JSON.parse(r.counts) as PurgeCounts,
+    touched: { tombstones: touched.tombstones ?? [], recalls: touched.recalls ?? [] },
+    seqFloor: r.seq_floor === null ? null : Number(r.seq_floor),
+    receivedAt: r.received_at === null ? null : Number(r.received_at),
+  };
+}
+
+/** The purges of this store, newest first; `before` a seq, to read on. */
+export function listPurges(
+  db: Database,
+  opts: { limit?: number; before?: number } = {},
+): PurgeRecord[] {
+  const limit = Math.min(Math.max(1, Math.trunc(opts.limit ?? 50)), 500);
+  const rows = db
+    .prepare(`SELECT ${PURGE_COLUMNS} FROM purge WHERE seq < ? ORDER BY seq DESC LIMIT ?`)
+    .all(opts.before ?? Number.MAX_SAFE_INTEGER, limit) as unknown as PurgeRow[];
+  return rows.map(purgeRecord);
+}
+
+/** A mirror a purge blanks lines of, and whether they are still to be blanked. */
+export interface PurgeMirror {
+  rawFileId: number;
+  source: string;
+  path: string;
+  generation: number;
+  mirror: string;
+  lines: Array<[number, number]>;
+  /** Its lines are still to be blanked (see completePurges); why not yet, if it failed. */
+  pending: boolean;
+  error: string | null;
+}
+
+/** A purge with what it removed, by id, and its mirrors: never text. */
+export interface PurgeDetail extends PurgeRecord {
+  removed: {
+    events: string[];
+    entries: string[];
+    sessions: Array<{ source: string; sessionId: string }>;
+    recalls: string[];
+    /** Files it blocked: their later lines are stored blank. */
+    files: Array<{ source: string; path: string }>;
+  };
+  mirrors: PurgeMirror[];
+}
+
+/** A purge, with what it removed by id and its mirrors; null for an unknown id. */
+export function getPurge(db: Database, id: string): PurgeDetail | null {
+  const row = db.prepare(`SELECT ${PURGE_COLUMNS} FROM purge WHERE id = ?`).get(id) as
+    | PurgeRow
+    | undefined;
+  if (!row) return null;
+  const removed: PurgeDetail['removed'] = {
+    events: [],
+    entries: [],
+    sessions: [],
+    recalls: [],
+    files: [],
+  };
+  for (const r of db
+    .prepare('SELECT kind, scope, id FROM purged WHERE purge_id = ? ORDER BY kind, scope, id')
+    .all(id) as Array<{ kind: string; scope: string; id: string }>) {
+    if (r.kind === 'event') removed.events.push(r.id);
+    else if (r.kind === 'entry') removed.entries.push(r.id);
+    else if (r.kind === 'session') removed.sessions.push({ source: r.scope, sessionId: r.id });
+    else if (r.kind === 'recall') removed.recalls.push(r.id);
+    else if (r.kind === 'file') removed.files.push({ source: r.scope, path: r.id });
+  }
+  const mirrors = new Map<number, PurgeMirror>();
+  for (const r of db
+    .prepare(
+      `SELECT l.raw_file_id, l.first_line, l.line_count, f.source, f.path, f.generation, f.mirror,
+              p.raw_file_id AS pending, p.error
+         FROM purge_line l JOIN raw_file f ON f.id = l.raw_file_id
+         LEFT JOIN purge_pending p ON p.raw_file_id = l.raw_file_id
+        WHERE l.purge_id = ? ORDER BY l.raw_file_id, l.first_line`,
+    )
+    .all(id) as Array<{
+    raw_file_id: number;
+    first_line: number;
+    line_count: number;
+    source: string;
+    path: string;
+    generation: number;
+    mirror: string;
+    pending: number | null;
+    error: string | null;
+  }>) {
+    let m = mirrors.get(Number(r.raw_file_id));
+    if (!m) {
+      m = {
+        rawFileId: Number(r.raw_file_id),
+        source: r.source,
+        path: r.path,
+        generation: Number(r.generation),
+        mirror: r.mirror,
+        lines: [],
+        pending: r.pending !== null,
+        error: r.error,
+      };
+      mirrors.set(m.rawFileId, m);
+    }
+    m.lines.push([Number(r.first_line), Number(r.line_count)]);
+  }
+  return { ...purgeRecord(row), removed, mirrors: [...mirrors.values()] };
 }

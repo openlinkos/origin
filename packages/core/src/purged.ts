@@ -69,6 +69,13 @@ export function purgedLookup(db: Database): PurgedLookup {
   };
 }
 
+/**
+ * The setting that keeps the highest `recall.seq` a purge deleted on SQLite, which would otherwise
+ * give the number out again: a device sends its hub the recalls after the last seq it sent, and
+ * would skip a new recall under an old number (see insertRecall).
+ */
+export const RECALL_SEQ_FLOOR = 'purge.recall_seq_floor';
+
 /** Whether a purge removed the event, entry, or recall with this id: one query. */
 export function isPurgedId(db: Database, id: string): boolean {
   if (!purgeTables(db)) return false;

@@ -5,7 +5,12 @@ import { assertStoreCurrent, type Database, transaction } from './db.js';
 import { readMirror } from './mirror.js';
 import { parentPlaceFact, recordSessionParent } from './parents.js';
 import { mirrorRelPath, parseRawPath, remotePath } from './paths.js';
-import { isSkippedLine, type PurgedLookup, purgedLookup } from './purged.js';
+import {
+  isSkippedLine,
+  type PurgedLookup,
+  purgedLookup,
+  withPurgedLinesBlanked,
+} from './purged.js';
 import { refreshThreads } from './threads.js';
 import type { ParsedLine, ProjectRootFact, SessionPlaceFact, SourceFile } from './types.js';
 
@@ -682,7 +687,9 @@ function mirrorPlaceLines(db: Database, home: string, source: string, device = '
     )
     .get(source, placesPath(device)) as { id: number } | undefined;
   if (!row) return [];
-  const text = readMirror(db, home, row.id, 0, Number.MAX_SAFE_INTEGER).toString('utf8');
+  // Lines a purge removed are read blank even before their mirror is rewritten.
+  const bytes = readMirror(db, home, row.id, 0, Number.MAX_SAFE_INTEGER);
+  const text = withPurgedLinesBlanked(db, home, row.id, 0, bytes).toString('utf8');
   return text
     .split('\n')
     .map((line) => line.replace(/\r$/, ''))
