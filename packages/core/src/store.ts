@@ -1,12 +1,13 @@
 import path from 'node:path';
 import {
-  AUTHOR_SIGNAL_SQL,
-  AUTHOR_SQL,
+  authorSignalSql,
+  authorSql,
   isOwnerPrompt,
-  OWNER_PROMPT_SQL,
+  ownerPromptSql,
   SPEAKER_SQL,
 } from './authors.js';
 import type { Database } from './db.js';
+import { jsonIsNotOne, pairList, perDialect } from './dialect.js';
 import { readMirrorLine } from './mirror.js';
 import { TOP_LEVEL_SESSION } from './parents.js';
 import { parseRawPath, rawDir } from './paths.js';
@@ -46,10 +47,12 @@ export interface SearchHit extends EventRow {
  * The columns of an event `e` as EventRow has them, its authorship included: who wrote an input, as
  * derived and combined with its session's kind (see authors.ts).
  */
-export const EVENT_COLUMNS = `e.id, e.source, e.session_id, e.parent_id, e.ts,
+export const eventColumns = perDialect(
+  (d) => `e.id, e.source, e.session_id, e.parent_id, e.ts,
   ${resolvedProjectSql('e.source', 'e.session_id', 'e.project')} AS project, e.cwd, e.git_branch,
   e.role, e.kind, e.text, e.raw_file_id, e.raw_line, e.agent_version, e.meta,
-  (${AUTHOR_SQL}) AS author, (${AUTHOR_SIGNAL_SQL}) AS author_signal, (${SPEAKER_SQL}) AS speaker`;
+  (${authorSql(d)}) AS author, (${authorSignalSql(d)}) AS author_signal, (${SPEAKER_SQL}) AS speaker`,
+);
 
 /** Forgotten events are excluded from every query (invariant 2, recorded forgetting). */
 export const VISIBLE_EVENT = 'NOT EXISTS (SELECT 1 FROM excluded_event x WHERE x.event_id = e.id)';
@@ -208,7 +211,7 @@ export function listSessions(
 function promptFinder(db: Database): (source: string, sessionId: string) => string | null {
   let stmt: ReturnType<Database['prepare']> | null = null;
   return (source, sessionId) => {
-    stmt ??= db.prepare(USER_MESSAGES);
+    stmt ??= db.prepare(userMessagesSql(db.dialect));
     for (const r of stmt.iterate(source, sessionId) as Iterable<UserMessage>) {
       if (isOwnerPrompt(asInput(r))) return promptTitle(r.text);
     }
@@ -258,15 +261,17 @@ interface UserMessage {
 }
 
 /** A session's visible user messages, in time order, through event_user_message. */
-const USER_MESSAGES = `SELECT e.id, e.seq, e.ts, e.text, (${AUTHOR_SQL}) AS author,
+const userMessagesSql = perDialect(
+  (d) => `SELECT e.id, e.seq, e.ts, e.text, (${authorSql(d)}) AS author,
     (${SPEAKER_SQL}) AS speaker
   FROM event e INDEXED BY event_user_message
   WHERE e.source = ? AND e.session_id = ? AND e.role = 'user' AND e.kind = 'message'
     AND ${VISIBLE_EVENT}
-  ORDER BY e.ts, e.seq`;
+  ORDER BY e.ts, e.seq`,
+);
 
 function userMessages(db: Database, source: string, sessionId: string): UserMessage[] {
-  return db.prepare(USER_MESSAGES).all(source, sessionId) as unknown as UserMessage[];
+  return db.prepare(userMessagesSql(db.dialect)).all(source, sessionId) as unknown as UserMessage[];
 }
 
 const asInput = (r: UserMessage) => ({ ...r, role: 'user', kind: 'message' });
@@ -291,7 +296,7 @@ export function isOwnerConversation(db: Database, source: string, sessionId: str
   const parent = db.hasTable('session_parent');
   const sql =
     kind && parent
-      ? OWNER_CONVERSATION
+      ? ownerConversationSql(db.dialect)
       : `SELECT 1 FROM event e INDEXED BY event_user_message
   WHERE e.source = ? AND e.session_id = ? AND e.role = 'user' AND e.kind = 'message'
     ${
@@ -306,19 +311,21 @@ export function isOwnerConversation(db: Database, source: string, sessionId: str
       WHERE p.source = e.source AND p.session_id = e.session_id)`
         : ''
     }
-    AND ${VISIBLE_EVENT} AND ${OWNER_PROMPT_SQL}
+    AND ${VISIBLE_EVENT} AND ${ownerPromptSql(db.dialect)}
   LIMIT 1`;
   return db.prepare(sql).get(source, sessionId) !== undefined;
 }
 
-const OWNER_CONVERSATION = `SELECT 1 FROM event e INDEXED BY event_user_message
+const ownerConversationSql = perDialect(
+  (d) => `SELECT 1 FROM event e INDEXED BY event_user_message
   WHERE e.source = ? AND e.session_id = ? AND e.role = 'user' AND e.kind = 'message'
     AND NOT EXISTS (SELECT 1 FROM session_kind k
       WHERE k.source = e.source AND k.session_id = e.session_id)
     AND NOT EXISTS (SELECT 1 FROM session_parent p
       WHERE p.source = e.source AND p.session_id = e.session_id)
-    AND ${VISIBLE_EVENT} AND ${OWNER_PROMPT_SQL}
-  LIMIT 1`;
+    AND ${VISIBLE_EVENT} AND ${ownerPromptSql(d)}
+  LIMIT 1`,
+);
 
 /** At most this many characters of a command and its arguments name a turn. */
 const COMMAND_MAX = 200;
@@ -371,7 +378,7 @@ export function sessionTurnStarts(
   if (!candidates.some((c) => c.command)) return candidates;
   const agent = `e.source = ? AND e.session_id = ? AND e.ts >= ? AND (e.ts > ? OR e.seq > ?)
     AND e.role = 'assistant' AND e.kind IN ('message', 'tool_use')
-    AND (e.meta IS NULL OR json_extract(e.meta, '$.sidechain') IS NOT 1) AND ${VISIBLE_EVENT}`;
+    AND (e.meta IS NULL OR ${jsonIsNotOne(db.dialect, 'e.meta', 'sidechain')}) AND ${VISIBLE_EVENT}`;
   const before = db.prepare(
     `SELECT 1 FROM event e WHERE ${agent} AND e.ts <= ? AND (e.ts < ? OR e.seq < ?) LIMIT 1`,
   );
@@ -415,7 +422,7 @@ export function listSessionEvents(
   params.push(o.limit ?? 200, o.offset ?? 0);
   const rows = db
     .prepare(
-      `SELECT ${EVENT_COLUMNS} FROM event e
+      `SELECT ${eventColumns(db.dialect)} FROM event e
         WHERE e.source = ? AND e.session_id = ?${where} AND ${VISIBLE_EVENT}
         ORDER BY e.ts, e.seq LIMIT ? OFFSET ?`,
     )
@@ -555,7 +562,7 @@ export function sessionNames(
     .prepare(
       `SELECT source, session_id, title FROM session
         WHERE event_count > 0 AND (source, session_id) IN
-          (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?))`,
+          (${pairList(db.dialect)})`,
     )
     .all(JSON.stringify(keys.map((k) => [k.source, k.sessionId]))) as unknown as Array<{
     source: string;
@@ -576,7 +583,7 @@ export function listEvents(db: Database, filter: EventFilter = {}): EventRow[] {
   params.push(filter.limit ?? 200, filter.offset ?? 0);
   const rows = db
     .prepare(
-      `SELECT ${EVENT_COLUMNS} FROM event e WHERE 1 = 1${where} ORDER BY e.ts ASC, e.seq ASC
+      `SELECT ${eventColumns(db.dialect)} FROM event e WHERE 1 = 1${where} ORDER BY e.ts ASC, e.seq ASC
        LIMIT ? OFFSET ?`,
     )
     .all(...(params as never[])) as unknown as RawEventRecord[];
@@ -586,7 +593,7 @@ export function listEvents(db: Database, filter: EventFilter = {}): EventRow[] {
 /** A visible event by id; forgotten events are reported as missing. */
 export function getEvent(db: Database, id: string): EventRow | null {
   const row = db
-    .prepare(`SELECT ${EVENT_COLUMNS} FROM event e WHERE e.id = ? AND ${VISIBLE_EVENT}`)
+    .prepare(`SELECT ${eventColumns(db.dialect)} FROM event e WHERE e.id = ? AND ${VISIBLE_EVENT}`)
     .get(id) as RawEventRecord | undefined;
   return row ? toEventRow(row) : null;
 }
@@ -596,9 +603,9 @@ export function getEvent(db: Database, id: string): EventRow | null {
  * tombstones.ts). Every other read uses getEvent.
  */
 export function loadEvent(db: Database, id: string): EventRow | null {
-  const row = db.prepare(`SELECT ${EVENT_COLUMNS} FROM event e WHERE e.id = ?`).get(id) as
-    | RawEventRecord
-    | undefined;
+  const row = db
+    .prepare(`SELECT ${eventColumns(db.dialect)} FROM event e WHERE e.id = ?`)
+    .get(id) as RawEventRecord | undefined;
   return row ? toEventRow(row) : null;
 }
 

@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
+import { trigramFilter } from './dialect.js';
 import {
   checkCognitionSources,
   ENTRY_KINDS,
@@ -315,11 +316,12 @@ export function deriveProposals(db: Database): number {
   db.exec('DELETE FROM proposal_source');
   db.exec('DELETE FROM proposal');
   // Through the search index: only tool results that contain a proposal id are read.
+  const holding = trigramFilter(db.dialect, 'e', ['prp', 'rp_']);
   const candidates = db
     .prepare(
       `SELECT e.id, e.source, e.session_id AS "sessionId", e.kind, e.ts, e.text
-         FROM event_fts f JOIN event e ON e.seq = f.rowid
-        WHERE event_fts MATCH '"prp" AND "rp_"' AND e.kind = 'tool_result'`,
+         FROM ${holding.from}
+        WHERE ${holding.where} AND e.kind = 'tool_result'`,
     )
     .all() as unknown as ProposalEvent[];
   for (const ev of candidates) deriveProposal(db, ev);

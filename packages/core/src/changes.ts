@@ -6,7 +6,7 @@ import { getSessionParent, isFoldedChild } from './parents.js';
 import { entryProjectMatchSql, projectEventSql, resolvedProjectSql } from './places.js';
 import { getProposal, type Proposal, VISIBLE_PROPOSAL } from './proposals.js';
 import {
-  EVENT_COLUMNS,
+  eventColumns,
   getSession,
   type RawEventRecord,
   toEventRow,
@@ -187,7 +187,7 @@ export function changesSince(db: Database, f: FeedFilter = {}): ChangeFeed {
     }
     const rows = db
       .prepare(
-        `SELECT ${EVENT_COLUMNS}, e.seq FROM event e
+        `SELECT ${eventColumns(db.dialect)}, e.seq FROM event e
           WHERE ${where.join(' AND ')} AND ${VISIBLE_EVENT}
           ORDER BY e.seq ${after ? 'ASC' : 'DESC'} LIMIT ?`,
       )

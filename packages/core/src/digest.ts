@@ -1,5 +1,6 @@
-import { OWNER_PROMPT_SQL } from './authors.js';
+import { ownerPromptSql } from './authors.js';
 import type { Database } from './db.js';
+import { json, jsonIsOne } from './dialect.js';
 import { type Entry, getEntry, isEntryId } from './entries.js';
 import { OriginError } from './errors.js';
 import { isRestoreTarget } from './forgetting.js';
@@ -500,7 +501,7 @@ export function digest(db: Database, opts: DigestOptions = {}): Digest {
   const prompts = db
     .prepare(
       `SELECT e.id, e.source, e.session_id, e.ts, e.text FROM event e
-        WHERE e.ts >= ? AND e.ts < ? AND ${OWNER_PROMPT_SQL} AND ${VISIBLE_EVENT}
+        WHERE e.ts >= ? AND e.ts < ? AND ${ownerPromptSql(db.dialect)} AND ${VISIBLE_EVENT}
           AND NOT EXISTS (SELECT 1 FROM session_kind k
                            WHERE k.source = e.source AND k.session_id = e.session_id)
           AND NOT EXISTS (SELECT 1 FROM session_parent p
@@ -528,9 +529,11 @@ export function digest(db: Database, opts: DigestOptions = {}): Digest {
   }
 
   // Tool calls, by the name the adapter recorded.
+  const d = db.dialect;
+  const call = `COALESCE(${json(d, 'e.meta', 'toolUseId')}, ${json(d, 'e.meta', 'callId')})`;
   const tools = db
     .prepare(
-      `SELECT e.source, e.session_id, json_extract(e.meta, '$.toolName') AS name, COUNT(*) AS calls
+      `SELECT e.source, e.session_id, ${json(d, 'e.meta', 'toolName')} AS name, COUNT(*) AS calls
          FROM event e
         WHERE e.ts >= ? AND e.ts < ? AND e.kind = 'tool_use' AND ${VISIBLE_EVENT}
         GROUP BY 1, 2, 3`,
@@ -556,11 +559,11 @@ export function digest(db: Database, opts: DigestOptions = {}): Digest {
       db
         .prepare(
           `SELECT e.source, e.session_id,
-                  COALESCE(json_extract(e.meta, '$.toolUseId'), json_extract(e.meta, '$.callId')) AS call
+                  ${call} AS call
              FROM event e
             WHERE e.ts >= ? AND e.ts < ? AND e.kind = 'tool_result' AND ${VISIBLE_EVENT}
-              AND (json_extract(e.meta, '$.isError') = 1
-                   OR json_extract(e.meta, '$.status') IS NOT NULL)`,
+              AND (${jsonIsOne(d, 'e.meta', 'isError')}
+                   OR ${json(d, 'e.meta', 'status')} IS NOT NULL)`,
         )
         .all(from, until) as unknown as Array<{
         source: string;
@@ -573,13 +576,13 @@ export function digest(db: Database, opts: DigestOptions = {}): Digest {
   );
   const edits = db
     .prepare(
-      `SELECT e.source, e.session_id, e.text, json_extract(e.meta, '$.toolName') AS name,
-              COALESCE(json_extract(e.meta, '$.toolUseId'), json_extract(e.meta, '$.callId')) AS call,
+      `SELECT e.source, e.session_id, e.text, ${json(d, 'e.meta', 'toolName')} AS name,
+              ${call} AS call,
               COALESCE(e.cwd, (SELECT s.cwd FROM session s
                                 WHERE s.source = e.source AND s.session_id = e.session_id)) AS cwd
          FROM event e
         WHERE e.ts >= ? AND e.ts < ? AND e.kind = 'tool_use' AND ${VISIBLE_EVENT}
-          AND json_extract(e.meta, '$.toolName') IN (${EDIT_TOOLS.map(() => '?').join(', ')})
+          AND ${json(d, 'e.meta', 'toolName')} IN (${EDIT_TOOLS.map(() => '?').join(', ')})
         ORDER BY e.ts, e.seq`,
     )
     .all(from, until, ...EDIT_TOOLS) as unknown as Array<{

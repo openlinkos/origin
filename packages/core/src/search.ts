@@ -1,10 +1,11 @@
 import { CJK_MESSAGE_TOKEN, cjkTermQuery, isCjkTerm } from './cjk.js';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
+import { idList } from './dialect.js';
 import { projectEventSql, resolvedProjectSql } from './places.js';
 import {
-  EVENT_COLUMNS,
   type EventFilter,
+  eventColumns,
   type RawEventRecord,
   type SearchHit,
   type SearchOptions,
@@ -636,8 +637,8 @@ export function searchEvents(db: Database, query: string, filter: SearchOptions 
   if (hits.length === 0) return [];
   const rows = db
     .prepare(
-      `SELECT ${EVENT_COLUMNS}, e.seq AS seq FROM event e
-       WHERE e.seq IN (SELECT value FROM json_each(?))`,
+      `SELECT ${eventColumns(db.dialect)}, e.seq AS seq FROM event e
+       WHERE e.seq IN (${idList(db.dialect, 'bigint')})`,
     )
     .all(JSON.stringify(hits.map((h) => h.seq))) as unknown as Array<
     RawEventRecord & { seq: number }

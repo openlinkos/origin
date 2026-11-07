@@ -1,8 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
-import { AUTHOR_SQL, isOwnerPrompt } from './authors.js';
+import { authorSql, isOwnerPrompt } from './authors.js';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
+import { idList } from './dialect.js';
 import { CURRENT_VERSION, type EntryKind } from './entries.js';
 import { storeName } from './identity.js';
 import { sessionFold } from './parents.js';
@@ -362,7 +363,7 @@ const BACKGROUND_CHARS = 1_000;
 export function latestPrompts(db: Database): string[] {
   const rows = db
     .prepare(
-      `SELECT e.text, (${AUTHOR_SQL}) AS author FROM event e INDEXED BY event_user_message
+      `SELECT e.text, (${authorSql(db.dialect)}) AS author FROM event e INDEXED BY event_user_message
        WHERE e.role = 'user' AND e.kind = 'message' AND ${VISIBLE_EVENT}
        ORDER BY e.ts DESC, e.seq DESC`,
     )
@@ -1464,7 +1465,7 @@ export function recallsWith(
   limit = 100,
 ): { recalls: RecallRecord[]; total: number } {
   if (refs.length === 0) return { recalls: [], total: 0 };
-  const matching = `SELECT DISTINCT recall_id FROM recall_item WHERE ref IN (SELECT value FROM json_each(?))`;
+  const matching = `SELECT DISTINCT recall_id FROM recall_item WHERE ref IN (${idList(db.dialect, 'text')})`;
   const list = JSON.stringify(refs);
   const total = (db.prepare(`SELECT COUNT(*) AS n FROM (${matching})`).get(list) as { n: number })
     .n;

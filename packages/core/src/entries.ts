@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { AUTHOR_SQL, SPEAKER_SQL } from './authors.js';
+import { authorSql, SPEAKER_SQL } from './authors.js';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { OriginError } from './errors.js';
@@ -521,7 +521,7 @@ export function checkCognitionSources(
   const ids = [...new Set(sources.map((s) => s.eventId))];
   const inputs = db
     .prepare(
-      `SELECT e.id, (${AUTHOR_SQL}) AS author, (${SPEAKER_SQL}) AS speaker FROM event e
+      `SELECT e.id, (${authorSql(db.dialect)}) AS author, (${SPEAKER_SQL}) AS speaker FROM event e
         WHERE e.id IN (${ids.map(() => '?').join(', ')})
           AND e.role = 'user' AND e.kind IN ('message', 'meta')
         ORDER BY e.seq`,

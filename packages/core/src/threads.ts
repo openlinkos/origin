@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Database } from './db.js';
 import { transaction } from './db.js';
+import { trigramFilter } from './dialect.js';
 import { resolvedProjectSql } from './places.js';
 import { isOwnerConversation, type SessionPrompt, sessionPrompts } from './store.js';
 
@@ -478,11 +479,12 @@ export function refreshThreads(
 export function deriveThreads(db: Database, opts: { anySession?: boolean } = {}): void {
   db.exec('DELETE FROM session_follow');
   // Through the search index: only tool results that contain a link id are read.
+  const holding = trigramFilter(db.dialect, 'e', ['lnk', 'nk_']);
   const candidates = db
     .prepare(
       `SELECT e.id, e.source, e.session_id AS "sessionId", e.kind, e.text
-         FROM event_fts f JOIN event e ON e.seq = f.rowid
-        WHERE event_fts MATCH '"lnk" AND "nk_"' AND e.kind = 'tool_result'`,
+         FROM ${holding.from}
+        WHERE ${holding.where} AND e.kind = 'tool_result'`,
     )
     .all() as unknown as FollowEvent[];
   for (const ev of candidates) deriveFollow(db, ev);

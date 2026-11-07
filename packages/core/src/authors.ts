@@ -1,4 +1,5 @@
 import type { Database } from './db.js';
+import { isPrompt, jsonIsOne, perDialect } from './dialect.js';
 import { promptTitle } from './prompt.js';
 import type { Author, EventInput, SessionKind, SessionKindFact } from './types.js';
 
@@ -20,7 +21,7 @@ import type { Author, EventInput, SessionKind, SessionKindFact } from './types.j
  * apart (event_author, session_kind), and a rebuild derives them again from the raw mirrors (see
  * reparse.ts). Reading combines them, so the order lines arrive in does not matter: an input of a
  * child session is the agent's, of a headless run the system's, and otherwise its own author's
- * (its effective author, AUTHOR_SQL).
+ * (its effective author, authorSql).
  */
 
 export const AUTHORS: readonly Author[] = ['owner', 'person', 'agent', 'system'];
@@ -57,7 +58,7 @@ export interface Authorship {
  * The author of an input whose line says nothing more: a meta event is the system's (rule 3), and a
  * message is the owner's when it reads as a prompt (see promptTitle) and is not a sub-agent's (a
  * Claude Code sidechain), the system's otherwise (rule 4, for older logs without the fields that
- * say it). AUTHOR_SQL applies the same rule to an input stored without its author.
+ * say it). authorSql applies the same rule to an input stored without its author.
  */
 export function defaultAuthor(e: {
   kind: string;
@@ -96,20 +97,24 @@ const SESSION_KIND = `(SELECT MIN(k.kind) FROM session_kind k
  * running against the store), the default (see defaultAuthor). Every query that reads an event's
  * author reads it here.
  */
-export const AUTHOR_SQL = `CASE WHEN ${INPUT} THEN COALESCE(
+export const authorSql = perDialect(
+  (d) => `CASE WHEN ${INPUT} THEN COALESCE(
   CASE ${SESSION_KIND} WHEN 'child' THEN 'agent' WHEN 'headless' THEN 'system' END,
   (SELECT a.author FROM event_author a WHERE a.seq = e.seq),
   CASE WHEN e.kind <> 'message' THEN 'system'
-       WHEN json_extract(e.meta, '$.sidechain') IS 1 THEN 'agent'
-       WHEN origin_prompt(e.text) = 1 THEN 'owner' ELSE 'system' END) END`;
+       WHEN ${jsonIsOne(d, 'e.meta', 'sidechain')} THEN 'agent'
+       WHEN ${isPrompt(d, 'e')} THEN 'owner' ELSE 'system' END) END`,
+);
 
-/** The field that decided AUTHOR_SQL, as an SQL expression. */
-export const AUTHOR_SIGNAL_SQL = `CASE WHEN ${INPUT} THEN COALESCE(
+/** The field that decided authorSql, as an SQL expression. */
+export const authorSignalSql = perDialect(
+  (d) => `CASE WHEN ${INPUT} THEN COALESCE(
   (SELECT k.signal FROM session_kind k WHERE k.source = e.source AND k.session_id = e.session_id
     ORDER BY k.kind, k.signal LIMIT 1),
   (SELECT a.signal FROM event_author a WHERE a.seq = e.seq),
   CASE WHEN e.kind <> 'message' THEN 'kind'
-       WHEN json_extract(e.meta, '$.sidechain') IS 1 THEN 'sidechain' ELSE 'text' END) END`;
+       WHEN ${jsonIsOne(d, 'e.meta', 'sidechain')} THEN 'sidechain' ELSE 'text' END) END`,
+);
 
 /** The speaker of event `e`, as an SQL expression, or null. */
 export const SPEAKER_SQL = `CASE WHEN ${INPUT} THEN
@@ -119,7 +124,7 @@ export const SPEAKER_SQL = `CASE WHEN ${INPUT} THEN
  * Whether an event is a prompt of the owner: a message whose effective author is the owner and that
  * reads as a prompt (see promptTitle). The one rule for what the owner said: it names sessions
  * without a title, starts turns, makes a session the owner's conversation, and is the background of
- * recall's term weights. OWNER_PROMPT_SQL is the same rule in a query.
+ * recall's term weights. ownerPromptSql is the same rule in a query.
  */
 export function isOwnerPrompt(e: {
   role: string;
@@ -136,8 +141,10 @@ export function isOwnerPrompt(e: {
 }
 
 /** isOwnerPrompt as an SQL condition on event `e`. */
-export const OWNER_PROMPT_SQL = `(e.role = 'user' AND e.kind = 'message'
-  AND (${AUTHOR_SQL}) = 'owner' AND origin_prompt(e.text) = 1)`;
+export const ownerPromptSql = perDialect(
+  (d) => `(e.role = 'user' AND e.kind = 'message'
+  AND (${authorSql(d)}) = 'owner' AND ${isPrompt(d, 'e')})`,
+);
 
 /**
  * Keeps the authorship of an input just stored, under its event's `seq`; other events are left

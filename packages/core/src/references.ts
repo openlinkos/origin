@@ -11,8 +11,8 @@ import { resolvedProjectSql } from './places.js';
 import { isProposalId } from './proposals.js';
 import { isRecallId, type RecallRecord, rebuildRecall, sessionRecalls } from './recall.js';
 import {
-  EVENT_COLUMNS,
   type EventPosition,
+  eventColumns,
   getEvent,
   getSession,
   isEventForgotten,
@@ -176,7 +176,7 @@ function around(
   kinds: EventKind[] | null,
 ): { before: EventRow[]; after: EventRow[] } {
   const kind = kinds ? ` AND e.kind IN (${kinds.map(() => '?').join(', ')})` : '';
-  const base = `SELECT ${EVENT_COLUMNS} FROM event e
+  const base = `SELECT ${eventColumns(db.dialect)} FROM event e
     WHERE e.source = ? AND e.session_id = ?${kind} AND ${VISIBLE_EVENT}`;
   const params = [event.source, event.sessionId, ...(kinds ?? []), at.ts, at.ts, at.seq, AROUND];
   const before = db
@@ -200,7 +200,7 @@ function parentOf(db: Database, event: EventRow): EventRow | null {
   if (db.prepare('SELECT 1 FROM event WHERE id = ?').get(id) !== undefined) return getEvent(db, id);
   const row = db
     .prepare(
-      `SELECT ${EVENT_COLUMNS} FROM event e
+      `SELECT ${eventColumns(db.dialect)} FROM event e
         WHERE e.id > ? AND e.id < ? AND ${VISIBLE_EVENT} ORDER BY e.seq LIMIT 1`,
     )
     .get(`${id}#`, `${id}$`) as RawEventRecord | undefined;
@@ -464,7 +464,9 @@ export function readSession(
   where.push(VISIBLE_EVENT);
   const range = where.join(' AND ');
   const rows = db
-    .prepare(`SELECT ${EVENT_COLUMNS} FROM event e WHERE ${range} ORDER BY e.ts, e.seq LIMIT ?`)
+    .prepare(
+      `SELECT ${eventColumns(db.dialect)} FROM event e WHERE ${range} ORDER BY e.ts, e.seq LIMIT ?`,
+    )
     .all(...(params as never[]), o.limit ?? 50) as unknown as RawEventRecord[];
   const total = (
     db.prepare(`SELECT COUNT(*) AS n FROM event e WHERE ${range}`).get(...(params as never[])) as {
