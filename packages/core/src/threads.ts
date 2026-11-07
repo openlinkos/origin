@@ -111,9 +111,10 @@ export function deriveFollow(db: Database, ev: FollowEvent): boolean {
   const link = followLink(ev.text);
   if (!link || (link.source === ev.source && link.sessionId === ev.sessionId)) return false;
   db.prepare(
-    `INSERT OR IGNORE INTO session_follow
+    `INSERT INTO session_follow
        (source, session_id, link_id, target_source, target_session_id, event_id)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT DO NOTHING`,
   ).run(ev.source, ev.sessionId, link.link, link.source, link.sessionId, ev.id);
   return true;
 }
@@ -327,7 +328,8 @@ function writeThreads(
   }
   const child = childSession(db);
   const insert = db.prepare(
-    'INSERT OR REPLACE INTO session_thread (source, session_id, thread_id) VALUES (?, ?, ?)',
+    `INSERT INTO session_thread (source, session_id, thread_id) VALUES (?, ?, ?)
+     ON CONFLICT (source, session_id) DO UPDATE SET thread_id = excluded.thread_id`,
   );
   for (const members of components.values()) {
     if (members.length < 2) continue;
@@ -478,7 +480,7 @@ export function deriveThreads(db: Database, opts: { anySession?: boolean } = {})
   // Through the search index: only tool results that contain a link id are read.
   const candidates = db
     .prepare(
-      `SELECT e.id, e.source, e.session_id AS sessionId, e.kind, e.text
+      `SELECT e.id, e.source, e.session_id AS "sessionId", e.kind, e.text
          FROM event_fts f JOIN event e ON e.seq = f.rowid
         WHERE event_fts MATCH '"lnk" AND "nk_"' AND e.kind = 'tool_result'`,
     )
@@ -609,7 +611,7 @@ export function threadLastPrompt(
       `SELECT s.source, s.session_id FROM session_thread t
          JOIN session s ON s.source = t.source AND s.session_id = t.session_id
         WHERE t.thread_id = ? AND s.event_count > 0 AND s.started_at <= ?
-        ORDER BY s.ended_at DESC, s.source, s.session_id LIMIT ?`,
+        ORDER BY s.ended_at DESC NULLS LAST, s.source, s.session_id LIMIT ?`,
     )
     .all(id, opts.until ?? Number.MAX_SAFE_INTEGER, LAST_PROMPT_SESSIONS) as unknown as Array<{
     source: string;

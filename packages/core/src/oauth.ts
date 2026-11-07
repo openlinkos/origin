@@ -1040,9 +1040,10 @@ export function startDeviceAuthorization(
         const userCode = normalizeUserCode(letters);
         const info = db
           .prepare(
-            `INSERT OR IGNORE INTO device_request (hash, user_code, device, ip, created_at, expires_at,
-                                                   interval_s, status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+            `INSERT INTO device_request (hash, user_code, device, ip, created_at, expires_at,
+                                         interval_s, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+             ON CONFLICT DO NOTHING`,
           )
           .run(
             secretHash(deviceCode),

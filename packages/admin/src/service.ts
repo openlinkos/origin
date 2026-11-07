@@ -1988,11 +1988,12 @@ export class AdminService {
     };
     const facet = (column: string, dim: Dim): FacetValue[] => {
       const w = where(dim);
+      const present = `${w.sql ? `${w.sql} AND` : 'WHERE'} ${column} IS NOT NULL`;
       return (
         this.db
           .prepare(
-            `SELECT ${column} AS value, COUNT(*) AS count FROM recall r ${w.sql}
-             GROUP BY 1 HAVING value IS NOT NULL ORDER BY count DESC, value`,
+            `SELECT ${column} AS value, COUNT(*) AS count FROM recall r ${present}
+             GROUP BY 1 ORDER BY count DESC, value`,
           )
           .all(...w.params) as unknown as FacetValue[]
       ).map((v) => ({ value: String(v.value), count: v.count }));

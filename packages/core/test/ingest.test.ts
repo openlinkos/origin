@@ -125,6 +125,24 @@ describe('syncSource', () => {
     expect(r.eventsAdded).toBe(2);
   });
 
+  it('passes over an event that lacks a value its row requires, keeping the rest', async () => {
+    const file = path.join(src, 'n.jsonl');
+    const lacking = (fields: Record<string, unknown>) =>
+      `${JSON.stringify({ id: 'x', session: 's5', ts: 1500, role: 'user', text: 'lacking', ...fields })}\n`;
+    fs.writeFileSync(
+      file,
+      line('1', 's5', 1000, 'user', 'good') +
+        lacking({ id: 'n1', ts: null }) +
+        lacking({ id: 'n2', session: null }) +
+        lacking({ id: 'n3', text: null }) +
+        line('2', 's5', 2000, 'user', 'also good'),
+    );
+    const r = await syncSource({ db, home }, fakeAdapter(src));
+    expect(r.parseErrors).toBe(0);
+    expect(r.eventsAdded).toBe(2);
+    expect(listEvents(db, { sessionId: 's5' }).map((e) => e.id)).toEqual(['fake:1', 'fake:2']);
+  });
+
   it('drops mirror bytes left by an interrupted sync before appending (invariant 1)', async () => {
     const file = path.join(src, 'm.jsonl');
     fs.writeFileSync(file, line('1', 's7', 1000, 'user', 'first'));

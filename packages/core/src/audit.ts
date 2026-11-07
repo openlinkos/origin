@@ -50,9 +50,10 @@ export function recordAudit(db: Database, input: AuditInput, now = Date.now()): 
   const info = db
     .prepare(
       `INSERT INTO audit_log (at, actor, channel, action, target, detail, ip, user_agent)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       RETURNING id`,
     )
-    .run(
+    .get(
       now,
       clip(input.actor, 128) ?? 'unknown',
       input.channel,
@@ -61,8 +62,8 @@ export function recordAudit(db: Database, input: AuditInput, now = Date.now()): 
       input.detail ? JSON.stringify(input.detail) : null,
       clip(input.ip, 64),
       clip(input.userAgent, 256),
-    );
-  return Number(info.lastInsertRowid);
+    ) as { id: number };
+  return info.id;
 }
 
 /** Audit records, newest first. `beforeId` pages backwards. */

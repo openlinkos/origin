@@ -299,7 +299,8 @@ export function deriveProposal(db: Database, ev: ProposalEvent): boolean {
     ev.ts,
   );
   const cite = db.prepare(
-    'INSERT OR IGNORE INTO proposal_source (proposal_id, event_id, quote) VALUES (?, ?, ?)',
+    `INSERT INTO proposal_source (proposal_id, event_id, quote) VALUES (?, ?, ?)
+     ON CONFLICT DO NOTHING`,
   );
   for (const s of p.sources) cite.run(p.id, s.eventId, s.quote);
   return true;
@@ -316,7 +317,7 @@ export function deriveProposals(db: Database): number {
   // Through the search index: only tool results that contain a proposal id are read.
   const candidates = db
     .prepare(
-      `SELECT e.id, e.source, e.session_id AS sessionId, e.kind, e.ts, e.text
+      `SELECT e.id, e.source, e.session_id AS "sessionId", e.kind, e.ts, e.text
          FROM event_fts f JOIN event e ON e.seq = f.rowid
         WHERE event_fts MATCH '"prp" AND "rp_"' AND e.kind = 'tool_result'`,
     )

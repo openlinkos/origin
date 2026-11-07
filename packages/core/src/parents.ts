@@ -170,6 +170,12 @@ export function getSessionParent(
   };
 }
 
+/**
+ * The separator of the keys a parent walk has seen, as an SQL string literal: the unit separator
+ * (U+001F), which no source or session id holds.
+ */
+const SEP = "'\u001f'";
+
 /** A session counts when it has a visible event that is not a memory. Forgotten sessions do not. */
 function visibleSession(source: string, session: string): string {
   return `EXISTS (
@@ -188,17 +194,17 @@ const HANGING_CHILD = `WITH RECURSIVE hang(
 ) AS (
   SELECT p.source, p.session_id, p.via, p.run_group, p.run_name, p.signal,
          p.parent_source, p.parent_session_id,
-         char(31) || p.source || char(31) || p.session_id || char(31), 1
+         ${SEP} || p.source || ${SEP} || p.session_id || ${SEP}, 1
     FROM session_parent p
    WHERE ${visibleSession('p.source', 'p.session_id')}
   UNION ALL
   SELECT hang.source, hang.session_id, hang.via, hang.run_group, hang.run_name, hang.signal,
          p.parent_source, p.parent_session_id,
-         hang.seen || hang.anc_source || char(31) || hang.anc_id || char(31), hang.depth + 1
+         hang.seen || hang.anc_source || ${SEP} || hang.anc_id || ${SEP}, hang.depth + 1
     FROM hang
     JOIN session_parent p ON p.source = hang.anc_source AND p.session_id = hang.anc_id
    WHERE hang.depth < 32
-     AND instr(hang.seen, char(31) || hang.anc_source || char(31) || hang.anc_id || char(31)) = 0
+     AND instr(hang.seen, ${SEP} || hang.anc_source || ${SEP} || hang.anc_id || ${SEP}) = 0
      AND NOT ${visibleSession('hang.anc_source', 'hang.anc_id')}
 )
 SELECT hang.source, hang.session_id, hang.via, hang.run_group, hang.run_name, hang.signal
@@ -269,19 +275,19 @@ export function isFoldedChild(db: Database, source: string, sessionId: string): 
 export const TOP_LEVEL_SESSION = `NOT EXISTS (
   WITH RECURSIVE chain(source, session_id, seen, depth) AS (
     SELECT p.parent_source, p.parent_session_id,
-           char(31) || session.source || char(31) || session.session_id || char(31)
-             || p.parent_source || char(31) || p.parent_session_id || char(31),
+           ${SEP} || session.source || ${SEP} || session.session_id || ${SEP}
+             || p.parent_source || ${SEP} || p.parent_session_id || ${SEP},
            1
       FROM session_parent p
      WHERE p.source = session.source AND p.session_id = session.session_id
     UNION ALL
     SELECT p.parent_source, p.parent_session_id,
-           chain.seen || p.parent_source || char(31) || p.parent_session_id || char(31),
+           chain.seen || p.parent_source || ${SEP} || p.parent_session_id || ${SEP},
            chain.depth + 1
       FROM chain
       JOIN session_parent p ON p.source = chain.source AND p.session_id = chain.session_id
      WHERE chain.depth < 32
-       AND instr(chain.seen, char(31) || p.parent_source || char(31) || p.parent_session_id || char(31)) = 0
+       AND instr(chain.seen, ${SEP} || p.parent_source || ${SEP} || p.parent_session_id || ${SEP}) = 0
   )
   SELECT 1 FROM chain
    WHERE NOT EXISTS (

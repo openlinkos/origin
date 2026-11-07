@@ -433,7 +433,7 @@ export function latestAgentVersions(db: Database): Map<string, string> {
     .prepare(
       `SELECT source, session_id FROM (
          SELECT source, session_id,
-                ROW_NUMBER() OVER (PARTITION BY source ORDER BY ended_at DESC) AS n
+                ROW_NUMBER() OVER (PARTITION BY source ORDER BY ended_at DESC NULLS LAST) AS n
            FROM session WHERE event_count > 0)
         WHERE n <= 5 ORDER BY source, n`,
     )
@@ -503,9 +503,13 @@ export function listThreadSessions(
         WHERE (source, session_id) IN
             (SELECT t.source, t.session_id FROM session_thread t WHERE t.thread_id = ?)
           AND event_count > 0
-        ORDER BY started_at, source, session_id LIMIT ? OFFSET ?`,
+        ORDER BY started_at NULLS FIRST, source, session_id LIMIT ? OFFSET ?`,
     )
-    .all(threadId, opts.limit ?? -1, opts.offset ?? 0) as unknown as SessionRecord[];
+    .all(
+      threadId,
+      opts.limit ?? Number.MAX_SAFE_INTEGER,
+      opts.offset ?? 0,
+    ) as unknown as SessionRecord[];
   const prompt = promptFinder(db);
   return rows.map((r) => toSessionRow(r, prompt));
 }

@@ -624,7 +624,7 @@ INSERT INTO backfill_chain (tid, root)
   UNION
   SELECT d.id, en.root FROM backfill_todo d
     JOIN entry_source s ON s.event_id = d.target JOIN entry en ON en.id = s.entry_id;
-INSERT OR IGNORE INTO tombstone_effect (tombstone_id, kind, item, how)
+INSERT INTO tombstone_effect (tombstone_id, kind, item, how)
   SELECT c.tid, 'entry', v.id, 'direct' FROM backfill_chain c JOIN entry v ON v.root = c.root
   UNION
   SELECT c.tid, 'event', s.event_id, 'direct' FROM backfill_chain c
@@ -638,8 +638,10 @@ INSERT OR IGNORE INTO tombstone_effect (tombstone_id, kind, item, how)
     JOIN backfill_todo d ON d.id = f.tombstone_id
   UNION
   SELECT x.tombstone_id, 'event', x.event_id, 'direct' FROM excluded_event x
-    JOIN backfill_todo d ON d.id = x.tombstone_id;
-INSERT OR IGNORE INTO tombstone_meta (tombstone_id, author) SELECT id, NULL FROM backfill_todo;
+    JOIN backfill_todo d ON d.id = x.tombstone_id WHERE true
+  ON CONFLICT DO NOTHING;
+INSERT INTO tombstone_meta (tombstone_id, author) SELECT id, NULL FROM backfill_todo WHERE true
+  ON CONFLICT DO NOTHING;
 DELETE FROM backfill_todo;
 DELETE FROM backfill_chain;
 `;

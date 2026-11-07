@@ -125,7 +125,7 @@ export function eventActivity(
     .prepare(
       `SELECT s.source AS source,
               ${resolvedProjectSql('s.source', 's.session_id', 's.project')} AS project,
-              CAST(e.ts / ? AS INTEGER) * ? AS start,
+              CAST(e.ts / ? AS BIGINT) * ? AS start,
               COUNT(*) AS n
        FROM session s CROSS JOIN event e INDEXED BY event_session
          ON e.source = s.source AND e.session_id = s.session_id
@@ -142,7 +142,7 @@ export function eventActivity(
     .prepare(
       `SELECT s.source AS source,
               ${resolvedProjectSql('s.source', 's.session_id', 's.project')} AS project,
-              CAST(e.ts / ? AS INTEGER) * ? AS start,
+              CAST(e.ts / ? AS BIGINT) * ? AS start,
               COUNT(*) AS n
        FROM excluded_event x CROSS JOIN event e ON e.id = x.event_id
        CROSS JOIN session s ON s.source = e.source AND s.session_id = e.session_id
@@ -177,10 +177,10 @@ export function activeProjects(
   return db
     .prepare(
       `SELECT ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} AS project,
-              COUNT(*) AS sessions, MAX(ended_at) AS lastAt FROM session
+              COUNT(*) AS sessions, MAX(ended_at) AS "lastAt" FROM session
        WHERE ${resolvedProjectSql('session.source', 'session.session_id', 'session.project')} IS NOT NULL
          AND event_count > 0 AND ended_at >= ?
-       GROUP BY 1 ORDER BY sessions DESC, lastAt DESC`,
+       GROUP BY 1 ORDER BY sessions DESC, "lastAt" DESC`,
     )
     .all(o.since) as unknown as Array<{ project: string; sessions: number; lastAt: number }>;
 }
@@ -215,7 +215,7 @@ export function ingestHealth(
               CASE WHEN note LIKE 'device %' THEN substr(note, 8) ELSE NULL END AS device,
               COUNT(*) AS runs, SUM(lines_read) AS lines_read, SUM(events_added) AS events_added,
               SUM(parse_errors) AS parse_errors, MAX(finished_at) AS last_at
-       FROM sync_log WHERE ${where} GROUP BY 1, 2 ORDER BY 1, 2`,
+       FROM sync_log WHERE ${where} GROUP BY 1, 2 ORDER BY 1, 2 NULLS FIRST`,
     )
     .all(...params) as unknown as Array<{
     source: string;

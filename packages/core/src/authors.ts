@@ -145,7 +145,9 @@ export const OWNER_PROMPT_SQL = `(e.role = 'user' AND e.kind = 'message'
  */
 export function authorWriter(db: Database): (seq: number, ev: EventInput) => void {
   const insert = db.prepare(
-    'INSERT OR REPLACE INTO event_author (seq, author, speaker, signal) VALUES (?, ?, ?, ?)',
+    `INSERT INTO event_author (seq, author, speaker, signal) VALUES (?, ?, ?, ?)
+     ON CONFLICT (seq) DO UPDATE
+       SET author = excluded.author, speaker = excluded.speaker, signal = excluded.signal`,
   );
   return (seq, ev) => {
     if (!hasAuthor(ev)) return;
@@ -165,7 +167,8 @@ export function recordSessionKind(db: Database, source: string, fact: SessionKin
   return (
     db
       .prepare(
-        'INSERT OR IGNORE INTO session_kind (source, session_id, kind, signal) VALUES (?, ?, ?, ?)',
+        `INSERT INTO session_kind (source, session_id, kind, signal) VALUES (?, ?, ?, ?)
+         ON CONFLICT DO NOTHING`,
       )
       .run(source, fact.sessionId, fact.kind, cleanSignal(fact.signal)).changes > 0
   );

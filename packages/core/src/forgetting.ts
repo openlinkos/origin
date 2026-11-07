@@ -139,13 +139,14 @@ function statements(db: Database) {
     forgottenBy: db.prepare('SELECT tombstone_id AS t FROM forgotten_entry WHERE entry_id = ?'),
     excludedBy: db.prepare('SELECT tombstone_id AS t FROM excluded_event WHERE event_id = ?'),
     hideEntry: db.prepare(
-      'INSERT OR IGNORE INTO forgotten_entry (entry_id, tombstone_id) VALUES (?, ?)',
+      'INSERT INTO forgotten_entry (entry_id, tombstone_id) VALUES (?, ?) ON CONFLICT DO NOTHING',
     ),
     hideEvent: db.prepare(
-      'INSERT OR IGNORE INTO excluded_event (event_id, tombstone_id) VALUES (?, ?)',
+      'INSERT INTO excluded_event (event_id, tombstone_id) VALUES (?, ?) ON CONFLICT DO NOTHING',
     ),
     addRow: db.prepare(
-      'INSERT OR IGNORE INTO tombstone_effect (tombstone_id, kind, item, how) VALUES (?, ?, ?, ?)',
+      `INSERT INTO tombstone_effect (tombstone_id, kind, item, how) VALUES (?, ?, ?, ?)
+       ON CONFLICT DO NOTHING`,
     ),
     sessionOf: db.prepare('SELECT source, session_id FROM event WHERE id = ?'),
   };
@@ -541,18 +542,16 @@ function insertTombstone(
   db.prepare(
     'INSERT INTO tombstone (id, target, reason, created_at, origin) VALUES (?, ?, ?, ?, ?)',
   ).run(t.id, t.target, t.reason, t.createdAt, t.origin);
-  db.prepare('INSERT OR IGNORE INTO tombstone_meta (tombstone_id, author) VALUES (?, ?)').run(
-    t.id,
-    author,
-  );
+  db.prepare(
+    'INSERT INTO tombstone_meta (tombstone_id, author) VALUES (?, ?) ON CONFLICT DO NOTHING',
+  ).run(t.id, author);
 }
 
 /** Record an author learned later (a tombstone first received without one). */
 function noteAuthor(db: Database, id: string, author: string | null | undefined): void {
-  db.prepare('INSERT OR IGNORE INTO tombstone_meta (tombstone_id, author) VALUES (?, ?)').run(
-    id,
-    author ?? null,
-  );
+  db.prepare(
+    'INSERT INTO tombstone_meta (tombstone_id, author) VALUES (?, ?) ON CONFLICT DO NOTHING',
+  ).run(id, author ?? null);
   if (author) {
     db.prepare(
       'UPDATE tombstone_meta SET author = ? WHERE tombstone_id = ? AND author IS NULL',

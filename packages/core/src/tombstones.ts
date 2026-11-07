@@ -65,7 +65,7 @@ const SUMMARY = `SELECT t.id, t.target, t.reason, t.created_at, t.origin, m.auth
        WHERE x.tombstone_id = t.id AND x.kind = 'entry') AS entries,
     (SELECT COUNT(DISTINCT x.item) FROM tombstone_effect x
        WHERE x.tombstone_id = t.id AND x.kind = 'event') AS events,
-    (SELECT group_concat(r.id, ' ') FROM tombstone r WHERE r.target = t.id) AS restored_by
+    (SELECT string_agg(r.id, ' ') FROM tombstone r WHERE r.target = t.id) AS restored_by
   FROM tombstone t LEFT JOIN tombstone_meta m ON m.tombstone_id = t.id`;
 
 interface SummaryRow {

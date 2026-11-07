@@ -643,16 +643,19 @@ export function eventInserter(
   agentVersion: string | null,
 ): (lineNo: number, events: EventInput[]) => EventInput[] {
   const insert = db.prepare(
-    `INSERT OR IGNORE INTO event
+    `INSERT INTO event
          (id, source, session_id, parent_id, ts, project, cwd, git_branch, role, kind, text,
           raw_file_id, raw_line, agent_version, meta)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT DO NOTHING
+       RETURNING seq`,
   );
   // Who wrote an input is kept with it, derived from the same line (see authors.ts).
   const keepAuthor = authorWriter(db);
   return (lineNo, events) =>
     events.filter((ev) => {
-      const done = insert.run(
+      if (!storable(ev)) return false;
+      const done = insert.get(
         `${source}:${ev.id}`,
         source,
         ev.sessionId,
@@ -668,11 +671,27 @@ export function eventInserter(
         lineNo,
         ev.agentVersion ?? agentVersion ?? null,
         ev.meta ? JSON.stringify(ev.meta) : null,
-      );
-      if (done.changes === 0) return false;
-      keepAuthor(Number(done.lastInsertRowid), ev);
+      ) as { seq: number } | undefined;
+      if (!done) return false;
+      keepAuthor(done.seq, ev);
       return true;
     });
+}
+
+/**
+ * Whether an event has every value its row requires. One with a null session, role, kind, text, or
+ * time, or a time that is NaN (which SQLite stores as NULL), is passed over, as INSERT OR IGNORE
+ * did before. A value that cannot be bound at all (undefined) still fails the line.
+ */
+function storable(ev: EventInput): boolean {
+  return (
+    ev.sessionId !== null &&
+    ev.ts !== null &&
+    !Number.isNaN(ev.ts) &&
+    ev.role !== null &&
+    ev.kind !== null &&
+    ev.text !== null
+  );
 }
 
 /** A chunk of a device's raw mirror, replicated to a hub (see docs/architecture.md#personal-hub). */
@@ -1221,11 +1240,12 @@ function createRawFile(
   const info = db
     .prepare(
       `INSERT INTO raw_file (source, path, generation, mirror, first_seen_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?)
+       RETURNING id`,
     )
-    .run(source, rawPath, generation, mirror, now, now);
+    .get(source, rawPath, generation, mirror, now, now) as { id: number };
   return {
-    id: Number(info.lastInsertRowid),
+    id: info.id,
     source,
     path: rawPath,
     generation,
