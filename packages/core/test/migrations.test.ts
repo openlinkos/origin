@@ -15,9 +15,11 @@ import {
   listSessions,
   listTokens,
   type Migration,
+  type MigrationContext,
   OriginError,
   openDatabase,
   openMemoryDatabase,
+  PG_BASE_VERSION,
   rawLocator,
   readRawLine,
   recordAudit,
@@ -29,6 +31,8 @@ import {
   storeVersion,
   syncSource,
   threadIdOf,
+  type UpgradeStep,
+  upgradeSteps,
 } from '../src/index.js';
 import { fakeAdapter, line } from './helpers.js';
 import {
@@ -543,6 +547,51 @@ describe('a store of a newer Origin', () => {
     }));
     openDatabase(other, { migrations: beyond }).close();
     expect(() => openDatabase(other)).toThrow(OriginError);
+  });
+});
+
+describe('the steps of an upgrade', () => {
+  const versions = (steps: UpgradeStep[]) => steps.map((s) => [s.version, s.up !== undefined]);
+
+  it('are on SQLite the migrations after the store, recording version 1 first in 0.1.0', () => {
+    const migrations = counted([]);
+    expect(versions(upgradeSteps('sqlite', FIRST_VERSION, false, migrations))).toEqual([
+      [1, false],
+      [2, true],
+      [3, true],
+      [4, true],
+    ]);
+    expect(versions(upgradeSteps('sqlite', FIRST_VERSION, true, migrations))).toEqual([
+      [2, true],
+      [3, true],
+      [4, true],
+    ]);
+    expect(versions(upgradeSteps('sqlite', 3, true, migrations))).toEqual([[4, true]]);
+    expect(upgradeSteps('sqlite', 4, true, migrations)).toEqual([]);
+  });
+
+  it('are on PostgreSQL the migrations after its base version, each through its own step', () => {
+    const ran: string[] = [];
+    const step = (version: number, postgres: boolean): Migration => ({
+      version,
+      name: `step ${version}`,
+      up: () => void ran.push(`up ${version}`),
+      ...(postgres ? { postgres: () => void ran.push(`postgres ${version}`) } : {}),
+    });
+    const migrations = [
+      step(PG_BASE_VERSION - 1, true),
+      step(PG_BASE_VERSION, true),
+      step(PG_BASE_VERSION + 1, true),
+      step(PG_BASE_VERSION + 2, false),
+    ];
+    const steps = upgradeSteps('postgres', PG_BASE_VERSION, true, migrations);
+    expect(steps.map((s) => s.version)).toEqual([PG_BASE_VERSION + 1, PG_BASE_VERSION + 2]);
+    for (const s of steps) s.up?.({} as MigrationContext);
+    expect(ran).toEqual([`postgres ${PG_BASE_VERSION + 1}`, `up ${PG_BASE_VERSION + 2}`]);
+    expect(upgradeSteps('postgres', PG_BASE_VERSION + 2, true, migrations)).toEqual([]);
+    expect(() => upgradeSteps('postgres', PG_BASE_VERSION - 1, true, migrations)).toThrow(
+      new RegExp(`starts at version ${PG_BASE_VERSION}`),
+    );
   });
 });
 

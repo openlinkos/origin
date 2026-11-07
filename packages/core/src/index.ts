@@ -189,9 +189,12 @@ export {
   FIRST_VERSION,
   type Migration,
   type MigrationContext,
+  PG_BASE_VERSION,
   rebuildAuthorship,
   STORE_VERSION,
   storeVersion,
+  type UpgradeStep,
+  upgradeSteps,
 } from './migrations.js';
 export {
   FRAME_BYTES,

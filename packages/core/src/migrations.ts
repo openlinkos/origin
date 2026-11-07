@@ -1,5 +1,6 @@
+import type { Dialect } from './database.js';
 import type { Database } from './db.js';
-import { assertStoreCurrent, transaction } from './db.js';
+import { transaction } from './db.js';
 import { OriginError, StoreUpgradedError } from './errors.js';
 import { sessionBranchQuery } from './ingest.js';
 import { reparsePlaces } from './places.js';
@@ -13,11 +14,15 @@ import type { SourceAdapter } from './types.js';
  * Versions of the store format, and the migrations between them (see
  * docs/architecture.md#migrations).
  *
- * A store records its version in the database header, `PRAGMA user_version`: SQLite keeps it there
- * for applications, it can be read before any table exists, and it is written in the same
- * transaction as the changes it describes, so a migration and its version commit or roll back
- * together. A backup copies it with the database. Origin 0.1.0 wrote no version: a store without
- * one is version 1 if it has the tables of 0.1.0, and new otherwise.
+ * A store records its version in its database (Database.formatVersion): in SQLite, in the database
+ * header, `PRAGMA user_version`. SQLite keeps it there for applications, it can be read before any
+ * table exists, and it is written in the same transaction as the changes it describes, so a
+ * migration and its version commit or roll back together. A backup copies it with the database.
+ * Origin 0.1.0 wrote no version: a store without one is version 1 if it has the tables of 0.1.0,
+ * and new otherwise.
+ *
+ * A store in PostgreSQL starts at PG_BASE_VERSION: migrations up to it never run there, and each
+ * later one runs its `postgres` step, or `up` when that is written for both engines.
  *
  * Opening a store brings it to the latest version, in order and once each:
  *
@@ -59,6 +64,11 @@ export interface Migration {
   /** What it does, for messages. */
   name: string;
   up(ctx: MigrationContext): void;
+  /**
+   * The step on PostgreSQL, for a migration whose `up` is not written for both engines (SQL that
+   * both accept, and the helpers of dialect.ts). Only migrations after PG_BASE_VERSION run there.
+   */
+  postgres?(ctx: MigrationContext): void;
 }
 
 /**
@@ -439,6 +449,12 @@ export const FIRST_VERSION = 1;
 /** The latest version: what this code creates, and brings older stores to. */
 export const STORE_VERSION = latestVersion(MIGRATIONS);
 
+/**
+ * The version a store in PostgreSQL starts at: it is created with the schema of this version or a
+ * later one, so no migration up to it ever runs there.
+ */
+export const PG_BASE_VERSION = 12;
+
 /** How long a process waits for another to finish a migration before it gives up. */
 export const MIGRATION_WAIT_MS = 5 * 60_000;
 
@@ -471,18 +487,14 @@ function latestVersion(migrations: Migration[]): number {
   return version;
 }
 
-/** `PRAGMA user_version`: 0 for a store that records none. */
-function userVersion(db: Database): number {
-  return (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-}
-
 /**
  * The version of a store: the one it records, else 1 for a store of 0.1.0 (which has the `raw_file`
- * and `event` tables), else 0 for a new one.
+ * and `event` tables), else 0 for a new one. Only SQLite has stores of 0.1.0.
  */
 export function storeVersion(db: Database): number {
-  const recorded = userVersion(db);
+  const recorded = db.formatVersion();
   if (recorded > 0) return recorded;
+  if (db.dialect !== 'sqlite') return 0;
   return db.hasTable('raw_file') && db.hasTable('event') ? FIRST_VERSION : 0;
 }
 
@@ -513,22 +525,59 @@ export function refuseNewerStore(
  * may be running a migration that takes a while.
  */
 function underLock<T>(db: Database, fn: () => T): T {
-  assertStoreCurrent(db);
-  const timeout = (db.prepare('PRAGMA busy_timeout').get() as { timeout: number }).timeout;
-  db.exec(`PRAGMA busy_timeout = ${MIGRATION_WAIT_MS}`);
-  try {
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      const out = fn();
-      db.exec('COMMIT');
-      return out;
-    } catch (err) {
-      db.exec('ROLLBACK');
-      throw err;
-    }
-  } finally {
-    db.exec(`PRAGMA busy_timeout = ${timeout}`);
+  return db.withWaitTimeout(MIGRATION_WAIT_MS, () => transaction(db, fn, { immediate: true }));
+}
+
+/** One step of an upgrade: a migration, or recording the version of a store of 0.1.0. */
+export interface UpgradeStep {
+  version: number;
+  name: string;
+  /** What it changes, on the store's engine; none for a step that only records the version. */
+  up?: (ctx: MigrationContext) => void;
+}
+
+/**
+ * The steps that bring a store at version `found` (`stamped` when it records it) to the latest of
+ * `migrations`, on its engine. On SQLite, every migration after `found`, after recording version 1
+ * in a store of 0.1.0, which records none. On PostgreSQL, whose stores start at PG_BASE_VERSION,
+ * every migration after `found`, each through its `postgres` step if it has one.
+ */
+export function upgradeSteps(
+  dialect: Dialect,
+  found: number,
+  stamped: boolean,
+  migrations: Migration[],
+): UpgradeStep[] {
+  if (dialect === 'sqlite') {
+    const steps: UpgradeStep[] = [
+      { version: FIRST_VERSION, name: 'record the format version' },
+      ...migrations.map((m) => ({ version: m.version, name: m.name, up: m.up.bind(m) })),
+    ];
+    return steps.filter((s) => !(s.version < found || (s.version === found && stamped)));
   }
+  if (found < PG_BASE_VERSION) {
+    throw new OriginError(
+      `The store has format version ${found}, but a store in ${dialect} starts at version ${PG_BASE_VERSION}.`,
+    );
+  }
+  return migrations
+    .filter((m) => m.version > found)
+    .map((m) => ({
+      version: m.version,
+      name: m.name,
+      up: m.postgres ? m.postgres.bind(m) : m.up.bind(m),
+    }));
+}
+
+/**
+ * Create what the schema has and the store lacks, its tables, indexes, views, and triggers, through
+ * SQLite's idempotent statements. Another engine needs its own schema, which this Origin lacks.
+ */
+function ensureObjects(db: Database): void {
+  if (db.dialect !== 'sqlite') {
+    throw new OriginError(`This Origin cannot create or complete a store in ${db.dialect}.`);
+  }
+  db.exec(SCHEMA);
 }
 
 /** What a migration, or a rebuild that parses mirrored lines again, is given (see MigrationContext). */
@@ -591,7 +640,7 @@ export function migrate(db: Database, opts: MigrateOptions): void {
   const latest = opts.migrations ? latestVersion(migrations) : STORE_VERSION;
   const log = opts.log ?? (() => {});
   const found = storeVersion(db);
-  const stamped = userVersion(db) !== 0;
+  const stamped = db.formatVersion() !== 0;
   refuseNewer(found, latest, opts.file);
 
   if (found === 0) {
@@ -599,28 +648,23 @@ export function migrate(db: Database, opts: MigrateOptions): void {
       const now = storeVersion(db);
       refuseNewer(now, latest, opts.file);
       if (now !== 0) return; // created by another process meanwhile
-      db.exec(SCHEMA);
-      db.exec(`PRAGMA user_version = ${latest}`);
+      ensureObjects(db);
+      db.setFormatVersion(latest);
     });
   } else if (found < latest || !stamped) {
+    const steps = upgradeSteps(db.dialect, found, stamped, migrations);
     opts.beforeMigrate?.(db);
     const ctx = migrationContext(db, opts.home, opts.adapters, log);
-    // A store of 0.1.0 records no version yet: record 1, then go on from there.
-    const steps: Array<{ version: number; name: string; up?: () => void }> = [
-      { version: FIRST_VERSION, name: 'record the format version' },
-      ...migrations.map((m) => ({ version: m.version, name: m.name, up: () => m.up(ctx) })),
-    ];
     for (const step of steps) {
-      if (step.version < found || (step.version === found && stamped)) continue;
       try {
         underLock(db, () => {
           const now = storeVersion(db);
           refuseNewer(now, latest, opts.file);
           // Done already, by another process that opened the store at the same time.
-          if (now >= step.version && userVersion(db) !== 0) return;
+          if (now >= step.version && db.formatVersion() !== 0) return;
           if (step.up) log(`Upgrading the store to version ${step.version}: ${step.name}.`);
-          step.up?.();
-          db.exec(`PRAGMA user_version = ${step.version}`);
+          step.up?.(ctx);
+          db.setFormatVersion(step.version);
         });
       } catch (err) {
         if (!step.up || err instanceof NewerStoreError || err instanceof StoreUpgradedError)
@@ -635,5 +679,5 @@ export function migrate(db: Database, opts: MigrateOptions): void {
       }
     }
   }
-  db.exec(SCHEMA);
+  ensureObjects(db);
 }
