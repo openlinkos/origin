@@ -320,6 +320,7 @@ export {
   PG_MIN_SERVER_VERSION,
   PG_OBJECTS,
   PG_PREFLIGHT_SQL,
+  PG_PRESENT_HERE_SQL,
   PG_PRESENT_SQL,
   type PgObject,
   type PgPreflight,

@@ -99,6 +99,16 @@ export async function outside(
   }
 }
 
+/**
+ * A connection of `pg` itself to this file's database, with `schema` alone on its search_path, as
+ * a program other than Origin would connect: the caller ends it.
+ */
+export async function connect(schema: string): Promise<Admin> {
+  const a = await admin(databaseUrl);
+  await a.query(`SET search_path TO "${schema.replaceAll('"', '""')}"`);
+  return a;
+}
+
 /** The URL of the server's own database, and of this file's. */
 export const urls = () => ({ server: TEST_URL, database: databaseUrl });
 

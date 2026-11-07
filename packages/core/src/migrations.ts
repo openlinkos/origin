@@ -3,6 +3,7 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { OriginError, StoreUpgradedError } from './errors.js';
 import { sessionBranchQuery } from './ingest.js';
+import { missingObjects, PG_PRESENT_HERE_SQL } from './pg/schema.js';
 import { reparsePlaces } from './places.js';
 import { deriveProposals } from './proposals.js';
 import { reparseAuthorship, reparseMemories, reparseParents, reparseTitles } from './reparse.js';
@@ -35,7 +36,8 @@ import type { SourceAdapter } from './types.js';
  * - A store whose version is newer than this code knows is refused, unchanged.
  *
  * Then the schema's idempotent statements run, as on every open: tables, indexes, views, and
- * triggers that are new, and that existing data needs nothing from, appear without a migration.
+ * triggers that are new, and that existing data needs nothing from, appear without a migration. In
+ * PostgreSQL the schema is pg/schema.ts's PG_OBJECTS, of which what the store lacks is created.
  */
 
 /** What a migration can use. */
@@ -753,14 +755,27 @@ export function upgradeSteps(
 }
 
 /**
- * Create what the schema has and the store lacks, its tables, indexes, views, and triggers, through
- * SQLite's idempotent statements. Another engine needs its own schema, which this Origin lacks.
+ * Create what the schema has and the store lacks, its tables, indexes, views, functions, and
+ * triggers: in SQLite through the schema's idempotent statements; in PostgreSQL, where DDL is not
+ * free, by asking the catalog which of PG_OBJECTS the store has, so that opening a complete store
+ * runs one query and takes no lock. What is missing is created under the store's write lock, after
+ * asking again, as another process may have created it meanwhile. An object that exists is kept
+ * as it is, as `IF NOT EXISTS` keeps it: changing one needs a migration.
  */
 function ensureObjects(db: Database): void {
-  if (db.dialect !== 'sqlite') {
-    throw new OriginError(`This Origin cannot create or complete a store in ${db.dialect}.`);
+  if (db.dialect === 'sqlite') {
+    db.exec(SCHEMA);
+    return;
   }
-  db.exec(SCHEMA);
+  const missing = () =>
+    missingObjects(db.prepare(PG_PRESENT_HERE_SQL).all() as Array<{ kind: string; name: string }>);
+  if (missing().length === 0) return;
+  const create = () => {
+    const objects = missing();
+    if (objects.length > 0) db.exec(objects.map((o) => `${o.sql};\n`).join(''));
+  };
+  if (db.isTransaction) create();
+  else underLock(db, create);
 }
 
 /** What a migration, or a rebuild that parses mirrored lines again, is given (see MigrationContext). */
