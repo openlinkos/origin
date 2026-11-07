@@ -32,11 +32,14 @@ import {
   rememberPlaceHead,
 } from './places.js';
 import { deriveProposal } from './proposals.js';
+import { blankBytes, isSkippedLine, type PurgedLookup, purgedLookup } from './purged.js';
 import { deriveFollow, refreshThreads } from './threads.js';
 import { NAME_RE } from './tokens.js';
 import type {
   EventInput,
   GeneratedSource,
+  ParsedLine,
+  SessionParentFact,
   SourceAdapter,
   SourceFile,
   SyncResult,
@@ -88,6 +91,11 @@ export interface AppendStats {
   parseErrors: number;
   /** Lines that yielded events, all of which the store already had: lines sent again. */
   duplicates: number;
+  /**
+   * Lines mirrored blank because a purge removed what they hold, or blocked their file (see
+   * purged.ts); present only when there were any.
+   */
+  purged?: number;
 }
 
 /**
@@ -347,6 +355,7 @@ export const TRANSACTION_BYTES = 1024 * 1024;
  * else is looked at again under the lock.
  */
 function isUnchanged(ctx: IngestContext, source: string, file: SourceFile): boolean {
+  if (isBlocked(ctx.db, source, file.absPath)) return true;
   const raw = latestRawFile(ctx.db, source, file.absPath);
   if (!raw) return false;
   // A generated source keeps its token where a file keeps the hash of its tail.
@@ -359,6 +368,15 @@ function isUnchanged(ctx: IngestContext, source: string, file: SourceFile): bool
   }
   if (file.compression) return st.mtimeMs <= raw.updated_at;
   return st.size === raw.bytes_ingested && tailMatches(fileContent(file.absPath), raw);
+}
+
+/**
+ * Whether a purge blocked the file: it is never read again, a generated source never asked for
+ * more, whatever it holds now.
+ */
+function isBlocked(db: Database, source: string, absPath: string): boolean {
+  const purged = purgedLookup(db);
+  return purged.any && purged.file(source, absPath) !== null;
 }
 
 /** What one ingestion step did, and the raw file whose mirror it sealed frames for, if any. */
@@ -381,6 +399,8 @@ function ingestFile(
   agentVersion: string | null,
   result: SyncResult,
 ): Step {
+  // Checked again under the lock: a purge may have blocked the file since it was found changed.
+  if (isBlocked(ctx.db, adapter.id, file.absPath)) return NOTHING;
   let raw = latestRawFile(ctx.db, adapter.id, file.absPath);
   const content = openContent(ctx, file, raw);
   if (!content) return NOTHING;
@@ -505,7 +525,21 @@ function appendLines(
   lines.pop(); // trailing empty string
   const baseLine = raw.lines_ingested;
   const touchedSessions = new Set<string>();
-  const insert = eventInserter(ctx.db, adapter.id, raw.id, parse.agentVersion);
+  // What a purge removed stays out: a line that holds any of it, or any line of a file a purge
+  // blocked, is mirrored as spaces of the same length, so that byte offsets and line numbers stay
+  // those of the source file and of a device's cursor, and nothing is read from it.
+  const purged = purgedLookup(ctx.db);
+  const blocked = purged.any ? purged.file(adapter.id, raw.path) : null;
+  let mirrored = chunk;
+  const blank = (start: number, end: number) => {
+    if (mirrored === chunk) mirrored = Buffer.from(chunk);
+    blankBytes(mirrored, start, end);
+    stats.purged = (stats.purged ?? 0) + 1;
+  };
+  // Where the line being parsed starts and ends in `chunk` (line breaks are single bytes).
+  let lineStart = 0;
+  let lineEnd = -1;
+  const insert = eventInserter(ctx.db, adapter.id, raw.id, parse.agentVersion, purged);
   // The latest title wins, except that a generated one never replaces one the user gave.
   const setTitle = ctx.db.prepare(
     `INSERT INTO session (source, session_id, title, title_manual) VALUES (?, ?, ?, ?)
@@ -515,14 +549,27 @@ function appendLines(
   );
   for (let i = 0; i < lines.length; i++) {
     const lineNo = baseLine + i + 1;
+    lineStart = lineEnd + 1;
+    lineEnd = chunk.indexOf(0x0a, lineStart);
     let line = lines[i] ?? '';
     if (line.endsWith('\r')) line = line.slice(0, -1);
-    if (line.trim().length === 0) continue;
-    stats.linesRead++;
-    let parsed: ReturnType<SourceAdapter['parseLine']>;
     // Origin's places file: generated locally, or a device file whose raw path is `places.jsonl`
     // (`@device:places.jsonl` on a hub). A person's file of that name is parsed by the adapter.
     const originPlaces = isOriginPlacesFile(parse.relPath, raw.path, parse.generated);
+    // A blank line, or one a purge replaced: nothing to read. A places line of spaces is still the
+    // file's latest, which its generator compares with the last line it wrote (see places.ts).
+    if (isSkippedLine(line)) {
+      if (originPlaces && line.length > 0) {
+        rememberPlaceHead(ctx.db, adapter.id, parse.device ?? '', line, true);
+      }
+      continue;
+    }
+    stats.linesRead++;
+    if (blocked !== null) {
+      blank(lineStart, lineEnd);
+      continue;
+    }
+    let parsed: ReturnType<SourceAdapter['parseLine']>;
     try {
       // places.jsonl is parsed here, so a source whose adapter does not know the file still
       // applies it. The adapter's own parseLine stays free of git.
@@ -543,6 +590,14 @@ function appendLines(
       continue;
     }
     if (!parsed) continue;
+    if (purged.any && removedBy(purged, adapter.id, parsed, originPlaces) !== null) {
+      blank(lineStart, lineEnd);
+      if (originPlaces) {
+        const spaces = ' '.repeat(lineEnd - lineStart);
+        rememberPlaceHead(ctx.db, adapter.id, parse.device ?? '', spaces, true);
+      }
+      continue;
+    }
     // A places line that is not the object its type requires. The bytes stay; the line changes
     // nothing, and it is recorded as the tip only so a later line is still the latest.
     if (originPlaces) {
@@ -563,15 +618,15 @@ function appendLines(
       // The result of `follow` links its session to the one it continues (see threads.ts), and the
       // result of `propose` holds a proposal (see proposals.ts).
       const stored = { ...ev, id: `${adapter.id}:${ev.id}`, source: adapter.id };
-      deriveFollow(ctx.db, stored);
-      deriveProposal(ctx.db, stored);
+      deriveFollow(ctx.db, stored, purged);
+      deriveProposal(ctx.db, stored, purged);
     }
     if (parsed.memory) {
       try {
         const growthOrigin = storeName(ctx.db);
         importMemory(
           ctx.db,
-          { source: adapter.id, device: parse.device ?? growthOrigin, growthOrigin },
+          { source: adapter.id, device: parse.device ?? growthOrigin, growthOrigin, purged },
           parsed.memory,
         );
       } catch (err) {
@@ -587,11 +642,20 @@ function appendLines(
     }
     // A session this line says is an agent's or a program's: whose its inputs are changes, and with
     // it whether it is the owner's conversation, so its threads are looked at again.
+    // Facts about other sessions than the line's own: none about a session a purge removed.
     for (const fact of parsed.sessionKinds ?? []) {
+      if (purged.any && purged.session(adapter.id, fact.sessionId) !== null) continue;
       if (recordSessionKind(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
     }
     if (originPlaces) {
-      const applied = applyPlaceFacts(ctx.db, adapter.id, parsed, Date.now(), parse.device ?? '');
+      const applied = applyPlaceFacts(
+        ctx.db,
+        adapter.id,
+        parsed,
+        Date.now(),
+        parse.device ?? '',
+        purged,
+      );
       for (const sessionId of applied.sessions) touchedSessions.add(sessionId);
     }
     for (const ev of parsed.events) {
@@ -604,6 +668,7 @@ function appendLines(
     // An agent's own line (fromAgent) still counts from the session file.
     for (const fact of parsed.sessionParents ?? []) {
       if (!originPlaces && !fact.fromAgent) continue;
+      if (purged.any && parentRemovedBy(purged, adapter.id, fact) !== null) continue;
       if (recordSessionParent(ctx.db, adapter.id, fact)) touchedSessions.add(fact.sessionId);
     }
   }
@@ -616,7 +681,7 @@ function appendLines(
     [...touchedSessions].map((sessionId) => ({ source: adapter.id, sessionId })),
   );
   const st = mirrorState(ctx.db, raw.id) as MirrorState;
-  const sealed = appendMirror(ctx.db, ctx.home, st, chunk, ctx.frameBytes ?? FRAME_BYTES);
+  const sealed = appendMirror(ctx.db, ctx.home, st, mirrored, ctx.frameBytes ?? FRAME_BYTES);
   ctx.db
     .prepare(
       `UPDATE raw_file SET bytes_ingested = ?, lines_ingested = ?, tail_hash = ?, updated_at = ?
@@ -633,28 +698,96 @@ function appendLines(
 }
 
 /**
+ * The purge that removed what a parsed line holds, if any: one of its events, by id or by session,
+ * or the session it titles; for a places line, a session it places, or the child or the parent a
+ * parent line names. Such a line is mirrored blank (see appendLines).
+ */
+function removedBy(
+  purged: PurgedLookup,
+  source: string,
+  parsed: ParsedLine,
+  placesLine: boolean,
+): string | null {
+  for (const ev of parsed.events) {
+    const by = purged.event(`${source}:${ev.id}`) ?? purged.session(source, ev.sessionId);
+    if (by !== null) return by;
+  }
+  if (parsed.sessionTitle && parsed.sessionId) {
+    const by = purged.session(source, parsed.sessionId);
+    if (by !== null) return by;
+  }
+  if (!placesLine) return null;
+  for (const place of parsed.places ?? []) {
+    const by = purged.session(source, place.sessionId);
+    if (by !== null) return by;
+  }
+  for (const fact of parsed.sessionParents ?? []) {
+    const by = parentRemovedBy(purged, source, fact);
+    if (by !== null) return by;
+  }
+  return null;
+}
+
+/** The purge that removed the child or the parent session a parent fact names, if any. */
+function parentRemovedBy(
+  purged: PurgedLookup,
+  source: string,
+  fact: SessionParentFact,
+): string | null {
+  return (
+    purged.session(source, fact.sessionId) ??
+    purged.session(fact.parentSource ?? source, fact.parentSessionId)
+  );
+}
+
+/** The columns of an event a line yields, in the order eventInserter binds them. */
+const EVENT_COLUMNS = `id, source, session_id, parent_id, ts, project, cwd, git_branch, role, kind,
+  text, raw_file_id, raw_line, agent_version, meta`;
+
+/**
+ * The `seq` of the next event once a store holds a purge: after the last event, and after every
+ * event a purge deleted (`purge.seq_floor`), so that no number a changes cursor may have passed is
+ * given out again (see changesSince).
+ */
+const NEXT_SEQ_AFTER_PURGES = `(SELECT COALESCE(MAX(n), 0) + 1 FROM (
+    SELECT MAX(seq) AS n FROM event UNION ALL SELECT MAX(seq_floor) AS n FROM purge) AS f)`;
+
+/**
  * Inserts the events parsed from a line of a raw file, keeping those already stored (event ids are
- * stable, so ingesting a line again adds nothing); returns the events it added.
+ * stable, so ingesting a line again adds nothing) and leaving out those a purge removed, by id or
+ * by session; returns the events it added. Must run inside a write transaction, which `purged`
+ * belongs to.
  */
 export function eventInserter(
   db: Database,
   source: string,
   rawFileId: number,
   agentVersion: string | null,
+  purged: PurgedLookup = purgedLookup(db),
 ): (lineNo: number, events: EventInput[]) => EventInput[] {
   const insert = db.prepare(
-    `INSERT INTO event
-         (id, source, session_id, parent_id, ts, project, cwd, git_branch, role, kind, text,
-          raw_file_id, raw_line, agent_version, meta)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT DO NOTHING
-       RETURNING seq`,
+    purged.any
+      ? `INSERT INTO event (seq, ${EVENT_COLUMNS})
+           VALUES (${NEXT_SEQ_AFTER_PURGES}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT DO NOTHING
+           RETURNING seq`
+      : `INSERT INTO event (${EVENT_COLUMNS})
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT DO NOTHING
+           RETURNING seq`,
   );
   // Who wrote an input is kept with it, derived from the same line (see authors.ts).
   const keepAuthor = authorWriter(db);
   return (lineNo, events) =>
     events.filter((ev) => {
       if (!storable(ev)) return false;
+      if (
+        purged.any &&
+        (purged.event(`${source}:${ev.id}`) !== null ||
+          purged.session(source, ev.sessionId) !== null)
+      ) {
+        return false;
+      }
       const done = insert.get(
         `${source}:${ev.id}`,
         source,
@@ -865,6 +998,7 @@ export function appendRemoteLines(
     total.eventsAdded += appended.eventsAdded;
     total.parseErrors += appended.parseErrors;
     total.duplicates += appended.duplicates;
+    if (appended.purged) total.purged = (total.purged ?? 0) + appended.purged;
     start = end;
   }
   return total;

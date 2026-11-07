@@ -18,6 +18,7 @@ import {
   shouldSendEntry,
   type TombstoneRecord,
   unpushedOnly,
+  withPurgedLinesBlanked,
 } from '@openlinkos/origin-core';
 import type { HubConfig } from './config.js';
 
@@ -235,8 +236,15 @@ async function pushRawFile(
   let conflicts = 0;
   const agentVersion = recordedAgentVersion(opts.db, file.id);
   while (offset < file.bytes) {
-    // Offsets are in the mirror's uncompressed content; the hub compresses what it stores.
-    const data = readMirrorLines(opts.db, opts.home, file.id, offset, CHUNK_BYTES);
+    // Offsets are in the mirror's uncompressed content; the hub compresses what it stores. A line
+    // a purge here removed goes blank, at its length, even before the purge has blanked the mirror.
+    const data = withPurgedLinesBlanked(
+      opts.db,
+      opts.home,
+      file.id,
+      offset,
+      readMirrorLines(opts.db, opts.home, file.id, offset, CHUNK_BYTES),
+    );
     if (data.length === 0) throw new Error(`the mirror of ${file.path} ends before its cursor`);
     const body = {
       device: opts.hub.device,

@@ -5,6 +5,7 @@ import { assertStoreCurrent, type Database, transaction } from './db.js';
 import { readMirror } from './mirror.js';
 import { parentPlaceFact, recordSessionParent } from './parents.js';
 import { mirrorRelPath, parseRawPath, remotePath } from './paths.js';
+import { isSkippedLine, type PurgedLookup, purgedLookup } from './purged.js';
 import { refreshThreads } from './threads.js';
 import type { ParsedLine, ProjectRootFact, SessionPlaceFact, SourceFile } from './types.js';
 
@@ -571,6 +572,8 @@ export interface AppliedPlaces {
  * Apply the roots, places, and parents of one parsed line. No-op until the tables exist. `device`
  * is `''` on this store and the sending device's name on a hub. A parent line fills `session_parent`
  * the same way ingestion does, including a run's group and name on a row an agent line already named.
+ * Nothing is applied to a session a purge removed, nor makes one a parent (`purged`, of the caller's
+ * transaction, else looked up here).
  */
 export function applyPlaceFacts(
   db: Database,
@@ -578,18 +581,28 @@ export function applyPlaceFacts(
   parsed: ParsedLine,
   seenAt = Date.now(),
   device = '',
+  purged: PurgedLookup = purgedLookup(db),
 ): AppliedPlaces {
   if (!db.hasTable('session_place')) return { sessions: [], parents: 0 };
   const sessions: string[] = [];
   let parents = 0;
+  const removed = (src: string, sessionId: string) =>
+    purged.any && purged.session(src, sessionId) !== null;
   for (const root of parsed.roots ?? []) upsertRoot(db, root, seenAt, device);
   for (const place of parsed.places ?? []) {
+    if (removed(source, place.sessionId)) continue;
     if (upsertPlaceLine(db, source, place.sessionId, place.project, place.root, place.signal)) {
       sessions.push(place.sessionId);
     }
   }
   if (db.hasTable('session_parent')) {
     for (const fact of parsed.sessionParents ?? []) {
+      if (
+        removed(source, fact.sessionId) ||
+        removed(fact.parentSource ?? source, fact.parentSessionId)
+      ) {
+        continue;
+      }
       if (recordSessionParent(db, source, fact)) {
         parents += 1;
         sessions.push(fact.sessionId);
@@ -951,11 +964,12 @@ export function reparsePlaces(
       for (const raw of text.split('\n')) {
         lineNo++;
         const line = raw.replace(/\r$/, '');
-        if (line.length === 0) continue;
+        if (line.length === 0 || isSkippedLine(line)) continue;
         const parsed = parsePlaceLine(line);
         if (parsed.warning) log?.(`warning ${mirrorRelPath(file)}:${lineNo}: ${parsed.warning}`);
       }
     }
+    const purged = purgedLookup(db);
     for (const file of mirrors) {
       const text = readPlacesText(db, home, file.id);
       if (text === null) continue;
@@ -964,6 +978,11 @@ export function reparsePlaces(
       for (const raw of text.split('\n')) {
         const line = raw.replace(/\r$/, '');
         if (line.length === 0) continue;
+        // A line a purge blanked is still the file's latest, but says nothing.
+        if (isSkippedLine(line)) {
+          rememberPlaceHead(db, file.source, device, line, true);
+          continue;
+        }
         const parsed = parsePlaceLine(line);
         rememberPlaceHead(db, file.source, device, line, Boolean(parsed.warning));
         if (parsed.warning) continue;
@@ -971,7 +990,7 @@ export function reparsePlaces(
         if (key) latest.set(key, parsed);
       }
       for (const parsed of latest.values()) {
-        const applied = applyPlaceFacts(db, file.source, parsed, Date.now(), device);
+        const applied = applyPlaceFacts(db, file.source, parsed, Date.now(), device, purged);
         parents += applied.parents;
         for (const sessionId of applied.sessions) {
           changed.push({ source: file.source, sessionId });

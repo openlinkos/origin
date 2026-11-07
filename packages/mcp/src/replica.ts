@@ -11,6 +11,8 @@ import {
   getSession,
   isEntryForgotten,
   isoLocal,
+  isPurgedId,
+  isPurgedSession,
   localTimeZone,
   OriginError,
 } from '@openlinkos/origin-core';
@@ -171,7 +173,9 @@ export function createReplicaServer(opts: ReplicaOptions): ReplicaServer {
 
   const facts: LocalFacts = {
     known: (id) => isKnown(db, id),
-    forgotten: (id) => isForgotten(db, id),
+    // What this device purged stays hidden here, however long its hub still has it.
+    forgotten: (id) => isForgotten(db, id) || isPurgedId(db, id),
+    removedSession: (source, session) => isPurgedSession(db, source, session),
     entryStatus: (id) => {
       if (isEntryForgotten(db, id)) return 'forgotten';
       return getEntry(db, id)?.status ?? null;

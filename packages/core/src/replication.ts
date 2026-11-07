@@ -21,6 +21,7 @@ import {
 } from './forgetting.js';
 import { storeName } from './identity.js';
 import { isImportedEntry } from './memories.js';
+import { type PurgedLookup, purgedLookup } from './purged.js';
 import {
   getRecall,
   insertRecall,
@@ -243,14 +244,20 @@ function sameEntry(a: ReplicaEntry, b: ReplicaEntry): boolean {
 export type ReceiveResult =
   | { status: 'applied' | 'exists' }
   /** The version it supersedes or events it cites are not here yet: send it again later. */
-  | { status: 'pending'; missing: string[] };
+  | { status: 'pending'; missing: string[] }
+  /**
+   * A purge here removed the version, the version it supersedes, or an event it cites: it is not
+   * stored, and never will be, so the sender may count it as done.
+   */
+  | { status: 'purged'; purgeId: string };
 
 /**
  * Store a version of an entry written on another store (on a hub: pushed by a device). Idempotent
- * by id; the same id with a different body is refused. The version it supersedes and every event
- * it cites must already be here, or the result is `pending`. A version that joins a hidden chain,
- * or cites events hidden here, is hidden on arrival by the forgets concerned (invariant 2), and
- * their growth is logged under `growthOrigin`.
+ * by id; the same id with a different body is refused. A version a purge here removed, or that
+ * supersedes a version or cites an event a purge removed, is `purged` and not stored. Otherwise the
+ * version it supersedes and every event it cites must already be here, or the result is `pending`.
+ * A version that joins a hidden chain, or cites events hidden here, is hidden on arrival by the
+ * forgets concerned (invariant 2), and their growth is logged under `growthOrigin`.
  */
 export function receiveEntry(
   db: Database,
@@ -266,6 +273,16 @@ export function receiveEntry(
           throw new ConflictError(`Entry ${e.id} already exists with different content.`);
         }
         return { status: 'exists' };
+      }
+      // Before `pending`: what a purge removed never arrives, so the version would wait forever.
+      const purged = purgedLookup(db);
+      if (purged.any) {
+        const purgeId =
+          purged.entry(e.id) ??
+          (e.supersedes ? purged.entry(e.supersedes) : null) ??
+          e.sources.map((s) => purged.event(s.eventId)).find((p) => p !== null) ??
+          null;
+        if (purgeId !== null) return { status: 'purged', purgeId };
       }
       const missing: string[] = [];
       if (e.supersedes) {
@@ -411,22 +428,65 @@ export function parseReplicaRecall(value: unknown): RecallRecord {
 
 /**
  * Store a recall a device made (on a hub). Idempotent by id; the same id with a different body is
- * refused. A recall holds only ids, so it needs nothing else to be here first.
+ * refused. A recall holds only ids, so it needs nothing else to be here first. A recall a purge here
+ * removed, or one made in a session a purge removed, is `purged` and not stored; the items that name
+ * what a purge removed are left out of the rest, before they are compared with a recall stored
+ * already, which may have lost more of them to a purge (a thread that is gone, an event of a session
+ * that is), so that sending it again is not a conflict.
  */
-export function receiveRecall(db: Database, r: RecallRecord): 'applied' | 'exists' {
+export function receiveRecall(db: Database, r: RecallRecord): 'applied' | 'exists' | 'purged' {
   return transaction(
     db,
     () => {
+      const purged = purgedLookup(db);
+      if (
+        purged.any &&
+        (purged.recall(r.id) !== null ||
+          (r.source !== null &&
+            r.sessionId !== null &&
+            purged.session(r.source, r.sessionId) !== null))
+      ) {
+        return 'purged';
+      }
+      const kept = purged.any ? { ...r, items: r.items.filter((i) => !itemPurged(purged, i)) } : r;
       const existing = getRecall(db, r.id);
       if (existing) {
-        if (JSON.stringify(existing) !== JSON.stringify(r)) {
+        if (
+          JSON.stringify(existing) !== JSON.stringify(kept) &&
+          !(purged.any && keptAfterPurges(existing, kept))
+        ) {
           throw new ConflictError(`Recall ${r.id} already exists with different content.`);
         }
         return 'exists';
       }
-      insertRecall(db, r);
+      insertRecall(db, kept);
       return 'applied';
     },
     { immediate: true },
   );
+}
+
+/** Whether a recall item names what a purge removed: an entry, an event, or a session. */
+function itemPurged(purged: PurgedLookup, item: RecallItemRecord): boolean {
+  if (item.kind === 'entry') return purged.entry(item.ref) !== null;
+  if (item.kind === 'event') return purged.event(item.ref) !== null;
+  if (item.kind === 'session') {
+    const colon = item.ref.indexOf(':');
+    return (
+      colon > 0 && purged.session(item.ref.slice(0, colon), item.ref.slice(colon + 1)) !== null
+    );
+  }
+  return false;
+}
+
+/**
+ * Whether a stored recall is `received` less items a purge here took from it: the same in all but
+ * its items, each of which `received` has too.
+ */
+function keptAfterPurges(stored: RecallRecord, received: RecallRecord): boolean {
+  if (JSON.stringify({ ...stored, items: [] }) !== JSON.stringify({ ...received, items: [] })) {
+    return false;
+  }
+  const items = new Set(received.items.map((i) => JSON.stringify(i)));
+  return stored.items.every((i) => items.has(JSON.stringify(i)));
 }

@@ -389,6 +389,15 @@ export {
   rejectProposal,
 } from './proposals.js';
 export {
+  isPurgedId,
+  isPurgedSession,
+  isSkippedLine,
+  PURGED_MARKER,
+  type PurgedLookup,
+  purgedLookup,
+  withPurgedLinesBlanked,
+} from './purged.js';
+export {
   briefIds,
   entrySummary,
   estimateTokens,

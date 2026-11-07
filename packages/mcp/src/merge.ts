@@ -39,13 +39,29 @@ import {
 export interface LocalFacts {
   /** Whether this store has an entry or event with this id (visible or not). */
   known(id: string): boolean;
-  /** Whether this store has forgotten the entry or excluded the event. */
+  /**
+   * Whether this store has forgotten the entry or excluded the event, or deleted it for good (a
+   * purge, which its hub may not have made yet).
+   */
   forgotten(id: string): boolean;
   /** The status here of an entry this store has, or null. */
   entryStatus(id: string): string | null;
   /** The versions this store has of the entry with this root (none if it has none). */
   versions(root: string): VersionView[];
+  /**
+   * Whether this store deleted the session for good, with everything in it, whose events its hub
+   * may still have: none of it is shown here.
+   */
+  removedSession?(source: string, session: string): boolean;
 }
+
+/** Whether the device deleted the session for good (see LocalFacts.removedSession). */
+function removedHere(facts: LocalFacts, source: string, session: string): boolean {
+  return facts.removedSession?.(source, session) === true;
+}
+
+/** The source of an event, from its id (`<source>:<id>`). */
+const sourceOf = (id: string) => id.slice(0, id.indexOf(':'));
 
 function key(v: { created: string; id: string }): [number, string] {
   return [Date.parse(v.created), v.id];
@@ -118,7 +134,7 @@ export function mergeSearch(
     opts.ranked ? interleave(local.events, theirs) : [...local.events, ...theirs],
     (e) => e.id,
   )
-    .filter((e) => !facts.forgotten(e.id))
+    .filter((e) => !facts.forgotten(e.id) && !removedHere(facts, e.source, e.session))
     .map((e) => labelled(e, facts, e.id));
   return { entries: entries.slice(0, opts.limit), events: events.slice(0, opts.limit) };
 }
@@ -146,6 +162,7 @@ export function mergeTimeline(
     const sessionKey = (s: SessionView) => `${s.source}\n${s.session}`;
     const mine = new Set(local.sessions.map(sessionKey));
     const sessions = union(local.sessions, theirs, sessionKey)
+      .filter((s) => !removedHere(facts, s.source, s.session))
       .map((s) => ({ ...s, origin: (mine.has(sessionKey(s)) ? 'local' : 'hub') as Found }))
       .sort((a, b) => endedAt(b) - endedAt(a));
     return { sessions: sessions.slice(0, limit) };
@@ -153,7 +170,7 @@ export function mergeTimeline(
   const mine: SessionEvents = local;
   const theirs = hub && 'events' in hub ? hub : null;
   const events = union(mine.events, theirs?.events ?? [], (e) => e.id)
-    .filter((e) => !facts.forgotten(e.id))
+    .filter((e) => !facts.forgotten(e.id) && !removedHere(facts, e.source, e.session))
     .map((e) => labelled(e, facts, e.id))
     .sort((a, b) => Date.parse(a.time) - Date.parse(b.time) || (a.id < b.id ? -1 : 1));
   const shown = events.slice(0, limit);
@@ -238,10 +255,17 @@ function hubThread(r: ThreadResult, facts: LocalFacts): ThreadResult {
   };
 }
 
-/** The hub's recall, without the items this device has forgotten, in its items and its text. */
+/**
+ * The hub's recall, without the items this device has forgotten, or the sessions it deleted, in its
+ * items and its text.
+ */
 function hubRecall(r: RecallResult, facts: LocalFacts): RecallResult {
   const hidden = r.items
-    .filter((i) => (i.kind === 'entry' || i.kind === 'event') && facts.forgotten(i.id))
+    .filter((i) =>
+      i.kind === 'session'
+        ? i.source !== undefined && removedHere(facts, i.source, i.id)
+        : (i.kind === 'entry' || i.kind === 'event') && facts.forgotten(i.id),
+    )
     .map((i) => i.id);
   if (hidden.length === 0) return r;
   const lines = r.text.split('\n').filter((l) => !hidden.some((id) => l.startsWith(`- ${id} `)));
@@ -285,14 +309,18 @@ export function mergeGet(
 ): GetResult | null {
   if (local && !isEntryResult(local)) return { ...local, origin: 'local' };
   if (!local && hub && !isEntryResult(hub)) {
-    if (isSessionResult(hub)) return { ...hubSession(hub, facts), origin: 'hub' };
+    if (isSessionResult(hub)) {
+      if (removedHere(facts, hub.source, hub.session)) return null;
+      return { ...hubSession(hub, facts), origin: 'hub' };
+    }
     if (isThreadResult(hub)) return { ...hubThread(hub, facts), origin: 'hub' };
     if (isRecallResult(hub)) return { ...hubRecall(hub, facts), origin: 'hub' };
     if (isProposalResult(hub)) {
       const shown = hubProposal(hub, facts);
       return shown && { ...shown, origin: 'hub' };
     }
-    return facts.forgotten(hub.id) ? null : { ...hubEvent(hub, facts), origin: 'hub' };
+    if (facts.forgotten(hub.id) || removedHere(facts, hub.source, hub.session)) return null;
+    return { ...hubEvent(hub, facts), origin: 'hub' };
   }
   const mine = local && isEntryResult(local) ? local : null;
   const theirs = hub && isEntryResult(hub) ? hub : null;
@@ -326,10 +354,10 @@ export function mergeChanges(
   facts: LocalFacts,
 ): Omit<ChangesResult, 'next'> {
   const events = union(local?.events ?? [], hub?.events ?? [], (e) => e.id)
-    .filter((e) => !facts.forgotten(e.id))
+    .filter((e) => !facts.forgotten(e.id) && !removedHere(facts, sourceOf(e.id), e.session))
     .map((e) => labelled(e, facts, e.id))
     .sort((a, b) => Date.parse(a.time) - Date.parse(b.time) || (a.id < b.id ? -1 : 1));
-  const active = new Set(events.map((e) => `${e.id.slice(0, e.id.indexOf(':'))}\n${e.session}`));
+  const active = new Set(events.map((e) => `${sourceOf(e.id)}\n${e.session}`));
   const sessionKey = (s: SessionView) => `${s.source}\n${s.session}`;
   const mine = new Set((local?.sessions ?? []).map(sessionKey));
   const sessions = union(local?.sessions ?? [], hub?.sessions ?? [], sessionKey)
@@ -376,6 +404,7 @@ export function mergeDigest(
   const mine = new Map((local?.sessions ?? []).map((s) => [s.id, s]));
   const sessions: DigestSessionView[] = [];
   for (const s of hub.sessions) {
+    if (removedHere(facts, s.source, s.session)) continue;
     const here = held(s.source, s.session);
     if (here && !here.visible) continue;
     const own = here && mine.get(s.id);

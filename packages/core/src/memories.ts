@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Database } from './db.js';
 import { type EntryKind, insertEntry, validateEntry } from './entries.js';
 import { coverArrival } from './forgetting.js';
+import { type PurgedLookup, purgedLookup } from './purged.js';
 import type { NativeMemory } from './types.js';
 
 /**
@@ -41,6 +42,8 @@ export interface ImportContext {
   device: string;
   /** This store's name, under which the growth of a forget that covers a new version is logged. */
   growthOrigin: string;
+  /** What purges removed, as the caller's transaction looked it up; looked up here otherwise. */
+  purged?: PurgedLookup;
 }
 
 interface PreviousVersion {
@@ -54,14 +57,16 @@ interface PreviousVersion {
 
 /**
  * Derive the entry version of one version of a native memory, read from its event, unless it is
- * already here. Returns whether a version was added. Must run inside a write transaction, once the
- * event is stored; throws an OriginError for a memory that makes no valid entry.
+ * already here, or a purge removed it. Returns whether a version was added. Must run inside a write
+ * transaction, once the event is stored (an event a purge removed is never stored again); throws an
+ * OriginError for a memory that makes no valid entry.
  */
 export function importMemory(db: Database, ctx: ImportContext, m: NativeMemory): boolean {
   const eventId = `${ctx.source}:${m.eventId}`;
   const id = importedEntryId(eventId);
   if (db.prepare('SELECT 1 FROM entry WHERE id = ?').get(id)) return false;
   if (!db.prepare('SELECT 1 FROM event WHERE id = ?').get(eventId)) return false;
+  if ((ctx.purged ?? purgedLookup(db)).entry(id) !== null) return false;
   const previousId = m.previous ? importedEntryId(`${ctx.source}:${m.previous}`) : null;
   // The previous version derived nothing if it had no content: this one then starts a new chain.
   const previous = previousId

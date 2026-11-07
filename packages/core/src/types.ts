@@ -305,6 +305,8 @@ export interface SyncResult {
   parseErrors: number;
   /** Lines that yielded events, all of which the store already had. */
   duplicates: number;
+  /** Lines mirrored blank because a purge removed what they hold; present only when there were any. */
+  purged?: number;
   newGenerations: number;
   durationMs: number;
 }

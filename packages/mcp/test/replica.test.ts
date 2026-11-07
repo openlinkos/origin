@@ -38,6 +38,7 @@ import {
   type LocalFacts,
   mergeDigest,
   mergeGet,
+  mergeSearch,
   mergeTimeline,
 } from '../src/merge.js';
 import { refreshGate } from '../src/tools.js';
@@ -572,6 +573,98 @@ describe('reading along references on a connected device', () => {
     ) as RecallResult;
     expect(ids(messages.items)).toEqual(['fake:x10']);
     expect(messages.text).toBe(`${header}\n\n${heading}\n${kept}`);
+  });
+
+  it('shows nothing of a session the device deleted for good, which its hub still has', () => {
+    const facts: LocalFacts = {
+      ...factsOf([]),
+      removedSession: (source, session) => source === 'fake' && session === 'gone',
+    };
+    const ev = (id: string, session: string) => ({
+      id,
+      time: '2026-10-20T10:00:00.000Z',
+      source: 'fake',
+      project: null,
+      session,
+      role: 'user',
+      kind: 'message',
+      text: id,
+    });
+    const view = (session: string) => ({
+      session,
+      source: 'fake',
+      project: null,
+      title: null,
+      started: null,
+      ended: null,
+      events: 1,
+    });
+    const listed = mergeTimeline(
+      { sessions: [view('kept')] },
+      { sessions: [view('gone'), view('other')] },
+      facts,
+      10,
+    );
+    expect('sessions' in listed && listed.sessions.map((s) => s.session)).toEqual([
+      'kept',
+      'other',
+    ]);
+    const found = mergeSearch(
+      { entries: [], events: [] },
+      { entries: [], events: [ev('fake:g1', 'gone'), ev('fake:k1', 'kept')] as never },
+      facts,
+      { ranked: true, limit: 10 },
+    );
+    expect(ids(found.events)).toEqual(['fake:k1']);
+    const event = mergeGet(
+      null,
+      {
+        ...ev('fake:g1', 'gone'),
+        cwd: null,
+        git_branch: null,
+        agent_version: null,
+      } satisfies EventResult,
+      facts,
+    );
+    expect(event).toBeNull();
+    const recall = mergeGet(
+      null,
+      {
+        id: 'rcl_000000000001',
+        time: '',
+        occasion: 'start',
+        agent: 'codex',
+        session: null,
+        device: 'desktop',
+        project: 'demo',
+        directory: null,
+        budget: 800,
+        tokens: 40,
+        items: [
+          {
+            rank: 1,
+            layer: 'sessions',
+            kind: 'session',
+            id: 'gone',
+            source: 'fake',
+            score: null,
+            used: null,
+          },
+          {
+            rank: 2,
+            layer: 'sessions',
+            kind: 'session',
+            id: 'kept',
+            source: 'fake',
+            score: null,
+            used: null,
+          },
+        ],
+        text: 'Origin recall rcl_000000000001: a brief.\n\nRecent sessions:\n- gone (fake) Gone.\n- kept (fake) Kept.',
+      } satisfies RecallResult,
+      facts,
+    ) as RecallResult;
+    expect(ids(recall.items)).toEqual(['kept']);
   });
 
   it("pages a session with the device's count of what follows, or the hub's", () => {

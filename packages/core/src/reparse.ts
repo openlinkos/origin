@@ -11,6 +11,7 @@ import { recordSessionParent } from './parents.js';
 import { mirrorRelPath, parseRawPath, rawDir } from './paths.js';
 import { isOriginPlacesFile } from './places.js';
 import { deriveProposal } from './proposals.js';
+import { isSkippedLine, type PurgedLookup, purgedLookup } from './purged.js';
 import { PULL_TOMBSTONES_AGAIN, setSetting } from './settings.js';
 import { recordedAgentVersion } from './store.js';
 import { deriveFollow } from './threads.js';
@@ -36,13 +37,14 @@ interface RawFileRecord {
  * ingestion would parse it: every raw file of the source, this store's own and, on a hub, every
  * device's, oldest first, and its lines in order. Lines the adapter cannot parse are counted and
  * skipped; a mirror whose data is missing is reported and skipped; a frame that cannot be reached
- * (a hub's bucket) throws, so that the migration runs again later.
+ * (a hub's bucket) throws, so that the migration runs again later. Blank lines, lines a purge
+ * replaced, and files a purge blocked are skipped; `purged` is what purges removed.
  */
 function reparse(
   ctx: MigrationContext,
   source: string,
   needles: string[],
-  fn: (parsed: ParsedLine) => void,
+  fn: (parsed: ParsedLine, purged: PurgedLookup) => void,
 ): void {
   const files = ctx.db
     .prepare(
@@ -51,14 +53,17 @@ function reparse(
     .all(source) as unknown as RawFileRecord[];
   if (files.length === 0) return;
   const adapter = ctx.adapter(source);
+  const purged = purgedLookup(ctx.db);
   let errors = 0;
   for (const f of files) {
+    if (blockedFile(purged, f)) continue;
     const relPath = mirrorRelPath(f);
     // A device's file is not on the hub: as at ingestion, its mirror stands in for it.
     const absPath = f.path.startsWith('@') ? path.join(rawDir(ctx.home), f.mirror) : f.path;
     const readLine = (n: number) => readMirrorLine(ctx.db, ctx.home, f.id, n);
     try {
       scanMirrorLines(ctx.db, ctx.home, f.id, needles, (line, lineNo) => {
+        if (isSkippedLine(line)) return;
         let parsed: ParsedLine | null;
         try {
           parsed = adapter.parseLine(line, {
@@ -72,7 +77,7 @@ function reparse(
           errors++;
           return;
         }
-        if (parsed) fn(parsed);
+        if (parsed) fn(parsed, purged);
       });
     } catch (err) {
       if (!(err instanceof OriginError)) throw err;
@@ -82,15 +87,22 @@ function reparse(
   if (errors > 0) ctx.log(`${errors} mirrored ${source} lines could not be parsed; skipped.`);
 }
 
+/** Whether a purge blocked a raw file, whose lines are never read again. */
+function blockedFile(purged: PurgedLookup, f: RawFileRecord): boolean {
+  return purged.any && purged.file(f.source, f.path) !== null;
+}
+
 /**
  * Set the titles of a source's sessions from its mirrored lines that contain one of `needles`, as
  * ingestion with its adapter now would: per session, the latest title, unless the user gave one,
- * in which case the latest the user gave. Sessions none of these lines titles keep their title.
+ * in which case the latest the user gave. Sessions none of these lines titles keep their title, and
+ * a session a purge removed gets none.
  */
 export function reparseTitles(ctx: MigrationContext, source: string, needles: string[]): void {
   const titles = new Map<string, { title: string; manual: boolean }>();
-  reparse(ctx, source, needles, (parsed) => {
+  reparse(ctx, source, needles, (parsed, purged) => {
     if (!parsed.sessionTitle || !parsed.sessionId) return;
+    if (purged.any && purged.session(source, parsed.sessionId) !== null) return;
     const manual = parsed.manualTitle === true;
     const current = titles.get(parsed.sessionId);
     if (!current || manual || !current.manual) {
@@ -123,18 +135,20 @@ export function reparseMemories(ctx: MigrationContext, source: string): void {
   if (files.length === 0) return;
   const adapter = ctx.adapter(source);
   const hub = storeName(ctx.db);
+  const purged = purgedLookup(ctx.db);
   let events = 0;
   let errors = 0;
   for (const f of files) {
+    if (blockedFile(purged, f)) continue;
     const relPath = mirrorRelPath(f);
     const absPath = f.path.startsWith('@') ? path.join(rawDir(ctx.home), f.mirror) : f.path;
     const device = parseRawPath(f.path).device ?? hub;
-    const insert = eventInserter(ctx.db, source, f.id, recordedAgentVersion(ctx.db, f.id));
+    const insert = eventInserter(ctx.db, source, f.id, recordedAgentVersion(ctx.db, f.id), purged);
     const readLine = (n: number) => readMirrorLine(ctx.db, ctx.home, f.id, n);
     try {
       // Every line: an empty needle is found in each.
       scanMirrorLines(ctx.db, ctx.home, f.id, [''], (line, lineNo) => {
-        if (line.trim().length === 0) return;
+        if (isSkippedLine(line)) return;
         let parsed: ParsedLine | null;
         try {
           parsed = adapter.parseLine(line, {
@@ -152,7 +166,7 @@ export function reparseMemories(ctx: MigrationContext, source: string): void {
         events += insert(lineNo, parsed.events).length;
         if (!parsed.memory) return;
         try {
-          importMemory(ctx.db, { source, device, growthOrigin: hub }, parsed.memory);
+          importMemory(ctx.db, { source, device, growthOrigin: hub, purged }, parsed.memory);
         } catch (err) {
           if (!(err instanceof OriginError)) throw err;
           errors++;
@@ -247,6 +261,7 @@ export function reparseAuthorship(ctx: MigrationContext): void {
     'SELECT 1 FROM raw_file WHERE lower(mirror) = lower(?) AND id <> ? LIMIT 1',
   );
   const keepAuthor = authorWriter(db);
+  const purged = purgedLookup(db);
   // Looked up once an event is added: a store without a name gets one when it needs it.
   let growthOrigin: string | null = null;
   const touched = new Map<string, { source: string; sessionId: string }>();
@@ -264,6 +279,7 @@ export function reparseAuthorship(ctx: MigrationContext): void {
       skipped.add(f.source);
       continue;
     }
+    if (blockedFile(purged, f)) continue;
     const relPath = mirrorRelPath(f);
     // A device's file is not on the hub: as at ingestion, its mirror stands in for it.
     const absPath = f.path.startsWith('@') ? path.join(rawDir(ctx.home), f.mirror) : f.path;
@@ -275,14 +291,14 @@ export function reparseAuthorship(ctx: MigrationContext): void {
       if (inserter === undefined) {
         inserter =
           shared.get(f.mirror, f.id) === undefined
-            ? eventInserter(db, f.source, f.id, recordedAgentVersion(db, f.id))
+            ? eventInserter(db, f.source, f.id, recordedAgentVersion(db, f.id), purged)
             : null;
       }
       return inserter !== null && inserter(lineNo, [ev]).length > 0;
     };
     try {
       scanMirrorLines(db, ctx.home, f.id, AUTHOR_NEEDLES[f.source] ?? [''], (line, lineNo) => {
-        if (line.trim().length === 0) return;
+        if (isSkippedLine(line)) return;
         let parsed: ParsedLine | null;
         try {
           parsed = adapter.parseLine(line, {
@@ -318,13 +334,14 @@ export function reparseAuthorship(ctx: MigrationContext): void {
             });
           }
           const event = { ...ev, id, source: f.source };
-          deriveFollow(db, event);
-          deriveProposal(db, event);
+          deriveFollow(db, event, purged);
+          deriveProposal(db, event, purged);
           // A hub that read the line first may have forgotten its event already (invariant 2).
           growthOrigin ??= storeName(db);
           coverEventArrival(db, id, growthOrigin);
         }
         for (const fact of parsed.sessionKinds ?? []) {
+          if (purged.any && purged.session(f.source, fact.sessionId) !== null) continue;
           if (recordSessionKind(db, f.source, fact)) counts.kinds++;
         }
       });
@@ -389,6 +406,7 @@ export function reparseParents(ctx: MigrationContext): ParentReparse {
   };
   const skipped = new Set<string>();
   const sessions: Array<{ source: string; sessionId: string }> = [];
+  const purged = purgedLookup(db);
   let parents = 0;
   let errors = 0;
   const started = Date.now();
@@ -403,6 +421,7 @@ export function reparseParents(ctx: MigrationContext): ParentReparse {
       skipped.add(f.source);
       continue;
     }
+    if (blockedFile(purged, f)) continue;
     const relPath = mirrorRelPath(f);
     const absPath = f.path.startsWith('@') ? path.join(rawDir(ctx.home), f.mirror) : f.path;
     const readLine = (n: number) => readMirrorLine(db, ctx.home, f.id, n);
@@ -413,7 +432,7 @@ export function reparseParents(ctx: MigrationContext): ParentReparse {
         f.id,
         PARENT_NEEDLES[f.source] ?? ['"type":"parent"'],
         (line, lineNo) => {
-          if (line.trim().length === 0) return;
+          if (isSkippedLine(line)) return;
           let parsed: ParsedLine | null;
           try {
             parsed = adapter.parseLine(line, {
@@ -434,6 +453,13 @@ export function reparseParents(ctx: MigrationContext): ParentReparse {
             return;
           }
           for (const fact of parsed.sessionParents ?? []) {
+            if (
+              purged.any &&
+              (purged.session(f.source, fact.sessionId) !== null ||
+                purged.session(fact.parentSource ?? f.source, fact.parentSessionId) !== null)
+            ) {
+              continue;
+            }
             if (recordSessionParent(db, f.source, fact)) {
               parents++;
               sessions.push({ source: f.source, sessionId: fact.sessionId });

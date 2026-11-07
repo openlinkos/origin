@@ -16,6 +16,7 @@ import {
 import { OriginError } from './errors.js';
 import { checkReason, type ForgetResult, forgetInTransaction, IN_EFFECT } from './forgetting.js';
 import { resolvedProjectSql } from './places.js';
+import { type PurgedLookup, purgedLookup } from './purged.js';
 import { getEvent, getSession } from './store.js';
 import { isoLocal } from './time.js';
 import type { EventRow, SessionRow } from './types.js';
@@ -266,13 +267,21 @@ export interface ProposalEvent {
 /**
  * Record the proposal an event carries, if it is a tool result that carries one. The same proposal
  * in a later event is a copy (a tool printed the result again), so the earliest event that carries a
- * proposal is its own, by time and then id, whatever order they arrive in. Returns whether it
- * recorded one. Must run inside a write transaction.
+ * proposal is its own, by time and then id, whatever order they arrive in. None comes from an event
+ * a purge removed, by id or by session (`purged`, of the caller's transaction, else looked up here).
+ * Returns whether it recorded one. Must run inside a write transaction.
  */
-export function deriveProposal(db: Database, ev: ProposalEvent): boolean {
+export function deriveProposal(db: Database, ev: ProposalEvent, purged?: PurgedLookup): boolean {
   if (ev.kind !== 'tool_result') return false;
   const p = proposalIn(ev.text);
   if (!p) return false;
+  const removed = purged ?? purgedLookup(db);
+  if (
+    removed.any &&
+    (removed.event(ev.id) !== null || removed.session(ev.source, ev.sessionId) !== null)
+  ) {
+    return false;
+  }
   const known = db.prepare('SELECT event_id, at FROM proposal WHERE id = ?').get(p.id) as
     | { event_id: string; at: number }
     | undefined;
@@ -324,7 +333,8 @@ export function deriveProposals(db: Database): number {
         WHERE ${holding.where} AND e.kind = 'tool_result'`,
     )
     .all() as unknown as ProposalEvent[];
-  for (const ev of candidates) deriveProposal(db, ev);
+  const purged = purgedLookup(db);
+  for (const ev of candidates) deriveProposal(db, ev, purged);
   return (db.prepare('SELECT COUNT(*) AS n FROM proposal').get() as { n: number }).n;
 }
 

@@ -3,6 +3,7 @@ import type { Database } from './db.js';
 import { transaction } from './db.js';
 import { trigramFilter } from './dialect.js';
 import { resolvedProjectSql } from './places.js';
+import { type PurgedLookup, purgedLookup } from './purged.js';
 import { isOwnerConversation, type SessionPrompt, sessionPrompts } from './store.js';
 
 /**
@@ -105,12 +106,23 @@ export interface FollowEvent {
 
 /**
  * Record the follow link an event carries, if it is a tool result that carries one (R1); a session
- * that follows itself links nothing. Returns whether it did. Must run inside a write transaction.
+ * that follows itself links nothing, nor does a link from or to what a purge removed (`purged`, of
+ * the caller's transaction, else looked up here). Returns whether it did. Must run inside a write
+ * transaction.
  */
-export function deriveFollow(db: Database, ev: FollowEvent): boolean {
+export function deriveFollow(db: Database, ev: FollowEvent, purged?: PurgedLookup): boolean {
   if (ev.kind !== 'tool_result') return false;
   const link = followLink(ev.text);
   if (!link || (link.source === ev.source && link.sessionId === ev.sessionId)) return false;
+  const removed = purged ?? purgedLookup(db);
+  if (
+    removed.any &&
+    (removed.event(ev.id) !== null ||
+      removed.session(ev.source, ev.sessionId) !== null ||
+      removed.session(link.source, link.sessionId) !== null)
+  ) {
+    return false;
+  }
   db.prepare(
     `INSERT INTO session_follow
        (source, session_id, link_id, target_source, target_session_id, event_id)
@@ -487,7 +499,8 @@ export function deriveThreads(db: Database, opts: { anySession?: boolean } = {})
         WHERE ${holding.where} AND e.kind = 'tool_result'`,
     )
     .all() as unknown as FollowEvent[];
-  for (const ev of candidates) deriveFollow(db, ev);
+  const purged = purgedLookup(db);
+  for (const ev of candidates) deriveFollow(db, ev, purged);
 
   const nodes = new Map<string, Node>();
   for (const n of db
