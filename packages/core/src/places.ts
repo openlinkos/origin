@@ -143,13 +143,6 @@ export function lastSegment(p: string): string | null {
   return parts.at(-1) ?? null;
 }
 
-function hasTable(db: Database, name: string): boolean {
-  return (
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !==
-    undefined
-  );
-}
-
 function stripPrefix(p: string): string {
   if (p.startsWith('\\\\?\\UNC\\')) return `\\\\${p.slice('\\\\?\\UNC\\'.length)}`;
   if (p.startsWith('\\\\?\\')) return p.slice('\\\\?\\'.length);
@@ -306,7 +299,7 @@ interface RootRow {
 
 /** The longest `project_root` path that contains `cwd`, for one device, under `comparePath`. */
 export function longestRoot(db: Database, cwd: string, device = ''): RootRow | null {
-  if (!hasTable(db, 'project_root')) return null;
+  if (!db.hasTable('project_root')) return null;
   const key = comparePath(cwd);
   const rows = db
     .prepare('SELECT path, project, root, signal FROM project_root WHERE device = ?')
@@ -427,7 +420,7 @@ export function underProjectAlias(
   project: string,
   device = '',
 ): boolean {
-  if (!hasTable(db, 'project_root')) return false;
+  if (!db.hasTable('project_root')) return false;
   const key = comparePath(home);
   const rows = db
     .prepare('SELECT path FROM project_root WHERE device = ? AND project = ?')
@@ -559,7 +552,7 @@ export function recordExplicitPlace(
   sessionId: string,
   project: string,
 ): void {
-  if (!hasTable(db, 'session_place')) return;
+  if (!db.hasTable('session_place')) return;
   db.prepare(
     `INSERT INTO session_place (source, session_id, project, root, signal) VALUES (?, ?, ?, NULL, 'explicit')
      ON CONFLICT(source, session_id) DO UPDATE SET
@@ -586,7 +579,7 @@ export function applyPlaceFacts(
   seenAt = Date.now(),
   device = '',
 ): AppliedPlaces {
-  if (!hasTable(db, 'session_place')) return { sessions: [], parents: 0 };
+  if (!db.hasTable('session_place')) return { sessions: [], parents: 0 };
   const sessions: string[] = [];
   let parents = 0;
   for (const root of parsed.roots ?? []) upsertRoot(db, root, seenAt, device);
@@ -595,7 +588,7 @@ export function applyPlaceFacts(
       sessions.push(place.sessionId);
     }
   }
-  if (hasTable(db, 'session_parent')) {
+  if (db.hasTable('session_parent')) {
     for (const fact of parsed.sessionParents ?? []) {
       if (recordSessionParent(db, source, fact)) {
         parents += 1;
@@ -718,7 +711,7 @@ export function rememberPlaceHead(
   line: string,
   tipOnly = false,
 ): void {
-  if (!hasTable(db, 'place_head')) return;
+  if (!db.hasTable('place_head')) return;
   const put = db.prepare(
     `INSERT INTO place_head (source, device, key, line) VALUES (?, ?, ?, ?)
      ON CONFLICT(source, device, key) DO UPDATE SET line = excluded.line`,
@@ -730,7 +723,7 @@ export function rememberPlaceHead(
 }
 
 function loadPlaceHead(db: Database, source: string, device: string): Map<string, string> {
-  if (!hasTable(db, 'place_head')) return new Map();
+  if (!db.hasTable('place_head')) return new Map();
   const rows = db
     .prepare('SELECT key, line FROM place_head WHERE source = ? AND device = ?')
     .all(source, device) as Array<{ key: string; line: string }>;
@@ -743,7 +736,7 @@ function rescanPlaceHead(
   source: string,
   device: string,
 ): Map<string, string> {
-  if (hasTable(db, 'place_head')) {
+  if (db.hasTable('place_head')) {
     db.prepare('DELETE FROM place_head WHERE source = ? AND device = ?').run(source, device);
   }
   for (const line of mirrorPlaceLines(db, home, source, device)) {
@@ -846,7 +839,7 @@ export function placesSourceFile(
     device?: string;
   } = {},
 ): SourceFile | null {
-  if (!hasTable(db, 'session_place')) return null;
+  if (!db.hasTable('session_place')) return null;
   if (opts.touchedSessions && opts.touchedSessions.size === 0) return null;
   const device = opts.device ?? '';
   const sessions = consideredSessions(db, source, opts.touchedSessions);
@@ -893,17 +886,12 @@ export function placesSourceFile(
  */
 /**
  * Run `fn` under the write lock. A caller that already holds one (a migration's `underLock`) runs
- * `fn` inside that transaction; starting another fails, and any other failure still throws.
+ * `fn` inside that transaction.
  */
 function withWriteLock<T>(db: Database, fn: () => T): T {
   assertStoreCurrent(db);
-  try {
-    db.exec('BEGIN IMMEDIATE');
-  } catch (err) {
-    const message = (err as Error).message;
-    if (!/transaction/i.test(message)) throw err;
-    return fn();
-  }
+  if (db.isTransaction) return fn();
+  db.exec('BEGIN IMMEDIATE');
   try {
     const out = fn();
     db.exec('COMMIT');
@@ -941,7 +929,7 @@ export function reparsePlaces(
   home: string,
   log?: (message: string) => void,
 ): ReparsedPlaces {
-  if (!hasTable(db, 'session_place')) return { changed: [], parents: 0 };
+  if (!db.hasTable('session_place')) return { changed: [], parents: 0 };
   return withWriteLock(db, () => {
     const changed: Array<{ source: string; sessionId: string }> = [];
     let parents = 0;
@@ -1026,7 +1014,7 @@ export function sessionShape(db: Database): SessionShape {
   const total = (
     db.prepare('SELECT COUNT(*) AS n FROM session WHERE event_count > 0').get() as { n: number }
   ).n;
-  if (!hasTable(db, 'session_parent')) return { top: total, children: 0 };
+  if (!db.hasTable('session_parent')) return { top: total, children: 0 };
   const children = (
     db
       .prepare(

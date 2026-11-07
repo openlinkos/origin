@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import type { Database } from './db.js';
 import { frameBucket, framesPath } from './frames.js';
 import { mirrorUsage } from './mirror.js';
-import { dbPath, remotePath } from './paths.js';
+import { remotePath } from './paths.js';
 import { resolvedProjectSql } from './places.js';
 
 /** Disk usage of a store (see docs/architecture.md#storage). */
@@ -69,14 +69,7 @@ function mirrorPlacement(
 }
 
 export function storeUsage(db: Database, home: string): StoreUsage {
-  const pageCount = (db.prepare('PRAGMA page_count').get() as { page_count: number }).page_count;
-  const pageSize = (db.prepare('PRAGMA page_size').get() as { page_size: number }).page_size;
-  let walBytes = 0;
-  try {
-    walBytes = fs.statSync(`${dbPath(home)}-wal`).size;
-  } catch {
-    // no WAL file (in-memory database, or checkpointed and removed)
-  }
+  const database = db.databaseBytes();
   const mirrors = mirrorUsage(db);
   let freeDiskBytes: number | null = null;
   try {
@@ -91,8 +84,8 @@ export function storeUsage(db: Database, home: string): StoreUsage {
     mirrors.local.storedBytes + mirrors.remote.storedBytes,
   );
   return {
-    databaseBytes: pageCount * pageSize,
-    walBytes,
+    databaseBytes: database.bytes,
+    walBytes: database.walBytes ?? 0,
     mirrorBytes: { local: mirrors.local.bytes, remote: mirrors.remote.bytes },
     mirrorStoredBytes: { local: mirrors.local.storedBytes, remote: mirrors.remote.storedBytes },
     mirrorDiskBytes: placement.disk,

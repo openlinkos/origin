@@ -520,9 +520,8 @@ export function sealIdleMirrors(
 
 /** Flush the database's write-ahead log to disk; false if that failed. */
 function syncWriteAheadLog(db: Database): boolean {
-  const main = (
-    db.prepare('PRAGMA database_list').all() as Array<{ name: string; file: string }>
-  ).find((d) => d.name === 'main')?.file;
+  if (db.dialect !== 'sqlite') return true; // the server makes each commit durable
+  const main = db.location();
   if (!main) return true; // an in-memory database
   let fd: number;
   try {

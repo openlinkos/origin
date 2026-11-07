@@ -478,10 +478,7 @@ function filedUnderPlacedSession(
   entryProject: string,
   project: string,
 ): boolean {
-  const table = db
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_place'")
-    .get();
-  if (!table) return false;
+  if (!db.hasTable('session_place')) return false;
   return (
     db
       .prepare(

@@ -22,6 +22,7 @@ import {
   readRawLine,
   recordAudit,
   remember,
+  SqliteDatabase,
   STORE_VERSION,
   searchEvents,
   storeName,
@@ -131,12 +132,12 @@ describe('the format version', () => {
 
   it('tells a store of 0.1.0, which records none, from a new one', () => {
     const empty = new DatabaseSync(file);
-    expect(storeVersion(empty)).toBe(0);
+    expect(storeVersion(new SqliteDatabase(empty))).toBe(0);
     empty.close();
     legacyStore(file).close();
     const legacy = new DatabaseSync(file);
     expect(userVersion(legacy)).toBe(0);
-    expect(storeVersion(legacy)).toBe(FIRST_VERSION);
+    expect(storeVersion(new SqliteDatabase(legacy))).toBe(FIRST_VERSION);
     legacy.close();
   });
 

@@ -48,10 +48,22 @@ export {
   parseFeedCursor,
 } from './changes.js';
 export {
+  type DatabaseFactory,
+  type Dialect,
+  type RunResult,
+  SqliteDatabase,
+  type SqlRow,
+  type SqlValue,
+  type Statement,
+  setDatabaseFactory,
+} from './database.js';
+export {
   type Database,
   type OpenOptions,
   openDatabase,
   openMemoryDatabase,
+  type PrepareOptions,
+  prepareStore,
   transaction,
 } from './db.js';
 export {

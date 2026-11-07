@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as sqlite from 'node:sqlite';
-import type { Database } from './db.js';
+import { type Database, SqliteDatabase } from './database.js';
 import { OriginError } from './errors.js';
 import { forgetFrameBucket, frameBucket, framesPath } from './frames.js';
 import {
@@ -26,7 +26,11 @@ export interface BackupResult {
   mirrorBytesCopied: number;
 }
 
-type BackupFn = (db: Database, path: string, options?: { rate?: number }) => Promise<number>;
+type BackupFn = (
+  db: sqlite.DatabaseSync,
+  path: string,
+  options?: { rate?: number },
+) => Promise<number>;
 
 /**
  * Back up a store into `target` (see docs/guide/privacy.md#backing-up): first the database, with
@@ -46,6 +50,9 @@ export async function backupStore(
   home: string,
   target: string,
 ): Promise<BackupResult> {
+  if (!(db instanceof SqliteDatabase)) {
+    throw new OriginError('Only a store kept in SQLite can be backed up this way.');
+  }
   const backup = (sqlite as unknown as { backup: BackupFn }).backup;
   const dest = path.join(target, 'origin.db');
   const inside = path.relative(path.resolve(rawDir(home)), path.resolve(target));
@@ -60,7 +67,7 @@ export async function backupStore(
   // What a previous backup here holds, to extend it rather than copy everything again.
   const previous = new Map(snapshotMirrors(dest)?.map((m) => [m.state.rawFileId, m]));
   for (const f of [dest, `${dest}-wal`, `${dest}-shm`]) fs.rmSync(f, { force: true });
-  await backup(db, dest, { rate: 2 ** 31 - 1 });
+  await backup(db.handle, dest, { rate: 2 ** 31 - 1 });
   const mirrors = snapshotMirrors(dest);
   if (!mirrors) throw new OriginError(`Cannot read the backed-up database ${dest}.`);
   let copied = 0;
@@ -77,7 +84,7 @@ export async function backupStore(
   // From a hub that keeps its sealed frames in a bucket, the frames were copied into the backup:
   // the copy keeps them all on disk, like any store without a bucket.
   if (frameBucket(db) !== null) {
-    const copy = new sqlite.DatabaseSync(dest);
+    const copy = new SqliteDatabase(new sqlite.DatabaseSync(dest));
     try {
       forgetFrameBucket(copy);
     } finally {
@@ -98,9 +105,9 @@ export async function backupStore(
  */
 function snapshotMirrors(file: string): Array<{ state: MirrorState; identity: string }> | null {
   if (!fs.existsSync(file)) return null;
-  let copy: sqlite.DatabaseSync | null = null;
+  let copy: SqliteDatabase | null = null;
   try {
-    copy = new sqlite.DatabaseSync(file);
+    copy = new SqliteDatabase(new sqlite.DatabaseSync(file));
     const identities = new Map(
       (
         copy

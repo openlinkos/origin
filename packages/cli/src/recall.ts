@@ -178,11 +178,12 @@ async function runHook(agent: HookAgent, io: HookIO): Promise<number> {
     if (isRelay(db)) return 0;
     const input = hookInput(db, agent, event);
     if (!input) return 0;
-    db.exec(`PRAGMA busy_timeout = ${HOOK_BUSY_MS};`);
-    initStoreName(db, process.env.ORIGIN_DEVICE || defaultStoreName());
-    const plan = planRecall(db, input);
-    const id = recordRecall(db, plan);
-    const text = recallText(plan, id);
+    const store = db;
+    const text = store.withWaitTimeout(HOOK_BUSY_MS, () => {
+      initStoreName(store, process.env.ORIGIN_DEVICE || defaultStoreName());
+      const plan = planRecall(store, input);
+      return recallText(plan, recordRecall(store, plan));
+    });
     if (text) console.log(hookOutput(agent, call.eventName, text));
     return 0;
   } catch (err) {

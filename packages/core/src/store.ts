@@ -287,8 +287,8 @@ const positionOf = (r: UserMessage) => ({
  * (version 8) or session_parent (version 10); that exclusion is left out until the table exists.
  */
 export function isOwnerConversation(db: Database, source: string, sessionId: string): boolean {
-  const kind = hasTable(db, 'session_kind');
-  const parent = hasTable(db, 'session_parent');
+  const kind = db.hasTable('session_kind');
+  const parent = db.hasTable('session_parent');
   const sql =
     kind && parent
       ? OWNER_CONVERSATION
@@ -309,14 +309,6 @@ export function isOwnerConversation(db: Database, source: string, sessionId: str
     AND ${VISIBLE_EVENT} AND ${OWNER_PROMPT_SQL}
   LIMIT 1`;
   return db.prepare(sql).get(source, sessionId) !== undefined;
-}
-
-/** Whether this connection has the table. Checked when the statement is built: a later migration on the same connection may create it. */
-function hasTable(db: Database, name: string): boolean {
-  return (
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !==
-    undefined
-  );
 }
 
 const OWNER_CONVERSATION = `SELECT 1 FROM event e INDEXED BY event_user_message

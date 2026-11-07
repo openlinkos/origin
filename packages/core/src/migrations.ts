@@ -93,7 +93,7 @@ export const MIGRATIONS: Migration[] = [
     version: 5,
     name: 'session branches and threads',
     up: ({ db }) => {
-      if (!hasColumn(db, 'session', 'git_branch')) {
+      if (!db.hasColumn('session', 'git_branch')) {
         db.exec('ALTER TABLE session ADD COLUMN git_branch TEXT');
       }
       db.exec(
@@ -104,7 +104,7 @@ export const MIGRATIONS: Migration[] = [
       db.exec(THREAD_TABLES_V5);
       // A CHECK constraint cannot be changed in place: the table is made again, rows and all. A
       // store of 0.3 has no recall tables yet; the schema creates them after the migrations.
-      if (hasTable(db, 'recall_item')) db.exec(RECALL_ITEM_V5);
+      if (db.hasTable('recall_item')) db.exec(RECALL_ITEM_V5);
       // By the rules as they were: who wrote what is known from version 8 on, which derives the
       // threads again.
       deriveThreads(db, { anySession: true });
@@ -127,12 +127,12 @@ export const MIGRATIONS: Migration[] = [
     version: 7,
     name: 'tokens of devices and agents, and an audit channel for the hub API',
     up: ({ db }) => {
-      if (!hasColumn(db, 'api_token', 'kind')) {
+      if (!db.hasColumn('api_token', 'kind')) {
         db.exec(
           "ALTER TABLE api_token ADD COLUMN kind TEXT NOT NULL DEFAULT 'device' CHECK (kind IN ('device', 'agent'))",
         );
       }
-      if (!hasColumn(db, 'api_token', 'preset')) {
+      if (!db.hasColumn('api_token', 'preset')) {
         db.exec(
           "ALTER TABLE api_token ADD COLUMN preset TEXT NOT NULL DEFAULT 'readwrite' CHECK (preset IN ('readwrite', 'readonly'))",
         );
@@ -193,8 +193,8 @@ export const MIGRATIONS: Migration[] = [
     version: 11,
     name: 'recall items that are past messages',
     up: ({ db }) => {
-      if (!hasTable(db, 'recall_item')) return;
-      const excerpt = hasColumn(db, 'recall_item', 'excerpt') ? 'excerpt' : 'NULL';
+      if (!db.hasTable('recall_item')) return;
+      const excerpt = db.hasColumn('recall_item', 'excerpt') ? 'excerpt' : 'NULL';
       db.exec(recallItemV11(excerpt));
     },
   },
@@ -288,7 +288,7 @@ function classifyTokensV7(db: Database): void {
     if (/^([\\/]|[A-Za-z]:[\\/])/.test(path.slice(colon + 1))) devices.add(path.slice(1, colon));
   }
   for (const table of ['entry', 'tombstone', 'recall']) {
-    if (!hasTable(db, table) || !hasColumn(db, table, 'origin')) continue;
+    if (!db.hasTable(table) || !db.hasColumn(table, 'origin')) continue;
     for (const r of db.prepare(`SELECT DISTINCT origin FROM ${table}`).all() as Array<{
       origin: string;
     }>) {
@@ -476,19 +476,6 @@ function userVersion(db: Database): number {
   return (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
 }
 
-function hasColumn(db: Database, table: string, column: string): boolean {
-  return (db.prepare(`PRAGMA table_info("${table}")`).all() as Array<{ name: string }>).some(
-    (c) => c.name === column,
-  );
-}
-
-function hasTable(db: Database, name: string): boolean {
-  return (
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !==
-    undefined
-  );
-}
-
 /**
  * The version of a store: the one it records, else 1 for a store of 0.1.0 (which has the `raw_file`
  * and `event` tables), else 0 for a new one.
@@ -496,7 +483,7 @@ function hasTable(db: Database, name: string): boolean {
 export function storeVersion(db: Database): number {
   const recorded = userVersion(db);
   if (recorded > 0) return recorded;
-  return hasTable(db, 'raw_file') && hasTable(db, 'event') ? FIRST_VERSION : 0;
+  return db.hasTable('raw_file') && db.hasTable('event') ? FIRST_VERSION : 0;
 }
 
 /** A store written by a newer Origin than this one. */

@@ -133,7 +133,7 @@ interface Node {
  * before then uses the label on the session.
  */
 function projectExpr(db: Database): string {
-  return hasTable(db, 'session_place')
+  return db.hasTable('session_place')
     ? resolvedProjectSql('source', 'session_id', 'project')
     : 'project';
 }
@@ -193,8 +193,8 @@ class Groups {
  * threads before then omits the table it does not have.
  */
 function childSession(db: Database): (source: string, sessionId: string) => boolean {
-  const parent = hasTable(db, 'session_parent');
-  const kind = hasTable(db, 'session_kind');
+  const parent = db.hasTable('session_parent');
+  const kind = db.hasTable('session_kind');
   if (!parent && !kind) return () => false;
   const parts: string[] = [];
   if (parent) {
@@ -221,14 +221,6 @@ function childSession(db: Database): (source: string, sessionId: string) => bool
   };
 }
 
-/** Whether this connection has the table. A later migration on the same connection may create it. */
-function hasTable(db: Database, name: string): boolean {
-  return (
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !==
-    undefined
-  );
-}
-
 /**
  * Attach the children of sessions that are already in a thread (a component of two or more) to
  * that thread, and their children in turn, when the child has visible events and is not already
@@ -236,7 +228,7 @@ function hasTable(db: Database, name: string): boolean {
  */
 function attachChildren(db: Database, nodes: Map<string, Node>, groups: Groups): void {
   // Version 10 creates session_parent. Earlier derivations have no parent rows to attach.
-  if (!hasTable(db, 'session_parent')) return;
+  if (!db.hasTable('session_parent')) return;
   const sizes = new Map<string, number>();
   for (const k of nodes.keys()) {
     const root = groups.find(k);
@@ -379,12 +371,12 @@ export function refreshThreads(
        SELECT f.source, f.session_id FROM session_follow f
         WHERE f.target_source = ? AND f.target_session_id = ? AND ${VISIBLE_LINK}`,
     ),
-    parent: hasTable(db, 'session_parent')
+    parent: db.hasTable('session_parent')
       ? db.prepare(
           'SELECT parent_source, parent_session_id FROM session_parent WHERE source = ? AND session_id = ?',
         )
       : null,
-    children: hasTable(db, 'session_parent')
+    children: db.hasTable('session_parent')
       ? db.prepare(
           'SELECT source, session_id FROM session_parent WHERE parent_source = ? AND parent_session_id = ?',
         )
