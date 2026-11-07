@@ -330,6 +330,46 @@ export function scanMirrorLines(
   }
 }
 
+/**
+ * Call `fn` with every line of a mirror from line `from` (1-based) to its end, in order, with its
+ * line number, decompressing each sealed frame once (a purge's plan reads its candidate mirrors
+ * this way; see purge.ts). Throws an OriginError if the mirror's data is missing, and any other
+ * error if a frame could not be reached.
+ */
+export function eachMirrorLine(
+  db: Database,
+  home: string,
+  rawFileId: number,
+  from: number,
+  fn: (line: string, lineNo: number) => void,
+): void {
+  const st = mirrorState(db, rawFileId);
+  if (!st || from > st.lines) return;
+  const chunks = db
+    .prepare(
+      `SELECT ${CHUNK_COLUMNS} FROM raw_chunk WHERE raw_file_id = ? AND first_line + line_count > ?
+       ORDER BY first_line`,
+    )
+    .all(rawFileId, from) as unknown as Chunk[];
+  const each = (buf: Buffer, first: number) => {
+    let lineNo = first;
+    for (let start = 0; start < buf.length; lineNo++) {
+      const nl = buf.indexOf(0x0a, start);
+      const end = nl < 0 ? buf.length : nl;
+      if (lineNo >= from && lineNo <= st.lines) {
+        let line = buf.toString('utf8', start, end);
+        if (line.endsWith('\r')) line = line.slice(0, -1);
+        fn(line, lineNo);
+      }
+      start = end + 1;
+    }
+  };
+  for (const c of chunks) each(readFrame(home, st.mirror, c), c.first_line);
+  if (st.bytes > st.sealedBytes && st.lines >= Math.max(from, st.sealedLines + 1)) {
+    each(readMirror(db, home, rawFileId, st.sealedBytes, st.bytes), st.sealedLines + 1);
+  }
+}
+
 /** The lines of `buf`, complete lines of which the first is line `first`, that hold a pattern. */
 function scanLines(
   buf: Buffer,

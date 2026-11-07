@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { authorWriter, hasAuthor, recordSessionKind } from './authors.js';
+import type { Database } from './database.js';
 import { OriginError } from './errors.js';
 import { coverEventArrival } from './forgetting.js';
 import { storeName } from './identity.js';
@@ -23,13 +24,36 @@ import type { EventInput, ParsedLine, SourceAdapter } from './types.js';
  * sync, which only reads what follows its cursor.
  */
 
-interface RawFileRecord {
+/** A mirrored raw file, as the loops that parse its lines again read it. */
+export interface MirroredFile {
   id: number;
   source: string;
   path: string;
   generation: number;
   mirror: string;
   updated_at: number;
+}
+
+type RawFileRecord = MirroredFile;
+
+/**
+ * Parses the mirrored lines of raw file `f` with its source's adapter, as ingestion parsed them:
+ * with the file's relative path, its original path (a device's file is not on a hub, so there its
+ * mirror stands in for it, as at ingestion), and earlier lines read from the mirror. The parser
+ * throws whatever the adapter throws. Shared by every loop that parses mirrored lines again: the
+ * data migrations here, and a purge's plan (see purge.ts).
+ */
+export function mirroredLineParser(
+  db: Database,
+  home: string,
+  adapter: SourceAdapter,
+  f: MirroredFile,
+): (line: string, lineNo: number) => ParsedLine | null {
+  const relPath = mirrorRelPath(f);
+  const absPath = f.path.startsWith('@') ? path.join(rawDir(home), f.mirror) : f.path;
+  const readLine = (n: number) => readMirrorLine(db, home, f.id, n);
+  return (line, lineNo) =>
+    adapter.parseLine(line, { absPath, relPath, lineNo, fileMtimeMs: f.updated_at, readLine });
 }
 
 /**
@@ -57,22 +81,13 @@ function reparse(
   let errors = 0;
   for (const f of files) {
     if (blockedFile(purged, f)) continue;
-    const relPath = mirrorRelPath(f);
-    // A device's file is not on the hub: as at ingestion, its mirror stands in for it.
-    const absPath = f.path.startsWith('@') ? path.join(rawDir(ctx.home), f.mirror) : f.path;
-    const readLine = (n: number) => readMirrorLine(ctx.db, ctx.home, f.id, n);
+    const parse = mirroredLineParser(ctx.db, ctx.home, adapter, f);
     try {
       scanMirrorLines(ctx.db, ctx.home, f.id, needles, (line, lineNo) => {
         if (isSkippedLine(line)) return;
         let parsed: ParsedLine | null;
         try {
-          parsed = adapter.parseLine(line, {
-            absPath,
-            relPath,
-            lineNo,
-            fileMtimeMs: f.updated_at,
-            readLine,
-          });
+          parsed = parse(line, lineNo);
         } catch {
           errors++;
           return;
@@ -140,24 +155,16 @@ export function reparseMemories(ctx: MigrationContext, source: string): void {
   let errors = 0;
   for (const f of files) {
     if (blockedFile(purged, f)) continue;
-    const relPath = mirrorRelPath(f);
-    const absPath = f.path.startsWith('@') ? path.join(rawDir(ctx.home), f.mirror) : f.path;
     const device = parseRawPath(f.path).device ?? hub;
     const insert = eventInserter(ctx.db, source, f.id, recordedAgentVersion(ctx.db, f.id), purged);
-    const readLine = (n: number) => readMirrorLine(ctx.db, ctx.home, f.id, n);
+    const parse = mirroredLineParser(ctx.db, ctx.home, adapter, f);
     try {
       // Every line: an empty needle is found in each.
       scanMirrorLines(ctx.db, ctx.home, f.id, [''], (line, lineNo) => {
         if (isSkippedLine(line)) return;
         let parsed: ParsedLine | null;
         try {
-          parsed = adapter.parseLine(line, {
-            absPath,
-            relPath,
-            lineNo,
-            fileMtimeMs: f.updated_at,
-            readLine,
-          });
+          parsed = parse(line, lineNo);
         } catch {
           errors++;
           return;
@@ -280,10 +287,7 @@ export function reparseAuthorship(ctx: MigrationContext): void {
       continue;
     }
     if (blockedFile(purged, f)) continue;
-    const relPath = mirrorRelPath(f);
-    // A device's file is not on the hub: as at ingestion, its mirror stands in for it.
-    const absPath = f.path.startsWith('@') ? path.join(rawDir(ctx.home), f.mirror) : f.path;
-    const readLine = (n: number) => readMirrorLine(db, ctx.home, f.id, n);
+    const parse = mirroredLineParser(db, ctx.home, adapter, f);
     // Made when a line first yields an event the store lacks, which is rare: finding the version
     // the file's events record reads the events table.
     let inserter: ReturnType<typeof eventInserter> | null | undefined;
@@ -301,13 +305,7 @@ export function reparseAuthorship(ctx: MigrationContext): void {
         if (isSkippedLine(line)) return;
         let parsed: ParsedLine | null;
         try {
-          parsed = adapter.parseLine(line, {
-            absPath,
-            relPath,
-            lineNo,
-            fileMtimeMs: f.updated_at,
-            readLine,
-          });
+          parsed = parse(line, lineNo);
         } catch {
           counts.errors++;
           return;
@@ -423,8 +421,7 @@ export function reparseParents(ctx: MigrationContext): ParentReparse {
     }
     if (blockedFile(purged, f)) continue;
     const relPath = mirrorRelPath(f);
-    const absPath = f.path.startsWith('@') ? path.join(rawDir(ctx.home), f.mirror) : f.path;
-    const readLine = (n: number) => readMirrorLine(db, ctx.home, f.id, n);
+    const parse = mirroredLineParser(db, ctx.home, adapter, f);
     try {
       scanMirrorLines(
         db,
@@ -435,13 +432,7 @@ export function reparseParents(ctx: MigrationContext): ParentReparse {
           if (isSkippedLine(line)) return;
           let parsed: ParsedLine | null;
           try {
-            parsed = adapter.parseLine(line, {
-              absPath,
-              relPath,
-              lineNo,
-              fileMtimeMs: f.updated_at,
-              readLine,
-            });
+            parsed = parse(line, lineNo);
           } catch {
             errors++;
             return;

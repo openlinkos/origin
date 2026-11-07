@@ -389,6 +389,19 @@ export {
   rebuildProposals,
   rejectProposal,
 } from './proposals.js';
+// Purging: plan, apply, and complete.
+export {
+  PURGE_EVENTS_WARN,
+  PURGE_ID_RE,
+  PURGE_LIMITS,
+  type PurgeAdapters,
+  type PurgeCounts,
+  type PurgeFile,
+  type PurgePlan,
+  type PurgeSelector,
+  type PurgeWarning,
+  planPurge,
+} from './purge.js';
 export {
   continuationLine,
   isPurgedId,
