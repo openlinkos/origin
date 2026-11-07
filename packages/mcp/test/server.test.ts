@@ -126,6 +126,27 @@ describe('origin MCP server', () => {
     );
   });
 
+  it('has no tool that purges, and no code that could', async () => {
+    // A purge deletes for good: only the owner makes one, through the CLI or the admin UI, never an
+    // agent. Neither this server nor the OpenClaw plugin's tools may reach it.
+    const { tools } = await client.listTools();
+    expect(tools.filter((t) => /purge|erase|delete|wipe/i.test(t.name))).toEqual([]);
+    const packages = path.resolve(import.meta.dirname, '../..');
+    const files = ['mcp', 'openclaw'].flatMap((pkg) =>
+      (fs.readdirSync(path.join(packages, pkg, 'src'), { recursive: true }) as string[])
+        .filter((f) => f.endsWith('.ts'))
+        .map((f) => path.join(packages, pkg, 'src', f)),
+    );
+    expect(files.length).toBeGreaterThan(5);
+    for (const file of files) {
+      const code = fs
+        .readFileSync(file, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/(^|[^:\\])\/\/.*$/gm, '$1');
+      expect(code.match(/\b(purge|planPurge|completePurges)\b/g), file).toBeNull();
+    }
+  });
+
   it('briefs an agent on where it works, and records the recall for its device', async () => {
     await call('remember', {
       kind: 'cognition',

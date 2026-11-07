@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-0ac92b2a
+sourceHash: sha256-f32faaa7
 ---
 
 # 架构
@@ -186,8 +186,8 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 | 表 | 内容 |
 |---|---|
 | `raw_file` | 每个镜像文件代次一行，带有它的采集游标 |
-| `raw_chunk` | 每个镜像已封存的帧：首行行号、行数、在内容中和在 `.zst` 文件中的偏移量与长度。触发器拒绝更新和删除 |
-| `event` | 规范化后的事件，以它们到达本库的次序（`seq`）为键 |
+| `raw_chunk` | 每个镜像已封存的帧：首行行号、行数、在内容中和在 `.zst` 文件中的偏移量与长度。触发器拒绝更新和删除，清除除外 |
+| `event` | 规范化后的事件，以它们到达本库的次序（`seq`）为键。触发器拒绝删除，清除除外 |
 | `event_block` | 每一块 4,096 个连续到达的事件中最晚的时间戳，以及到这一块为止最晚的时间戳（派生数据，由触发器维护） |
 | `event_author`, `session_kind` | 每条输入是谁写的，以它的事件的 `seq` 为键：它的作者、说话人，以及决定作者的字段；以及某一行声明为子会话（Agent 的）或无界面运行（程序的）的会话，连同那个字段（派生自原始行，可重建；见[作者](#authors)） |
 | `message_fts`, `event_fts`, `event_cjk` | 事件的检索索引：`message` 事件的完整 trigram 索引、只记录哪些事件含有每个 trigram 的全部事件索引，以及 CJK 二元组索引（见[检索与时间线](#search-and-timeline)） |
@@ -198,12 +198,15 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 | `session_parent` | 某一行声明哪个会话是另一个会话的子会话（子 Agent 或工作流步骤）：它的父会话、方式（`subagent` 或 `workflow`）、行中写明时的工作流运行分组和名称，以及决定这一事实的字段（派生自原始行；见[父会话](#parent-sessions)） |
 | `proposal`、`proposal_source` | Agent 提出的提议，每条带有它派生自的会话和事件，以及它引用的事件和引文（派生自工具结果，可重建；见[提议](#proposals)） |
 | `sync_log` | 每次同步运行一行 |
-| `entry`, `entry_source`, `entry_fts` | 条目、条目引用的事件（含引文），以及条目的 FTS5 索引。每个版本记录它的 `root`（第一个版本，写入时确定）和它的 `origin` |
-| `imported_entry` | 本库从原生记忆派生出的条目版本（见[原生记忆](#native-memories)），它们从不发送给其他库 |
-| `tombstone`, `forgotten_entry`, `excluded_event` | 遗忘与恢复，每条都有一个全局 id（`tmb_` 加随机十六进制，与 `ent_` id 相同）和它的 `origin`；以及本库中被隐藏的内容，每个被隐藏的条目和事件都记有一次覆盖它的、生效中的遗忘 |
+| `entry`, `entry_source`, `entry_fts` | 条目、条目引用的事件（含引文），以及条目的 FTS5 索引。每个版本记录它的 `root`（第一个版本，写入时确定）和它的 `origin`。触发器拒绝对条目的任何更新，也拒绝删除条目及其引用，清除除外 |
+| `imported_entry` | 本库从原生记忆派生出的条目版本（见[原生记忆](#native-memories)），它们从不发送给其他库。触发器拒绝删除，清除除外 |
+| `tombstone`, `forgotten_entry`, `excluded_event` | 遗忘与恢复，每条都有一个全局 id（`tmb_` 加随机十六进制，与 `ent_` id 相同）和它的 `origin`；以及本库中被隐藏的内容，每个被隐藏的条目和事件都记有一次覆盖它的、生效中的遗忘。触发器拒绝对遗忘记录的任何更新和删除 |
 | `tombstone_effect` | 每次遗忘在本库中覆盖的内容，一个条目或事件可以被多次遗忘覆盖：按它的目标经规则得出、按它的中枢所列、按发送它的设备所报，或按规则 3（见[遗忘](#forgetting)） |
 | `tombstone_meta` | 每条遗忘记录的作者（已知时） |
-| `recall`, `recall_item` | 本库进行的每一次召回，以及它交出了什么，只记 id，从不记文本，另记每条过往消息的摘录从哪里开始（见[召回](#recall)）；触发器拒绝更新和删除 |
+| `recall`, `recall_item` | 本库进行的每一次召回，以及它交出了什么，只记 id，从不记文本，另记每条过往消息的摘录从哪里开始（见[召回](#recall)）；触发器拒绝更新，也拒绝删除，清除除外 |
+| `purge`, `purged`, `purge_line` | 清除：遗忘只是隐藏内容，清除则永久删除它。每次清除都有一个全局 id（`prg_` 加随机十六进制）和它的 `origin`，并记有作者、来自哪个渠道、原因、选中了什么（id、来源、路径、时间；从不记文本）、在本库中删除了每类多少项，以及它删除的最大事件 `seq`，新事件不会再用到这个序号；还记有每次清除删除了什么（按类型和 id），使这些内容不会从来源文件、设备或中枢回来；以及每次清除涂白的镜像行。触发器拒绝任何更新和删除 |
+| `purge_pending` | 清除仍需涂白其中某些行的镜像，记有最近一次错误，从不记内容；完成后这一行即被删除 |
+| `guard_lift` | 平时为空，只在清除自己的写事务中才有内容：它列出这次清除解除守卫的表（`event`、`entry`、`entry_source`、`imported_entry`、`recall`、`recall_item`、`raw_chunk`），清除在提交前再把它清空，所以其他连接永远看不到其中的行。其他守卫从不查看它 |
 | `change_log` | 本库写入或收到的条目和遗忘记录的只追加序列（序号、类型、id、origin、时间），由触发器填写；触发器拒绝任何更新和删除。复制游标指向这个序列 |
 | `api_token` | 中枢访问令牌，每个都是主人的一台设备或一个 Agent 的凭据：名称（设备的令牌即设备名）、类型（`device` 或 `agent`）、预设权限（`readwrite`，Agent 还可以是 `readonly`）和 SHA-256 哈希，从不保存令牌本身 |
 | `oauth_client`、`oauth_code`、`oauth_grant`、`oauth_token` | 作为 `/mcp` 的 OAuth 授权服务器的中枢（见[访问](#access)）：注册过的客户端，或者中枢获取过其元数据文档的客户端，以及何时再次获取；一次性授权码；主人批准的授权，每个都是一个带有名称、预设权限和到期时间的 Agent；以及它们的访问令牌和刷新令牌。授权码和令牌只以 SHA-256 哈希的形式保存 |
@@ -277,6 +280,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 | 9 | 项目（见[项目](#projects)）：空的 `project_root`（每个设备一行）、`session_place` 和 `place_head`。升级不写入任何行，也不读取文件。设备在解析工作树并追加 `places.jsonl` 时填入它们 |
 | 10 | 父会话（见[父会话](#parent-sessions)）：`session_parent`，通过重新解析已经写明父会话的镜像行来填写，设备和中枢都是如此。它不打开 ZCode 的数据库，也不打开 Grok Build 的会话目录，并且除非镜像行已经带有 workflow 对象，否则不会发明工作流运行的分组。`session_parent` 建好之后，在项目表出现之前就镜像下来的 `places.jsonl` 行会被读进这些表。本 Origin 不认识的 `v` 原样留在镜像里，解析时跳过并记一条警告；以后哪个格式开始认识它，就在那个格式的迁移里再调用一次 `reparsePlaces`。`project_root` 每个设备一行，所以两台设备上的同一条路径不会互相覆盖，`place_head` 记下每个会话或路径的最新一行。线索会重新推导，因此子会话会加入父会话的线索，链接工作树里的会话会加入主检出所在的分支。它会报告进度，并与它的版本在同一个事务中执行，所以中断的升级会让库停留在版本 9 |
 | 11 | 作为过往消息的召回项（见[召回](#recall)）：`recall_item.excerpt`，即消息的摘录从哪里开始，以及 `recall_item` 原来的约束不允许的层 `messages` 和类型 `event`；这张表像版本 5 那样重新建立，连同它的行（其 `excerpt` 为空）、索引和触发器 |
+| 12 | 清除：`purge`、`purged`、`purge_line` 和 `purge_pending`，都是空的，以及 `guard_lift`。拒绝删除 `raw_chunk`、`recall` 和 `recall_item` 以及拒绝更新 `raw_chunk` 的触发器重新建立，只在 `guard_lift` 列出它们的表时才放行，而只有清除自己的事务会这样做；`event`、`entry`、`entry_source` 和 `imported_entry` 也得到同样的删除守卫。条目得到拒绝更新的守卫，遗忘记录得到拒绝更新和删除的守卫，这些守卫什么都无法解除；另有一个触发器把被删除的条目从 `entry_fts` 中移除。不填写任何数据。此后较早版本的 Origin 会拒绝这个库，这样就没有哪个版本会再次采集清除删掉的内容 |
 
 **什么时候需要迁移。** 除了已有数据不需要从中得到什么的新表、索引、视图或触发器之外，对库格式的任何改动都需要迁移：新增、重命名或删除列，修改约束，修改触发器或视图（`IF NOT EXISTS` 会保留旧的），需要为已有数据填写的派生行，或者因为适配器现在能从镜像的行中读出更多内容而需要重新解析这些行。*schema 迁移*就地修改表；*数据迁移*根据库中已有的内容（包括原始镜像）修改或填写行。两者都要保持不变量：原始镜像和事件永远不会被改写（不变量 3），被遗忘的内容保持被遗忘（不变量 2）。`core` 没有适配器，所以对于需要重新解析镜像中的行的数据迁移，由打开库的进程传入适配器；CLI 正是这样做的，并且在它执行第一个迁移之前，还会先设置好库的帧存储，以便中枢读取存储桶中的帧。
 

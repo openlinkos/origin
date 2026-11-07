@@ -1,11 +1,15 @@
 /**
  * Database schema (see docs/architecture.md).
  * - raw_file: append-only mirror cursors for original files (Raw).
+ * - guard_lift: empty except inside a purge's own write transaction, which adds a row for each
+ *   table whose append-only guard it lifts and deletes it again before it commits, so no other
+ *   connection ever sees one (version 12).
  * - raw_chunk: the sealed zstd frames of each mirror (see mirror.ts): first line, line count,
  *   offset and length in the mirror's content and in its `.zst` file. Append-only: triggers reject
- *   updates and deletes.
+ *   updates and deletes, except in a purge (guard_lift).
  * - event: unified events (Event), append-only, keyed by `seq`, their order of arrival in this store
- *   (the rowid; explicit so that VACUUM keeps it, since the search indexes refer to it).
+ *   (the rowid; explicit so that VACUUM keeps it, since the search indexes refer to it). A trigger
+ *   rejects deletes, except in a purge; updates are not guarded.
  *   event_user_message indexes a session's user messages alone, which a turn starts with (see
  *   sessionPrompts), so that a long session's turns are found without reading its other events.
  * - event_block: for each block of 4,096 consecutive arrivals, the latest timestamp in it and up to
@@ -44,14 +48,16 @@
  * - entry / entry_source: durable entries and the events they cite (Entry), append-only; an entry
  *   changes only by being superseded. Several versions may supersede the same one (concurrent
  *   corrections on different stores); `root` is the first version of the chain, fixed on insert.
- *   Status is derived, never stored. `origin` is the store that wrote the version.
- * - entry_fts: FTS5 trigram index over entries.
+ *   Status is derived, never stored. `origin` is the store that wrote the version. Triggers reject
+ *   every update of an entry, and deletes of either, except in a purge.
+ * - entry_fts: FTS5 trigram index over entries, kept by triggers on insert and delete.
  * - imported_entry: the versions of entries this store derived from native memories (see
  *   memories.ts). Every store that parses a memory stream derives them, so they are never sent.
+ *   Deletes are rejected, except in a purge.
  * - tombstone / forgotten_entry / excluded_event: forget and restore operations (Tombstone, with a
  *   global `tmb_` id and the store it came from; a restore is a tombstone whose target is a
  *   forget's id), and what is hidden on this store: each hidden entry and event with one forget in
- *   effect that covers it.
+ *   effect that covers it. Triggers reject every update and delete of a tombstone.
  * - tombstone_effect: what each forget covers on this store, several forgets per item: by the
  *   rules from its target (`direct`), as its hub listed it (`listed`, on a device, replaced by
  *   each new list), as a device reported it (`reported`, on a hub), or by rule 3 (`cascade`). An
@@ -66,7 +72,9 @@
  *   size, and for a message where its excerpt starts in its text (`excerpt`, a code-point offset;
  *   version 11, which also allowed the kind `event` and the layer `messages`). Only ids, numbers,
  *   and a hash of the prompt, never text, so that a forget hides nothing a recall could still show.
- *   Append-only: triggers reject updates and deletes.
+ *   Append-only: triggers reject updates, and deletes except in a purge.
+ * - purge / purged / purge_line / purge_pending: purges, which delete content for good (version
+ *   12; see PURGE_TABLES).
  * - api_token: hub access tokens (name and SHA-256 hash; the token itself is never stored), each
  *   the credential of a device or an agent of the owner (`kind`), with what it may do (`preset`:
  *   readwrite, or readonly for an agent; both added in version 7).
@@ -124,7 +132,85 @@ CREATE TABLE IF NOT EXISTS place_head (
 ) WITHOUT ROWID;
 `;
 
+/**
+ * Purges (version 12), which delete content for good where a forget only hides it:
+ * - purge: each purge, with a global `prg_` id, the store that made it, who made it and through
+ *   what, the reason, what it selected (ids, a source, a path, times; never text), how many items
+ *   of each kind it removed on this store (`counts`), what it kept but changed (`touched`), when it
+ *   came from the hub, if it did, and the highest event `seq` it deleted (`seq_floor`), so that a
+ *   new event never takes the number of one it deleted, which a changes cursor may have passed.
+ * - purged: what each purge removed, by kind and id (a session or a file within its source in
+ *   `scope`), so that it never comes back from a source file, a device, or the hub.
+ * - purge_line: the mirror lines each purge blanked, by first line and count.
+ * - purge_pending: the mirrors whose lines a purge still has to blank, a work queue whose rows go
+ *   once that is done, with the last error, never content.
+ * The records are append-only: triggers reject every update and delete, which a purge never lifts.
+ * The version 12 migration copies this SQL rather than importing it, so the two must stay the same.
+ */
+export const PURGE_TABLES = `
+CREATE TABLE IF NOT EXISTS purge (
+  seq         INTEGER PRIMARY KEY,
+  id          TEXT    NOT NULL UNIQUE,
+  at          INTEGER NOT NULL,
+  origin      TEXT    NOT NULL,
+  author      TEXT    NOT NULL,
+  channel     TEXT    NOT NULL CHECK (channel IN ('cli', 'ui', 'api', 'hub')),
+  reason      TEXT    NOT NULL CHECK (length(trim(reason)) > 0),
+  selector    TEXT    NOT NULL,
+  counts      TEXT    NOT NULL,
+  touched     TEXT    NOT NULL DEFAULT '{}',
+  seq_floor   INTEGER,
+  received_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS purged (
+  kind     TEXT NOT NULL CHECK (kind IN ('event', 'entry', 'session', 'recall', 'file')),
+  scope    TEXT NOT NULL DEFAULT '',
+  id       TEXT NOT NULL,
+  purge_id TEXT NOT NULL REFERENCES purge(id),
+  PRIMARY KEY (kind, scope, id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS purged_purge ON purged (purge_id);
+CREATE TABLE IF NOT EXISTS purge_line (
+  raw_file_id INTEGER NOT NULL REFERENCES raw_file(id),
+  first_line  INTEGER NOT NULL,
+  line_count  INTEGER NOT NULL CHECK (line_count > 0),
+  purge_id    TEXT    NOT NULL REFERENCES purge(id),
+  PRIMARY KEY (raw_file_id, first_line, purge_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS purge_line_purge ON purge_line (purge_id);
+CREATE TABLE IF NOT EXISTS purge_pending (
+  raw_file_id INTEGER PRIMARY KEY REFERENCES raw_file(id),
+  since       INTEGER NOT NULL,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  error       TEXT
+);
+CREATE TRIGGER IF NOT EXISTS purge_no_update BEFORE UPDATE ON purge BEGIN
+  SELECT RAISE(ABORT, 'purge is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS purge_no_delete BEFORE DELETE ON purge BEGIN
+  SELECT RAISE(ABORT, 'purge is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS purged_no_update BEFORE UPDATE ON purged BEGIN
+  SELECT RAISE(ABORT, 'purged is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS purged_no_delete BEFORE DELETE ON purged BEGIN
+  SELECT RAISE(ABORT, 'purged is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS purge_line_no_update BEFORE UPDATE ON purge_line BEGIN
+  SELECT RAISE(ABORT, 'purge_line is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS purge_line_no_delete BEFORE DELETE ON purge_line BEGIN
+  SELECT RAISE(ABORT, 'purge_line is append-only');
+END;
+`;
+
 export const SCHEMA = `
+-- Where a purge lifts an append-only guard: the guards of the tables a purge deletes from (event,
+-- entry, entry_source, imported_entry, recall, recall_item, and raw_chunk, whose frames it seals
+-- again) hold unless this table names theirs (version 12).
+CREATE TABLE IF NOT EXISTS guard_lift (
+  name TEXT PRIMARY KEY
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS raw_file (
   id             INTEGER PRIMARY KEY,
   source         TEXT    NOT NULL,
@@ -154,10 +240,12 @@ CREATE TABLE IF NOT EXISTS raw_chunk (
   PRIMARY KEY (raw_file_id, first_line)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS raw_chunk_offset ON raw_chunk (raw_file_id, byte_offset);
-CREATE TRIGGER IF NOT EXISTS raw_chunk_no_update BEFORE UPDATE ON raw_chunk BEGIN
+CREATE TRIGGER IF NOT EXISTS raw_chunk_no_update BEFORE UPDATE ON raw_chunk
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'raw_chunk') BEGIN
   SELECT RAISE(ABORT, 'raw_chunk is append-only');
 END;
-CREATE TRIGGER IF NOT EXISTS raw_chunk_no_delete BEFORE DELETE ON raw_chunk BEGIN
+CREATE TRIGGER IF NOT EXISTS raw_chunk_no_delete BEFORE DELETE ON raw_chunk
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'raw_chunk') BEGIN
   SELECT RAISE(ABORT, 'raw_chunk is append-only');
 END;
 
@@ -245,6 +333,10 @@ CREATE INDEX IF NOT EXISTS event_project ON event (project, ts);
 CREATE INDEX IF NOT EXISTS event_seq_ts  ON event (seq, ts);
 CREATE INDEX IF NOT EXISTS event_user_message ON event (source, session_id, ts)
   WHERE role = 'user' AND kind = 'message';
+CREATE TRIGGER IF NOT EXISTS event_no_delete BEFORE DELETE ON event
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'event') BEGIN
+  SELECT RAISE(ABORT, 'event is append-only');
+END;
 
 CREATE TABLE IF NOT EXISTS event_author (
   seq     INTEGER PRIMARY KEY,
@@ -367,6 +459,13 @@ CREATE TABLE IF NOT EXISTS entry (
 CREATE INDEX IF NOT EXISTS entry_created    ON entry (created_at);
 CREATE INDEX IF NOT EXISTS entry_supersedes ON entry (supersedes);
 CREATE INDEX IF NOT EXISTS entry_root       ON entry (root, created_at, id);
+CREATE TRIGGER IF NOT EXISTS entry_no_update BEFORE UPDATE ON entry BEGIN
+  SELECT RAISE(ABORT, 'entry is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS entry_no_delete BEFORE DELETE ON entry
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'entry') BEGIN
+  SELECT RAISE(ABORT, 'entry is append-only');
+END;
 
 CREATE TABLE IF NOT EXISTS entry_source (
   entry_id TEXT NOT NULL REFERENCES entry(id),
@@ -375,10 +474,18 @@ CREATE TABLE IF NOT EXISTS entry_source (
   PRIMARY KEY (entry_id, event_id)
 );
 CREATE INDEX IF NOT EXISTS entry_source_event ON entry_source (event_id);
+CREATE TRIGGER IF NOT EXISTS entry_source_no_delete BEFORE DELETE ON entry_source
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'entry_source') BEGIN
+  SELECT RAISE(ABORT, 'entry_source is append-only');
+END;
 
 CREATE TABLE IF NOT EXISTS imported_entry (
   entry_id TEXT PRIMARY KEY REFERENCES entry(id)
 );
+CREATE TRIGGER IF NOT EXISTS imported_entry_no_delete BEFORE DELETE ON imported_entry
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'imported_entry') BEGIN
+  SELECT RAISE(ABORT, 'imported_entry is append-only');
+END;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts USING fts5(
   text,
@@ -389,6 +496,9 @@ CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS entry_ai AFTER INSERT ON entry BEGIN
   INSERT INTO entry_fts (rowid, text) VALUES (new.rowid, new.text);
 END;
+CREATE TRIGGER IF NOT EXISTS entry_ad AFTER DELETE ON entry BEGIN
+  INSERT INTO entry_fts (entry_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+END;
 
 CREATE TABLE IF NOT EXISTS tombstone (
   id         TEXT    PRIMARY KEY,
@@ -397,6 +507,12 @@ CREATE TABLE IF NOT EXISTS tombstone (
   created_at INTEGER NOT NULL,
   origin     TEXT    NOT NULL
 );
+CREATE TRIGGER IF NOT EXISTS tombstone_no_update BEFORE UPDATE ON tombstone BEGIN
+  SELECT RAISE(ABORT, 'tombstone is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS tombstone_no_delete BEFORE DELETE ON tombstone BEGIN
+  SELECT RAISE(ABORT, 'tombstone is append-only');
+END;
 
 CREATE TABLE IF NOT EXISTS forgotten_entry (
   entry_id     TEXT PRIMARY KEY REFERENCES entry(id),
@@ -480,16 +596,18 @@ CREATE INDEX IF NOT EXISTS recall_item_ref ON recall_item (ref);
 CREATE TRIGGER IF NOT EXISTS recall_no_update BEFORE UPDATE ON recall BEGIN
   SELECT RAISE(ABORT, 'recall is append-only');
 END;
-CREATE TRIGGER IF NOT EXISTS recall_no_delete BEFORE DELETE ON recall BEGIN
+CREATE TRIGGER IF NOT EXISTS recall_no_delete BEFORE DELETE ON recall
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'recall') BEGIN
   SELECT RAISE(ABORT, 'recall is append-only');
 END;
 CREATE TRIGGER IF NOT EXISTS recall_item_no_update BEFORE UPDATE ON recall_item BEGIN
   SELECT RAISE(ABORT, 'recall_item is append-only');
 END;
-CREATE TRIGGER IF NOT EXISTS recall_item_no_delete BEFORE DELETE ON recall_item BEGIN
+CREATE TRIGGER IF NOT EXISTS recall_item_no_delete BEFORE DELETE ON recall_item
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'recall_item') BEGIN
   SELECT RAISE(ABORT, 'recall_item is append-only');
 END;
-
+${PURGE_TABLES}
 CREATE TABLE IF NOT EXISTS api_token (
   name         TEXT    PRIMARY KEY,
   hash         TEXT    NOT NULL UNIQUE,

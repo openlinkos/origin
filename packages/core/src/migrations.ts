@@ -208,6 +208,189 @@ export const MIGRATIONS: Migration[] = [
       db.exec(recallItemV11(excerpt));
     },
   },
+  {
+    // Purges, which delete content for good where a forget only hides it: their records, and
+    // guard_lift, through which a purge's own transaction lifts the append-only guards of the
+    // tables it deletes from. The guards of raw_chunk, recall, and recall_item are made again with
+    // that condition; events, entries, what entries cite, and tombstones, append-only until now by
+    // convention, get guards of their own, and entries a trigger that keeps their search index when
+    // one is deleted. Nothing is filled in. A table the store lacks yet gets its triggers from the
+    // schema after the migrations. The SQL is written here, not imported from schema.ts; the two
+    // must stay the same. Stores in PostgreSQL start at this version.
+    version: 12,
+    name: 'purges, and append-only guards only a purge can lift',
+    up: ({ db }) => {
+      db.exec(GUARD_LIFT_V12);
+      db.exec(PURGE_TABLES_V12);
+      for (const [table, sql] of GUARDS_V12) {
+        if (db.hasTable(table)) db.exec(sql);
+      }
+    },
+  },
+];
+
+/** Version 12: where a purge lifts an append-only guard. */
+const GUARD_LIFT_V12 = `
+CREATE TABLE IF NOT EXISTS guard_lift (
+  name TEXT PRIMARY KEY
+) WITHOUT ROWID;
+`;
+
+/**
+ * Version 12: the records of purges. Written here, not imported from schema.ts (PURGE_TABLES); keep
+ * the two the same.
+ */
+const PURGE_TABLES_V12 = `
+CREATE TABLE IF NOT EXISTS purge (
+  seq         INTEGER PRIMARY KEY,
+  id          TEXT    NOT NULL UNIQUE,
+  at          INTEGER NOT NULL,
+  origin      TEXT    NOT NULL,
+  author      TEXT    NOT NULL,
+  channel     TEXT    NOT NULL CHECK (channel IN ('cli', 'ui', 'api', 'hub')),
+  reason      TEXT    NOT NULL CHECK (length(trim(reason)) > 0),
+  selector    TEXT    NOT NULL,
+  counts      TEXT    NOT NULL,
+  touched     TEXT    NOT NULL DEFAULT '{}',
+  seq_floor   INTEGER,
+  received_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS purged (
+  kind     TEXT NOT NULL CHECK (kind IN ('event', 'entry', 'session', 'recall', 'file')),
+  scope    TEXT NOT NULL DEFAULT '',
+  id       TEXT NOT NULL,
+  purge_id TEXT NOT NULL REFERENCES purge(id),
+  PRIMARY KEY (kind, scope, id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS purged_purge ON purged (purge_id);
+CREATE TABLE IF NOT EXISTS purge_line (
+  raw_file_id INTEGER NOT NULL REFERENCES raw_file(id),
+  first_line  INTEGER NOT NULL,
+  line_count  INTEGER NOT NULL CHECK (line_count > 0),
+  purge_id    TEXT    NOT NULL REFERENCES purge(id),
+  PRIMARY KEY (raw_file_id, first_line, purge_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS purge_line_purge ON purge_line (purge_id);
+CREATE TABLE IF NOT EXISTS purge_pending (
+  raw_file_id INTEGER PRIMARY KEY REFERENCES raw_file(id),
+  since       INTEGER NOT NULL,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  error       TEXT
+);
+CREATE TRIGGER IF NOT EXISTS purge_no_update BEFORE UPDATE ON purge BEGIN
+  SELECT RAISE(ABORT, 'purge is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS purge_no_delete BEFORE DELETE ON purge BEGIN
+  SELECT RAISE(ABORT, 'purge is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS purged_no_update BEFORE UPDATE ON purged BEGIN
+  SELECT RAISE(ABORT, 'purged is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS purged_no_delete BEFORE DELETE ON purged BEGIN
+  SELECT RAISE(ABORT, 'purged is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS purge_line_no_update BEFORE UPDATE ON purge_line BEGIN
+  SELECT RAISE(ABORT, 'purge_line is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS purge_line_no_delete BEFORE DELETE ON purge_line BEGIN
+  SELECT RAISE(ABORT, 'purge_line is append-only');
+END;
+`;
+
+/**
+ * Version 12: the triggers of each table, by table. The delete guards of raw_chunk, recall, and
+ * recall_item, and raw_chunk's update guard, are dropped first, as they were made without the
+ * condition; the rest are new.
+ */
+const GUARDS_V12: Array<[table: string, sql: string]> = [
+  [
+    'raw_chunk',
+    `
+DROP TRIGGER IF EXISTS raw_chunk_no_update;
+DROP TRIGGER IF EXISTS raw_chunk_no_delete;
+CREATE TRIGGER IF NOT EXISTS raw_chunk_no_update BEFORE UPDATE ON raw_chunk
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'raw_chunk') BEGIN
+  SELECT RAISE(ABORT, 'raw_chunk is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS raw_chunk_no_delete BEFORE DELETE ON raw_chunk
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'raw_chunk') BEGIN
+  SELECT RAISE(ABORT, 'raw_chunk is append-only');
+END;
+`,
+  ],
+  [
+    'event',
+    `
+CREATE TRIGGER IF NOT EXISTS event_no_delete BEFORE DELETE ON event
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'event') BEGIN
+  SELECT RAISE(ABORT, 'event is append-only');
+END;
+`,
+  ],
+  [
+    'entry',
+    `
+CREATE TRIGGER IF NOT EXISTS entry_no_update BEFORE UPDATE ON entry BEGIN
+  SELECT RAISE(ABORT, 'entry is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS entry_no_delete BEFORE DELETE ON entry
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'entry') BEGIN
+  SELECT RAISE(ABORT, 'entry is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS entry_ad AFTER DELETE ON entry BEGIN
+  INSERT INTO entry_fts (entry_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+END;
+`,
+  ],
+  [
+    'entry_source',
+    `
+CREATE TRIGGER IF NOT EXISTS entry_source_no_delete BEFORE DELETE ON entry_source
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'entry_source') BEGIN
+  SELECT RAISE(ABORT, 'entry_source is append-only');
+END;
+`,
+  ],
+  [
+    'imported_entry',
+    `
+CREATE TRIGGER IF NOT EXISTS imported_entry_no_delete BEFORE DELETE ON imported_entry
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'imported_entry') BEGIN
+  SELECT RAISE(ABORT, 'imported_entry is append-only');
+END;
+`,
+  ],
+  [
+    'tombstone',
+    `
+CREATE TRIGGER IF NOT EXISTS tombstone_no_update BEFORE UPDATE ON tombstone BEGIN
+  SELECT RAISE(ABORT, 'tombstone is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS tombstone_no_delete BEFORE DELETE ON tombstone BEGIN
+  SELECT RAISE(ABORT, 'tombstone is append-only');
+END;
+`,
+  ],
+  [
+    'recall',
+    `
+DROP TRIGGER IF EXISTS recall_no_delete;
+CREATE TRIGGER IF NOT EXISTS recall_no_delete BEFORE DELETE ON recall
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'recall') BEGIN
+  SELECT RAISE(ABORT, 'recall is append-only');
+END;
+`,
+  ],
+  [
+    'recall_item',
+    `
+DROP TRIGGER IF EXISTS recall_item_no_delete;
+CREATE TRIGGER IF NOT EXISTS recall_item_no_delete BEFORE DELETE ON recall_item
+  WHEN NOT EXISTS (SELECT 1 FROM guard_lift WHERE name = 'recall_item') BEGIN
+  SELECT RAISE(ABORT, 'recall_item is append-only');
+END;
+`,
+  ],
 ];
 
 /**

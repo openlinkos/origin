@@ -39,6 +39,7 @@ import {
   downgradeToV5,
   downgradeToV6,
   downgradeToV10,
+  downgradeToV11,
   legacyStore,
   schemaOf,
   store040,
@@ -384,7 +385,7 @@ describe('a store of version 5', () => {
 
     db = openDatabase(file);
     expect(userVersion(db)).toBe(STORE_VERSION);
-    expect(STORE_VERSION).toBe(11);
+    expect(STORE_VERSION).toBe(12);
     expect({
       proposals: db.prepare('SELECT * FROM proposal').all(),
       sources: db.prepare('SELECT * FROM proposal_source').all(),
@@ -484,7 +485,7 @@ describe('a store of version 10', () => {
     const logged: string[] = [];
     db = openDatabase(file, { log: (m) => logged.push(m) });
     expect(userVersion(db)).toBe(STORE_VERSION);
-    expect(STORE_VERSION).toBe(11);
+    expect(STORE_VERSION).toBe(12);
     expect(logged.join('\n')).toMatch(/Upgrading the store to version 11/);
     // Every row kept, with no excerpt.
     expect(db.prepare('SELECT * FROM recall_item ORDER BY rank').all()).toEqual(before);
@@ -518,6 +519,73 @@ describe('a store of version 10', () => {
     const fresh = openDatabase(path.join(tmp, 'fresh.db'));
     expect(schemaOf(db)).toEqual(schemaOf(fresh));
     fresh.close();
+    db.close();
+  });
+});
+
+describe('a store of version 11', () => {
+  it('gets the records of purges, and guards that only a purge lifts (version 12)', async () => {
+    const logs = path.join(tmp, 'logs');
+    fs.mkdirSync(logs);
+    fs.writeFileSync(
+      path.join(logs, 'a.jsonl'),
+      `${line('1', 's1', 1000, 'user', 'deploy the staging cluster')}${line('2', 's1', 2000, 'assistant', 'Deployed.')}`,
+    );
+    let db = openDatabase(file);
+    await syncSource({ db, home }, fakeAdapter(logs));
+    const entry = remember(db, {
+      kind: 'knowledge',
+      text: 'The cluster is called staging.',
+      confidence: 1,
+      author: 'user@laptop',
+      sources: [{ eventId: 'fake:1' }],
+    });
+    db.prepare(
+      `INSERT INTO recall (id, at, origin, occasion, budget, tokens)
+       VALUES ('rcl_000000000001', 1000, 'laptop', 'prompt', 400, 60)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO recall_item (recall_id, rank, layer, kind, ref, score, tokens)
+       VALUES ('rcl_000000000001', 1, 'prompt', 'entry', ?, 2.5, 20)`,
+    ).run(entry.id);
+    db.close();
+    downgradeToV11(file);
+    const v11 = new DatabaseSync(file);
+    expect(userVersion(v11)).toBe(11);
+    expect(
+      v11
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE name IN ('purge', 'guard_lift', 'event_no_delete', 'entry_ad')",
+        )
+        .all(),
+    ).toEqual([]);
+    v11.close();
+
+    const logged: string[] = [];
+    db = openDatabase(file, { log: (m) => logged.push(m) });
+    expect(userVersion(db)).toBe(STORE_VERSION);
+    expect(logged.join('\n')).toMatch(/Upgrading the store to version 12/);
+    const fresh = openDatabase(path.join(tmp, 'fresh.db'));
+    expect(schemaOf(db)).toEqual(schemaOf(fresh));
+    fresh.close();
+
+    // Everything kept, and nothing purged.
+    expect(listSessions(db)).toMatchObject([{ sessionId: 's1', eventCount: 2 }]);
+    expect(getEntry(db, entry.id)).toMatchObject({ status: 'active' });
+    for (const table of ['purge', 'purged', 'purge_line', 'purge_pending', 'guard_lift']) {
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
+    }
+    // The guards hold without a purge.
+    for (const sql of [
+      'DELETE FROM event',
+      'DELETE FROM entry_source',
+      'DELETE FROM entry',
+      `UPDATE entry SET text = 'changed'`,
+      'DELETE FROM recall_item',
+      'DELETE FROM recall',
+    ]) {
+      expect(() => db.prepare(sql).run(), sql).toThrow(/append-only/);
+    }
     db.close();
   });
 });

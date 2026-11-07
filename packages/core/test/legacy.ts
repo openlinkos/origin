@@ -86,6 +86,7 @@ export function schemaOf(db: Database): unknown[] {
 export function downgradeToV1(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    undoV12(db);
     dropParents(db);
     dropPlaces(db);
     // Version 8: authorship.
@@ -116,6 +117,65 @@ export function downgradeToV1(file: string): void {
     const same = JSON.stringify(schemaOf(db)) === JSON.stringify(schemaOf(reference));
     reference.close();
     if (!same) throw new Error('downgradeToV1 must undo every migration since 0.1.0');
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Undo version 12: no purge records and no guard_lift; the guards of raw_chunk, recall, and
+ * recall_item as they were, which nothing lifts; no guards on events, entries, what entries cite,
+ * or tombstones; and no entry_ad. Throws if the store holds a purge.
+ */
+function undoV12(db: DatabaseSync): void {
+  if (
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'purge'").get() &&
+    db.prepare('SELECT 1 FROM purge').get()
+  ) {
+    throw new Error('undoV12 cannot undo a purge');
+  }
+  for (const trigger of [
+    'event_no_delete',
+    'entry_no_update',
+    'entry_no_delete',
+    'entry_ad',
+    'entry_source_no_delete',
+    'imported_entry_no_delete',
+    'tombstone_no_update',
+    'tombstone_no_delete',
+  ]) {
+    db.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
+  }
+  for (const table of ['purge_pending', 'purge_line', 'purged', 'purge']) {
+    db.exec(`DROP TABLE IF EXISTS ${table}`);
+  }
+  const guards: Array<[table: string, trigger: string, on: string]> = [
+    ['raw_chunk', 'raw_chunk_no_update', 'UPDATE'],
+    ['raw_chunk', 'raw_chunk_no_delete', 'DELETE'],
+    ['recall', 'recall_no_delete', 'DELETE'],
+    ['recall_item', 'recall_item_no_delete', 'DELETE'],
+  ];
+  for (const [table, trigger, on] of guards) {
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)) {
+      continue;
+    }
+    db.exec(`DROP TRIGGER IF EXISTS ${trigger};
+CREATE TRIGGER ${trigger} BEFORE ${on} ON ${table} BEGIN
+  SELECT RAISE(ABORT, '${table} is append-only');
+END;`);
+  }
+  db.exec('DROP TABLE IF EXISTS guard_lift');
+}
+
+/**
+ * Turn a store of the latest version, closed, back into a store of version 11: without purges (see
+ * undoV12).
+ */
+export function downgradeToV11(file: string): void {
+  const db = new DatabaseSync(file);
+  try {
+    undoV12(db);
+    db.exec('PRAGMA user_version = 11');
   } finally {
     db.close();
   }
@@ -158,6 +218,7 @@ END;`);
 export function downgradeToV10(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    undoV12(db);
     undoV11(db);
     db.exec('PRAGMA user_version = 10');
   } finally {
@@ -192,6 +253,7 @@ function dropAuthorship(db: DatabaseSync): void {
 export function downgradeToV7(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    undoV12(db);
     undoV11(db);
     dropParents(db);
     dropPlaces(db);
@@ -210,6 +272,7 @@ export function downgradeToV7(file: string): void {
 export function downgradeToV5(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    undoV12(db);
     undoV11(db);
     dropParents(db);
     dropPlaces(db);
@@ -270,6 +333,7 @@ END;`);
 export function downgradeToV6(file: string): void {
   const db = new DatabaseSync(file);
   try {
+    undoV12(db);
     undoV11(db);
     dropParents(db);
     dropPlaces(db);
