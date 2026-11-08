@@ -70,12 +70,12 @@ curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=2026/11
 ```
 
 ```json
-{ "lines": 2, "events": 2, "duplicates": 0, "parse_errors": 0, "errors": [] }
+{ "lines": 2, "events": 2, "duplicates": 0, "parse_errors": 0, "purged": 0, "errors": [] }
 ```
 
 - **Where they go.** The hub keeps the lines as file `path` of the source, here `2026/11/02.jsonl` of `chat-ops`, sent by the token's name, `chat-bridge`, and reads them as it reads what a device sends. They stay on the hub: devices never download them, and agents find them through the hub, as everything else there.
 - **The body.** Event lines, at most 8 MiB, as `application/x-ndjson` or `text/plain`, possibly gzip-encoded. Use `--data-binary`, which sends a file as it is, rather than `-d`, which drops its line breaks; one line without a line break at the end, as `-d '{"id":…}'` sends it, is fine.
-- **The answer.** How many lines the hub read, how many new events they gave, how many it already had (`duplicates`), and how many are not valid events (`parse_errors`), which it keeps but reads nothing from; `errors` describes the first five of those, each with its line's number in the file and why, such as `{ "line": 7, "error": "\"author\" is only for lines whose \"role\" is user" }`. Fix the writer and go on appending to the same file: a line once read is kept, valid or not, so sending it again in a new file only adds a copy.
+- **The answer.** How many lines the hub read, how many new events they gave, how many it already had (`duplicates`), how many are not valid events (`parse_errors`), which it keeps but reads nothing from, and how many it stored blank because you purged what they hold (`purged`, see [Purging](./cli.md#purging)); `errors` describes the first five of those, each with its line's number in the file and why, such as `{ "line": 7, "error": "\"author\" is only for lines whose \"role\" is user" }`. Fix the writer and go on appending to the same file: a line once read is kept, valid or not, so sending it again in a new file only adds a copy.
 - **Sending again.** If you do not know whether a request arrived, send it again: lines the hub already has add nothing.
 - **A token of its own.** A device's token works too, and sends as that device; lines sent with it under a path that the device's own `sources/` directory also has are kept in a file of their own, beside the device's.
 

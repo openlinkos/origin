@@ -398,12 +398,16 @@ export {
 } from './proposals.js';
 // Purging: plan, apply, and complete.
 export {
+  applyHubPurge,
   completePurges,
   getPurge,
+  type HubPurge,
+  type HubPurgeRecord,
   latestPurgeSeq,
   listPurges,
   type PendingPurgeMirror,
   PURGE_EVENTS_WARN,
+  PURGE_FEED_PAGE,
   PURGE_ID_RE,
   PURGE_LIMITS,
   type PurgeAdapters,
@@ -411,7 +415,9 @@ export {
   type PurgeCompletion,
   type PurgeCounts,
   type PurgeDetail,
+  type PurgeFeedPage,
   type PurgeFile,
+  type PurgeItems,
   type PurgeMirror,
   type PurgeOptions,
   type PurgePlan,
@@ -420,9 +426,11 @@ export {
   type PurgeSelector,
   type PurgeTouched,
   type PurgeWarning,
+  parsePurgeFeedPage,
   pendingPurgeMirrors,
   planPurge,
   purge,
+  purgeFeed,
 } from './purge.js';
 export {
   continuationLine,

@@ -22,6 +22,7 @@ import {
 import { type MirroredFile, mirroredLineParser } from './reparse.js';
 import { getSetting, setSetting } from './settings.js';
 import { refreshThreads, threadIdOf } from './threads.js';
+import { NAME_RE } from './tokens.js';
 import type { ParsedLine, SourceAdapter } from './types.js';
 
 /**
@@ -304,6 +305,8 @@ class Planner {
     readonly selector: PurgeSelector,
     /** Parses of mirrors, kept from an earlier plan of the same purge. */
     readonly files: Map<number, FileParse> = new Map(),
+    /** What a purge made on another store removed there, in place of the selector's own seeds. */
+    private readonly given: PurgeItems | null = null,
   ) {
     this.adapter = adapterLookup(adapters);
     this.purged = purgedLookup(db);
@@ -323,6 +326,10 @@ class Planner {
   // --- Seeds -----------------------------------------------------------------------------------
 
   private seed(): void {
+    if (this.given) {
+      this.seedGiven(this.given);
+      return;
+    }
     const s = this.selector;
     const d = this.db.dialect;
     switch (s.kind) {
@@ -377,6 +384,48 @@ class Planner {
         break;
       default:
         throw new OriginError('Unknown kind of purge selector.');
+    }
+  }
+
+  /**
+   * What a hub's purge removed there (see applyHubPurge), as far as this store holds it: the rules
+   * then run from these ids as from a selector's, since this store may hold more of a session, or
+   * other lines that yield the same events. Ids this store does not hold are passed over.
+   */
+  private seedGiven(g: PurgeItems): void {
+    const d = this.db.dialect;
+    for (const r of this.db
+      .prepare(`SELECT id FROM event WHERE id IN (${idList(d, 'text')}) ORDER BY id`)
+      .all(json(g.events)) as Array<{ id: string }>) {
+      this.addEvent(r.id);
+    }
+    for (const r of this.db
+      .prepare(`SELECT DISTINCT root FROM entry WHERE id IN (${idList(d, 'text')}) ORDER BY root`)
+      .all(json(g.entries)) as Array<{ root: string }>) {
+      this.addChain(r.root);
+    }
+    const pairs = JSON.stringify(g.sessions);
+    for (const r of this.db
+      .prepare(
+        `SELECT source, session_id FROM session WHERE (source, session_id) IN (${pairList(d)})
+         UNION
+         SELECT DISTINCT source, session_id FROM event WHERE (source, session_id) IN (${pairList(d)})
+         ORDER BY 1, 2`,
+      )
+      .all(pairs, pairs) as Array<{ source: string; session_id: string }>) {
+      this.addSession(key(r.source, r.session_id));
+    }
+    for (const r of this.db
+      .prepare(`SELECT id FROM recall WHERE id IN (${idList(d, 'text')}) ORDER BY id`)
+      .all(json(g.recalls)) as Array<{ id: string }>) {
+      this.recalls.add(r.id);
+    }
+    // Files the hub blocked are candidates here: the rules decide whether they are blocked here too.
+    const file = this.db.prepare(
+      'SELECT id FROM raw_file WHERE source = ? AND path = ? ORDER BY generation',
+    );
+    for (const [source, path] of g.files) {
+      for (const r of file.all(source, path) as Array<{ id: number }>) this.addFile(Number(r.id));
     }
   }
 
@@ -940,9 +989,10 @@ function makePlan(
   adapters: PurgeAdapters,
   selector: PurgeSelector,
   parses?: Map<number, FileParse>,
+  given?: PurgeItems,
 ): PurgePlan {
   assertComplete(db, 'purge');
-  const planner = new Planner(db, home, adapters, selector, parses).run();
+  const planner = new Planner(db, home, adapters, selector, parses, given ?? null).run();
   const blocked = planner.blockedFiles();
   const continued = new Map<number, string>();
   const refusals: string[] = [];
@@ -1357,36 +1407,53 @@ export function purge(
   // The slow part, parsing the mirrors, is done before taking the write lock.
   const first = opts.plan ?? makePlan(db, home, adapters, chosen);
   const parses = states.get(first)?.planner.files;
+  const now = opts.now ?? Date.now();
+  const result = underLock(db, home, adapters, opts, () => {
+    const plan = makePlan(db, home, adapters, chosen, parses);
+    if (expected !== undefined && expected !== plan.digest) {
+      throw new ConflictError(
+        'The store has changed since this purge was planned, and it would now delete something else: plan it again.',
+      );
+    }
+    if (plan.refusals.length > 0) throw new OriginError(plan.refusals.join(' '));
+    if (emptyPlan(plan)) {
+      throw new OriginError('Nothing to purge: the selector takes nothing this store holds.');
+    }
+    return applyPlan(db, plan, states.get(plan) as PlanState, {
+      id: `prg_${randomBytes(6).toString('hex')}`,
+      at: now,
+      origin: storeName(db),
+      author,
+      channel: opts.channel,
+      reason,
+      actor: opts.actor ?? author,
+      receivedAt: null,
+    });
+  });
+  return result as PurgeResult;
+}
+
+/**
+ * Apply a plan made under the write lock (`apply`, which may decline with null), with secure
+ * deletes on SQLite; then blank the mirrors it queued, unless `opts.complete` is false.
+ */
+function underLock(
+  db: Database,
+  home: string,
+  adapters: PurgeAdapters,
+  opts: { complete?: boolean; budgetMs?: number; log?: (message: string) => void },
+  apply: () => PurgeResult | null,
+): PurgeResult | null {
   const sqlite = db.dialect === 'sqlite';
   const secure = sqlite ? pragma(db, 'secure_delete') : null;
   if (sqlite) db.exec('PRAGMA secure_delete = ON');
-  let result: PurgeResult;
+  let result: PurgeResult | null;
   try {
-    result = transaction(
-      db,
-      () => {
-        const plan = makePlan(db, home, adapters, chosen, parses);
-        if (expected !== undefined && expected !== plan.digest) {
-          throw new ConflictError(
-            'The store has changed since this purge was planned, and it would now delete something else: plan it again.',
-          );
-        }
-        if (plan.refusals.length > 0) throw new OriginError(plan.refusals.join(' '));
-        if (emptyPlan(plan)) {
-          throw new OriginError('Nothing to purge: the selector takes nothing this store holds.');
-        }
-        return applyPlan(db, plan, states.get(plan) as PlanState, {
-          ...opts,
-          reason,
-          author,
-          now: opts.now ?? Date.now(),
-        });
-      },
-      { immediate: true },
-    );
+    result = transaction(db, apply, { immediate: true });
   } finally {
     if (secure !== null) db.exec(`PRAGMA secure_delete = ${secure}`);
   }
+  if (result === null) return null;
   if (opts.complete !== false) {
     result.mirrors = completePurges(db, home, adapters, {
       budgetMs: opts.budgetMs,
@@ -1446,15 +1513,23 @@ function clearWorkTables(db: Database): void {
   );
 }
 
+/** Who made a purge, and where: what its record says besides what it selected and removed. */
+interface PurgeMaker {
+  id: string;
+  at: number;
+  origin: string;
+  author: string;
+  channel: PurgeChannel;
+  reason: string;
+  /** Who the audit log names. */
+  actor: string;
+  receivedAt: number | null;
+}
+
 /** Apply a plan made under the write lock: the deletes, then the purge's record. */
-function applyPlan(
-  db: Database,
-  plan: PurgePlan,
-  state: PlanState,
-  opts: PurgeOptions & { now: number },
-): PurgeResult {
+function applyPlan(db: Database, plan: PurgePlan, state: PlanState, made: PurgeMaker): PurgeResult {
   const d = db.dialect;
-  const id = `prg_${randomBytes(6).toString('hex')}`;
+  const id = made.id;
   db.exec(
     `INSERT INTO guard_lift (name) VALUES ${LIFTED.map((n) => `('${n}')`).join(', ')}
        ON CONFLICT DO NOTHING`,
@@ -1545,25 +1620,25 @@ function applyPlan(
         tombstones: plan.tombstones,
         recalls: [...touched].filter((r) => !plan.recalls.includes(r)).sort(),
       };
-      const origin = storeName(db);
       const { seq } = db
         .prepare(
           `INSERT INTO purge (id, at, origin, author, channel, reason, selector, counts, touched,
-                              seq_floor)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              seq_floor, received_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            RETURNING seq`,
         )
         .get(
           id,
-          opts.now,
-          origin,
-          opts.author,
-          opts.channel,
-          opts.reason,
+          made.at,
+          made.origin,
+          made.author,
+          made.channel,
+          made.reason,
           JSON.stringify(plan.selector),
           JSON.stringify(counts),
           JSON.stringify(touchedOut),
           floor,
+          made.receivedAt,
         ) as { seq: number };
       recordPurged(db, id, plan);
       const pending = queueMirrors(db, id, Number(seq), plan);
@@ -1574,27 +1649,28 @@ function applyPlan(
       recordAudit(
         db,
         {
-          actor: opts.actor ?? opts.author,
-          channel: opts.channel,
+          actor: made.actor,
+          // A hub's purge came through its replication API.
+          channel: made.channel === 'hub' ? 'api' : made.channel,
           action: 'purge',
           target: id,
           detail: { ...counts },
         },
-        opts.now,
+        made.receivedAt ?? made.at,
       );
       const record: PurgeRecord = {
         seq: Number(seq),
         id,
-        at: opts.now,
-        origin,
-        author: opts.author,
-        channel: opts.channel,
-        reason: opts.reason,
+        at: made.at,
+        origin: made.origin,
+        author: made.author,
+        channel: made.channel,
+        reason: made.reason,
         selector: plan.selector,
         counts,
         touched: touchedOut,
         seqFloor: floor === null ? null : Number(floor),
-        receivedAt: null,
+        receivedAt: made.receivedAt,
       };
       return { id, record, plan, mirrors: null, pending };
     } finally {
@@ -2106,4 +2182,259 @@ export function getPurge(db: Database, id: string): PurgeDetail | null {
     m.lines.push([Number(r.first_line), Number(r.line_count)]);
   }
   return { ...purgeRecord(row), removed, mirrors: [...mirrors.values()] };
+}
+
+// --- From a hub down to its devices ------------------------------------------------------------
+
+/**
+ * What a purge removed, by id, as a hub's purge feed sends it down to a device: events, entries
+ * (every version), sessions as `[source, id]`, recalls, and the files it blocked, as
+ * `[source, path]` with the path as the device knows it.
+ */
+export interface PurgeItems {
+  events: string[];
+  entries: string[];
+  sessions: Array<[string, string]>;
+  recalls: string[];
+  files: Array<[string, string]>;
+}
+
+/** A purge a hub made, as its feed describes it: who, when, why, and what it selected. */
+export interface HubPurgeRecord {
+  /** Its seq on the hub: the feed's cursor. */
+  seq: number;
+  id: string;
+  at: number;
+  origin: string;
+  author: string;
+  reason: string;
+  selector: PurgeSelector;
+}
+
+/** A hub's purge with everything it removed that a device may hold (see applyHubPurge). */
+export interface HubPurge extends HubPurgeRecord {
+  items: PurgeItems;
+}
+
+/**
+ * One page of a hub's purge feed (`GET /v1/purges`): one purge, or none after `after`, and at most
+ * PURGE_FEED_PAGE of the ids it removed, from `offset`. While `next.offset` is not 0, the next page
+ * holds more of the same purge; once it is, the purge is whole, and `next.after` is its seq. `more`
+ * says whether to ask again, with `next`.
+ */
+export interface PurgeFeedPage {
+  purge: HubPurgeRecord | null;
+  items: PurgeItems;
+  more: boolean;
+  next: { after: number; offset: number };
+}
+
+/** The most ids a page of the purge feed holds. */
+export const PURGE_FEED_PAGE = 10_000;
+
+const noItems = (): PurgeItems => ({
+  events: [],
+  entries: [],
+  sessions: [],
+  recalls: [],
+  files: [],
+});
+
+/**
+ * The purge feed of a hub for one of its devices (see PurgeFeedPage): the purges this store made,
+ * not those it received, in order, each with what it removed, by id. Of the files a purge blocked,
+ * only that device's are listed, as the device knows their paths (without `@<device>:`).
+ */
+export function purgeFeed(
+  db: Database,
+  opts: { after: number; offset?: number; device: string; limit?: number },
+): PurgeFeedPage {
+  const after = opts.after;
+  const offset = opts.offset ?? 0;
+  const limit = Math.min(Math.max(1, opts.limit ?? PURGE_FEED_PAGE), PURGE_FEED_PAGE);
+  const none: PurgeFeedPage = {
+    purge: null,
+    items: noItems(),
+    more: false,
+    next: { after, offset: 0 },
+  };
+  if (!db.hasTable('purge')) return none;
+  const row = db
+    .prepare(
+      `SELECT ${PURGE_COLUMNS} FROM purge WHERE seq > ? AND channel <> 'hub' ORDER BY seq LIMIT 1`,
+    )
+    .get(after) as PurgeRow | undefined;
+  if (!row) return none;
+  const rows = db
+    .prepare(
+      `SELECT kind, scope, id FROM purged WHERE purge_id = ?
+        ORDER BY kind, scope, id LIMIT ? OFFSET ?`,
+    )
+    .all(row.id, limit + 1, offset) as Array<{ kind: string; scope: string; id: string }>;
+  const partial = rows.length > limit;
+  const items = noItems();
+  for (const r of rows.slice(0, limit)) {
+    if (r.kind === 'event') items.events.push(r.id);
+    else if (r.kind === 'entry') items.entries.push(r.id);
+    else if (r.kind === 'session') items.sessions.push([r.scope, r.id]);
+    else if (r.kind === 'recall') items.recalls.push(r.id);
+    else if (r.kind === 'file') {
+      const { device, originalPath } = parseRawPath(r.id);
+      if (device === opts.device) items.files.push([r.scope, originalPath]);
+    }
+  }
+  const seq = Number(row.seq);
+  const later =
+    !partial &&
+    db.prepare("SELECT 1 AS one FROM purge WHERE seq > ? AND channel <> 'hub' LIMIT 1").get(seq) !==
+      undefined;
+  return {
+    purge: {
+      seq,
+      id: row.id,
+      at: Number(row.at),
+      origin: row.origin,
+      author: row.author,
+      reason: row.reason,
+      selector: JSON.parse(row.selector) as PurgeSelector,
+    },
+    items,
+    more: partial || later,
+    next: partial ? { after, offset: offset + limit } : { after: seq, offset: 0 },
+  };
+}
+
+function invalidFeed(what: string): never {
+  throw new OriginError(`The hub sent an invalid purge feed: ${what}.`);
+}
+
+const isObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+function feedIds(value: unknown, what: string): string[] {
+  if (!Array.isArray(value) || value.length > PURGE_FEED_PAGE) invalidFeed(what);
+  for (const id of value) {
+    if (typeof id !== 'string' || id.length === 0 || id.length > 4096) invalidFeed(what);
+  }
+  return value as string[];
+}
+
+function feedPairs(value: unknown, what: string): Array<[string, string]> {
+  if (!Array.isArray(value) || value.length > PURGE_FEED_PAGE) invalidFeed(what);
+  return value.map((pair) => {
+    if (!Array.isArray(pair) || pair.length !== 2) invalidFeed(what);
+    const [a, b] = feedIds(pair, what) as [string, string];
+    return [a, b];
+  });
+}
+
+function feedCount(value: unknown, what: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) invalidFeed(what);
+  return value;
+}
+
+/** A page of a hub's purge feed as the hub sent it, checked field by field (see purgeFeed). */
+export function parsePurgeFeedPage(value: unknown): PurgeFeedPage {
+  if (!isObject(value)) invalidFeed('not an object');
+  const next = value.next;
+  if (!isObject(next)) invalidFeed('next');
+  const page: PurgeFeedPage = {
+    purge: null,
+    items: noItems(),
+    more: value.more === true,
+    next: { after: feedCount(next.after, 'next'), offset: feedCount(next.offset, 'next') },
+  };
+  if (value.purge === null || value.purge === undefined) return page;
+  const p = value.purge;
+  if (!isObject(p)) invalidFeed('purge');
+  if (typeof p.id !== 'string' || !PURGE_ID_RE.test(p.id)) invalidFeed('purge id');
+  if (typeof p.origin !== 'string' || !NAME_RE.test(p.origin)) invalidFeed(`origin of ${p.id}`);
+  if (typeof p.author !== 'string' || p.author.trim().length === 0 || p.author.length > 200) {
+    invalidFeed(`author of ${p.id}`);
+  }
+  let reason: string;
+  try {
+    reason = checkReason(p.reason);
+  } catch {
+    invalidFeed(`reason of ${p.id}`);
+  }
+  const selector = p.selector;
+  if (
+    !isObject(selector) ||
+    typeof selector.kind !== 'string' ||
+    JSON.stringify(selector).length > 64 * 1024
+  ) {
+    invalidFeed(`selector of ${p.id}`);
+  }
+  const items = value.items;
+  if (!isObject(items)) invalidFeed(`items of ${p.id}`);
+  page.purge = {
+    seq: feedCount(p.seq, `seq of ${p.id}`),
+    id: p.id,
+    at: feedCount(p.at, `time of ${p.id}`),
+    origin: p.origin,
+    author: p.author.trim(),
+    reason,
+    selector: selector as unknown as PurgeSelector,
+  };
+  page.items = {
+    events: feedIds(items.events ?? [], `events of ${p.id}`),
+    entries: feedIds(items.entries ?? [], `entries of ${p.id}`),
+    sessions: feedPairs(items.sessions ?? [], `sessions of ${p.id}`),
+    recalls: feedIds(items.recalls ?? [], `recalls of ${p.id}`),
+    files: feedPairs(items.files ?? [], `files of ${p.id}`),
+  };
+  return page;
+}
+
+/** Whether this store holds the purge with this id. */
+function hasPurge(db: Database, id: string): boolean {
+  return db.prepare('SELECT 1 AS one FROM purge WHERE id = ?').get(id) !== undefined;
+}
+
+/**
+ * Apply on this device a purge its hub made (see purgeFeed): the rules run here from the ids the
+ * hub removed, as far as this store holds them, since it may hold more of a session or other lines
+ * that yield the same events; the record keeps the hub's id, origin, author, reason, and selector,
+ * this store's counts, the channel `hub`, and when it arrived, even when nothing here was removed.
+ * A purge this store holds already is passed over (null). A plan this store refuses (the last line
+ * of a generated source it cannot go on from) throws an OriginError and deletes nothing, so that a
+ * later sync applies it.
+ */
+export function applyHubPurge(
+  db: Database,
+  home: string,
+  adapters: PurgeAdapters,
+  hub: HubPurge,
+  opts: {
+    complete?: boolean;
+    budgetMs?: number;
+    log?: (message: string) => void;
+    now?: number;
+  } = {},
+): PurgeResult | null {
+  if (!PURGE_ID_RE.test(hub.id)) throw new OriginError('Invalid purge id.');
+  const reason = checkReason(hub.reason);
+  if (hasPurge(db, hub.id)) return null;
+  const first = makePlan(db, home, adapters, hub.selector, undefined, hub.items);
+  const parses = states.get(first)?.planner.files;
+  return underLock(db, home, adapters, opts, () => {
+    if (hasPurge(db, hub.id)) return null;
+    const plan = makePlan(db, home, adapters, hub.selector, parses, hub.items);
+    if (plan.refusals.length > 0) {
+      throw new OriginError(
+        `The hub's purge ${hub.id} cannot be applied here yet: ${plan.refusals.join(' ')}`,
+      );
+    }
+    return applyPlan(db, plan, states.get(plan) as PlanState, {
+      id: hub.id,
+      at: hub.at,
+      origin: hub.origin,
+      author: hub.author,
+      channel: 'hub',
+      reason,
+      actor: hub.author,
+      receivedAt: opts.now ?? Date.now(),
+    });
+  });
 }

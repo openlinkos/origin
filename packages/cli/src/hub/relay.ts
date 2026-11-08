@@ -141,6 +141,9 @@ async function relay(opts: RelaySyncOptions): Promise<RelaySyncResult> {
     tombstonesApplied: 0,
     // A relay keeps no recalls: its agents' hooks hand nothing over, and the hub records briefs.
     recallsPushed: 0,
+    // Nor anything a hub's purge could remove: it does not read the hub's purges.
+    purgesApplied: 0,
+    purgeError: null,
     sources: [],
     failed: [],
   };

@@ -11,10 +11,10 @@ If all your agents run on one machine, you do not need a hub.
 
 ## How it works
 
-- Every **device** keeps archiving its own sessions locally, exactly as without a hub, and runs `origin sync`. Once the device is connected, a sync also sends the device's raw session mirrors, and the entries and tombstones written on it, to the hub, then pulls back anything that was forgotten on the hub or on another device.
+- Every **device** keeps archiving its own sessions locally, exactly as without a hub, and runs `origin sync`. Once the device is connected, a sync also sends the device's raw session mirrors, and the entries and tombstones written on it, to the hub, then pulls back anything that was forgotten on the hub or on another device, and what you purged on the hub.
 - The **hub** runs `origin serve`. It parses the pushed mirrors with the same adapters, so every answer still traces back to the original line, and it holds what every device has sent: it is where everything can be found.
 - On a device, `origin mcp` keeps answering from the device's own store, so it keeps working offline, and adds what the hub knows: other devices' sessions and entries, and entries written by cloud agents. Cloud agents connect to the hub's MCP endpoint directly.
-- Devices never download each other's data. Only forgetting travels down from the hub, so that what you forget anywhere is hidden everywhere.
+- Devices never download each other's data. Only forgetting and purging travel down from the hub, so that what you forget anywhere is hidden everywhere, and what you purge on the hub is deleted everywhere.
 - A machine with little disk can be a **relay** instead of a complete device: it keeps nothing but cursors, sends its agents' logs straight to the hub, and answers its agents through the hub (see [Run a device as a relay](#run-a-device-as-a-relay)).
 
 The design is in [Architecture](../architecture.md#personal-hub).
@@ -109,7 +109,7 @@ On a hub without the admin UI at `/admin`, create a token for the device on the 
 
 - The hub knows the device by its store's name: `ORIGIN_DEVICE`, or the host name, when the store was first used. It connects under that name, and its token is named after it; `origin hub connect` and `origin hub status` check it with the hub, and if they differ, refuse and say how to fix it. `--device` renames a store that has not saved an entry or forgotten anything yet; after that, the store keeps its name, and a token created for it must have that name. `origin hub disconnect` removes the connection.
 - `ORIGIN_HUB_URL` and `ORIGIN_HUB_TOKEN` override the stored connection.
-- `origin sync` ingests local sessions, sends the raw mirrors and the entries and tombstones written on the device, and applies the hub's tombstones. It is safe to re-run: a sync picks up where the previous one stopped. `origin push` does the same.
+- `origin sync` ingests local sessions, applies the purges made on the hub, sends the raw mirrors and the entries and tombstones written on the device, and applies the hub's tombstones. It is safe to re-run: a sync picks up where the previous one stopped. `origin push` does the same.
 
 Once the device is connected, the agent registrations you already have stay the same. `origin mcp` answers from the device's store and asks the hub at the same time, then merges both answers; each result says whether it was found on this device (`local`) or on the hub (`hub`). If the hub does not answer within 2 seconds (`ORIGIN_HUB_TIMEOUT_MS`), the agent gets this device's answer with a note that the hub was not consulted. What agents save lands on the device first and is synced to the hub right away, or on the next sync if the hub cannot be reached. Correcting or forgetting something that only the hub has is done on the hub, so it needs the hub to be reachable.
 
@@ -175,11 +175,15 @@ curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=inciden
   --data-binary @incidents.jsonl
 ```
 
-The hub appends the lines to file `path` of the source `chat-ops`, as sent by the token's name, `chat-bridge`, archives and parses them as it does what devices send, and answers with how many lines it read, how many events were new, how many it already had, and how many were not valid events. Sending lines again is safe. A request holds at most 8 MiB of lines. See [Send lines to your hub](./sources.md#send-lines-to-your-hub).
+The hub appends the lines to file `path` of the source `chat-ops`, as sent by the token's name, `chat-bridge`, archives and parses them as it does what devices send, and answers with how many lines it read, how many events were new, how many it already had, how many were not valid events, and how many it stored blank because a purge removed what they hold. Sending lines again is safe. A request holds at most 8 MiB of lines. See [Send lines to your hub](./sources.md#send-lines-to-your-hub).
 
 ## Forgetting
 
 Forgetting through the hub works as on one machine (see [Privacy and your data](./privacy.md#forgetting)), and it reaches every device. Each device applies the hub's tombstones on its next sync, so its local copy hides the same entries and events, and what a device forgets reaches the hub and, from there, every other device. Forgotten events stay hidden even if a device pushes them again. Restoring travels the same way: restore on the hub's admin UI, or with `origin restore` on a device, and every store brings back what that forget hid, in whatever order the forget and the restore reach it.
+
+## Purging
+
+A purge deletes for good what you select, and keeps a record with your reason (see [Purging](./cli.md#purging)). Purge on the hub, in its [admin UI](./admin.md): each device applies the purge at its next sync, before it sends anything, so what it removed is deleted from the device's store too, and never comes back up from it, whatever the agents' logs there still hold. `origin sync` says how many purges it applied, and `origin purged` lists them under the hub's id, with its reason. A purge made on a device, with `origin purge`, deletes only that device's copy: the hub keeps what it already received, so the command prints a link to the same purge in the hub's admin UI. Tokens of devices and agents cannot purge anything on the hub; a device's token only reads the hub's purges. A purge does not reach backups, or the agents' own log files.
 
 ## Manage it in a browser
 

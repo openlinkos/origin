@@ -1,15 +1,19 @@
 import zlib from 'node:zlib';
 import {
+  applyHubPurge,
   applyTombstone,
   type Database,
   exportEntry,
   exportTombstone,
   getSetting,
+  type HubPurge,
   localRawFiles,
   type OwnChange,
   ownChanges,
   ownRecalls,
   PULL_TOMBSTONES_AGAIN,
+  type PurgeAdapters,
+  parsePurgeFeedPage,
   parseTombstoneRecord,
   type ReplicaEntry,
   readMirrorLines,
@@ -20,6 +24,7 @@ import {
   unpushedOnly,
   withPurgedLinesBlanked,
 } from '@openlinkos/origin-core';
+import { storeAdapters } from '../sources.js';
 import type { HubConfig } from './config.js';
 
 /** At most this many bytes per request, unless a single line is longer. */
@@ -35,6 +40,8 @@ export interface HubSyncOptions {
   hub: HubConfig;
   fetch?: typeof fetch;
   log?: (message: string) => void;
+  /** The adapters that re-plan a hub's purges here; the store's own sources by default. */
+  adapters?: PurgeAdapters;
 }
 
 export interface HubSyncResult {
@@ -56,6 +63,13 @@ export interface HubSyncResult {
   tombstonesApplied: number;
   /** Recalls made here that the hub received; null if the hub does not keep recalls yet. */
   recallsPushed: number | null;
+  /** The hub's purges applied here (see pullPurges). */
+  purgesApplied: number;
+  /**
+   * A purge of the hub that could not be applied here, and why: it and the purges after it wait for
+   * the next sync, and the rest of this one goes on.
+   */
+  purgeError: { id: string; error: string } | null;
 }
 
 /** Settings keys of a device's cursors for one hub. */
@@ -65,6 +79,8 @@ export const pulledKey = (hub: HubConfig) => `hub.pulled:${hub.url}`;
 export const pulledAgainKey = (hub: HubConfig) => `hub.pulled-again:${hub.url}`;
 /** How far a device has sent its recalls to a hub: a sequence number of its recall table. */
 export const recallsKey = (hub: HubConfig) => `hub.recalls:${hub.url}`;
+/** The seq of the last purge of a hub that this device applied (see pullPurges). */
+export const purgesKey = (hub: HubConfig) => `hub.purges_after:${hub.url}`;
 /** When the last sync with this hub finished, in milliseconds, for `origin ui` and `origin status`. */
 export const syncedKey = (hub: HubConfig) => `hub.synced:${hub.url}`;
 /** The last sync with this hub that failed: `{ at, error }`, as JSON. */
@@ -127,12 +143,13 @@ export async function recordHubSync<T>(
 }
 
 /**
- * Sync this device with its hub (see docs/architecture.md#personal-hub): send the raw mirror bytes
- * the hub does not have yet, then the entries and tombstones written here after the push cursor,
- * then apply the hub's tombstones after the pull cursor (invariant 2, recorded forgetting, across
- * replicas), then send the recalls made here after their cursor. Each cursor is saved after every successful request, so an interrupted sync resumes
- * where it stopped, and running it again is a no-op. When it finished, or why it failed, is recorded
- * (lastHubSync).
+ * Sync this device with its hub (see docs/architecture.md#personal-hub): apply the hub's purges
+ * after their cursor, so that nothing they removed is sent up again; send the raw mirror bytes the
+ * hub does not have yet, then the entries and tombstones written here after the push cursor, then
+ * apply the hub's tombstones after the pull cursor (invariant 2, recorded forgetting, across
+ * replicas), then send the recalls made here after their cursor. Each cursor is saved after every
+ * successful request, so an interrupted sync resumes where it stopped, and running it again is a
+ * no-op. When it finished, or why it failed, is recorded (lastHubSync).
  */
 export async function syncWithHub(opts: HubSyncOptions): Promise<HubSyncResult> {
   return recordHubSync(opts.db, opts.hub, async () => {
@@ -147,7 +164,10 @@ export async function syncWithHub(opts: HubSyncOptions): Promise<HubSyncResult> 
       waiting: null,
       tombstonesApplied: 0,
       recallsPushed: 0,
+      purgesApplied: 0,
+      purgeError: null,
     };
+    await pullPurges(opts, call, result);
     await pushMirrors(opts, call, result);
     await pushChanges(opts, call, result);
     await pullTombstones(opts, call, result);
@@ -347,6 +367,87 @@ export async function pushChanges(opts: HubSyncOptions, call: Call, result: HubS
       advance(last);
       scanned = last;
     }
+  }
+}
+
+/**
+ * The error of a hub that gives no purges: one from before purges, which has no `/v1/purges` (404),
+ * or one that gives none to this token, an agent's (403). Null for a page of the feed.
+ */
+const noPurges = (reply: unknown): string | null =>
+  typeof reply === 'object' &&
+  reply !== null &&
+  typeof (reply as { error?: unknown }).error === 'string' &&
+  !('next' in reply)
+    ? (reply as { error: string }).error
+    : null;
+
+/**
+ * Apply the purges the hub made, oldest first, after this device's cursor (see applyHubPurge and
+ * docs/architecture.md#purging): each comes in pages of ids and is applied whole, re-planned here
+ * from what this device holds, and the cursor moves past it once it is. One that cannot be applied
+ * here is left, with the cursor before it, in `result.purgeError`, and the rest of the sync goes
+ * on; the next sync tries it again. A hub from before purges answers 404, and a hub gives a store
+ * connected with an agent's token no purges (403): there is nothing to pull.
+ */
+export async function pullPurges(opts: HubSyncOptions, call: Call, result: HubSyncResult) {
+  const key = purgesKey(opts.hub);
+  const saved = Number(getSetting(opts.db, key) ?? '0');
+  let after = Number.isSafeInteger(saved) && saved > 0 ? saved : 0;
+  let offset = 0;
+  let whole: HubPurge | null = null;
+  let adapters: PurgeAdapters | null = null;
+  for (;;) {
+    const reply = await call(
+      'GET',
+      `/v1/purges?after=${after}&offset=${offset}&device=${encodeURIComponent(opts.hub.device)}`,
+      undefined,
+      [403, 404],
+    );
+    const none = offset === 0 ? noPurges(reply) : null;
+    if (none !== null) {
+      opts.log?.(`no purges from the hub: ${none}`);
+      return;
+    }
+    const page = parsePurgeFeedPage(reply);
+    const p = page.purge;
+    if (p === null) {
+      if (whole !== null) throw new Error(`The hub's purge ${whole.id} ended part way.`);
+      return;
+    }
+    if (p.seq <= after || (whole !== null && whole.id !== p.id)) {
+      throw new Error('The hub sent an invalid purge cursor.');
+    }
+    if (whole === null) whole = { ...p, items: page.items };
+    else {
+      for (const k of ['events', 'entries', 'sessions', 'recalls', 'files'] as const) {
+        (whole.items[k] as unknown[]).push(...page.items[k]);
+      }
+    }
+    if (page.next.offset !== 0) {
+      // More of the same purge: its ids come in pages.
+      if (page.next.after !== after || page.next.offset <= offset || !page.more) {
+        throw new Error('The hub sent an invalid purge cursor.');
+      }
+      offset = page.next.offset;
+      continue;
+    }
+    if (page.next.after !== p.seq) throw new Error('The hub sent an invalid purge cursor.');
+    try {
+      adapters ??= opts.adapters ?? storeAdapters(opts.home);
+      if (applyHubPurge(opts.db, opts.home, adapters, whole, { log: opts.log })) {
+        result.purgesApplied++;
+      }
+    } catch (err) {
+      result.purgeError = { id: whole.id, error: (err as Error).message };
+      opts.log?.(`the hub's purge ${whole.id} was not applied here: ${(err as Error).message}`);
+      return;
+    }
+    after = p.seq;
+    setSetting(opts.db, key, String(after));
+    offset = 0;
+    whole = null;
+    if (!page.more) return;
   }
 }
 

@@ -344,6 +344,7 @@ describe('your own sources on a hub', () => {
       events: 2,
       duplicates: 0,
       parse_errors: 0,
+      purged: 0,
       errors: [],
     });
 
@@ -374,6 +375,7 @@ describe('your own sources on a hub', () => {
       events: 0,
       duplicates: 2,
       parse_errors: 0,
+      purged: 0,
       errors: [],
     });
     expect(remoteCursors(hubDb, 'bot')[0]?.bytes).toBe(2 * Buffer.byteLength(lines(2)));
@@ -511,6 +513,7 @@ describe('your own sources on a hub', () => {
         events: 0,
         duplicates: 1,
         parse_errors: 0,
+        purged: 0,
         errors: [],
       });
       expect(

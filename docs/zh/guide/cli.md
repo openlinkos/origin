@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-0801815f
+sourceHash: sha256-14ebfec6
 ---
 
 # 命令参考
@@ -273,7 +273,7 @@ This cannot be undone. The purge is kept as a record with its reason, ids, and c
 
 原始镜像中被清除的行随后逐个镜像涂白。如果中途停下，`origin status` 会列出仍待涂白的镜像，`origin purge --resume` 或下一次 `origin sync` 会把它们做完。
 
-清除触及不到它之前做的备份、保留旧版本的存储桶中的旧版本、其他库，以及你的 Agent 自己的文件：Agent 再次写入的内容会作为新数据回来。在连接到中枢的设备上，清除只删除设备上的副本；中枢保留它已经收到的内容，所以 CLI 会打印一个链接，指向中枢[管理界面](./admin.md)中的同一次清除。中继没有可清除的内容。规则见[清除](../architecture.md#purging)。
+清除触及不到它之前做的备份、保留旧版本的存储桶中的旧版本、其他库，以及你的 Agent 自己的文件：Agent 再次写入的内容会作为新数据回来。在连接到中枢的设备上，清除只删除设备上的副本；中枢保留它已经收到的内容，所以 CLI 会打印一个链接，指向中枢[管理界面](./admin.md)中的同一次清除。在中枢上做的清除，会在设备下一次 `origin sync` 时到达它，同步会说明应用了多少次清除，`origin purged` 以中枢的 id 列出它。中继没有可清除的内容。规则见[清除](../architecture.md#purging)。
 
 ## 审阅提议 {#reviewing-proposals}
 

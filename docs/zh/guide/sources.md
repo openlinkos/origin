@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-37f9a630
+sourceHash: sha256-493839ea
 ---
 
 # 接入你自己的来源
@@ -74,12 +74,12 @@ curl -sS -X POST "https://hub.example.com/v1/sources/chat-ops/lines?path=2026/11
 ```
 
 ```json
-{ "lines": 2, "events": 2, "duplicates": 0, "parse_errors": 0, "errors": [] }
+{ "lines": 2, "events": 2, "duplicates": 0, "parse_errors": 0, "purged": 0, "errors": [] }
 ```
 
 - **去向。** 中枢把这些行保存为该来源的文件 `path`，这里是 `chat-ops` 的 `2026/11/02.jsonl`，发送者是令牌的名称 `chat-bridge`，并像读取设备发来的内容一样读取它们。它们只在中枢上：设备从不下载它们，Agent 通过中枢找到它们，与那里的其他一切相同。
 - **请求体。** 事件行，最多 8 MiB，类型为 `application/x-ndjson` 或 `text/plain`，可以用 gzip 编码。请使用 `--data-binary`，它按原样发送文件；`-d` 会去掉换行符。末尾没有换行符的单独一行，就像 `-d '{"id":…}'` 发送的那样，也没有问题。
-- **回答。** 中枢读到多少行、它们带来多少新事件、多少行它已经有了（`duplicates`），以及多少行不是有效事件（`parse_errors`），这些行会被保留，但不会读出任何内容；`errors` 说明其中的前五行，每行给出它在文件中的行号和原因，比如 `{ "line": 7, "error": "\"author\" is only for lines whose \"role\" is user" }`。改好写入方之后，继续追加到同一个文件：一行一旦读过就会保留，无论有效与否，所以换个文件重发只会多出一份副本。
+- **回答。** 中枢读到多少行、它们带来多少新事件、多少行它已经有了（`duplicates`），多少行不是有效事件（`parse_errors`），这些行会被保留，但不会读出任何内容，以及多少行因为你清除了其中的内容而以涂白的形式存储（`purged`，见[清除](./cli.md#purging)）；`errors` 说明其中的前五行，每行给出它在文件中的行号和原因，比如 `{ "line": 7, "error": "\"author\" is only for lines whose \"role\" is user" }`。改好写入方之后，继续追加到同一个文件：一行一旦读过就会保留，无论有效与否，所以换个文件重发只会多出一份副本。
 - **再发一次。** 如果不确定某个请求是否到达，就再发一次：中枢已有的行不会新增任何内容。
 - **自己的令牌。** 设备的令牌也能用，并以那台设备的身份发送；用它发送的行，即使路径与那台设备自己的 `sources/` 目录中的某个文件相同，也会保存在一个单独的文件中，与设备的文件并存。
 

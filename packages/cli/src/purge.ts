@@ -5,6 +5,7 @@ import {
   getPurge,
   isRelay,
   listPurges,
+  listTokens,
   OriginError,
   PURGE_ID_RE,
   type PurgeAdapters,
@@ -343,7 +344,7 @@ function hubNote(
 ): void {
   const link = hubPurgeLink(hub, selector, plan);
   out(
-    `\nThis store syncs to the hub at ${hub.url}, which keeps its copy of what it already has: a purge here does not reach it. Purge it on the hub too, in its admin UI${link ? `:\n  ${link}` : '.'}`,
+    `\nThis store syncs to the hub at ${hub.url}, which keeps its copy of what it already has: a purge here does not reach it. Purge it on the hub too, in its admin UI; a purge made there reaches this device at its next sync${link ? `:\n  ${link}` : '.'}`,
   );
 }
 
@@ -466,6 +467,9 @@ export function cmdPurge(ctx: PurgeCtx, args: string[]): number {
   }
   out(`The record: origin purged ${r.id}`);
   if (hub) hubNote(out, hub, selector, r.plan);
+  else if (listTokens(ctx.db).some((t) => t.kind === 'device' && t.revokedAt === null)) {
+    out('The devices that sync with this hub apply this purge at their next sync.');
+  }
   return 0;
 }
 

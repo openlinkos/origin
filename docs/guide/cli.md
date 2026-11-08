@@ -268,7 +268,7 @@ What it keeps: the forgets, which cover less afterwards, and a record of the pur
 
 The purged lines of the raw mirrors are blanked right after, a mirror at a time. If that stops part way, `origin status` lists the mirrors still to blank, and `origin purge --resume`, or the next `origin sync`, finishes them.
 
-A purge does not reach backups made before it, older versions in a bucket that keeps them, other stores, or your agents' own files: what an agent writes again comes back as new data. On a device connected to a hub, a purge deletes only the device's copy; the hub keeps what it already received, so the CLI prints a link to the same purge in the hub's [admin UI](./admin.md). A relay keeps nothing to purge. The rules are in [Purging](../architecture.md#purging).
+A purge does not reach backups made before it, older versions in a bucket that keeps them, other stores, or your agents' own files: what an agent writes again comes back as new data. On a device connected to a hub, a purge deletes only the device's copy; the hub keeps what it already received, so the CLI prints a link to the same purge in the hub's [admin UI](./admin.md). A purge made on the hub reaches the device at its next `origin sync`, which says how many it applied, and `origin purged` lists it under the hub's id. A relay keeps nothing to purge. The rules are in [Purging](../architecture.md#purging).
 
 ## Reviewing proposals
 

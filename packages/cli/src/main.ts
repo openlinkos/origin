@@ -392,6 +392,16 @@ function describeHubSync(hub: HubConfig, r: HubSyncResult): string {
   const lines = [
     `Hub ${hub.url} (as ${hub.device}): sent ${count(r.files, 'file')} (${fmtBytes(r.bytes)}, ${count(r.eventsAdded, 'new event')}), ${count(r.entriesPushed, 'entry', 'entries')}, ${count(r.tombstonesPushed, 'tombstone')}, and ${count(r.recallsPushed ?? 0, 'recall')}; applied ${count(r.tombstonesApplied, 'tombstone')} from the hub.`,
   ];
+  if (r.purgesApplied > 0) {
+    lines.push(
+      `Applied ${count(r.purgesApplied, 'purge')} the hub made: origin purged lists ${r.purgesApplied === 1 ? 'it' : 'them'}.`,
+    );
+  }
+  if (r.purgeError) {
+    lines.push(
+      `The hub's purge ${r.purgeError.id} was not applied here, and waits for the next sync: ${r.purgeError.error}`,
+    );
+  }
   if (r.waiting) {
     lines.push(
       `Entry ${r.waiting.id} waits until the hub has ${r.waiting.missing.join(', ')}; it is sent again on the next sync.`,
@@ -477,7 +487,7 @@ async function cmdSync(ctx: Ctx, args: string[]): Promise<number> {
       log: values.verbose ? (m) => console.error(`  ${m}`) : undefined,
     });
     console.log(`\n${describeHubSync(hub, r)}`);
-    return r.refused.length > 0 ? 1 : 0;
+    return r.refused.length > 0 || r.purgeError ? 1 : 0;
   } catch (err) {
     console.error(`\nNot synced with the hub: ${(err as Error).message}`);
     return 1;

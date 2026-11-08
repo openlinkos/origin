@@ -21,9 +21,11 @@ import {
   NAME_RE,
   OriginError,
   type Principal,
+  type PurgeFeedPage,
   parseReplicaEntry,
   parseReplicaRecall,
   parseTombstoneRecord,
+  purgeFeed,
   receiveEntry,
   receiveRecall,
   receiveTombstone,
@@ -273,9 +275,37 @@ async function handle(
       sendJson(res, 200, tombstoneFeed(opts.db, { after, device }));
       return;
     }
+    case '/v1/purges': {
+      sendJson(res, 200, purgesFor(opts, caller, req, url));
+      return;
+    }
     default:
+      // Nothing under /v1 sends a purge up or makes one: only the owner purges, on the hub itself.
       throw new HttpError(404, 'Not found.');
   }
+}
+
+/**
+ * `GET /v1/purges?after=<seq>&offset=<n>`: the hub's purges, one page at a time, for the device
+ * whose own token asks (see purgeFeed and docs/architecture.md#replication-raw-mirrors-entries-and-tombstones-up-tombstones-down).
+ * Only GET exists; an agent's token, which may sit where other agents can read it, gets nothing.
+ */
+function purgesFor(
+  opts: HubOptions,
+  caller: Principal,
+  req: http.IncomingMessage,
+  url: URL,
+): PurgeFeedPage {
+  if (req.method !== 'GET') throw new HttpError(404, 'Not found.');
+  if (caller.kind !== 'device' || caller.via !== 'token') {
+    throw new HttpError(403, "Only a device's own token reads the hub's purges.");
+  }
+  const device = deviceOf(opts, caller.name, url.searchParams.get('device'));
+  const after = Number(url.searchParams.get('after') ?? '0');
+  if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, 'Invalid "after".');
+  const offset = Number(url.searchParams.get('offset') ?? '0');
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new HttpError(400, 'Invalid "offset".');
+  return purgeFeed(opts.db, { after, offset, device });
 }
 
 /**
@@ -358,6 +388,8 @@ async function appendSourceLines(
     events: r.eventsAdded,
     duplicates: r.duplicates,
     parse_errors: r.parseErrors,
+    // Lines stored blank because a purge removed what they hold (see docs/architecture.md#purging).
+    purged: r.purged ?? 0,
     errors,
   });
 }

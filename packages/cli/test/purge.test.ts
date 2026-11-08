@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   ConflictError,
+  createToken,
   type Database,
   getEvent,
   getPurge,
@@ -241,6 +242,14 @@ describe('origin purge', () => {
       ),
     ).toBe(
       'https://hub.example.com/admin/purge?lines=chat&from=laptop&path=%2Flogs%2Fa.jsonl&unparsed=1',
+    );
+  });
+
+  it('on a hub, says that its devices apply the purge', () => {
+    createToken(db, 'desktop');
+    expect(cmdPurge(ctx(), ['event', 'fake:e3', '--reason', 'r', '--yes'])).toBe(0);
+    expect(printed()).toContain(
+      'The devices that sync with this hub apply this purge at their next sync.',
     );
   });
 
