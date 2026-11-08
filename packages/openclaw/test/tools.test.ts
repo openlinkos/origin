@@ -3,9 +3,10 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { TOOLS_MODES, type ToolsMode } from '../src/config.js';
 import { callHubTool, PROTOCOL_VERSION } from '../src/hub-mcp.js';
 import plugin, { registerOrigin } from '../src/index.js';
-import { ORIGIN_TOOLS, TOOL_NAMES } from '../src/tools.js';
+import { ORIGIN_TOOLS, offeredIn, TOOL_NAMES } from '../src/tools.js';
 import type { AgentTool } from '../src/types.js';
 import { agentCtx, fakeApi, tmpDir } from './fake.js';
 
@@ -137,6 +138,49 @@ function owner(over: Record<string, unknown> = {}, agentId = 'xiaohan'): Record<
   };
 }
 
+/** Synthetic Discord ids: the owner, someone else, a guild channel, and a thread in it. */
+const OWNER_ID = '100000000000000001';
+const OTHER_ID = '100000000000000002';
+const CHANNEL_KEY = 'agent:xiaohan:discord:channel:300000000000000001';
+const THREAD_KEY = `${CHANNEL_KEY}:thread:300000000000000002`;
+
+/**
+ * A version 2 tool context, as OpenClaw 2026.10.6 gives one for a turn the owner started in a
+ * Discord guild channel with memory-core in the memory slot (synthetic): the run's fields, the
+ * sender, and the invocation guard; no memory audience, whose fields OpenClaw sets undefined.
+ */
+function channelTurn(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    agentId: 'xiaohan',
+    sessionKey: CHANNEL_KEY,
+    sessionId: 'sess-3',
+    messageChannel: 'discord',
+    agentAccountId: 'default',
+    nativeChannelId: '300000000000000001',
+    deliveryContext: { channel: 'discord', to: 'channel:300000000000000001', accountId: 'default' },
+    requesterSenderId: OWNER_ID,
+    senderIsOwner: true,
+    memoryAudience: undefined,
+    assertMemoryAudienceCurrent: undefined,
+    assertInvocationCurrent: () => undefined,
+    ...over,
+  };
+}
+
+/** The same in a thread of that channel. */
+const threadTurn = (over: Record<string, unknown> = {}) =>
+  channelTurn({
+    sessionKey: THREAD_KEY,
+    nativeChannelId: '300000000000000002',
+    deliveryContext: {
+      channel: 'discord',
+      to: 'channel:300000000000000002',
+      accountId: 'default',
+      threadId: '300000000000000002',
+    },
+    ...over,
+  });
+
 /** Run a tool as OpenClaw does, with the call's id first. */
 const run = (tool: AgentTool | null, params: unknown, signal?: AbortSignal) => {
   if (!tool) throw new Error('no tool for this run');
@@ -164,8 +208,13 @@ describe('registration', () => {
     expect(hooks.has('agent_end')).toBe(true);
     expect(logs.filter((l) => l.level === 'info').map((l) => l.message)).toEqual([
       expect.stringMatching(/^origin: recording every agent/),
-      `origin: giving every agent Origin's read tools from ${hub.url}, in the owner's own turns: origin_brief, origin_search, origin_get, origin_timeline, origin_digest`,
+      `origin: giving every agent Origin's read tools from ${hub.url}, in every turn the owner starts: origin_brief, origin_search, origin_get, origin_timeline, origin_digest`,
     ]);
+    expect(
+      start({ tools: 'owner-private' }).logs.find((l) => l.message.includes('giving'))?.message,
+    ).toBe(
+      `origin: giving every agent Origin's read tools from ${hub.url}, in the turns OpenClaw resolves as the owner's private memory audience: origin_brief, origin_search, origin_get, origin_timeline, origin_digest`,
+    );
   });
 
   it('gives each tool a name, label, description, and an object schema', () => {
@@ -187,14 +236,44 @@ describe('registration', () => {
     }
   });
 
-  it('registers no tools with a directory, or with tools set to false', () => {
+  it('registers no tools with a directory, or with tools set to off (or false, as 0.6.0 took it)', () => {
     const dir = start({ hub: undefined, token: undefined, dir: path.join(state, 'openclaw') });
     expect(dir.tools.size).toBe(0);
     expect(dir.hooks.size).toBeGreaterThan(0);
-    const off = start({ tools: false });
-    expect(off.tools.size).toBe(0);
-    expect(off.hooks.has('agent_end')).toBe(true);
-    expect(off.logs.some((l) => l.message.includes('read tools'))).toBe(false);
+    for (const tools of ['off', false]) {
+      const off = start({ tools });
+      expect(off.tools.size).toBe(0);
+      expect(off.hooks.has('agent_end')).toBe(true);
+      expect(off.logs.some((l) => l.message.includes('read tools'))).toBe(false);
+    }
+    // With a directory, whatever `tools` says.
+    const dirOn = start({
+      hub: undefined,
+      token: undefined,
+      dir: path.join(state, 'openclaw'),
+      tools: 'owner-turns',
+    });
+    expect(dirOn.tools.size).toBe(0);
+  });
+
+  it('takes the gate from tools: owner-turns by default, and for true, as 0.6.0 took it', () => {
+    for (const tools of [undefined, null, true, 'owner-turns', ' owner-turns ']) {
+      const { tool } = start({ tools });
+      expect(tool('origin_search', channelTurn())?.name).toBe('origin_search');
+      expect(tool('origin_search', owner())?.name).toBe('origin_search');
+    }
+    const strict = start({ tools: 'owner-private' });
+    expect(strict.tool('origin_search', channelTurn())).toBeNull();
+    expect(strict.tool('origin_search', owner())?.name).toBe('origin_search');
+  });
+
+  it("declares in the manifest's schema the settings of tools the plugin takes", () => {
+    expect(manifest.configSchema.properties.tools).toEqual({
+      anyOf: [{ type: 'string', enum: [...TOOLS_MODES] }, { type: 'boolean' }],
+      default: 'owner-turns',
+    });
+    expect(TOOLS_MODES[0]).toBe('owner-turns');
+    expect(manifest.uiHints.tools.help).toContain('owner-turns');
   });
 
   it('still records, and says so once, on a host that cannot register tools', () => {
@@ -249,31 +328,200 @@ describe('registration', () => {
   });
 });
 
-describe("only in the owner's own turns", () => {
+describe("only in the owner's turns", () => {
   const conversation = {
     kind: 'conversation',
     agentId: 'xiaohan',
     sessionKey: 'agent:xiaohan:telegram:group:7',
     sessionId: 'sess-2',
   };
+  /** A run nobody sent, in the shape OpenClaw 2026.10.6 gives its tools (synthetic). */
+  const cron = channelTurn({
+    sessionKey: 'agent:xiaohan:cron:nightly-digest',
+    messageChannel: undefined,
+    nativeChannelId: undefined,
+    deliveryContext: undefined,
+    requesterSenderId: undefined,
+    senderIsOwner: false,
+  });
+  const heartbeat = channelTurn({
+    sessionKey: 'agent:xiaohan:main',
+    nativeChannelId: undefined,
+    requesterSenderId: undefined,
+    // A heartbeat's `From` may match an owner entry: OpenClaw names no sender all the same.
+    senderIsOwner: true,
+  });
+  const cli = channelTurn({
+    sessionKey: 'agent:xiaohan:main',
+    messageChannel: undefined,
+    nativeChannelId: undefined,
+    deliveryContext: undefined,
+    requesterSenderId: undefined,
+    // `openclaw agent` runs as the owner, with no sender.
+    senderIsOwner: true,
+    oneShotCliRun: true,
+  });
+  // Queued messages of several senders, run as one: OpenClaw clears the sender.
+  const batch = channelTurn({ requesterSenderId: undefined, senderIsOwner: false });
 
-  it('offers every tool in a turn OpenClaw resolved as the owner-private audience', () => {
-    const { tool } = start();
-    for (const name of TOOL_NAMES) expect(tool(name, owner())?.name).toBe(name);
+  it('offers every tool in a turn OpenClaw resolved as the owner-private audience, with either gate', () => {
+    for (const tools of ['owner-turns', 'owner-private']) {
+      const { tool } = start({ tools });
+      for (const name of TOOL_NAMES) {
+        expect(tool(name, owner())?.name).toBe(name);
+        // Whatever the sender fields say: the audience is OpenClaw's proof.
+        expect(tool(name, owner({ senderIsOwner: false }))?.name).toBe(name);
+      }
+    }
   });
 
-  it("offers none for a conversation's audience, or a turn without one, whoever sent it", () => {
+  it('offers every tool in a turn the owner started in a Discord guild channel, a thread, or a direct chat', () => {
+    const { tool } = start();
+    const direct = owner({
+      memoryAudience: undefined,
+      assertMemoryAudienceCurrent: undefined,
+      requesterSenderId: OWNER_ID,
+      senderIsOwner: true,
+    });
+    for (const name of TOOL_NAMES) {
+      expect(tool(name, channelTurn())?.name).toBe(name);
+      expect(tool(name, threadTurn())?.name).toBe(name);
+      expect(tool(name, direct)?.name).toBe(name);
+    }
+  });
+
+  it('offers none in the same turns started by someone else', () => {
+    const { tool } = start();
+    for (const name of TOOL_NAMES) {
+      for (const turn of [channelTurn, threadTurn]) {
+        expect(tool(name, turn({ requesterSenderId: OTHER_ID, senderIsOwner: false }))).toBeNull();
+        expect(
+          tool(name, turn({ requesterSenderId: OTHER_ID, senderIsOwner: undefined })),
+        ).toBeNull();
+        expect(
+          tool(
+            name,
+            turn({
+              requesterSenderId: OTHER_ID,
+              senderIsOwner: false,
+              memoryAudience: conversation,
+            }),
+          ),
+        ).toBeNull();
+      }
+    }
+  });
+
+  it('offers none in a cron, heartbeat, or openclaw agent run, or a batch of several senders', () => {
     const { tool, logs } = start();
     for (const name of TOOL_NAMES) {
-      expect(tool(name, owner({ memoryAudience: conversation }))).toBeNull();
-      expect(tool(name, owner({ memoryAudience: conversation, senderIsOwner: true }))).toBeNull();
-      // A cron, heartbeat, or detached run, or someone else's turn: no audience.
-      expect(tool(name, owner({ memoryAudience: undefined }))).toBeNull();
-      expect(tool(name, owner({ memoryAudience: undefined, senderIsOwner: true }))).toBeNull();
-      expect(tool(name, owner({ memoryAudience: { kind: 'owner' } }))).toBeNull();
-      expect(tool(name, owner({ memoryAudience: 'owner-private' }))).toBeNull();
+      for (const ctx of [cron, heartbeat, cli, batch]) expect(tool(name, ctx)).toBeNull();
+      // A cron job made by the owner names the owner, but OpenClaw does not take the run for theirs.
+      expect(tool(name, { ...cron, requesterSenderId: OWNER_ID })).toBeNull();
     }
     expect(logs.filter((l) => l.level === 'warn')).toEqual([]);
+  });
+
+  it('offers none when the sender is the owner but OpenClaw names no sender, or a fact is not of its type', () => {
+    const { tool } = start();
+    for (const name of TOOL_NAMES) {
+      for (const requesterSenderId of [undefined, null, '', '   ', 42, { id: OWNER_ID }]) {
+        expect(tool(name, channelTurn({ requesterSenderId }))).toBeNull();
+      }
+      for (const senderIsOwner of [undefined, null, 'true', 1, {}]) {
+        expect(tool(name, channelTurn({ senderIsOwner }))).toBeNull();
+      }
+      // Fields of the older shapes are not the sender's.
+      expect(
+        tool(name, channelTurn({ requesterSenderId: undefined, senderId: OWNER_ID })),
+      ).toBeNull();
+    }
+  });
+
+  it("with a memory audience, offers them to the owner only when it is bound to the turn's own session", () => {
+    const { tool } = start();
+    const audience = { ...conversation, sessionKey: CHANNEL_KEY };
+    for (const name of TOOL_NAMES) {
+      expect(tool(name, channelTurn({ memoryAudience: audience }))?.name).toBe(name);
+      // Another session's audience, such as the channel's in a turn of its thread.
+      expect(tool(name, threadTurn({ memoryAudience: audience }))).toBeNull();
+      expect(tool(name, owner({ memoryAudience: conversation, senderIsOwner: true }))).toBeNull();
+      expect(
+        tool(
+          name,
+          owner({ memoryAudience: conversation, senderIsOwner: true, requesterSenderId: OWNER_ID }),
+        ),
+      ).toBeNull();
+      // An audience that names no session, or is not one.
+      expect(tool(name, channelTurn({ memoryAudience: { kind: 'conversation' } }))).toBeNull();
+      expect(tool(name, channelTurn({ memoryAudience: { kind: 'owner' } }))).toBeNull();
+      expect(tool(name, channelTurn({ memoryAudience: 'owner-private' }))).toBeNull();
+      expect(tool(name, channelTurn({ memoryAudience: CHANNEL_KEY }))).toBeNull();
+      // A turn that names no session.
+      expect(
+        tool(
+          name,
+          channelTurn({ sessionKey: undefined, memoryAudience: { kind: 'conversation' } }),
+        ),
+      ).toBeNull();
+    }
+  });
+
+  it("with tools set to owner-private, offers none in the owner's channel, thread, or direct turns OpenClaw resolved no private audience for", () => {
+    const { tool } = start({ tools: 'owner-private' });
+    for (const name of TOOL_NAMES) {
+      expect(tool(name, channelTurn())).toBeNull();
+      expect(tool(name, threadTurn())).toBeNull();
+      expect(
+        tool(name, channelTurn({ memoryAudience: { ...conversation, sessionKey: CHANNEL_KEY } })),
+      ).toBeNull();
+      expect(
+        tool(
+          name,
+          owner({ memoryAudience: undefined, requesterSenderId: OWNER_ID, senderIsOwner: true }),
+        ),
+      ).toBeNull();
+      expect(tool(name, owner())?.name).toBe(name);
+    }
+  });
+
+  it('decides by the gate alone (offeredIn)', () => {
+    const cases: Array<[Record<string, unknown>, Record<ToolsMode, boolean>]> = [
+      [owner(), { 'owner-turns': true, 'owner-private': true, off: false }],
+      [channelTurn(), { 'owner-turns': true, 'owner-private': false, off: false }],
+      [threadTurn(), { 'owner-turns': true, 'owner-private': false, off: false }],
+      [
+        channelTurn({ senderIsOwner: false }),
+        { 'owner-turns': false, 'owner-private': false, off: false },
+      ],
+      [cron, { 'owner-turns': false, 'owner-private': false, off: false }],
+      [heartbeat, { 'owner-turns': false, 'owner-private': false, off: false }],
+      [cli, { 'owner-turns': false, 'owner-private': false, off: false }],
+      [batch, { 'owner-turns': false, 'owner-private': false, off: false }],
+      [{}, { 'owner-turns': false, 'owner-private': false, off: false }],
+    ];
+    for (const [ctx, expected] of cases) {
+      for (const mode of TOOLS_MODES) expect(offeredIn(mode, ctx), mode).toBe(expected[mode]);
+    }
+  });
+
+  it("serves only the agents the plugin records, by the turn's agent or its session key", () => {
+    const { tool } = start({ agents: ['xiaohan'] });
+    expect(tool('origin_search', channelTurn())).not.toBeNull();
+    expect(tool('origin_search', threadTurn({ agentId: undefined }))).not.toBeNull();
+    expect(tool('origin_search', channelTurn({ agentId: 'other' }))).toBeNull();
+    expect(
+      tool(
+        'origin_search',
+        channelTurn({
+          agentId: undefined,
+          sessionKey: 'agent:other:discord:channel:300000000000000001',
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      tool('origin_search', channelTurn({ agentId: undefined, sessionKey: undefined })),
+    ).toBeNull();
   });
 
   it('offers none without a context, or with one that lacks the invocation guard, and says so once', () => {
@@ -282,12 +530,80 @@ describe("only in the owner's own turns", () => {
       expect(tools.get(name)?.factory.create(undefined)).toBeNull();
       expect(tool(name, null)).toBeNull();
       expect(tool(name, 'agent:xiaohan:main')).toBeNull();
-      // A context of an older version: the run's fields and even an audience, but no guard.
-      expect(tool(name, { ...agentCtx(), senderIsOwner: true })).toBeNull();
+      // A context of an older version: the run's fields, the owner's sender, even an audience, but no guard.
+      expect(
+        tool(name, { ...agentCtx(), senderIsOwner: true, requesterSenderId: OWNER_ID }),
+      ).toBeNull();
+      expect(tool(name, channelTurn({ assertInvocationCurrent: undefined }))).toBeNull();
       expect(tool(name, owner({ assertInvocationCurrent: undefined }))).toBeNull();
     }
     expect(logs.filter((l) => l.level === 'warn').map((l) => l.message)).toEqual([
-      'origin: the read tools need an OpenClaw that resolves memory audiences, and this one built a tool without its invocation guard: its agents get no Origin tools',
+      "origin: the read tools need OpenClaw's invocation guard, and this OpenClaw built a tool without it: its agents get no Origin tools",
+    ]);
+  });
+
+  it("checks the invocation guard alone, before and after the call, in an owner's turn without an audience", async () => {
+    const order: string[] = [];
+    hub.respond = (c) => {
+      order.push('hub');
+      return {
+        body: {
+          jsonrpc: '2.0',
+          id: c.body.id,
+          result: { content: [{ type: 'text', text: 'ok' }] },
+        },
+      };
+    };
+    const ctx = channelTurn({ assertInvocationCurrent: () => order.push('invocation') });
+    await run(start().tool('origin_search', ctx), {});
+    expect(order).toEqual(['invocation', 'hub', 'invocation']);
+
+    // With an audience bound to the turn, its guard too.
+    order.length = 0;
+    const bound = channelTurn({
+      memoryAudience: { ...conversation, sessionKey: CHANNEL_KEY },
+      assertInvocationCurrent: () => order.push('invocation'),
+      assertMemoryAudienceCurrent: () => order.push('audience'),
+    });
+    await run(start().tool('origin_search', bound), {});
+    expect(order).toEqual(['invocation', 'audience', 'hub', 'invocation', 'audience']);
+  });
+
+  it('withholds the answer when the invocation guard throws after the call, in a channel turn', async () => {
+    let live = true;
+    const ctx = threadTurn({
+      assertInvocationCurrent: () => {
+        if (!live) throw new Error('the tool invocation is no longer current');
+      },
+    });
+    hub.respond = (c) => {
+      live = false;
+      return {
+        body: {
+          jsonrpc: '2.0',
+          id: c.body.id,
+          result: {
+            content: [{ type: 'text', text: 'the owner keeps the spare key in the shed' }],
+          },
+        },
+      };
+    };
+    const err = await run(start().tool('origin_get', ctx), { id: 'ent_1' }).catch((e: Error) => e);
+    expect(hub.calls).toHaveLength(1);
+    expect((err as Error).message).toBe(
+      "this turn may no longer read the owner's memory in Origin: the tool invocation is no longer current",
+    );
+    expect((err as Error).message).not.toContain('shed');
+  });
+
+  it("briefs on the agent's project in a channel turn, or on the channel's with projectBy channel", async () => {
+    await run(start().tool('origin_brief', channelTurn()), {});
+    await run(start().tool('origin_brief', threadTurn({ agentId: undefined })), {});
+    await run(start({ projectBy: 'channel' }).tool('origin_brief', channelTurn()), {});
+    expect(hub.args()).toEqual([
+      ['brief', { project: 'xiaohan' }],
+      ['brief', { project: 'xiaohan' }],
+      ['brief', { project: 'discord' }],
     ]);
   });
 
@@ -376,7 +692,7 @@ describe("only in the owner's own turns", () => {
     expect(old.tools.size).toBe(0);
     expect(old.hooks.has('agent_end')).toBe(true);
     expect(old.logs.filter((l) => l.level === 'warn').map((l) => l.message)).toEqual([
-      'origin: the read tools need an OpenClaw that resolves memory audiences (2026.10.6 or later), and this one is 2026.9.30: its agents get no Origin tools',
+      'origin: the read tools need OpenClaw 2026.10.6 or later, and this one is 2026.9.30: its agents get no Origin tools',
     ]);
     expect(old.logs.some((l) => l.message.includes('giving'))).toBe(false);
     // A later one, a pre-release of the first, or one that does not say: the tools, still gated.
@@ -384,6 +700,7 @@ describe("only in the owner's own turns", () => {
       const host = start({}, { version });
       expect([...host.tools.keys()]).toEqual(TOOL_NAMES);
       expect(host.tool('origin_search', agentCtx())).toBeNull();
+      expect(host.tool('origin_search', channelTurn({ senderIsOwner: false }))).toBeNull();
     }
   });
 });
