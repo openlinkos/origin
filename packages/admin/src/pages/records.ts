@@ -19,6 +19,7 @@ import {
   tableWrap,
 } from './components.js';
 import { csrfField, docsUrl, renderPage } from './layout.js';
+import { purgeButton } from './purge.js';
 
 /** A forget or a restore, as a badge. */
 function kindTag(ctx: Ctx, t: TombstoneSummary): SafeHtml {
@@ -35,6 +36,15 @@ function statusTag(ctx: Ctx, t: TombstoneSummary): SafeHtml {
     (id) =>
       html`<span class="ol-cell-sub"><a class="ol-mono" href="${href('tombstone', { id })}">${id}</a></span>`,
   )}`;
+}
+
+/** The purges that deleted some of what a forget covered, each linked to its record. */
+function purgedBy(ctx: Ctx, ids: readonly string[]): SafeHtml {
+  if (ids.length === 0) return html``;
+  return html`<span class="ol-cell-sub">${ctx.t('tombstone.purgedBy')} ${ids.map(
+    (id, i) =>
+      html`${i > 0 ? ', ' : ''}<a class="ol-mono" href="${href('purge-record', { id })}">${id}</a>`,
+  )}</span>`;
 }
 
 function covers(ctx: Ctx, t: TombstoneSummary): SafeHtml {
@@ -55,13 +65,20 @@ function targetCell(t: TombstoneSummary): SafeHtml {
  */
 export function tombstonesPage(
   ctx: Ctx,
-  o: { tombstones: TombstoneSummary[]; more: boolean },
+  o: { tombstones: TombstoneSummary[]; more: boolean; purgedBy: Record<string, string[]> },
 ): void {
   const t = ctx.t;
   renderPage(ctx, 200, {
     title: t('nav.tombstones'),
     nav: 'tombstones',
     heading: t('tombstones.title'),
+    actions: linkButton(ctx, {
+      href: '/admin/purges',
+      label: t('nav.purges'),
+      icon: 'trash-2',
+      variant: 'ghost',
+      size: 'sm',
+    }),
     body: html`${pageIntro(ctx, { description: t('tombstones.help') })}
     ${
       o.tombstones.length === 0
@@ -84,7 +101,7 @@ export function tombstonesPage(
           <td>${targetCell(r)}</td>
           <td class="ol-nowrap">${r.origin}${r.author ? html`<span class="ol-cell-sub">${r.author}</span>` : ''}</td>
           <td class="ol-nowrap">${covers(ctx, r)}</td>
-          <td>${statusTag(ctx, r)}</td>
+          <td>${statusTag(ctx, r)}${purgedBy(ctx, o.purgedBy[r.id] ?? [])}</td>
           <td>${r.reason ? clip(r.reason, 200) : html`<span class="ol-subtle">—</span>`}</td>
         </tr>`,
             ),
@@ -144,6 +161,7 @@ function restoreForm(ctx: Ctx, d: TombstoneDetail, o: { reason?: string }): Safe
     icon: 'history',
     body: html`<div class="ol-stack">
       <p>${t('restore.plan', { entries: fmtNumber(plan.entries.length, ctx.lang), events: fmtNumber(plan.events.length, ctx.lang) })}</p>
+      ${d.purgedBy.length > 0 ? html`<p class="ol-hint">${t('restore.purged')}</p>` : ''}
       <form method="post" action="/admin/restore" class="ol-form">
         ${csrfField(ctx)}
         <input type="hidden" name="id" value="${d.tombstone.id}">
@@ -186,6 +204,12 @@ export function tombstonePage(
     crumbs: [{ label: t('nav.tombstones'), href: '/admin/tombstones' }],
     heading: html`${isForget ? t('tombstone.forgetTitle') : t('tombstone.restoreTitle')} <span class="ol-mono">${r.id}</span>`,
     badges: html`${kindTag(ctx, r)}${isForget ? statusTag(ctx, { ...r, restoredBy: [] }) : ''}`,
+    // What a forget in effect covers can be purged; a restored one, or one whose cover is
+    // gone (purged, or never held here), has nothing hidden to purge.
+    actions:
+      isForget && r.inEffect && r.entries + r.events > 0
+        ? purgeButton(ctx, { kind: 'forgotten', tombstone: r.id })
+        : '',
     body: html`${pageIntro(ctx, { description: isForget ? t('tombstone.forgetHelp') : t('tombstone.restoreHelp') })}
     ${o.error ? html`<div class="ol-notices">${alert(ctx, 'danger', o.error)}</div>` : ''}
     ${notice ? html`<div class="ol-notices">${notice}</div>` : ''}
@@ -200,6 +224,7 @@ export function tombstonePage(
           <dt>${t('tombstones.origin')}</dt><dd>${r.origin}</dd>
           <dt>${t('tombstones.author')}</dt><dd>${r.author ?? html`<span class="ol-subtle">—</span>`}</dd>
           ${isForget ? html`<dt>${t('tombstones.covers')}</dt><dd>${covers(ctx, r)}</dd>` : ''}
+          ${d.purgedBy.length > 0 ? html`<dt>${t('tombstone.purgedBy')}</dt><dd>${d.purgedBy.map((p) => html`<span class="ol-cell-sub"><a class="ol-mono" href="${href('purge-record', { id: p.id })}">${p.id}</a> ${time(p.at)} · ${t('tombstone.purgedCount', { events: fmtNumber(p.events, ctx.lang), entries: fmtNumber(p.entries, ctx.lang) })}</span>`)}</dd>` : ''}
           ${isForget && d.restores.length > 0 ? html`<dt>${t('tombstone.restores')}</dt><dd>${d.restores.map((x) => html`<span class="ol-cell-sub"><a class="ol-mono" href="${href('tombstone', { id: x.id })}">${x.id}</a> ${time(x.createdAt)} · ${x.reason ?? '—'}</span>`)}</dd>` : ''}
           ${!isForget && d.forget ? html`<dt>${t('tombstone.liftsForget')}</dt><dd><span class="ol-mono">${d.forget.target}</span>${d.forget.reason ? html`<span class="ol-cell-sub">${d.forget.reason}</span>` : ''}</dd>` : ''}
         </dl>`,

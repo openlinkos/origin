@@ -917,6 +917,7 @@ describe('origin ui: writes', () => {
       '/admin/remember (session)',
       '/admin/forget (session)',
       '/admin/restore (session)',
+      '/admin/purge (session)',
       '/admin/api/logout (session)',
       '/admin/api/entries (session)',
       '/admin/api/correct (session)',
@@ -924,10 +925,27 @@ describe('origin ui: writes', () => {
       '/admin/api/proposal-reject (session)',
       '/admin/api/forget (session)',
       '/admin/api/restore (session)',
+      '/admin/api/purge (session)',
     ]);
+    // Purging, the one write that deletes, is the hub's `fresh` routes, here with the session that
+    // the one-time link started: origin ui has no password.
+    const purging = [
+      '/admin/purge',
+      '/admin/purges',
+      '/admin/purge-record',
+      '/admin/api/purge-plan',
+      '/admin/api/purge',
+      '/admin/api/purges',
+      '/admin/api/purge-record',
+    ];
     for (const r of LOCAL_ROUTES) {
+      if (purging.includes(r.path)) continue;
       expect(r.path).not.toMatch(/delete|edit|update|unforget|purge|password|key|sql|file|token/i);
     }
+    expect(LOCAL_ROUTES.filter((r) => r.method === 'POST' && /purge/.test(r.path))).toEqual([
+      { method: 'POST', path: '/admin/purge', auth: 'session' },
+      { method: 'POST', path: '/admin/api/purge', auth: 'session' },
+    ]);
   });
 });
 

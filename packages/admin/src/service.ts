@@ -5,6 +5,7 @@ import {
   type AuditRecord,
   acceptProposal,
   activeProjects,
+  ConflictError,
   childSessions,
   createToken as coreCreateToken,
   correct,
@@ -30,6 +31,7 @@ import {
   type GrantInfo,
   getEntry,
   getEvent,
+  getPurge,
   getRecall,
   getSession,
   getTombstone,
@@ -41,6 +43,7 @@ import {
   isEventForgotten,
   isGrantActive,
   latestAgentVersions,
+  latestPurgeSeq,
   listAdminSessions,
   listAudit,
   listDevices,
@@ -49,6 +52,7 @@ import {
   listGrants,
   listProjects,
   listProposals,
+  listPurges,
   listRecalls,
   listRejectedProposals,
   listSessionEvents,
@@ -61,10 +65,18 @@ import {
   type PrincipalKind,
   type Proposal,
   type ProposalCard,
+  type PurgeAdapters,
+  type PurgeDetail,
+  type PurgePlan,
+  type PurgeRecord,
+  type PurgeResult,
+  type PurgeSelector,
   parsePreset,
   planForget,
+  planPurge,
   planRestore,
   proposalState,
+  purge,
   RECALL_OCCASIONS,
   type RecallItemRecord,
   type RecallOccasion,
@@ -132,6 +144,13 @@ export const ACTIVITY_DAYS = 30;
 export const ENDED_GRANTS_MS = 30 * 86_400_000;
 /** Storage on disk is measured again after this long (it stats every mirror with a bucket). */
 const STORAGE_TTL_MS = 60_000;
+/**
+ * How long a purge from the admin UI goes on blanking its mirrors before it answers; what is left
+ * is blanked later (see completePurges), and the purge's page says so.
+ */
+export const PURGE_BUDGET_MS = 10_000;
+/** Purges read at a time to find the forgets they touched. */
+const PURGE_PAGE = 500;
 
 /** Who is acting, for the audit log. */
 export interface Actor {
@@ -492,6 +511,8 @@ export interface Overview {
   latestEntries: Entry[];
   /** The latest forgets and restores (ids, reasons, and counts; never what they hide). */
   latestTombstones: TombstoneSummary[];
+  /** The latest purges (ids, reasons, and counts; never what they deleted). */
+  latestPurges: PurgeRecord[];
   /** How many proposals wait for review. */
   pendingProposals: number;
 }
@@ -689,9 +710,20 @@ export type ProposalDetail =
   | { state: 'shown'; card: ProposalCard }
   | { state: 'rejected'; rejected: RejectedProposal };
 
+/** A purge that deleted some of what a forget covered: the forget stays, covering less. */
+export interface PurgeMark {
+  id: string;
+  at: number;
+  /** What the purge deleted in all, not only of this forget. */
+  events: number;
+  entries: number;
+}
+
 /** A forget or a restore, for its page. */
 export interface TombstoneDetail {
   tombstone: TombstoneSummary;
+  /** For a forget: the purges that deleted some of what it covered, oldest first. */
+  purgedBy: PurgeMark[];
   /** For a forget in effect: what it hides here, text included (shown to the owner only). */
   hidden: HiddenContent | null;
   /** For a forget in effect: what restoring it would bring back here. */
@@ -876,6 +908,13 @@ export class AdminService {
       afterWrite?: () => void;
       /** Devices and agents can sign in by browser (OAuth), at /admin on the hub's own port. */
       oauth?: boolean;
+      /**
+       * The adapters of the store's sources, by which a purge parses its mirrors again (see
+       * planPurge). Without them, a purge that has mirrors to read is refused.
+       */
+      adapters?: PurgeAdapters;
+      /** Warnings, such as purged lines that could not be blanked yet. */
+      log?: (message: string) => void;
     },
   ) {}
 
@@ -970,6 +1009,7 @@ export class AdminService {
       projects: activity.projects,
       latestEntries: listEntries(this.db, { limit: 5 }),
       latestTombstones: listTombstones(this.db, { limit: 5 }),
+      latestPurges: listPurges(this.db, { limit: 5 }),
       pendingProposals: countProposals(this.db, { status: 'pending' }),
     };
   }
@@ -2167,6 +2207,7 @@ export class AdminService {
     const live = t.kind === 'forget' && t.inEffect;
     return {
       tombstone: t,
+      purgedBy: t.kind === 'forget' ? (this.purgeMarks().get(t.id) ?? []) : [],
       hidden: live ? hiddenContent(this.db, t.id, { limit: HIDDEN_LIMIT }) : null,
       restorePlan: live ? planRestore(this.db, t.id) : null,
       restores: t.restoredBy
@@ -2338,9 +2379,129 @@ export class AdminService {
     return result;
   }
 
-  tombstones(before?: string): { tombstones: TombstoneSummary[]; more: boolean } {
+  /**
+   * Forgets and restores, newest first, a page at a time, with the purges that deleted some of
+   * what each forget listed covered (`purgedBy`: purge ids by tombstone id).
+   */
+  tombstones(before?: string): {
+    tombstones: TombstoneSummary[];
+    more: boolean;
+    purgedBy: Record<string, string[]>;
+  } {
     const rows = listTombstones(this.db, { limit: PAGE_SIZE + 1, before });
-    return { tombstones: rows.slice(0, PAGE_SIZE), more: rows.length > PAGE_SIZE };
+    const tombstones = rows.slice(0, PAGE_SIZE);
+    const marks = this.purgeMarks();
+    const purgedBy: Record<string, string[]> = {};
+    for (const t of tombstones) {
+      const by = marks.get(t.id);
+      if (by) purgedBy[t.id] = by.map((m) => m.id);
+    }
+    return { tombstones, more: rows.length > PAGE_SIZE, purgedBy };
+  }
+
+  private marks: { seq: number; value: Map<string, PurgeMark[]> } | null = null;
+
+  /**
+   * The purges that touched each forget, by tombstone id, oldest first. Purges are few, and each
+   * lists the forgets it touched; they are read again only once there is a new one.
+   */
+  private purgeMarks(): Map<string, PurgeMark[]> {
+    const seq = latestPurgeSeq(this.db);
+    if (this.marks?.seq === seq) return this.marks.value;
+    const value = new Map<string, PurgeMark[]>();
+    let before: number | undefined;
+    for (;;) {
+      const page = listPurges(this.db, { limit: PURGE_PAGE, before });
+      for (const p of page) {
+        for (const id of p.touched.tombstones) {
+          const mark = { id: p.id, at: p.at, events: p.counts.events, entries: p.counts.entries };
+          value.set(id, [mark, ...(value.get(id) ?? [])]);
+        }
+      }
+      if (page.length < PURGE_PAGE) break;
+      before = page.at(-1)?.seq;
+    }
+    this.marks = { seq, value };
+    return value;
+  }
+
+  /**
+   * What purging `selector` would delete here, and what it would blank in the raw mirrors: ids and
+   * counts, never text (see planPurge). Reads only.
+   */
+  purgePlan(selector: PurgeSelector): PurgePlan {
+    return planPurge(this.db, this.o.home, this.o.adapters ?? [], selector);
+  }
+
+  /**
+   * Purge (see docs/architecture.md#purging): delete for good what the selector takes, as the
+   * owner, with a reason. The caller sends the digest of the plan it showed; if the store would
+   * now delete anything else, nothing is deleted (409). Core records the purge and writes the audit
+   * log, with ids and counts only. The purged lines of the mirrors are blanked right after, for as
+   * long as PURGE_BUDGET_MS allows; the rest is left pending (see completePurges).
+   */
+  purge(
+    who: Actor,
+    input: { selector: PurgeSelector; digest: unknown; reason: unknown },
+    channel: 'ui' | 'api',
+  ): PurgeResult {
+    if (typeof input.digest !== 'string' || input.digest === '') {
+      throw new HttpError(
+        400,
+        'Missing digest: preview the purge first, and confirm that preview.',
+      );
+    }
+    try {
+      return purge(this.db, this.o.home, this.o.adapters ?? [], input.selector, {
+        reason: typeof input.reason === 'string' ? input.reason : '',
+        author: `user@${storeName(this.db)}`,
+        actor: who.actor,
+        channel,
+        digest: input.digest,
+        budgetMs: PURGE_BUDGET_MS,
+        log: this.o.log,
+      });
+    } catch (err) {
+      if (err instanceof ConflictError) throw new HttpError(409, err.message);
+      throw err;
+    }
+  }
+
+  /**
+   * The purges made or received here, newest first, a page at a time (`before` a seq), each with
+   * how many of its mirrors still hold purged lines to blank.
+   */
+  purges(before?: number): {
+    purges: Array<PurgeRecord & { pending: number }>;
+    more: boolean;
+  } {
+    const rows = listPurges(this.db, { limit: PAGE_SIZE + 1, before });
+    const purges = rows.slice(0, PAGE_SIZE);
+    const pending = new Map<string, number>();
+    if (purges.length > 0) {
+      for (const r of this.db
+        .prepare(
+          `SELECT l.purge_id AS id, COUNT(DISTINCT l.raw_file_id) AS n
+             FROM purge_line l JOIN purge_pending p ON p.raw_file_id = l.raw_file_id
+            WHERE l.purge_id IN (${purges.map(() => '?').join(', ')})
+            GROUP BY l.purge_id`,
+        )
+        .all(...purges.map((p) => p.id)) as Array<{ id: string; n: number }>) {
+        pending.set(r.id, Number(r.n));
+      }
+    }
+    return {
+      purges: purges.map((p) => ({ ...p, pending: pending.get(p.id) ?? 0 })),
+      more: rows.length > PAGE_SIZE,
+    };
+  }
+
+  /** A purge, with what it deleted by id, and its mirrors; 404 for an unknown id. */
+  purgeRecord(id: unknown): PurgeDetail {
+    const purgeId = checkId(id, 'purge id');
+    const detail = getPurge(this.db, purgeId);
+    if (!detail) throw new HttpError(404, `Unknown purge ${purgeId}.`);
+    return detail;
   }
 
   auditLog(beforeId?: number): { records: AuditRecord[]; more: boolean } {

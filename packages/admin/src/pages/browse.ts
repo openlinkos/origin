@@ -25,6 +25,7 @@ import {
   sessionName,
 } from './components.js';
 import { renderPage } from './layout.js';
+import { purgeButton } from './purge.js';
 import {
   agentTag,
   box,
@@ -258,7 +259,7 @@ export function eventPage(ctx: Ctx, d: EventDetail): void {
       { label: t('event.session'), href: session },
     ],
     heading: eventLabel(ctx, e),
-    actions: html`${linkButton(ctx, { href: href('remember', { event: e.id }), label: t('event.remember'), icon: 'bookmark', size: 'sm' })}${linkButton(ctx, { href: href('forget', { id: e.id }), label: t('event.forget'), icon: 'eraser', variant: 'danger-soft', size: 'sm' })}`,
+    actions: html`${linkButton(ctx, { href: href('remember', { event: e.id }), label: t('event.remember'), icon: 'bookmark', size: 'sm' })}${linkButton(ctx, { href: href('forget', { id: e.id }), label: t('event.forget'), icon: 'eraser', variant: 'danger-soft', size: 'sm' })}${purgeButton(ctx, { kind: 'event', ids: [e.id] })}`,
     body: html`    ${facts(ctx, [
       { icon: 'clock', value: time(e.ts) },
       e.project ? { icon: 'folder', value: e.project } : null,

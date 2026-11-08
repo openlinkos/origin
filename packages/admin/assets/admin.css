@@ -1102,3 +1102,24 @@ a.admin-cell-title:hover {
   align-items: center;
   gap: var(--ol-space-2);
 }
+
+/* A purge: what it does not reach, and the flags of a mirror whose lines it blanks. ----------- */
+
+.admin-limits {
+  display: grid;
+  gap: var(--ol-space-2);
+  margin: 0;
+  padding-inline-start: 1.125rem;
+  color: var(--ol-color-fg-muted);
+  font-size: var(--ol-font-size-sm);
+}
+
+.admin-flags {
+  margin-block-start: var(--ol-space-1);
+}
+
+/* A note under a table that fills its panel, in line with the cells. */
+.admin-inset {
+  margin: 0;
+  padding: var(--ol-space-2) 0.875rem;
+}

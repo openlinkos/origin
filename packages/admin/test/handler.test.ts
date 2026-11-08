@@ -27,6 +27,17 @@ let clock: number;
 const FAST: ScryptParams = { N: 16, r: 1, p: 1 };
 const PASSWORD = 'correct-horse-battery-staple';
 
+/** The routes of purging: a preview, its records, and the two writes that apply one. */
+const PURGE_PATHS = [
+  '/admin/purge',
+  '/admin/purges',
+  '/admin/purge-record',
+  '/admin/api/purge-plan',
+  '/admin/api/purge',
+  '/admin/api/purges',
+  '/admin/api/purge-record',
+];
+
 beforeEach(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-admin-ui-'));
   db = openDatabase(path.join(tmp, 'origin.db'));
@@ -336,6 +347,7 @@ describe('routes', () => {
         "/admin/remember (session)",
         "/admin/forget (session)",
         "/admin/restore (session)",
+        "/admin/purge (fresh)",
         "/admin/signins/revoke (fresh)",
         "/admin/api/login (none)",
         "/admin/api/logout (session)",
@@ -349,15 +361,40 @@ describe('routes', () => {
         "/admin/api/proposal-reject (session)",
         "/admin/api/forget (session)",
         "/admin/api/restore (session)",
+        "/admin/api/purge (fresh)",
         "/admin/api/sessions-revoke (fresh)",
       ]
     `);
     // Restoring a forget adds a record and deletes nothing; accepting a proposal writes an entry
-    // through remember, and rejecting one is a forget. Nothing else could edit or delete history,
-    // or change the admin password.
+    // through remember, and rejecting one is a forget. Nothing else could edit history, delete
+    // anything but by a purge, or change the admin password.
     for (const r of ADMIN_ROUTES) {
+      if (PURGE_PATHS.includes(r.path)) continue;
       expect(r.path).not.toMatch(/delete|edit|update|unforget|purge|password|key|sql|file/i);
     }
+    // The only routes that delete, each only with a recent password.
+    expect(ADMIN_ROUTES.filter((r) => r.method === 'POST' && /purge/.test(r.path))).toEqual([
+      { method: 'POST', path: '/admin/purge', auth: 'fresh' },
+      { method: 'POST', path: '/admin/api/purge', auth: 'fresh' },
+    ]);
+    // Everything else of purging reads, behind a session.
+    expect(
+      ADMIN_ROUTES.filter((r) => /purge/.test(r.path)).map(
+        (r) => `${r.method} ${r.path} (${r.auth})`,
+      ),
+    ).toEqual([
+      'GET /admin/purge (session)',
+      'POST /admin/purge (fresh)',
+      'GET /admin/purges (session)',
+      'GET /admin/purge-record (session)',
+      'GET /admin/api/purge-plan (session)',
+      'POST /admin/api/purge (fresh)',
+      'GET /admin/api/purges (session)',
+      'GET /admin/api/purge-record (session)',
+    ]);
+    expect(new Set(ADMIN_ROUTES.filter((r) => /purge/.test(r.path)).map((r) => r.path))).toEqual(
+      new Set(PURGE_PATHS),
+    );
   });
 
   it('limit failed sign-ins per client and collapse them in the audit log', async () => {

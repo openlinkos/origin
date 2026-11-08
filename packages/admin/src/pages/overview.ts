@@ -25,6 +25,7 @@ import {
   tableWrap,
 } from './components.js';
 import { docsUrl, renderPage } from './layout.js';
+import { deletedCount } from './purge.js';
 import {
   agentSlot,
   agentTag,
@@ -428,6 +429,23 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
           )}</ul>`,
   });
 
+  const purges =
+    o.latestPurges.length === 0
+      ? ''
+      : box({
+          title: t('overview.latestPurges'),
+          aside: html`<a href="/admin/purges">${t('overview.allPurges')}</a>`,
+          flush: true,
+          body: html`<ul class="admin-rows">${o.latestPurges.map(
+            (p) => html`<li>
+              <span class="admin-bad">${t('purges.record')}</span>
+              <a class="admin-cell-title" href="${href('purge-record', { id: p.id })}">${clip(p.reason, 120)}</a>
+              <span class="admin-rows-end">${deletedCount(ctx, p.counts)}</span>
+              <span class="admin-rows-end">${whenShort(ctx, p.at)}</span>
+            </li>`,
+          )}</ul>`,
+        });
+
   renderPage(ctx, 200, {
     title: t('nav.overview'),
     nav: 'overview',
@@ -459,7 +477,7 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
               body: devicesTable(ctx, o.devices),
             })
       }${entries}</div>
-      <div class="ol-stack">${recalls}${projects}${local ? hubBox(ctx, o.hub) : ''}${status}${storage}${forgets}</div>
+      <div class="ol-stack">${recalls}${projects}${local ? hubBox(ctx, o.hub) : ''}${status}${storage}${forgets}${purges}</div>
     </div>`,
   });
 }

@@ -12,6 +12,8 @@ import {
   normalizeAdminUsername,
   OriginError,
   type Preset,
+  type PurgeAdapters,
+  type PurgeSelector,
   parsePreset,
   setAdminUsername,
   verifyAdminPassword,
@@ -82,6 +84,7 @@ import {
 import { here } from './pages/layout.js';
 import { connectPage, devicePage, devicesPage, overviewPage } from './pages/overview.js';
 import { proposalPage, proposalsPage } from './pages/proposals.js';
+import { purgePage, purgeRecordPage, purgesPage } from './pages/purge.js';
 import { recallPage, recallsPage } from './pages/recalls.js';
 import { auditPage, signinsPage, tombstonePage, tombstonesPage } from './pages/records.js';
 import { sessionPage, threadPage } from './pages/session.js';
@@ -93,6 +96,7 @@ import {
   tokensPage,
 } from './pages/tokens.js';
 import { queryAll } from './pages/workbench.js';
+import { purgeHref, selectorFromBody, selectorFromQuery } from './purge.js';
 import { CheckQueue, type LimiterOptions, LOGIN_LIMITS, LoginLimiter } from './ratelimit.js';
 import {
   AdminService,
@@ -132,6 +136,11 @@ export interface AdminOptions {
    * a client's metadata document (the CLI's, a network call). Without it, neither page exists.
    */
   oauth?: { resolveClient: ClientResolver } | null;
+  /**
+   * The adapters of the hub's sources, by which a purge parses mirrors again (see planPurge):
+   * without them, a purge that has mirrors to read is refused.
+   */
+  adapters?: PurgeAdapters;
   log?: (message: string) => void;
   /** Clock and limits, for tests. */
   now?: () => number;
@@ -156,6 +165,8 @@ export interface LocalAdminOptions {
   hub?: () => HubLink | null;
   /** Called after an entry is written or something is forgotten, for a sync with the hub. */
   afterWrite?: () => void;
+  /** The adapters of the store's sources, for purging (see AdminOptions.adapters). */
+  adapters?: PurgeAdapters;
   /** Messages for the terminal of `origin ui`: sign-ins, and errors. */
   log?: (message: string) => void;
   /** Clock, for tests. */
@@ -193,7 +204,7 @@ interface State {
 
 /**
  * `none`: no session needed. `session`: signed in. `fresh`: signed in, and the password entered
- * within the last 10 minutes (token create and revoke, revoking sessions).
+ * within the last 10 minutes (token create and revoke, revoking sessions, purging).
  */
 export type RouteAuth = 'none' | 'session' | 'fresh';
 
@@ -614,6 +625,74 @@ function decideDevice(ctx: Ctx, s: State): void {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Purging: the preview, applying it, and the records (see pages/purge.ts)
+
+/** Whether a sensitive write may go ahead now: on a hub, the password was entered lately. */
+function isFresh(ctx: Ctx, s: State): boolean {
+  return s.mode === 'local' || (ctx.session !== null && s.sessions.isFresh(ctx.session, ctx.now));
+}
+
+/**
+ * The preview of a purge of `selector`, planned now: with `error`, after a purge that was refused
+ * (a changed plan is a 409, and the preview shows what it would delete now).
+ */
+function showPurge(
+  ctx: Ctx,
+  s: State,
+  status: number,
+  selector: PurgeSelector,
+  o: { reason?: string; error?: string } = {},
+): void {
+  const errors = o.error ? [o.error] : [];
+  let plan = null;
+  try {
+    plan = ctx.service.purgePlan(selector);
+  } catch (err) {
+    if (!(err instanceof OriginError)) throw err;
+    errors.push(err.message);
+    if (status === 200) status = 400;
+  }
+  purgePage(ctx, status, { selector, plan, fresh: isFresh(ctx, s), reason: o.reason, errors });
+}
+
+/** `POST /admin/purge`: purge exactly the plan the preview showed, then open its record. */
+function applyPurge(ctx: Ctx, s: State): void {
+  const selector = selectorFromBody(ctx.body.selector);
+  try {
+    if (field(ctx, 'confirm').trim() !== 'purge') {
+      throw new OriginError(ctx.t('purge.confirmWrong'));
+    }
+    const r = ctx.service.purge(
+      actorOf(ctx),
+      { selector, digest: ctx.body.digest, reason: ctx.body.reason },
+      'ui',
+    );
+    redirect(ctx.res, `/admin/purge-record?id=${encodeURIComponent(r.id)}&done=1`);
+  } catch (err) {
+    const status =
+      err instanceof HttpError && (err.status === 409 || err.status === 400)
+        ? err.status
+        : err instanceof OriginError
+          ? 400
+          : 0;
+    if (status === 0) throw err;
+    showPurge(ctx, s, status, selector, {
+      reason: field(ctx, 'reason'),
+      error: (err as Error).message,
+    });
+  }
+}
+
+/** Where `POST /admin/purge` returns after the password is entered again: its preview. */
+function purgeBack(ctx: Ctx): string {
+  try {
+    return purgeHref(selectorFromBody(ctx.body.selector));
+  } catch {
+    return '/admin/purges';
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Pages
 
 const page = (
@@ -943,6 +1022,16 @@ const PAGES: Route[] = [
       });
     }
   }),
+  page('GET', '/purge', 'session', (ctx, s) =>
+    showPurge(ctx, s, 200, selectorFromQuery(ctx.url.searchParams)),
+  ),
+  page('POST', '/purge', 'fresh', applyPurge, purgeBack),
+  page('GET', '/purges', 'session', (ctx) => purgesPage(ctx, ctx.service.purges(beforeParam(ctx)))),
+  page('GET', '/purge-record', 'session', (ctx) =>
+    purgeRecordPage(ctx, ctx.service.purgeRecord(query(ctx, 'id')), {
+      done: flag(query(ctx, 'done')),
+    }),
+  ),
   page('GET', '/audit', 'session', (ctx) => auditPage(ctx, ctx.service.auditLog(beforeParam(ctx)))),
   hubPage('GET', '/signins', 'session', (ctx) => {
     const n = Number(query(ctx, 'revoked'));
@@ -1196,6 +1285,25 @@ const API: Route[] = [
       events: r.events.length,
     });
   }),
+  api('GET', 'purge-plan', 'session', (ctx) =>
+    json(ctx, 200, ctx.service.purgePlan(selectorFromQuery(ctx.url.searchParams))),
+  ),
+  api('POST', 'purge', 'fresh', (ctx) => {
+    const r = ctx.service.purge(
+      actorOf(ctx),
+      {
+        selector: selectorFromBody(ctx.body.selector),
+        digest: ctx.body.digest,
+        reason: ctx.body.reason,
+      },
+      'api',
+    );
+    json(ctx, 200, { id: r.id, record: r.record, pending: r.pending });
+  }),
+  api('GET', 'purges', 'session', (ctx) => json(ctx, 200, ctx.service.purges(beforeParam(ctx)))),
+  api('GET', 'purge-record', 'session', (ctx) =>
+    json(ctx, 200, ctx.service.purgeRecord(query(ctx, 'id'))),
+  ),
   api('GET', 'audit', 'session', (ctx) => json(ctx, 200, ctx.service.auditLog(beforeParam(ctx)))),
   hubApi('GET', 'connect', 'session', (ctx) => json(ctx, 200, ctx.service.connect())),
   hubApi('GET', 'admin-sessions', 'session', (ctx) =>
@@ -1233,9 +1341,11 @@ const routeList = (routes: Route[]): RouteList =>
 
 /**
  * Every route of the hub's admin UI: only GET and POST, and every write is a POST. This list is the
- * whole surface; tests pin the writes so that nothing beyond them (editing or deleting events,
- * mirrors, entries, or tombstones; changing the admin password) can appear unnoticed. Restoring a
- * forget is a write of its own: it adds a tombstone and deletes nothing.
+ * whole surface; tests pin the writes so that nothing beyond them (editing events, mirrors,
+ * entries, or tombstones; deleting anything but by a purge; changing the admin password) can appear
+ * unnoticed. Restoring a forget is a write of its own: it adds a tombstone and deletes nothing.
+ * Purging is the one write that deletes: two routes, each `fresh`, each applying only the plan
+ * whose digest the owner confirms.
  */
 export const ADMIN_ROUTES: RouteList = routeList(ROUTES.hub);
 
@@ -1424,6 +1534,8 @@ export function createAdminHandler(options: AdminOptions): AdminHandler {
       publicUrl,
       hubStore: true,
       oauth: Boolean(options.oauth),
+      adapters: options.adapters,
+      log: options.log,
     }),
     sessions: storedSessions(options.db),
     local: null,
@@ -1459,6 +1571,8 @@ export function createLocalAdmin(options: LocalAdminOptions): LocalAdmin {
       publicUrl: null,
       hub: options.hub,
       afterWrite: options.afterWrite,
+      adapters: options.adapters,
+      log: options.log,
     }),
     sessions: new MemorySessions(),
     local: { hosts: localHosts(options.port), link, failureLoggedAt: null },

@@ -62,6 +62,7 @@ export const ICON_NAMES = [
   'sun-moon',
   'terminal',
   'timer',
+  'trash-2',
   'triangle-alert',
   'user',
   'wrench',

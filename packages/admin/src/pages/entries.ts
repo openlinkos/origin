@@ -36,6 +36,7 @@ import {
   submitButton,
 } from './components.js';
 import { csrfField, renderPage } from './layout.js';
+import { purgeButton } from './purge.js';
 import { recallTable } from './recalls.js';
 import {
   box,
@@ -276,7 +277,7 @@ export function entryPage(ctx: Ctx, d: EntryDetail): void {
     crumbs: [{ label: t('nav.entries'), href: '/admin/entries' }],
     heading: clip(entrySummary(e.text), 120),
     badges: html`${kindTag(ctx, e.kind)}${statusBadge(ctx, e.status)}${entryFlags(ctx, e)}`,
-    actions: html`${e.status === 'active' ? linkButton(ctx, { href: href('correct', { id: e.id }), label: t('entry.correct'), icon: 'pencil', size: 'sm' }) : ''}${linkButton(ctx, { href: href('forget', { id: e.id }), label: t('entry.forget'), icon: 'eraser', variant: 'danger-soft', size: 'sm' })}`,
+    actions: html`${e.status === 'active' ? linkButton(ctx, { href: href('correct', { id: e.id }), label: t('entry.correct'), icon: 'pencil', size: 'sm' }) : ''}${linkButton(ctx, { href: href('forget', { id: e.id }), label: t('entry.forget'), icon: 'eraser', variant: 'danger-soft', size: 'sm' })}${purgeButton(ctx, { kind: 'entry', id: e.id })}`,
     body: html`${facts(ctx, [
       e.project ? { icon: 'folder', value: e.project } : null,
       { icon: 'user', value: e.author },

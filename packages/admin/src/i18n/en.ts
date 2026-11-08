@@ -751,6 +751,145 @@ export const en = {
   'signins.revokedNotice': 'Signed out {n} {n|session|sessions}.',
   'signins.cliHint':
     'On the hub, origin admin sessions --revoke-all signs out every session, and so does setting a new password with origin admin password.',
+
+  'nav.purges': 'Purges',
+  'purge.title': 'Purge',
+  'purge.link': 'Purge…',
+  'purge.rules':
+    'A purge deletes for good what it selects, with what goes with it: a raw line with every event it yields, an entry with every version of it, an event with every entry that cites it, and a session with its events and child sessions. Unlike a forget, nothing brings it back.',
+  'purge.selected': 'Selects',
+  'purge.summary':
+    'This deletes {events} {events|event|events} and {entries} {entries|entry|entries} for good',
+  'purge.warning':
+    'Everything listed here is deleted from this hub, and the lines of the raw mirrors it was read from are blanked. No restore can bring it back. Your devices delete it too when they next sync. The purge is kept as a record with your reason, what it selected, and counts, never what it deleted.',
+  'purge.warningLocal':
+    'Everything listed here is deleted from this device, and the lines of the raw mirrors it was read from are blanked. No restore can bring it back. The purge is kept as a record with your reason, what it selected, and counts, never what it deleted.',
+  'purge.hubKeeps':
+    'This device syncs with {hub}, which keeps its copy of what it has already received. To delete that copy too, purge it on the hub.',
+  'purge.hubLink': 'Purge it on the hub',
+  'purge.counts': 'What it deletes',
+  'purge.countsDone': 'What it deleted',
+  'purge.count.events': 'Events',
+  'purge.count.closure': '{n} because they share a raw line',
+  'purge.count.entries': 'Entry versions',
+  'purge.count.chains': 'of {n} {n|entry|entries}',
+  'purge.count.sessions': 'Sessions',
+  'purge.count.recalls': 'Recalls',
+  'purge.count.recallItems': 'Items of other recalls',
+  'purge.count.proposals': 'Proposals',
+  'purge.count.tombstones': 'Forgets that cover less',
+  'purge.count.lines': 'Mirror lines blanked',
+  'purge.count.mirrors': 'in {n} {n|mirror|mirrors}',
+  'purge.count.files': 'Files blocked',
+  'purge.events': 'Events',
+  'purge.entries': 'Entries',
+  'purge.sessions': 'Sessions',
+  'purge.recalls': 'Recalls',
+  'purge.recallItems': 'Items removed from other recalls',
+  'purge.recallItem': 'item {rank}',
+  'purge.proposals': 'Proposals',
+  'purge.tombstones': 'Forgets that will cover less',
+  'purge.tombstonesHelp': 'They stay, as records, and keep hiding what is left of what they cover.',
+  'purge.mirrors': 'Raw mirror lines',
+  'purge.mirrorsHelp':
+    'Each line becomes spaces of the same length, so every other line keeps its place.',
+  'purge.mirror': 'Mirror',
+  'purge.file': 'Original file',
+  'purge.generation': 'Gen.',
+  'purge.lines': 'Lines',
+  'purge.blocked': 'Blocked',
+  'purge.blockedHelp': 'Nothing in it stays: lines it gets later are stored blank.',
+  'purge.continued': 'Last line replaced',
+  'purge.continuedHelp': 'Its last line says where the agent goes on, so the next sync can.',
+  'purge.more': 'and {n} more',
+  'purge.files': 'Files blocked',
+  'purge.warn.large':
+    'This deletes {n} {n|event|events} in one transaction, which holds up every other write until it is done. Consider purging less at a time.',
+  'purge.warn.closure':
+    '{n} {n|event is|events are} added because {n|it shares|they share} a raw line with what you selected.',
+  'purge.warn.visible':
+    '{n} {n|event that is|events that are} not forgotten {n|is|are} purged too: {n|it shares|they share} a raw line with forgotten ones, or a proposal lost every source.',
+  'purge.warn.chains':
+    '{n} {n|entry cites|entries cite} what is purged and {n|is|are} deleted whole, every version. To keep what one says, first remember a new entry that cites events that stay.',
+  'purge.refused': 'This purge cannot be applied as it is.',
+  'purge.nothing': 'Nothing to purge: this selects nothing this store holds.',
+  'purge.reason': 'Reason',
+  'purge.reasonHelp':
+    'Required. Kept with the record for good and sent to your devices. Do not paste what you are purging.',
+  'purge.confirm': 'Type purge to confirm',
+  'purge.confirmHelp': 'This cannot be undone.',
+  'purge.confirmWrong': 'Type purge in the confirmation field to purge.',
+  'purge.submit': 'Purge',
+  'purge.reauth':
+    'Purging asks for your admin password if you have not entered it in the last 10 minutes.',
+  'purge.reauthButton': 'Enter your password',
+  'purge.limitsTitle': 'What a purge does not reach',
+  'purge.limit.backups':
+    'Backups made before the purge keep what it deletes; a later origin backup into the same directory copies the purged mirrors again.',
+  'purge.limit.versions':
+    'A bucket that keeps old versions of objects keeps the frames as they were.',
+  'purge.limit.stores':
+    "Stores the purge has not reached keep their copies: a device's purge stays on that device, and a hub's reaches its devices as they sync.",
+  'purge.limit.agents':
+    "Agents' own files (their session logs and memory files) are not touched: what an agent writes again arrives as new data, with new ids.",
+  'purge.limit.postgres':
+    'In PostgreSQL, the write-ahead log, its archives, and dead rows keep deleted data until they are recycled or vacuumed.',
+
+  'selector.event': 'Event',
+  'selector.events': '{n} {n|event|events}',
+  'selector.session': 'Session',
+  'selector.keepChildren': 'its child sessions kept',
+  'selector.entry': 'Entry',
+  'selector.forgotten': 'What a forget covers',
+  'selector.forgottenAll': 'Everything forgotten',
+  'selector.recall': 'Recall',
+  'selector.lines': 'Lines of {source}',
+  'selector.from': 'from {name}',
+  'selector.file': 'file {id}',
+  'selector.range': 'lines {range}',
+  'selector.since': 'since {time}',
+  'selector.until': 'until {time}',
+  'selector.unparsed': 'parse errors only',
+
+  'purges.title': 'Purges',
+  'purges.help':
+    'Every purge is kept as a record: when, where, by whom, why, what it selected, and how much it deleted; never what it deleted.',
+  'purges.none': 'Nothing has been purged',
+  'purges.noneHelp':
+    'To delete something for good, open it (an event, a session, an entry, or a forget) and choose Purge.',
+  'purges.howItWorks': 'How purging works',
+  'purges.record': 'Purge',
+  'purges.deleted': 'Deleted',
+  'purges.deletedCount':
+    '{events} {events|event|events}, {entries} {entries|entry|entries}, {lines} {lines|line|lines}',
+  'purges.mirrors': 'Mirrors',
+  'purges.blanked': 'Blanked',
+  'purges.pending': '{n} pending',
+  'purges.fromHub': 'from the hub',
+
+  'purgeRecord.title': 'Purge',
+  'purgeRecord.help':
+    'What this purge deleted, by id: the content is gone from this store. The record itself is never deleted.',
+  'purgeRecord.done': 'Purged. What is listed here is gone from this store.',
+  'purgeRecord.channel': 'Through',
+  'purgeRecord.received': 'Received from the hub',
+  'purgeRecord.pending':
+    'The purged lines of {n} {n|mirror are|mirrors are} not blanked yet. Origin goes on with them later; origin purge --resume does it now.',
+  'purgeRecord.status': 'Status',
+  'purgeRecord.blanked': 'Blanked',
+  'purgeRecord.pendingOne': 'Pending',
+  'purgeRecord.touched': 'Kept, but changed',
+  'purgeRecord.touchedHelp': 'Forgets that cover less, and recalls that list fewer items.',
+  'purgeRecord.touchedForgets': 'Forgets',
+  'purgeRecord.touchedRecalls': 'Recalls',
+
+  'tombstone.purgedBy': 'Purged by',
+  'tombstone.purgedCount':
+    '{events} {events|event|events}, {entries} {entries|entry|entries} in all',
+  'restore.purged': 'Part of what it covered was purged, and no restore brings that back.',
+
+  'overview.latestPurges': 'Latest purges',
+  'overview.allPurges': 'All purges',
 } as const;
 
 export type MessageKey = keyof typeof en;

@@ -29,6 +29,7 @@ import {
   sessionName,
 } from './components.js';
 import { renderPage } from './layout.js';
+import { purgeButton } from './purge.js';
 import { agentTag, box, facts, linkChips, whenShort } from './workbench.js';
 
 /** A prompt longer than this shows its start, and the rest on request. */
@@ -370,6 +371,7 @@ export function sessionPage(ctx: Ctx, o: SessionTrace & { open: boolean }): void
     nav: 'sessions',
     crumbs: [{ label: t('nav.sessions'), href: '/admin/sessions' }],
     heading: s.title ? s.title : sessionName(ctx, s, 160),
+    actions: purgeButton(ctx, { kind: 'session', source: s.source, sessionId: s.sessionId }),
     body: html`${facts(ctx, [
       { value: agentTag(s.source) },
       s.project ? { icon: 'folder', value: s.project } : null,
