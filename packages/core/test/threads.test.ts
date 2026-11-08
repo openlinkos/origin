@@ -126,6 +126,19 @@ describe('threads by branch (R2)', () => {
     expect(isWorkBranch('fix/login')).toBe(true);
   });
 
+  it("take each session's own place for its project", async () => {
+    write('s1.jsonl', session('s1', T0, 'feat-x'));
+    write('s2.jsonl', session('s2', T0 + 2 * DAY, 'feat-x'));
+    write('s6.jsonl', session('s6', T0 + DAY, 'feat-x', 'other'));
+    await sync();
+    db.prepare(
+      `INSERT INTO session_place (source, session_id, project, root, signal)
+       VALUES ('fake', 's6', 'other', NULL, 'test')`,
+    ).run();
+    rebuildThreads(db);
+    expect(threads()).toEqual({ [threadIdOf('fake', 's1')]: ['fake:s1', 'fake:s2'] });
+  });
+
   it("take a session's branch from most of its events, the latest of those that tie", async () => {
     write('s1.jsonl', [
       { id: 'a', session: 's1', ts: T0, branch: 'main' },

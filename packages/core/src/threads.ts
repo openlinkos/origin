@@ -148,7 +148,7 @@ interface Node {
  */
 function projectExpr(db: Database): string {
   return db.hasTable('session_place')
-    ? resolvedProjectSql('source', 'session_id', 'project')
+    ? resolvedProjectSql('session.source', 'session.session_id', 'session.project')
     : 'project';
 }
 
