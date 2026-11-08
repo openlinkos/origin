@@ -13,7 +13,8 @@ import type { HookHandler, PluginApi, PluginDefinition } from './types.js';
  * Origin's plugin for OpenClaw (docs/guide/openclaw.md): it writes the sessions of a Gateway's
  * agents to Origin as event lines, into a directory an Origin device on the same host reads, or to
  * an Origin hub; with a hub, it also gives the agents Origin's read tools, which the hub answers,
- * in the turns OpenClaw resolves as the owner's own (tools.ts). It depends on nothing but Node: OpenClaw loads its default export.
+ * in the owner's turns (tools.ts). It depends on nothing but Node: OpenClaw loads its default
+ * export.
  */
 
 export const PLUGIN_ID = 'origin';
@@ -107,8 +108,12 @@ export function registerOrigin(api: PluginApi, opts: RegisterOptions = {}): Reco
     }`,
   );
   if (tools.length > 0 && config.target.kind === 'hub') {
+    const when =
+      config.tools === 'owner-private'
+        ? "in the turns OpenClaw resolves as the owner's private memory audience"
+        : 'in every turn the owner starts';
     log.info(
-      `giving ${who} Origin's read tools from ${config.target.url}, in the owner's own turns: ${tools.join(', ')}`,
+      `giving ${who} Origin's read tools from ${config.target.url}, ${when}: ${tools.join(', ')}`,
     );
   }
   if (config.target.kind === 'hub' && config.target.token === null) {

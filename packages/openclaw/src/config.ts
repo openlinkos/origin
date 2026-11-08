@@ -23,10 +23,11 @@ export interface Config {
   includeTools: boolean;
   reconcileOnEnd: boolean;
   /**
-   * Whether the agents get Origin's read tools (tools.ts), which the hub answers: with a hub, unless
-   * set to false; never with a directory.
+   * When the agents get Origin's read tools (tools.ts), which the hub answers: in every turn the
+   * owner starts (`owner-turns`, the default), only in the turns OpenClaw resolves as the owner's
+   * private memory audience (`owner-private`), or never (`off`); always `off` with a directory.
    */
-  tools: boolean;
+  tools: ToolsMode;
   /** The agents to record, and to give the tools to, by id; null for all. */
   agents: string[] | null;
   /** The kinds of runs to record (`ctx.trigger`): user turns only by default. */
@@ -36,6 +37,10 @@ export interface Config {
   /** How long one delivery to a hub may take. */
   timeoutMs: number;
 }
+
+/** The settings of `tools`, the default first (Config.tools). */
+export const TOOLS_MODES = ['owner-turns', 'owner-private', 'off'] as const;
+export type ToolsMode = (typeof TOOLS_MODES)[number];
 
 export interface ConfigEnv {
   env: NodeJS.ProcessEnv;
@@ -176,7 +181,7 @@ function parse(raw: unknown, ctx: ConfigEnv): Config {
   }
   const spoolDir = optionalString(obj, 'spoolDir');
   // The tools read Origin through the hub: with a directory, there are none, whatever this says.
-  const tools = optionalBoolean(obj, 'tools') ?? true;
+  const tools = toolsMode(obj.tools);
 
   return {
     source,
@@ -185,12 +190,23 @@ function parse(raw: unknown, ctx: ConfigEnv): Config {
     project,
     includeTools: optionalBoolean(obj, 'includeTools') ?? true,
     reconcileOnEnd: optionalBoolean(obj, 'reconcileOnEnd') ?? false,
-    tools: target.kind === 'hub' && tools,
+    tools: target.kind === 'hub' ? tools : 'off',
     agents: optionalList(obj, 'agents'),
     triggers: optionalList(obj, 'triggers') ?? ['user'],
     stateDir: spoolDir ? resolveUserPath(spoolDir, ctx) : ctx.defaultStateDir,
     timeoutMs: timeoutMs as number,
   };
+}
+
+/**
+ * `tools`: one of TOOLS_MODES, `owner-turns` when unset; `true` and `false`, as 0.6.0 took them,
+ * mean `owner-turns` and `off`.
+ */
+function toolsMode(v: unknown): ToolsMode {
+  if (v === undefined || v === null || v === true) return 'owner-turns';
+  if (v === false) return 'off';
+  const mode = typeof v === 'string' ? TOOLS_MODES.find((m) => m === v.trim()) : undefined;
+  return mode ?? fail('"tools" must be owner-turns, owner-private, or off');
 }
 
 /** The hub's base URL: http or https, without credentials, query, or fragment. */

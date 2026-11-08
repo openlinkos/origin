@@ -75,7 +75,7 @@
     },
     "tools": {
       "label": "Origin tools for agents",
-      "help": "Give the agents Origin's read tools (origin_brief, origin_search, origin_get, origin_timeline, origin_digest), which your hub answers with the hub token. On with a hub; set false to turn them off."
+      "help": "When the agents get Origin's read tools (origin_brief, origin_search, origin_get, origin_timeline, origin_digest), which your hub answers with the hub token: owner-turns (default) in every turn OpenClaw's owner starts, in direct chats, groups, channels, and threads; owner-private only in turns OpenClaw resolves as its owner's private memory audience; off never. Only with a hub."
     },
     "spoolDir": {
       "label": "State directory",
@@ -154,7 +154,11 @@
         "default": false
       },
       "tools": {
-        "type": "boolean"
+        "anyOf": [
+          { "type": "string", "enum": ["owner-turns", "owner-private", "off"] },
+          { "type": "boolean" }
+        ],
+        "default": "owner-turns"
       },
       "spoolDir": {
         "type": "string",

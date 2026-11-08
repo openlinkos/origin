@@ -92,13 +92,20 @@ export interface ToolFactoryV2 {
 
 /**
  * The part of `OpenClawPluginToolContext<2>` the read tools use, besides the run's `agentId`,
- * `sessionKey`, and `messageChannel`: `assertInvocationCurrent`, which the version requires, and,
- * for an admitted session turn whose audience the host can prove, `memoryAudience` with
- * `assertMemoryAudienceCurrent`. Each guard throws once its authority has ended; a tool that holds
- * them across awaited work calls both immediately before it releases data or has an effect.
+ * `sessionKey`, and `messageChannel`: `assertInvocationCurrent`, which the version requires; the
+ * sender of the message the turn answers and whether OpenClaw takes that sender for its owner,
+ * when the turn has one; and, for an admitted session turn whose audience the host can prove,
+ * `memoryAudience` with `assertMemoryAudienceCurrent`. Each guard throws once its authority has
+ * ended; a tool that holds them across awaited work calls both immediately before it releases data
+ * or has an effect.
  */
 export interface ToolContextV2 {
   assertInvocationCurrent: () => void;
+  /** The sender's id on the channel, from the inbound message; none in a run nobody sent. */
+  requesterSenderId?: string;
+  /** True when the sender matches `commands.ownerAllowFrom` (or is an operator admin). */
+  senderIsOwner?: boolean;
+  sessionKey?: string;
   memoryAudience?: MemoryAudience;
   assertMemoryAudienceCurrent?: () => void;
 }

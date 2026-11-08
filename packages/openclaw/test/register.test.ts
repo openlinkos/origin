@@ -157,6 +157,8 @@ describe('register', () => {
     [{ dir: '/x', triggers: 'user' }, '"triggers"'],
     [{ dir: '/x', includeTools: 'yes' }, '"includeTools"'],
     [{ hub: 'https://hub.example.com', token: 't', tools: 'on' }, '"tools"'],
+    [{ hub: 'https://hub.example.com', token: 't', tools: 'everyone' }, 'owner-turns'],
+    [{ hub: 'https://hub.example.com', token: 't', tools: 1 }, '"tools"'],
     [{ dir: '/x', hubUrl: 'typo' }, 'unknown config key hubUrl'],
   ])('registers nothing and says why, once, for %j', (pluginConfig, message) => {
     const { api, hooks, tools, logs } = fakeApi({ pluginConfig, stateDir: state });
@@ -196,7 +198,7 @@ describe('register', () => {
       project: 'ops',
       includeTools: false,
       reconcileOnEnd: true,
-      tools: false,
+      tools: 'owner-private',
       spoolDir: path.join(state, 'spool-here'),
       timeoutMs: 3000,
     };
@@ -217,7 +219,7 @@ describe('register', () => {
       project: 'ops',
       includeTools: false,
       reconcileOnEnd: true,
-      tools: false,
+      tools: 'owner-private',
       stateDir: path.join(state, 'spool-here'),
       timeoutMs: 3000,
     });
