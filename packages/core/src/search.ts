@@ -1,8 +1,25 @@
-import { CJK_MESSAGE_TOKEN, cjkTermQuery, isCjkTerm } from './cjk.js';
+import { isCjkTerm } from './cjk.js';
+import type { SqlRow } from './database.js';
 import type { Database } from './db.js';
-import { transaction } from './db.js';
 import { idList } from './dialect.js';
-import { projectEventSql, resolvedProjectSql } from './places.js';
+import { resolvedProjectSql } from './places.js';
+import {
+  BLOCK_BITS,
+  candidateFilters,
+  type EntryQuery,
+  type IndexDriver,
+  MAX_SEQ,
+  MIN_SEQ,
+  type Need,
+  type Plan,
+  passColumn,
+  type QueryTerm,
+  type Row,
+  type SearchDriver,
+  type TermKind,
+  VISIBLE_SEQ,
+} from './search-driver.js';
+import { fts5Search } from './search-fts5.js';
 import {
   type EventFilter,
   eventColumns,
@@ -12,6 +29,8 @@ import {
   toEventRow,
 } from './store.js';
 import type { EventKind } from './types.js';
+
+export { type QueryTerm, type TermKind, termCheck } from './search-driver.js';
 
 /**
  * Event search (see docs/architecture.md#search-and-timeline).
@@ -31,6 +50,10 @@ import type { EventKind } from './types.js';
  * sessions can arrive after newer ones. Queries read an index latest arrival first, in a few chains
  * of blocks of arrivals (see event_block), merged by the latest timestamp each chain can still hold,
  * and stop as soon as no unread event can be newer than the events they need.
+ *
+ * This module plans a query and decides what to read and when to stop. The SQL that drives an
+ * index, counts its matches, and scores them is the store's engine's (see search-driver.ts): FTS5's
+ * in search-fts5.ts.
  */
 
 /** Ranking considers the newest RANK_WINDOW matches; with more matches, older ones are not ranked. */
@@ -41,14 +64,6 @@ export const RANK_WINDOW = 2_000;
  * search covers (its kinds, project, source, and time range) that match its indexed terms.
  */
 export const SCAN_LIMIT = 25_000;
-
-/** How a term is matched: `long` (3+ characters, trigram), `cjk` (1–2 CJK letters), `short` (other). */
-export type TermKind = 'long' | 'cjk' | 'short';
-
-export interface QueryTerm {
-  text: string;
-  kind: TermKind;
-}
 
 /** Split a query into distinct terms (case-insensitively) and classify them. */
 export function parseQuery(query: string): QueryTerm[] {
@@ -63,80 +78,6 @@ export function parseQuery(query: string): QueryTerm[] {
   return terms;
 }
 
-const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;
-
-/** FTS5 query for phrases that must all occur (a trigram index finds each one exactly). */
-export function phraseQuery(terms: QueryTerm[]): string {
-  return terms.map((t) => quote(t.text)).join(' AND ');
-}
-
-/** Trigrams used per term against event_fts; a subset still filters, and the text check is exact. */
-const MAX_TRIGRAMS = 24;
-
-/**
- * FTS5 query for event_fts, which records only which events contain each trigram (detail=none) and
- * so cannot match phrases: every trigram of every term, which events containing the terms must have.
- */
-function trigramQuery(terms: QueryTerm[]): string {
-  const all = new Set<string>();
-  for (const t of terms) {
-    const chars = [...t.text];
-    const grams: string[] = [];
-    for (let i = 0; i + 3 <= chars.length; i++) grams.push(chars.slice(i, i + 3).join(''));
-    const n = Math.min(grams.length, MAX_TRIGRAMS);
-    for (let i = 0; i < n; i++) {
-      all.add(grams[n === 1 ? 0 : Math.round((i * (grams.length - 1)) / (n - 1))] as string);
-    }
-  }
-  return [...all].map(quote).join(' AND ');
-}
-
-function escapeLike(s: string): string {
-  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
-}
-
-/**
- * SQL that checks that `column` contains `term`, ignoring case: LIKE for ASCII terms, instr() for
- * terms without letter case (CJK, digits, symbols), and origin_contains() otherwise.
- */
-export function termCheck(column: string, term: string, params: unknown[]): string {
-  if (/^[\x20-\x7e]*$/.test(term)) {
-    params.push(`%${escapeLike(term)}%`);
-    return `${column} LIKE ? ESCAPE '\\'`;
-  }
-  if (term.toLowerCase() === term.toUpperCase()) {
-    params.push(term);
-    return `instr(${column}, ?) > 0`;
-  }
-  params.push(term.toLowerCase());
-  return `origin_contains(${column}, ?)`;
-}
-
-/** Excluded events by seq: computed once per query, then probed without reading the events. */
-const VISIBLE_SEQ = (seq: string) =>
-  `+${seq} NOT IN (SELECT ev.seq FROM excluded_event x JOIN event ev ON ev.id = x.event_id)`;
-
-const MIN_SEQ = -Number.MAX_SAFE_INTEGER;
-const MAX_SEQ = Number.MAX_SAFE_INTEGER;
-
-interface Plan {
-  /** The FTS table that drives the query, or null to read the event table newest first. */
-  table: 'message_fts' | 'event_fts' | 'event_cjk' | null;
-  match: string | null;
-  /** CJK index query that the driving index's matches must also satisfy. */
-  cjk: string | null;
-  /** Terms that the driving index matches only roughly, checked against the text (event_fts). */
-  verify: string[];
-  /** Terms without an index, checked against the text of the candidates. */
-  checks: string[];
-  /** Kinds to filter on, when the driving index does not already. */
-  kinds: EventKind[] | null;
-  /** Whether the driving index gives a BM25 score. */
-  scored: boolean;
-  /** Whether at most SCAN_LIMIT candidates are read (some term has no index). */
-  capped: boolean;
-}
-
 function plan(terms: QueryTerm[], kinds: EventKind[] | undefined): Plan | null {
   const long = terms.filter((t) => t.kind === 'long');
   const cjk = terms.filter((t) => t.kind === 'cjk');
@@ -144,14 +85,13 @@ function plan(terms: QueryTerm[], kinds: EventKind[] | undefined): Plan | null {
   const capped = checks.length > 0;
   const onlyMessages = !!kinds && kinds.length > 0 && kinds.every((k) => k === 'message');
   const kindFilter = kinds && kinds.length > 0 ? kinds : null;
-  const cjkQuery = (ts: QueryTerm[]) => ts.map((t) => cjkTermQuery(t.text)).join(' AND ');
   if (long.length > 0) {
-    const cjkFilter = cjk.length > 0 ? cjkQuery(cjk) : null;
     if (onlyMessages) {
       return {
-        table: 'message_fts',
-        match: phraseQuery(long),
-        cjk: cjkFilter,
+        index: 'message',
+        long,
+        cjk,
+        messages: false,
         verify: [],
         checks,
         kinds: null,
@@ -160,10 +100,11 @@ function plan(terms: QueryTerm[], kinds: EventKind[] | undefined): Plan | null {
       };
     }
     return {
-      table: 'event_fts',
-      match: trigramQuery(long),
-      cjk: cjkFilter,
-      // A 3-character term is a single trigram, which event_fts matches exactly.
+      index: 'event',
+      long,
+      cjk,
+      messages: false,
+      // A 3-character term is a single trigram, which the event index matches exactly.
       verify: long.filter((t) => [...t.text].length > 3).map((t) => t.text),
       checks,
       kinds: kindFilter,
@@ -173,9 +114,10 @@ function plan(terms: QueryTerm[], kinds: EventKind[] | undefined): Plan | null {
   }
   if (cjk.length > 0) {
     return {
-      table: 'event_cjk',
-      match: onlyMessages ? `${cjkQuery(cjk)} AND ${CJK_MESSAGE_TOKEN}` : cjkQuery(cjk),
-      cjk: null,
+      index: 'cjk',
+      long,
+      cjk,
+      messages: onlyMessages,
       verify: [],
       checks,
       kinds: onlyMessages ? null : kindFilter,
@@ -184,10 +126,26 @@ function plan(terms: QueryTerm[], kinds: EventKind[] | undefined): Plan | null {
     };
   }
   if (checks.length > 0) {
-    const scan = { table: null, match: null, cjk: null, verify: [], checks, kinds: kindFilter };
+    const scan = { index: null, long, cjk, messages: false, verify: [], checks, kinds: kindFilter };
     return { ...scan, scored: false, capped: true };
   }
   return null;
+}
+
+/** The search indexes of the store's engine. */
+function searchDriver(db: Database): SearchDriver {
+  if (db.dialect !== 'sqlite') throw new Error(`No search indexes for ${db.dialect} yet.`);
+  return fts5Search(db);
+}
+
+/** The SQL of a plan's index (see IndexDriver), or null for a plan without one. */
+function indexOf(db: Database, p: Plan): IndexDriver | null {
+  return p.index ? searchDriver(db).events(p) : null;
+}
+
+/** The rows of the entries that match an entry search by terms of three or more characters. */
+export function matchingEntries(db: Database, q: EntryQuery): SqlRow[] {
+  return searchDriver(db).entries(q);
 }
 
 /** A candidate as read: its seq and timestamp, and whether it passed the checks. */
@@ -197,72 +155,6 @@ interface Hit {
   pass: boolean;
 }
 
-interface Row {
-  seq: number;
-  ts: number;
-  /** Whether the event passes the filters that need its row: a candidate. */
-  cand: number;
-  pass: number;
-  text?: string;
-}
-
-interface Need {
-  /** How many passing hits to return, newest first. */
-  count: number;
-  /** A check on the text that a hit must also pass (the text is read only for it). */
-  accept?: (text: string) => boolean;
-  /** Read at most SCAN_LIMIT candidates even if the plan does not require it. */
-  capped?: boolean;
-}
-
-/**
- * How a query checks an event's project: through the project's events, read once (`set`); for
- * each candidate, through its session's place (`row`), which reads nothing more than the row it
- * already has; or not at all, when the driving index is matched against the project already.
- */
-type ProjectCheck = 'set' | 'row' | 'none';
-
-/**
- * What makes an event a candidate besides the indexed terms and the time range: the filters on its
- * columns (source, project unless matched by its index, session, kinds) and, for event_fts, the
- * terms its trigrams only roughly match.
- */
-function candidateFilters(
-  p: Plan,
-  f: EventFilter,
-  params: unknown[],
-  project: ProjectCheck = 'set',
-): string[] {
-  const parts: string[] = [];
-  if (f.source) {
-    parts.push('e.source = ?');
-    params.push(f.source);
-  }
-  if (f.project && project === 'set') {
-    parts.push(projectEventSql('e'));
-    params.push(f.project, f.project);
-  } else if (f.project && project === 'row') {
-    parts.push(`${resolvedProjectSql('e.source', 'e.session_id', 'e.project')} = ?`);
-    params.push(f.project);
-  }
-  if (f.sessionId) {
-    parts.push('e.session_id = ?');
-    params.push(f.sessionId);
-  }
-  if (p.kinds) {
-    parts.push(`e.kind IN (${p.kinds.map(() => '?').join(', ')})`);
-    params.push(...p.kinds);
-  }
-  for (const term of p.verify) parts.push(termCheck('e.text', term, params));
-  return parts;
-}
-
-/** `pass`: whether a candidate's text holds the terms that have no index. */
-function passColumn(p: Plan, params: unknown[]): string {
-  const checks = p.checks.map((t) => termCheck('e.text', t, params));
-  return checks.length > 0 ? `(${checks.join(' AND ')})` : '1';
-}
-
 /**
  * A project with at most this many events in the time range can be matched through its index (its
  * events' seqs, read once), so that a search in it does not read every match to check its project:
@@ -270,78 +162,6 @@ function passColumn(p: Plan, params: unknown[]): string {
  * checks the project of each match it reads instead.
  */
 const PROJECT_SET_LIMIT = 100_000;
-
-/**
- * SQL reading the matches of an index-driven plan between two seqs (bound last), latest arrival
- * first: seq, ts, `cand`, and `pass`. Filters that need an event's row only set `cand`, so every
- * match comes back and a query can stop as soon as it has enough; the others (the time range, CJK
- * terms, and the project, when `projectSet` has it matched through its events) are part of the
- * WHERE clause and read no event.
- */
-function rangeQuery(
-  p: Plan,
-  f: EventFilter,
-  need: Need,
-  projectSet: boolean,
-): { sql: string; params: (lo: number, hi: number) => unknown[] } {
-  const table = p.table as string;
-  const conditions: string[] = [];
-  const whereParams: unknown[] = [];
-  if (p.cjk) {
-    conditions.push('+f.rowid IN (SELECT rowid FROM event_cjk WHERE event_cjk MATCH ?)');
-    whereParams.push(p.cjk);
-  }
-  const range = (column: string): string => {
-    let sql = '';
-    if (f.since !== undefined) {
-      sql += ` AND ${column} >= ?`;
-      whereParams.push(f.since);
-    }
-    if (f.until !== undefined) {
-      sql += ` AND ${column} <= ?`;
-      whereParams.push(f.until);
-    }
-    return sql;
-  };
-  const projectByIndex = !!f.project && projectSet;
-  if (projectByIndex) {
-    // Events with no place row still use the project index. Placed sessions match their resolved
-    // name. `range` pushes its parameters as it is called, in the order the placeholders appear.
-    whereParams.push(f.project);
-    const unplaced = range('e.ts');
-    whereParams.push(f.project);
-    const placed = range('e.ts');
-    conditions.push(`+f.rowid IN (
-      SELECT e.seq FROM event e
-       WHERE e.project = ? AND NOT EXISTS (
-         SELECT 1 FROM session_place sp WHERE sp.source = e.source AND sp.session_id = e.session_id)${unplaced}
-      UNION ALL
-      SELECT e.seq FROM event e
-        JOIN session_place sp ON sp.source = e.source AND sp.session_id = e.session_id
-       WHERE sp.project = ?${placed})`);
-  }
-  const inRange = range('x.ts');
-  if (inRange) conditions.push(inRange.slice(' AND '.length));
-  const selectParams: unknown[] = [];
-  // A match's row is read anyway to set `cand`: its project is checked there, not through every
-  // event of a large project.
-  const filters = candidateFilters(p, f, selectParams, projectByIndex ? 'none' : 'row');
-  const cand = filters.length > 0 ? `(${filters.join(' AND ')})` : '1';
-  const pass = passColumn(p, selectParams);
-  const row = cand !== '1' || pass !== '1' || !!need.accept;
-  const columns = ['f.rowid AS seq', 'x.ts AS ts', `${cand} AS cand`, `${pass} AS pass`];
-  if (need.accept) columns.push('e.text AS text');
-  // The index stays the outer loop (CROSS JOIN). Timestamps come from the narrow (seq, ts) index; an
-  // event is read only to filter or check it, after the time range.
-  const join = `CROSS JOIN event x INDEXED BY event_seq_ts ON x.seq = f.rowid${
-    row ? ' CROSS JOIN event e ON e.seq = f.rowid' : ''
-  }`;
-  const sql = `SELECT ${columns.join(', ')} FROM ${table} f ${join}
-    WHERE ${table} MATCH ? AND f.rowid BETWEEN ? AND ? AND ${VISIBLE_SEQ('f.rowid')}
-    ${conditions.map((c) => `AND ${c}`).join(' ')}
-    ORDER BY f.rowid DESC`;
-  return { sql, params: (lo, hi) => [...selectParams, p.match, lo, hi, ...whereParams] };
-}
 
 /** How many events the filter's project has in its time range, from the session aggregates. */
 function projectSize(db: Database, f: EventFilter): number {
@@ -386,7 +206,13 @@ const newestFirst = (a: Hit, b: Hit) => b.ts - a.ts || b.seq - a.seq;
  * The newest `need.count` passing hits, by timestamp (ties: the later arrival first), among the
  * newest SCAN_LIMIT candidates when capped. Exact whatever order events arrived in.
  */
-function newest(db: Database, p: Plan, f: EventFilter, need: Need): Hit[] {
+function newest(
+  db: Database,
+  p: Plan,
+  index: IndexDriver | null,
+  f: EventFilter,
+  need: Need,
+): Hit[] {
   const capped = p.capped || need.capped === true;
   const cap = capped ? SCAN_LIMIT : Number.POSITIVE_INFINITY;
   const hits: Hit[] = [];
@@ -395,7 +221,7 @@ function newest(db: Database, p: Plan, f: EventFilter, need: Need): Hit[] {
     const pass = r.pass === 1 && (!need.accept || need.accept(r.text as string));
     hits.push({ seq: r.seq, ts: r.ts, pass });
   };
-  if (!p.table) {
+  if (!index) {
     // Read in time order already: stop at the first `need.count` passing events.
     const q = scanQuery(p, f, need);
     let passing = 0;
@@ -410,14 +236,9 @@ function newest(db: Database, p: Plan, f: EventFilter, need: Need): Hit[] {
   // Few matches: read them all, in any order, each checked for its project, unless the project has
   // fewer events than that: those are read once instead, and the matches need no row.
   const few = Math.max(5 * need.count, 2_000);
-  const count = db.prepare(
-    `SELECT count(*) AS n FROM (SELECT 1 FROM ${p.table} WHERE ${p.table} MATCH ? LIMIT ?)`,
-  );
-  const matches = (count.get(p.match, few + 1) as { n: number }).n;
+  const matches = index.countMatches(few + 1);
   if (matches <= few) {
-    const q = rangeQuery(p, f, need, size < matches);
-    const all = db.prepare(q.sql).iterate(...(q.params(MIN_SEQ, MAX_SEQ) as never[]));
-    for (const r of all as Iterable<Row>) take(r);
+    for (const r of index.all(f, need, size < matches)) take(r);
     return select(hits, need.count, cap);
   }
   // With many matches, a small project is matched through its events when that reads fewer rows
@@ -430,7 +251,7 @@ function newest(db: Database, p: Plan, f: EventFilter, need: Need): Hit[] {
     ).n;
     projectSet = need.count * total > size * size;
   }
-  const q = rangeQuery(p, f, need, projectSet);
+  const stream = index.stream(f, need, projectSet);
 
   // Many matches: read the chains of blocks newest first, each with its own stream, always from the
   // chain that may still hold the newest unread hit, until no chain can hold one newer than those
@@ -462,10 +283,7 @@ function newest(db: Database, p: Plan, f: EventFilter, need: Need): Hit[] {
       const latest = chain?.bound() ?? Number.NEGATIVE_INFINITY;
       if (!chain || latest === Number.NEGATIVE_INFINITY || latest < Math.max(cut, floor)) break;
       // Read this chain until the rest of it may no longer hold the newest unread hit.
-      chain.rows ??= db
-        .prepare(q.sql)
-        .iterate(...(q.params(chain.lo, chain.hi) as never[]))
-        [Symbol.iterator]() as Iterator<Row>;
+      chain.rows ??= stream(chain.lo, chain.hi);
       const bound = chain.bound();
       while (chain.bound() >= bound && chain.bound() >= Math.max(cut, floor)) {
         const r = chain.next();
@@ -485,9 +303,6 @@ interface Block {
   block: number;
   max_ts: number;
 }
-
-/** Arrivals are grouped by block: seq >> BLOCK_BITS (see the event_block trigger). */
-const BLOCK_BITS = 12;
 
 /** A block this much newer than the chain above it starts a new chain. */
 const CHAIN_JUMP_MS = 86_400_000;
@@ -596,26 +411,6 @@ function select(hits: Hit[], count: number, cap: number): Hit[] {
 }
 
 /**
- * BM25 scores of the hits, in one query: bm25() computes its statistics over the whole index once
- * per query, so the hits are read without it.
- */
-function scores(db: Database, p: Plan, hits: Hit[]): Map<number, number> {
-  if (hits.length === 0) return new Map();
-  const seqs = hits.map((h) => h.seq);
-  const rows = db
-    .prepare(
-      `SELECT f.rowid AS seq, bm25(${p.table}) AS score FROM ${p.table} f
-       WHERE ${p.table} MATCH ? AND f.rowid BETWEEN ? AND ?
-         AND +f.rowid IN (SELECT value FROM json_each(?))`,
-    )
-    .all(p.match, Math.min(...seqs), Math.max(...seqs), JSON.stringify(seqs)) as unknown as Array<{
-    seq: number;
-    score: number;
-  }>;
-  return new Map(rows.map((r) => [r.seq, r.score]));
-}
-
-/**
  * Full-text search over visible events. By default the newest RANK_WINDOW matches are ranked by
  * BM25 (best first; ties newest first); `order: 'recent'`, and queries without a term of three or
  * more characters, give the newest first: by timestamp, and among equal timestamps, the later
@@ -628,9 +423,10 @@ export function searchEvents(db: Database, query: string, filter: SearchOptions 
   const limit = filter.limit ?? 20;
   const offset = filter.offset ?? 0;
   const ranked = p.scored && filter.order !== 'recent';
-  let hits = newest(db, p, filter, { count: ranked ? RANK_WINDOW : offset + limit });
-  if (ranked) {
-    const score = scores(db, p, hits);
+  const index = indexOf(db, p);
+  let hits = newest(db, p, index, filter, { count: ranked ? RANK_WINDOW : offset + limit });
+  if (ranked && index) {
+    const score = index.scores(hits.map((h) => h.seq));
     hits.sort((a, b) => (score.get(a.seq) ?? 0) - (score.get(b.seq) ?? 0) || newestFirst(a, b));
   }
   hits = hits.slice(offset, offset + limit);
@@ -664,7 +460,7 @@ export function findNewest(
 ): string | null {
   const p = plan(parseQuery(query), [kind]);
   if (!p) return null;
-  const [hit] = newest(db, p, {}, { count: 1, accept, capped: true });
+  const [hit] = newest(db, p, indexOf(db, p), {}, { count: 1, accept, capped: true });
   if (!hit) return null;
   return (db.prepare('SELECT id FROM event WHERE seq = ?').get(hit.seq) as { id: string }).id;
 }
@@ -701,21 +497,5 @@ export function snippetOf(text: string, terms: string[]): string {
  * only repairs.
  */
 export function rebuildSearchIndexes(db: Database): void {
-  transaction(
-    db,
-    () => {
-      db.exec(`INSERT INTO event_fts (event_fts) VALUES ('rebuild');
-        INSERT INTO message_fts (message_fts) VALUES ('rebuild');
-        INSERT INTO event_cjk (event_cjk) VALUES ('delete-all');
-        INSERT INTO event_cjk (rowid, text)
-          SELECT seq, t FROM (SELECT seq, origin_cjk(text, kind) AS t FROM event)
-          WHERE t IS NOT NULL;
-        INSERT INTO entry_fts (entry_fts) VALUES ('rebuild');
-        DELETE FROM event_block;
-        INSERT INTO event_block (block, max_ts, latest_ts)
-          SELECT block, max_ts, MAX(max_ts) OVER (ORDER BY block ROWS UNBOUNDED PRECEDING)
-          FROM (SELECT seq >> ${BLOCK_BITS} AS block, MAX(ts) AS max_ts FROM event GROUP BY 1);`);
-    },
-    { immediate: true },
-  );
+  searchDriver(db).rebuild();
 }

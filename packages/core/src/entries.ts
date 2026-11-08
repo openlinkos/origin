@@ -5,7 +5,7 @@ import { transaction } from './db.js';
 import { OriginError } from './errors.js';
 import { storeName } from './identity.js';
 import { entryProjectMatchSql } from './places.js';
-import { findNewest, parseQuery, phraseQuery, type QueryTerm, termCheck } from './search.js';
+import { findNewest, matchingEntries, parseQuery, type QueryTerm, termCheck } from './search.js';
 import { getEvent, VISIBLE_EVENT } from './store.js';
 import type { Author, EventRow } from './types.js';
 
@@ -331,17 +331,20 @@ export function searchEntries(db: Database, query: string, filter: EntryFilter =
   const terms = parseQuery(query);
   if (terms.length === 0) return [];
   const long = terms.filter((t) => t.kind === 'long');
-  const params: unknown[] = [];
-  let sql: string;
+  const where = (params: unknown[]) => `${entryWhere(filter, params)}${shortChecks(terms, params)}`;
   if (long.length > 0) {
-    params.push(phraseQuery(long));
-    sql = `${ENTRY_SELECT} JOIN entry_fts f ON f.rowid = en.rowid
-           WHERE entry_fts MATCH ? AND ${entryWhere(filter, params)}${shortChecks(terms, params)}
-           ORDER BY bm25(entry_fts), en.created_at DESC LIMIT ? OFFSET ?`;
-  } else {
-    sql = `${ENTRY_SELECT} WHERE ${entryWhere(filter, params)}${shortChecks(terms, params)}
-           ORDER BY en.created_at DESC LIMIT ? OFFSET ?`;
+    const rows = matchingEntries(db, {
+      long,
+      select: ENTRY_SELECT,
+      where,
+      limit: filter.limit ?? 20,
+      offset: filter.offset ?? 0,
+    });
+    return (rows as unknown as EntryRecord[]).map(toEntry);
   }
+  const params: unknown[] = [];
+  const sql = `${ENTRY_SELECT} WHERE ${where(params)}
+           ORDER BY en.created_at DESC LIMIT ? OFFSET ?`;
   params.push(filter.limit ?? 20, filter.offset ?? 0);
   return (db.prepare(sql).all(...(params as never[])) as unknown as EntryRecord[]).map(toEntry);
 }
