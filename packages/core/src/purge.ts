@@ -1918,6 +1918,51 @@ function completeMirror(
   return done;
 }
 
+/** A mirror whose purged lines are still to be blanked (see completePurges). */
+export interface PendingPurgeMirror {
+  rawFileId: number;
+  source: string;
+  path: string;
+  mirror: string;
+  /** How often blanking it failed, and why it failed last, never content. */
+  attempts: number;
+  error: string | null;
+  /** The purges whose lines it holds. */
+  purges: string[];
+}
+
+/** The mirrors whose purged lines are still to be blanked, oldest purge first. */
+export function pendingPurgeMirrors(db: Database): PendingPurgeMirror[] {
+  if (!db.hasTable('purge_pending')) return [];
+  const rows = db
+    .prepare(
+      `SELECT p.raw_file_id, p.attempts, p.error, f.source, f.path, f.mirror
+         FROM purge_pending p JOIN raw_file f ON f.id = p.raw_file_id
+        ORDER BY p.since, p.raw_file_id`,
+    )
+    .all() as Array<{
+    raw_file_id: number;
+    attempts: number;
+    error: string | null;
+    source: string;
+    path: string;
+    mirror: string;
+  }>;
+  const purgesOf = db.prepare(
+    `SELECT DISTINCT l.purge_id, p.seq FROM purge_line l JOIN purge p ON p.id = l.purge_id
+      WHERE l.raw_file_id = ? ORDER BY p.seq`,
+  );
+  return rows.map((r) => ({
+    rawFileId: Number(r.raw_file_id),
+    source: r.source,
+    path: r.path,
+    mirror: r.mirror,
+    attempts: Number(r.attempts),
+    error: r.error,
+    purges: (purgesOf.all(r.raw_file_id) as Array<{ purge_id: string }>).map((p) => p.purge_id),
+  }));
+}
+
 /** The seq of this store's latest purge, or 0 (see backupStore). */
 export function latestPurgeSeq(db: Database): number {
   if (!db.hasTable('purge')) return 0;

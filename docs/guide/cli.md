@@ -15,6 +15,14 @@ origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
 origin forget    <id> --reason <text> [--yes]          Hide an entry or event on every store, as a record (needs --yes)
 origin forgotten [--limit 50]                          Forgets and restores, newest first, with their reasons
 origin restore   <tombstone-id> --reason <text> [--yes]  Bring back what a forget hid (needs --yes)
+origin purge     <selector> --reason <text> [--yes] [--json] [--digest <d>]
+                                                       Delete for good from this store, as a record (needs --yes)
+                 selectors: event <id>… | session <source>:<session-id> [--keep-children] | entry <id>
+                          | forgotten <tombstone-id>|all | recall <id>
+                          | lines --source <id> [--from <device>] [--path <p>] [--file <raw-file-id> [--lines a-b]]
+                                  [--since <t>] [--until <t>] [--unparsed]
+origin purge     --resume                              Blank the purged lines still left in raw mirrors
+origin purged    [<purge-id>] [--limit 50] [--json]    Purges, newest first, with their reasons and counts
 origin proposals [--project <name>] [--status pending|accepted|rejected|all] [--limit 50]   Entries agents proposed, for you to review
 origin accept    <proposal-id> [--yes]                 Accept a proposal: write its entry (needs --yes)
 origin reject    <proposal-id> --reason <text> [--yes] Reject a proposal: forget it, as a record (needs --yes)
@@ -47,7 +55,7 @@ origin push                                            Same as origin sync (kept
 - **Source ids** are `claude-code`, `codex`, `cursor`, `grok`, and `zcode`, and the name of each of your own sources, a directory under `~/.origin/sources/` (see [Bring your own source](./sources.md)). `origin sync` warns of a directory there whose name names no source, and leaves it alone.
 - **Entry kinds** are `memory` (what happened), `knowledge` (stable facts), and `cognition` (your preferences, methods, goals, and boundaries).
 - **Entries** listed and found are the current ones. Superseded versions, and entries whose validity has ended (such as an imported memory whose file was deleted), appear with `origin entries --history` and in `origin show`. Entries imported from the memory files agents keep for themselves are marked as imported.
-- **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting and restoring leave, `rcl_7d2e9a0b1c3f` for recalls, `prp_1b7e4c0a9d23` for proposals, entries agents proposed for you to review, and `thr_4c1e9a7b2d30` for threads, the sessions of one piece of work (see [Threads](./concepts.md#threads)). Sessions go by the id their agent gives them, such as a UUID; `origin timeline` shows a session's thread next to its id.
+- **Ids** look like `ent_5f0c2a9e41b7` for entries, `claude-code:<uuid>` or `codex:<session>:o12` for events, `tmb_3a9d70c1e2f4` for tombstones, the records that forgetting and restoring leave, `prg_6e0b3d9a1c47` for purges, `rcl_7d2e9a0b1c3f` for recalls, `prp_1b7e4c0a9d23` for proposals, entries agents proposed for you to review, and `thr_4c1e9a7b2d30` for threads, the sessions of one piece of work (see [Threads](./concepts.md#threads)). Sessions go by the id their agent gives them, such as a UUID; `origin timeline` shows a session's thread next to its id.
 - **Help.** `origin --help`, or `--help` (`-h`) after any command, prints this list. Asking for help, and arguments a command does not take, never open the store, so they never upgrade it (see [Your store](./upgrading.md#your-store)).
 
 ## Searching
@@ -217,6 +225,51 @@ The forget is kept as a record with its reason; you can restore it later with or
 
 The rules are described in [Privacy and your data](./privacy.md#forgetting).
 
+## Purging
+
+A forget hides and can be restored; a purge deletes for good, from this store, and nothing brings it back. Use it for what must not be kept at all, such as a secret pasted into a session. `origin purge` takes a selector and a reason, first shows what it deletes, by id and count, never text, and only acts with `--yes`:
+
+```console
+$ origin purge session claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b --reason "pasted an API key"
+This purge deletes for good, from this store (laptop): 3 events, 0 entry versions, 1 session, 0 recalls; 3 lines blanked in 1 mirror.
+
+Events (3):
+  claude-code:9b2e4f7a-1c3d-4e5f-8a6b-7c9d0e1f2a3b
+  claude-code:2d4f6a8c-0e1b-4c3d-9e5f-6a7b8c9d0e1f
+  claude-code:7e9a1c3e-5b2d-4f6a-8c0e-1d3f5a7b9c2e
+
+Sessions (1):
+  claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
+
+Mirror lines blanked (1):
+  /home/you/.claude/projects/-home-you-app/4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b.jsonl (claude-code, raw file 12): lines 1-3 (blocked: its later lines are stored blank)
+
+Digest: sha256:5c1e…
+
+A purge does not reach:
+  - Backups made before the purge keep what it deletes; a later origin backup into the same directory copies the purged mirrors again.
+  …
+
+This cannot be undone. The purge is kept as a record with its reason, ids, and counts, never what it deletes. Re-run with --yes to purge, and with --digest sha256:5c1e… to purge only if it still deletes exactly this.
+```
+
+The selectors:
+
+- `event <id>…`: events, with the whole raw line each comes from, and so every other event that line yields.
+- `session <source>:<id>`: a session, its events, its recalls, and its child sessions unless `--keep-children`.
+- `entry <id>`: an entry, every version of its chain.
+- `forgotten <tombstone-id>`: what a forget hides on this store; `forgotten all`: everything hidden here.
+- `recall <id>`: a recall.
+- `lines --source <id>`: lines of a source's mirrors, narrowed with `--from <device>` (on a hub, the files a device or a writer sent), `--path <p>`, `--file <raw-file-id> [--lines a-b]`, `--since` and `--until` (the time of the lines' events), or `--unparsed`, the lines its adapter could not parse, of one file or one device, such as a bot's malformed lines.
+
+A purge takes more than it selects: every entry chain that cites a purged event, a proposal that loses all its sources, and the other lines of a file that hold the same events. The preview lists all of it, with warnings, so read it before `--yes`; with `--digest`, the purge deletes nothing if what it would delete has changed since the preview. `--json` prints the preview, or the result, as JSON.
+
+What it keeps: the forgets, which cover less afterwards, and a record of the purge, with who made it, when, why, what it selected, and counts. `origin purged` lists those records, newest first; `origin purged <prg-id>` shows one, with the mirror lines it blanked. Choose the reason with that in mind: it is kept for good, so say why, without quoting what you purge.
+
+The purged lines of the raw mirrors are blanked right after, a mirror at a time. If that stops part way, `origin status` lists the mirrors still to blank, and `origin purge --resume`, or the next `origin sync`, finishes them.
+
+A purge does not reach backups made before it, older versions in a bucket that keeps them, other stores, or your agents' own files: what an agent writes again comes back as new data. On a device connected to a hub, a purge deletes only the device's copy; the hub keeps what it already received, so the CLI prints a link to the same purge in the hub's [admin UI](./admin.md). A relay keeps nothing to purge. The rules are in [Purging](../architecture.md#purging).
+
 ## Reviewing proposals
 
 Agents propose, with the MCP tool [`propose`](./mcp.md#propose), what they infer and you have not confirmed, and what they write when they consolidate your memory for you. Origin runs no model and consolidates nothing itself: an agent outside it, such as a personal agent, reads your work through the MCP tools and proposes what is worth keeping. A proposal is no entry until you accept it. `origin proposals` lists those that wait for you, newest first; `--status accepted` lists those you accepted, with the entry each became, `--status rejected` those you rejected, by id and reason only, and `--status all` all three. `--project` keeps those of one project: the project a proposal names, or its session's.
@@ -256,7 +309,7 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 - On a device, `origin hub connect <url>` connects the device by your approval in the browser: it prints a link and a code, you approve the device in the hub's admin UI, and it receives its token, under its store's name; with `--token`, it uses a token created on the hub instead, which must have the store's name. It saves the hub's URL and the token. `origin hub connect` and `origin hub status` check this with the hub and say how to fix a mismatch. From then on, `origin sync` also syncs with the hub: it sends new raw mirror bytes and the entries and tombstones written on the device, then applies the tombstones of the hub. It can be re-run at any time, and each run resumes where the previous one stopped. `--local` skips the hub. `origin status` and `origin hub status` show when the device last finished a sync with the hub, whichever command or agent ran it, and the error of the last sync if it failed since.
 - Once a device is connected, `origin mcp` answers from the device's store and merges in the hub's answers, waiting for the hub at most 2 seconds; what agents save is written on the device and then synced.
 - Curation commands (`entries`, `show`, `correct`, `forget`, …) act on the device's own store. On a connected device, `correct`, `forget`, and `restore` then sync with the hub; if the hub cannot be reached, the change stays on the device until the next sync.
-- `origin hub connect … --relay` makes an empty store a [relay](./hub.md#run-a-device-as-a-relay), which keeps no sessions or entries of its own; a store that holds any is refused. On a relay, `origin sync` sends the agents' new log lines straight to the hub (`--local` does not apply), `origin status` shows per source the files and bytes still to send and warns when sessions not sent yet near the age at which their agent deletes them, `origin mcp` hands every tool call to the hub, and `search`, `timeline`, `digest`, `show`, `entries`, `correct`, and `forget` ask the hub; `entries --history`, `projects`, `forgotten`, and `restore` are not available (restore in the hub's admin UI). `origin hub status` shows the mode.
+- `origin hub connect … --relay` makes an empty store a [relay](./hub.md#run-a-device-as-a-relay), which keeps no sessions or entries of its own; a store that holds any is refused. On a relay, `origin sync` sends the agents' new log lines straight to the hub (`--local` does not apply), `origin status` shows per source the files and bytes still to send and warns when sessions not sent yet near the age at which their agent deletes them, `origin mcp` hands every tool call to the hub, and `search`, `timeline`, `digest`, `show`, `entries`, `correct`, and `forget` ask the hub; `entries --history`, `projects`, `forgotten`, `restore`, `purge`, and `purged` are not available (restore and purge in the hub's admin UI). `origin hub status` shows the mode.
 - `origin serve --admin` also serves the [admin UI](./admin.md) at `/admin`, and `--admin-listen <host:port>` serves it on a separate listener instead. Behind TLS, pass the hub's https address with `--public-url`; the hub refuses to serve the UI over plain HTTP beyond loopback. With the UI at `/admin`, agents sign in to the hub's MCP endpoint with OAuth, and devices connect by your approval (see [Connect your agents](./connect-agents.md#sign-in-with-oauth)).
 - `origin serve --raw-s3-endpoint <url> --raw-s3-bucket <name>`, or the `ORIGIN_RAW_S3_*` variables, keeps the hub's sealed frames, most of its raw mirrors, in an S3-compatible bucket such as MinIO; the keys are read only from the environment. `origin raw upload` moves the frames sealed before to the bucket, verifying each, 8 at a time unless `--concurrency` says otherwise, and `--remove` then removes the local files that held them. See [Keep raw mirrors in a bucket](./hub.md#keep-raw-mirrors-in-a-bucket).
 - `origin admin username <name>` changes the username you sign in to the admin UI with, and without a name shows it; you choose it at your first sign-in, with the admin password.

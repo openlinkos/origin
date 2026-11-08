@@ -187,7 +187,7 @@ The hub can serve an [admin UI](./admin.md) for you: an overview of your devices
 
 ## Keep raw mirrors in a bucket
 
-Raw mirrors take most of a hub's space, and their sealed frames, compressed blocks of lines, are written once and never change. A hub can keep them in an S3-compatible bucket instead of its disk, such as one on a MinIO server you run. The newest lines of each mirror (under 1 MiB per file) and the database stay on the hub's disk. Without a bucket, nothing changes.
+Raw mirrors take most of a hub's space, and their sealed frames, compressed blocks of lines, are written once and change only when a purge blanks lines in them. A hub can keep them in an S3-compatible bucket instead of its disk, such as one on a MinIO server you run. The newest lines of each mirror (under 1 MiB per file) and the database stay on the hub's disk. Without a bucket, nothing changes.
 
 Configure the bucket with flags of `origin serve` or with environment variables:
 
@@ -250,7 +250,7 @@ volumes:
 ```
 
 - **Starting.** The hub writes one small object, `<prefix>/.origin-check`, reads it back, and refuses to start if it cannot. From then on the store remembers the bucket and the prefix: the hub refuses to start without them or with others, and other commands run on the hub, such as `origin backup` or `origin show`, reach the bucket through the same variables. The endpoint may change.
-- **Frames.** Each new frame is one object, `<prefix>/<mirror>.zst/<offset>`, and objects are never changed or deleted. Frames sealed before the hub had a bucket stay on its disk, and are read from there until you move them. On the hub, even while it serves:
+- **Frames.** Each new frame is one object, `<prefix>/<mirror>.zst/<offset>`, and objects are never deleted, and put again only by a purge, which blanks lines in them. Frames sealed before the hub had a bucket stay on its disk, and are read from there until you move them. On the hub, even while it serves:
 
   ```bash
   origin raw upload            # upload and verify them, and list the .zst files that may go

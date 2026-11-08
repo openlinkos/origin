@@ -8,6 +8,7 @@ import {
   assertComplete,
   backupStore,
   checkRelayable,
+  completePurges,
   correct,
   createToken,
   type Database,
@@ -61,6 +62,7 @@ import {
   openDatabase,
   originHome,
   parseTime,
+  pendingPurgeMirrors,
   type RecallItemRecord,
   type RecallRecord,
   rawLocator,
@@ -147,6 +149,7 @@ import {
   printProposal,
   showProposal,
 } from './proposals.js';
+import { cmdPurge, cmdPurged, type PurgeCtx } from './purge.js';
 import { sourceAdapters, storeAdapters } from './sources.js';
 import { isHookCall, main as syncHook } from './sync-hook.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
@@ -171,6 +174,14 @@ Usage:
   origin forget    <id> --reason <text> [--yes]          Hide an entry or event on every store, as a record (needs --yes)
   origin forgotten [--limit 50]                          Forgets and restores, newest first, with their reasons
   origin restore   <tombstone-id> --reason <text> [--yes]  Bring back what a forget hid (needs --yes)
+  origin purge     <selector> --reason <text> [--yes] [--json] [--digest <d>]
+                                                         Delete for good from this store, as a record (needs --yes)
+                   selectors: event <id>… | session <source>:<session-id> [--keep-children] | entry <id>
+                            | forgotten <tombstone-id>|all | recall <id>
+                            | lines --source <id> [--from <device>] [--path <p>] [--file <raw-file-id> [--lines a-b]]
+                                    [--since <t>] [--until <t>] [--unparsed]
+  origin purge     --resume                              Blank the purged lines still left in raw mirrors
+  origin purged    [<purge-id>] [--limit 50] [--json]    Purges, newest first, with their reasons and counts
   origin proposals [--project <name>] [--status pending|accepted|rejected|all] [--limit 50]   Entries agents proposed, for you to review
   origin accept    <proposal-id> [--yes]                 Accept a proposal: write its entry (needs --yes)
   origin reject    <proposal-id> --reason <text> [--yes] Reject a proposal: forget it, as a record (needs --yes)
@@ -216,6 +227,7 @@ const NAMED_COMMANDS = new Set([
   'correct',
   'forget',
   'restore',
+  'purge',
   'accept',
   'reject',
   'hub',
@@ -322,6 +334,10 @@ export async function main(argv: string[]): Promise<number> {
         return cmdForgotten(forgettingCtx(ctx), rest);
       case 'restore':
         return await cmdRestore(forgettingCtx(ctx), rest);
+      case 'purge':
+        return cmdPurge(purgeCtx(ctx), rest);
+      case 'purged':
+        return cmdPurged(purgeCtx(ctx), rest);
       case 'proposals':
         return cmdProposals(proposalsCtx(ctx), rest);
       case 'accept':
@@ -450,6 +466,7 @@ async function cmdSync(ctx: Ctx, args: string[]): Promise<number> {
       'time',
     ]),
   );
+  completeLeftPurges(ctx);
   const hub = values.local ? null : hubOf(ctx);
   if (!hub) return 0;
   try {
@@ -565,6 +582,7 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
     ),
   );
   console.log(`\n${entries}\nData directory: ${ctx.home}`);
+  printPendingPurges(ctx);
   const devices = listDevices(ctx.db);
   if (devices.length > 0) {
     console.log(
@@ -580,6 +598,21 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
     printLastSync(ctx, hub);
   }
   return 0;
+}
+
+/** The mirrors whose purged lines are still to be blanked, with why, as `origin status` lists them. */
+function printPendingPurges(ctx: Ctx): void {
+  const pending = pendingPurgeMirrors(ctx.db);
+  if (pending.length === 0) return;
+  console.log(
+    `\nPurged lines still to blank in ${count(pending.length, 'mirror')} (origin purge --resume, or the next sync):`,
+  );
+  for (const p of pending.slice(0, 20)) {
+    console.log(
+      `  ${p.mirror} (${p.purges.join(', ')})${p.error ? `: ${oneLine(p.error, 160)}` : ''}`,
+    );
+  }
+  if (pending.length > 20) console.log(`  … and ${pending.length - 20} more`);
 }
 
 /** When this device last synced with its hub, and why the last sync failed if it did since. */
@@ -1469,6 +1502,27 @@ function forgettingCtx(ctx: Ctx): ForgettingCtx {
     relayHub: () => relayHub(ctx),
     afterChange: () => syncAfterChange(ctx),
   };
+}
+
+/** What `origin purge` and `purged` need from this command line. */
+function purgeCtx(ctx: Ctx): PurgeCtx {
+  return {
+    db: ctx.db,
+    home: ctx.home,
+    adapters: storeAdapters(ctx.home),
+    hub: () => hubOf(ctx),
+  };
+}
+
+/**
+ * Blank the purged lines that purges left in the mirrors (see completePurges), as a sync does
+ * before anything else; what fails is said and left for the next time.
+ */
+function completeLeftPurges(ctx: Ctx): void {
+  if (pendingPurgeMirrors(ctx.db).length === 0) return;
+  const r = completePurges(ctx.db, ctx.home, storeAdapters(ctx.home), { log: warn });
+  if (r.done > 0)
+    console.error(`Blanked ${count(r.lines, 'purged line')} in ${count(r.done, 'mirror')}.`);
 }
 
 /**

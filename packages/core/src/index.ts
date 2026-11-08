@@ -402,6 +402,7 @@ export {
   getPurge,
   latestPurgeSeq,
   listPurges,
+  type PendingPurgeMirror,
   PURGE_EVENTS_WARN,
   PURGE_ID_RE,
   PURGE_LIMITS,
@@ -419,6 +420,7 @@ export {
   type PurgeSelector,
   type PurgeTouched,
   type PurgeWarning,
+  pendingPurgeMirrors,
   planPurge,
   purge,
 } from './purge.js';

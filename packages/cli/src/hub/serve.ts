@@ -8,15 +8,18 @@ import {
   type OAuthServer,
 } from '@openlinkos/origin-admin';
 import {
+  completePurges,
   type Database,
   IDLE_SEAL_MS,
   OriginError,
+  pendingPurgeMirrors,
   prepareAdminCredential,
   recordAudit,
   type ScryptParams,
   type SourceAdapter,
   sealIdleMirrors,
 } from '@openlinkos/origin-core';
+import { hubAdapters } from '../sources.js';
 import { type ClientMetadataOptions, createClientResolver } from './client-metadata.js';
 import { createHubServer } from './server.js';
 
@@ -210,6 +213,12 @@ export async function startHub(o: StartHubOptions): Promise<RunningHub> {
     }
   }, IDLE_SEAL_CHECK_MS);
   sealing.unref();
+  // Purged lines a purge left in the mirrors, as after a crash or a bucket that could not be
+  // reached, are blanked now and then each minute, a few seconds at a time (see completePurges).
+  const blanking = purgeCompleter(o);
+  blanking();
+  const purging = setInterval(blanking, PURGE_CHECK_MS);
+  purging.unref();
   return {
     url,
     adminUrl: handler
@@ -217,6 +226,7 @@ export async function startHub(o: StartHubOptions): Promise<RunningHub> {
       : null,
     async close() {
       clearInterval(sealing);
+      clearInterval(purging);
       await Promise.all([close(hub), adminServer ? close(adminServer) : Promise.resolve()]);
     },
   };
@@ -224,3 +234,28 @@ export async function startHub(o: StartHubOptions): Promise<RunningHub> {
 
 /** How often the hub looks for mirrors that stopped growing. */
 const IDLE_SEAL_CHECK_MS = 10 * 60_000;
+/** How often the hub looks for purged lines still to blank, and how long it spends at a time. */
+const PURGE_CHECK_MS = 60_000;
+const PURGE_BUDGET_MS = 5_000;
+
+/**
+ * Blank the lines purges left in the hub's mirrors, if there are any. A mirror that keeps failing
+ * is tried each time, and its error logged once.
+ */
+function purgeCompleter(o: StartHubOptions): () => void {
+  const adapters = hubAdapters(o.adapters, o.home);
+  const said = new Set<string>();
+  const log = (message: string) => {
+    if (said.has(message)) return;
+    said.add(message);
+    o.log?.(message);
+  };
+  return () => {
+    try {
+      if (pendingPurgeMirrors(o.db).length === 0) return;
+      completePurges(o.db, o.home, adapters, { budgetMs: PURGE_BUDGET_MS, log });
+    } catch (err) {
+      log(`blanking purged lines failed: ${(err as Error).message}`);
+    }
+  };
+}

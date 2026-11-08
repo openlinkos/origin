@@ -132,7 +132,7 @@ Delivered as small, runnable increments, each usable on its own:
 
 - Many sessions have no title, because Claude Code writes `summary` lines for only some sessions.
 - A project is named after the directory of its main git checkout (a linked work tree or a subdirectory joins it), not derived from the git remote.
-- Forgetting hides data but does not erase it from the raw mirror files.
+- Forgetting hides data but does not erase it from the raw mirror files; purging deletes it, but not from backups made before, or from other stores.
 - From agents that keep sessions in a database (ZCode, the Cursor editor), each message is archived once, when it has settled; later changes to it are not.
 - Origin does not watch files on its own. Claude Code and Codex hand it each turn's new lines through their hooks, which `origin agents connect` sets up; for the other agents, while an agent runs, its MCP server checks for new lines every minute and once more when the agent exits; otherwise run `origin sync`, which also syncs with your hub.
 - On a device, CLI curation commands act on that device's own entries; the hub's admin UI shows and curates the entries of every device.

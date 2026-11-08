@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-63673b72
+sourceHash: sha256-0801815f
 ---
 
 # 命令参考
@@ -19,6 +19,14 @@ origin correct   <entry-id> <text> [--kind <kind>] [--confidence <0-1>]
 origin forget    <id> --reason <text> [--yes]          在每个库中隐藏条目或事件，并保存为记录（需加 --yes 确认）
 origin forgotten [--limit 50]                          遗忘与恢复的记录，从新到旧，附原因
 origin restore   <tombstone-id> --reason <text> [--yes]  带回一次遗忘隐藏的内容（需加 --yes 确认）
+origin purge     <selector> --reason <text> [--yes] [--json] [--digest <d>]
+                                                       从本库永久删除，并保存为记录（需加 --yes 确认）
+                 selectors: event <id>… | session <source>:<session-id> [--keep-children] | entry <id>
+                          | forgotten <tombstone-id>|all | recall <id>
+                          | lines --source <id> [--from <device>] [--path <p>] [--file <raw-file-id> [--lines a-b]]
+                                  [--since <t>] [--until <t>] [--unparsed]
+origin purge     --resume                              涂白原始镜像中仍留着的被清除的行
+origin purged    [<purge-id>] [--limit 50] [--json]    清除的记录，从新到旧，附原因和数量
 origin proposals [--project <name>] [--status pending|accepted|rejected|all] [--limit 50]   Agent 提出、等你审阅的条目
 origin accept    <proposal-id> [--yes]                 接受一条提议：写下它的条目（需要 --yes）
 origin reject    <proposal-id> --reason <text> [--yes] 拒绝一条提议：遗忘它，并留下记录（需要 --yes）
@@ -51,7 +59,7 @@ origin push                                            与 origin sync 相同（
 - **来源 id**：`claude-code`、`codex`、`cursor`、`grok` 与 `zcode`，以及你自己每个来源的名称，即 `~/.origin/sources/` 下的一个目录（见[接入你自己的来源](./sources.md)）。那里名称不能作为来源名称的目录，`origin sync` 会给出警告，并且不去动它。
 - **条目类型**：`memory`（发生过什么）、`knowledge`（稳定的事实）、`cognition`（你的偏好、方法、目标与边界）。
 - **条目**：列出和检索到的都是当前的条目。已被取代的版本，以及有效期已经结束的条目（例如文件已被删除的导入记忆），用 `origin entries --history` 或 `origin show` 才能看到。从 Agent 为自己保存的记忆文件导入的条目会标记为导入的。
-- **id 形式**：条目如 `ent_5f0c2a9e41b7`；事件如 `claude-code:<uuid>` 或 `codex:<session>:o12`；遗忘记录（遗忘与恢复留下的记录）如 `tmb_3a9d70c1e2f4`；召回如 `rcl_7d2e9a0b1c3f`；提议，即 Agent 提出、等你审阅的条目，如 `prp_1b7e4c0a9d23`；线索，即属于同一件工作的那些会话（见[线索](./concepts.md#threads)），如 `thr_4c1e9a7b2d30`。会话用它的 Agent 给的 id，例如一个 UUID；`origin timeline` 会在会话 id 旁显示它的线索。
+- **id 形式**：条目如 `ent_5f0c2a9e41b7`；事件如 `claude-code:<uuid>` 或 `codex:<session>:o12`；遗忘记录（遗忘与恢复留下的记录）如 `tmb_3a9d70c1e2f4`；清除如 `prg_6e0b3d9a1c47`；召回如 `rcl_7d2e9a0b1c3f`；提议，即 Agent 提出、等你审阅的条目，如 `prp_1b7e4c0a9d23`；线索，即属于同一件工作的那些会话（见[线索](./concepts.md#threads)），如 `thr_4c1e9a7b2d30`。会话用它的 Agent 给的 id，例如一个 UUID；`origin timeline` 会在会话 id 旁显示它的线索。
 - **帮助**：`origin --help`，或者任何命令后面加 `--help`（`-h`），会打印上面这份列表。请求帮助，以及命令不接受的参数，都不会打开库，所以永远不会升级它（见[你的库](./upgrading.md#your-store)）。
 - CLI 输出为英文。
 
@@ -222,6 +230,51 @@ The forget is kept as a record with its reason; you can restore it later with or
 
 遗忘规则见[隐私与数据](./privacy.md#forgetting)。
 
+## 清除 {#purging}
+
+遗忘是隐藏，可以恢复；清除则把内容从本库永久删除，什么也带不回来。它用于那些根本不该保留的内容，例如粘贴进会话的密钥。`origin purge` 需要一个选择器和一个原因，会先列出将删除的内容，只给 id 和数量，从不给文本，加 `--yes` 才真正执行：
+
+```console
+$ origin purge session claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b --reason "pasted an API key"
+This purge deletes for good, from this store (laptop): 3 events, 0 entry versions, 1 session, 0 recalls; 3 lines blanked in 1 mirror.
+
+Events (3):
+  claude-code:9b2e4f7a-1c3d-4e5f-8a6b-7c9d0e1f2a3b
+  claude-code:2d4f6a8c-0e1b-4c3d-9e5f-6a7b8c9d0e1f
+  claude-code:7e9a1c3e-5b2d-4f6a-8c0e-1d3f5a7b9c2e
+
+Sessions (1):
+  claude-code:4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b
+
+Mirror lines blanked (1):
+  /home/you/.claude/projects/-home-you-app/4f1c9e2a-7b3d-4e8f-9a6b-2c5d8e1f0a3b.jsonl (claude-code, raw file 12): lines 1-3 (blocked: its later lines are stored blank)
+
+Digest: sha256:5c1e…
+
+A purge does not reach:
+  - Backups made before the purge keep what it deletes; a later origin backup into the same directory copies the purged mirrors again.
+  …
+
+This cannot be undone. The purge is kept as a record with its reason, ids, and counts, never what it deletes. Re-run with --yes to purge, and with --digest sha256:5c1e… to purge only if it still deletes exactly this.
+```
+
+选择器有这些：
+
+- `event <id>…`：事件，连同每个事件所在的整行原始数据，因此也包括这一行产生的其他所有事件。
+- `session <source>:<id>`：一个会话，包括它的事件、它的召回，以及它的子会话，除非加上 `--keep-children`。
+- `entry <id>`：一个条目，即它那条链的每个版本。
+- `forgotten <tombstone-id>`：一次遗忘在本库隐藏的内容；`forgotten all`：本库隐藏的全部内容。
+- `recall <id>`：一次召回。
+- `lines --source <id>`：某个来源的镜像中的行，可以用 `--from <device>`（在中枢上，指某台设备或某个写入方发来的文件）、`--path <p>`、`--file <raw-file-id> [--lines a-b]`、`--since` 和 `--until`（这些行中事件的时间）缩小范围，或者用 `--unparsed` 只选它的适配器无法解析的行，限于一个文件或一台设备，例如机器人发来的格式错误的行。
+
+清除带走的比它选中的多：引用了被清除事件的每条条目链、失去全部来源的提议，以及文件中包含同样事件的其他行。预览会把这些全部列出，并附上警告，所以加 `--yes` 之前请先读一遍；加上 `--digest` 时，如果此后要删除的内容有了变化，清除就什么也不删。`--json` 以 JSON 打印预览或结果。
+
+它保留的有：遗忘记录，之后覆盖的范围变小；以及这次清除的记录，记下谁做的、何时、为什么、选中了什么，以及数量。`origin purged` 从新到旧列出这些记录；`origin purged <prg-id>` 显示其中一条，以及它涂白的镜像行。写原因时请记住这一点：原因会永久保存，所以说明为什么，不要引用要清除的内容。
+
+原始镜像中被清除的行随后逐个镜像涂白。如果中途停下，`origin status` 会列出仍待涂白的镜像，`origin purge --resume` 或下一次 `origin sync` 会把它们做完。
+
+清除触及不到它之前做的备份、保留旧版本的存储桶中的旧版本、其他库，以及你的 Agent 自己的文件：Agent 再次写入的内容会作为新数据回来。在连接到中枢的设备上，清除只删除设备上的副本；中枢保留它已经收到的内容，所以 CLI 会打印一个链接，指向中枢[管理界面](./admin.md)中的同一次清除。中继没有可清除的内容。规则见[清除](../architecture.md#purging)。
+
 ## 审阅提议 {#reviewing-proposals}
 
 Agent 用 MCP 工具 [`propose`](./mcp.md#propose) 提议它推断出、你尚未确认的内容，以及它替你整理记忆时写下的内容。Origin 不运行任何模型，自己也不整理任何东西：Origin 之外的 Agent（例如个人 Agent）通过 MCP 工具读你的工作，提议值得保留的内容。提议在你接受之前都不是条目。`origin proposals` 从新到旧列出等着你的提议；`--status accepted` 列出你接受了的，以及每条成为的条目；`--status rejected` 列出你拒绝了的，只列 id 和原因；`--status all` 三者都列。`--project` 只保留一个项目的提议：提议指明的项目，或者它所在会话的项目。
@@ -261,7 +314,7 @@ To bring it back: origin restore tmb_2d8f0c1a9e35 --reason <text>
 - 在设备上，`origin hub connect <url>` 经由你在浏览器中的批准接入设备：它打印一个链接和一个验证码，你在中枢的管理界面中批准这台设备，设备随即以它的库名称收到自己的令牌；加上 `--token` 时，它改用在中枢上创建的令牌，这个令牌必须以库的名称命名。它会保存中枢地址和令牌。`origin hub connect` 和 `origin hub status` 会向中枢核对，不一致时说明如何解决。此后 `origin sync` 也会与中枢同步：发送新的原始镜像字节，以及在本设备上写下的条目和遗忘记录，再应用中枢的遗忘记录。可以随时重跑，每次都会从上次停下的位置继续。`--local` 会跳过中枢。`origin status` 和 `origin hub status` 会显示这台设备上一次与中枢同步完成的时间（无论由哪个命令或 Agent 发起），如果此后有一次同步失败，还会显示它的错误。
 - 设备接入后，`origin mcp` 根据设备的库作答，并合并中枢的回答，等待中枢最多 2 秒；Agent 保存的内容写在设备上，然后再同步。
 - 管理命令（`entries`、`show`、`correct`、`forget` 等）作用于设备自己的库。在已接入中枢的设备上，`correct`、`forget` 和 `restore` 之后会与中枢同步；如果连不上中枢，改动会留在设备上，直到下一次同步。
-- `origin hub connect … --relay` 把一个空库变成[中继](./hub.md#run-a-device-as-a-relay)，它不保有自己的会话或条目；已经保存了这些内容的库会被拒绝。在中继上，`origin sync` 直接把 Agent 新增的记录行发送给中枢（`--local` 不适用），`origin status` 按来源显示尚未发送的文件和字节，并在尚未发送的会话临近被 Agent 删除的年龄时发出警告，`origin mcp` 把每一次工具调用都交给中枢，`search`、`timeline`、`digest`、`show`、`entries`、`correct` 和 `forget` 都会询问中枢；`entries --history`、`projects`、`forgotten` 和 `restore` 不可用（恢复请在中枢的管理界面中进行）。`origin hub status` 会显示模式。
+- `origin hub connect … --relay` 把一个空库变成[中继](./hub.md#run-a-device-as-a-relay)，它不保有自己的会话或条目；已经保存了这些内容的库会被拒绝。在中继上，`origin sync` 直接把 Agent 新增的记录行发送给中枢（`--local` 不适用），`origin status` 按来源显示尚未发送的文件和字节，并在尚未发送的会话临近被 Agent 删除的年龄时发出警告，`origin mcp` 把每一次工具调用都交给中枢，`search`、`timeline`、`digest`、`show`、`entries`、`correct` 和 `forget` 都会询问中枢；`entries --history`、`projects`、`forgotten`、`restore`、`purge` 和 `purged` 不可用（恢复和清除请在中枢的管理界面中进行）。`origin hub status` 会显示模式。
 - `origin serve --admin` 会同时在 `/admin` 下提供[管理界面](./admin.md)；`--admin-listen <host:port>` 则改为在单独的监听地址上提供。在 TLS 之后时，用 `--public-url` 传入中枢的 https 地址；中枢拒绝在回环地址之外通过明文 HTTP 提供管理界面。管理界面在 `/admin` 下时，Agent 用 OAuth 登录中枢的 MCP 端点，设备经由你的批准接入（见[接入 Agent](./connect-agents.md#sign-in-with-oauth)）。
 - `origin serve --raw-s3-endpoint <url> --raw-s3-bucket <name>`，或 `ORIGIN_RAW_S3_*` 环境变量，会把中枢已封存的帧——原始镜像的大部分——保存在兼容 S3 的存储桶中，例如 MinIO；密钥只从环境变量读取。`origin raw upload` 把此前封存的帧移入存储桶并逐帧校验，默认一次 8 帧（可用 `--concurrency` 调整），`--remove` 随后删除原先存放它们的本地文件。见[把原始镜像放进存储桶](./hub.md#keep-raw-mirrors-in-a-bucket)。
 - `origin admin username <name>` 修改你登录管理界面所用的用户名，不带名称时显示它；用户名在你第一次登录时连同管理密码一起选定。

@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util';
 import { DIGEST_LIMIT_MAX, digestDay, UPLOAD_CONCURRENCY } from '@openlinkos/origin-core';
 import { BUCKET_OPTIONS } from './hub/bucket.js';
+import { PURGE_OPTIONS, PURGE_USAGE, PURGED_USAGE, purgeArgsProblem } from './purge.js';
 import { UI_PORT } from './ui.js';
 
 /**
@@ -17,8 +18,11 @@ export interface ArgSpec {
   positionals?: readonly [number, number];
   /** Options that must be given, not blank, each with what to say when it is not. */
   required?: Readonly<Record<string, string>>;
-  /** What is wrong with the values given, or null: a check that needs no store. */
-  check?: (values: Readonly<Record<string, unknown>>) => string | null;
+  /** What is wrong with the values and arguments given, or null: a check that needs no store. */
+  check?: (
+    values: Readonly<Record<string, unknown>>,
+    positionals: readonly string[],
+  ) => string | null;
   usage: string;
 }
 
@@ -146,6 +150,17 @@ export const ARGS = {
     positionals: [1, 1],
     required: { reason: 'A reason is required: it is kept with the record.' },
     usage: 'Usage: origin restore <tombstone-id> --reason <text> [--yes]',
+  },
+  purge: {
+    options: PURGE_OPTIONS,
+    positionals: [0, MANY],
+    check: purgeArgsProblem,
+    usage: PURGE_USAGE,
+  },
+  purged: {
+    options: { limit: { type: 'string' }, json: { type: 'boolean', default: false } },
+    positionals: [0, 1],
+    usage: PURGED_USAGE,
   },
   proposals: {
     options: {
@@ -340,7 +355,7 @@ function checkSpec(label: string, spec: ArgSpec, args: readonly string[]): ArgCh
     const v = parsed.values[name];
     if (typeof v !== 'string' || v.trim().length === 0) return fail(message);
   }
-  const problem = spec.check?.(parsed.values);
+  const problem = spec.check?.(parsed.values, parsed.positionals);
   if (problem) return fail(problem);
   return { kind: 'run' };
 }

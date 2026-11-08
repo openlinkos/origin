@@ -7,15 +7,18 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { type AdminHandler, createLocalAdmin, type HubLink } from '@openlinkos/origin-admin';
 import {
+  completePurges,
   type Database,
   getSetting,
   OriginError,
+  pendingPurgeMirrors,
   type SourceAdapter,
   syncSource,
 } from '@openlinkos/origin-core';
 import type { HubConfig } from './hub/config.js';
 import { createAdminServer } from './hub/serve.js';
 import { syncedKey, syncWithHub } from './hub/sync.js';
+import { storeAdapters } from './sources.js';
 
 /** `origin ui` listens on this address only (see docs/architecture.md#admin-ui). */
 export const UI_HOST = '127.0.0.1';
@@ -228,8 +231,18 @@ async function ingestInBackground(
   log: (message: string) => void,
   stopped: () => boolean,
 ): Promise<UiIngest | null> {
-  if (!o.ingest || o.ingest.length === 0) return null;
   await new Promise((resolve) => setImmediate(resolve));
+  // First, the purged lines a purge left in the mirrors (see completePurges).
+  if (!stopped()) {
+    try {
+      if (pendingPurgeMirrors(o.db).length > 0) {
+        completePurges(o.db, o.home, storeAdapters(o.home), { log });
+      }
+    } catch (err) {
+      if (!stopped()) log(`Could not blank purged lines: ${(err as Error).message}`);
+    }
+  }
+  if (!o.ingest || o.ingest.length === 0) return null;
   const startedAt = Date.now();
   const total: UiIngest = { filesChanged: 0, eventsAdded: 0, parseErrors: 0, durationMs: 0 };
   for (const adapter of o.ingest) {
