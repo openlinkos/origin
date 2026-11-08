@@ -211,12 +211,12 @@ describe('terms without an index', () => {
     project = 'demo',
     kind = 'message',
   ): void {
-    const raw = db
+    const { id: raw } = db
       .prepare(
         `INSERT INTO raw_file (source, path, mirror, first_seen_at, updated_at)
-         VALUES ('fake', ?, 'bulk', 0, 0)`,
+         VALUES ('fake', ?, 'bulk', 0, 0) RETURNING id`,
       )
-      .run(`bulk-${firstTs}`).lastInsertRowid;
+      .get(`bulk-${firstTs}`) as { id: number };
     db.prepare(
       `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i + 1 < ?)
        INSERT INTO event (id, source, session_id, ts, project, role, kind, text, raw_file_id,
@@ -262,8 +262,11 @@ describe('terms without an index', () => {
     bulk(1_500, 1_000, 'needle in a haystack', 'big');
     bulk(1_500, 5_000, 'needle in a haystack', 'other');
     const size = db.prepare(
-      `INSERT OR REPLACE INTO session (source, session_id, project, started_at, ended_at, event_count)
-       VALUES ('fake', ?, ?, ?, ?, ?)`,
+      `INSERT INTO session (source, session_id, project, started_at, ended_at, event_count)
+       VALUES ('fake', ?, ?, ?, ?, ?)
+       ON CONFLICT (source, session_id) DO UPDATE SET project = excluded.project,
+         started_at = excluded.started_at, ended_at = excluded.ended_at,
+         event_count = excluded.event_count`,
     );
     for (const events of [1_500, 1_000_000]) {
       size.run('big-session', 'big', 1000, 2499, events);
@@ -478,8 +481,10 @@ describe('forgetting and rebuilding', () => {
     expect(searchEntries(db, 'sqlite 部署').map((e) => e.id)).toEqual(entriesBefore);
     // The message index still holds messages only.
     expect(messages('tool')).toEqual([]);
-    for (const table of ['event_fts', 'message_fts', 'entry_fts']) {
-      db.exec(`INSERT INTO ${table} (${table}) VALUES ('integrity-check')`);
+    if (db.dialect === 'sqlite') {
+      for (const table of ['event_fts', 'message_fts', 'entry_fts']) {
+        db.exec(`INSERT INTO ${table} (${table}) VALUES ('integrity-check')`);
+      }
     }
   });
 });

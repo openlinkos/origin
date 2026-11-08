@@ -124,9 +124,9 @@ function rangeQuery(
   const selectParams: unknown[] = [];
   // A match's row is read anyway to set `cand`: its project is checked there, not through every
   // event of a large project.
-  const filters = candidateFilters(p, f, selectParams, projectByIndex ? 'none' : 'row');
+  const filters = candidateFilters('sqlite', p, f, selectParams, projectByIndex ? 'none' : 'row');
   const cand = filters.length > 0 ? `(${filters.join(' AND ')})` : '1';
-  const pass = passColumn(p, selectParams);
+  const pass = passColumn('sqlite', p, selectParams);
   const row = cand !== '1' || pass !== '1' || !!need.accept;
   const columns = ['f.rowid AS seq', 'x.ts AS ts', `${cand} AS cand`, `${pass} AS pass`];
   if (need.accept) columns.push('e.text AS text');

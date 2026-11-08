@@ -331,7 +331,8 @@ export function searchEntries(db: Database, query: string, filter: EntryFilter =
   const terms = parseQuery(query);
   if (terms.length === 0) return [];
   const long = terms.filter((t) => t.kind === 'long');
-  const where = (params: unknown[]) => `${entryWhere(filter, params)}${shortChecks(terms, params)}`;
+  const where = (params: unknown[]) =>
+    `${entryWhere(filter, params)}${shortChecks(db, terms, params)}`;
   if (long.length > 0) {
     const rows = matchingEntries(db, {
       long,
@@ -350,10 +351,10 @@ export function searchEntries(db: Database, query: string, filter: EntryFilter =
 }
 
 /** Checks for the terms the trigram index cannot find (entries are few, so they are read). */
-function shortChecks(terms: QueryTerm[], params: unknown[]): string {
+function shortChecks(db: Database, terms: QueryTerm[], params: unknown[]): string {
   return terms
     .filter((t) => t.kind !== 'long')
-    .map((t) => ` AND ${termCheck('en.text', t.text, params)}`)
+    .map((t) => ` AND ${termCheck(db.dialect, 'en.text', t.text, params)}`)
     .join('');
 }
 

@@ -23,6 +23,7 @@ import {
 import { assertComplete } from './mode.js';
 import { recordSessionParent } from './parents.js';
 import { distinctRelPath, mirrorRelPath, parseRawPath, rawDir, remotePath } from './paths.js';
+import { eventDerivations } from './pg/search.js';
 import {
   applyPlaceFacts,
   isOriginPlacesFile,
@@ -797,6 +798,8 @@ export function eventInserter(
   );
   // Who wrote an input is kept with it, derived from the same line (see authors.ts).
   const keepAuthor = authorWriter(db);
+  // What SQLite's search triggers derive from an event, PostgreSQL keeps in tables of its own.
+  const derive = db.dialect === 'postgres' ? eventDerivations(db) : null;
   return (lineNo, events) =>
     events.filter((ev) => {
       if (!storable(ev)) return false;
@@ -826,6 +829,7 @@ export function eventInserter(
       ) as { seq: number } | undefined;
       if (!done) return false;
       keepAuthor(done.seq, ev);
+      derive?.(done.seq, ev);
       return true;
     });
 }

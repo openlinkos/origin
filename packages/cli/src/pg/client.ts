@@ -62,6 +62,8 @@ import { PG_WORKER_SOURCE, pgModulePath } from './worker-source.js';
 const WAIT_MS = 10_000;
 /** How long one statement may run by default (statement_timeout). */
 const STATEMENT_TIMEOUT_MS = 5 * 60_000;
+/** The memory of each sort and bitmap of a session's queries. */
+const WORK_MEM = '64MB';
 /** How long a session may sit in a transaction doing nothing. */
 const IDLE_IN_TRANSACTION_MS = 5 * 60_000;
 /** Connecting: one attempt, and the retries while the server cannot be reached. */
@@ -367,6 +369,9 @@ export class PgDatabase implements Database {
           `SET idle_in_transaction_session_timeout = ${IDLE_IN_TRANSACTION_MS}`,
           'SET plan_cache_mode = force_custom_plan',
           'SET jit = off',
+          // Search's bitmaps of GIN matches stay exact: a lossy page has origin_trigrams() computed
+          // again for each of its rows.
+          `SET work_mem = '${WORK_MEM}'`,
           "SET client_encoding = 'UTF8'",
           `SET search_path TO ${quoteIdent(target.schema)}`,
         ].join('; '),

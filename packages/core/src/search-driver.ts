@@ -1,4 +1,4 @@
-import type { SqlRow } from './database.js';
+import type { Dialect, SqlRow } from './database.js';
 import { projectEventSql, resolvedProjectSql } from './places.js';
 import type { EventFilter } from './store.js';
 import type { EventKind } from './types.js';
@@ -131,10 +131,14 @@ function escapeLike(s: string): string {
 }
 
 /**
- * SQL that checks that `column` contains `term`, ignoring case: LIKE for ASCII terms, instr() for
- * terms without letter case (CJK, digits, symbols), and origin_contains() otherwise.
+ * SQL that checks that `column` contains `term`, ignoring case: LIKE for ASCII terms (ILIKE on
+ * PostgreSQL, which folds ASCII alone in a store's C locale, as SQLite's LIKE does), instr() for
+ * terms without letter case (CJK, digits, symbols), and otherwise both folded beyond ASCII:
+ * origin_contains() on SQLite, which folds the text as JavaScript folds the term; on PostgreSQL,
+ * both by the server, as its trigram index folds the text (written out: origin_contains(), a
+ * function with settings of its own, would be called for each row rather than inlined).
  */
-export function termCheck(column: string, term: string, params: unknown[]): string {
+export function termCheck(d: Dialect, column: string, term: string, params: unknown[]): string {
   if (/^[\x20-\x7e]*$/.test(term)) {
     params.push(`%${escapeLike(term)}%`);
     return `${column} LIKE ? ESCAPE '\\'`;
@@ -143,9 +147,16 @@ export function termCheck(column: string, term: string, params: unknown[]): stri
     params.push(term);
     return `instr(${column}, ?) > 0`;
   }
+  if (d === 'postgres') {
+    params.push(term);
+    return `strpos(${foldedSql(column)}, ${foldedSql('?::text')}) > 0`;
+  }
   params.push(term.toLowerCase());
   return `origin_contains(${column}, ?)`;
 }
+
+/** A text expression folded as PostgreSQL folds the text its trigram index holds (pg_c_utf8). */
+export const foldedSql = (expr: string) => `lower(${expr} COLLATE pg_catalog.pg_c_utf8)`;
 
 /** Excluded events by seq: computed once per query, then probed without reading the events. */
 export const VISIBLE_SEQ = (seq: string) =>
@@ -170,6 +181,7 @@ export type ProjectCheck = 'set' | 'row' | 'none';
  * the terms its trigrams only roughly match.
  */
 export function candidateFilters(
+  d: Dialect,
   p: Plan,
   f: EventFilter,
   params: unknown[],
@@ -195,12 +207,12 @@ export function candidateFilters(
     parts.push(`e.kind IN (${p.kinds.map(() => '?').join(', ')})`);
     params.push(...p.kinds);
   }
-  for (const term of p.verify) parts.push(termCheck('e.text', term, params));
+  for (const term of p.verify) parts.push(termCheck(d, 'e.text', term, params));
   return parts;
 }
 
 /** `pass`: whether a candidate's text holds the terms that have no index. */
-export function passColumn(p: Plan, params: unknown[]): string {
-  const checks = p.checks.map((t) => termCheck('e.text', t, params));
+export function passColumn(d: Dialect, p: Plan, params: unknown[]): string {
+  const checks = p.checks.map((t) => termCheck(d, 'e.text', t, params));
   return checks.length > 0 ? `(${checks.join(' AND ')})` : '1';
 }

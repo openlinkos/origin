@@ -2,6 +2,7 @@ import { isCjkTerm } from './cjk.js';
 import type { SqlRow } from './database.js';
 import type { Database } from './db.js';
 import { idList } from './dialect.js';
+import { pgSearch } from './pg/search.js';
 import { resolvedProjectSql } from './places.js';
 import {
   BLOCK_BITS,
@@ -53,7 +54,7 @@ export { type QueryTerm, type TermKind, termCheck } from './search-driver.js';
  *
  * This module plans a query and decides what to read and when to stop. The SQL that drives an
  * index, counts its matches, and scores them is the store's engine's (see search-driver.ts): FTS5's
- * in search-fts5.ts.
+ * in search-fts5.ts, and PostgreSQL's in pg/search.ts, whose GIN indexes stand for these.
  */
 
 /** Ranking considers the newest RANK_WINDOW matches; with more matches, older ones are not ranked. */
@@ -78,7 +79,8 @@ export function parseQuery(query: string): QueryTerm[] {
   return terms;
 }
 
-function plan(terms: QueryTerm[], kinds: EventKind[] | undefined): Plan | null {
+/** How a search reads its terms (see Plan), or null when it has none. */
+export function plan(terms: QueryTerm[], kinds: EventKind[] | undefined): Plan | null {
   const long = terms.filter((t) => t.kind === 'long');
   const cjk = terms.filter((t) => t.kind === 'cjk');
   const checks = terms.filter((t) => t.kind === 'short').map((t) => t.text);
@@ -134,8 +136,7 @@ function plan(terms: QueryTerm[], kinds: EventKind[] | undefined): Plan | null {
 
 /** The search indexes of the store's engine. */
 function searchDriver(db: Database): SearchDriver {
-  if (db.dialect !== 'sqlite') throw new Error(`No search indexes for ${db.dialect} yet.`);
-  return fts5Search(db);
+  return db.dialect === 'postgres' ? pgSearch(db) : fts5Search(db);
 }
 
 /** The SQL of a plan's index (see IndexDriver), or null for a plan without one. */
@@ -179,11 +180,19 @@ function projectSize(db: Database, f: EventFilter): number {
  * SQL reading the candidates of a plan without an index, newest first: the newest SCAN_LIMIT
  * events that pass the filters, in the time range, with `pass`.
  */
-function scanQuery(p: Plan, f: EventFilter, need: Need): { sql: string; params: unknown[] } {
+function scanQuery(
+  db: Database,
+  p: Plan,
+  f: EventFilter,
+  need: Need,
+): { sql: string; params: unknown[] } {
   const selectParams: unknown[] = [];
-  const pass = passColumn(p, selectParams);
+  const pass = passColumn(db.dialect, p, selectParams);
   const whereParams: unknown[] = [];
-  const where = [VISIBLE_SEQ('e.seq'), ...candidateFilters(p, f, whereParams)];
+  // PostgreSQL checks each event's project: its plan for the project's set of events is a nested
+  // loop comparing every pair when its statistics have not caught up with a large ingest yet.
+  const project = db.dialect === 'postgres' ? 'row' : 'set';
+  const where = [VISIBLE_SEQ('e.seq'), ...candidateFilters(db.dialect, p, f, whereParams, project)];
   if (f.since !== undefined) {
     where.push('e.ts >= ?');
     whereParams.push(f.since);
@@ -223,7 +232,7 @@ function newest(
   };
   if (!index) {
     // Read in time order already: stop at the first `need.count` passing events.
-    const q = scanQuery(p, f, need);
+    const q = scanQuery(db, p, f, need);
     let passing = 0;
     for (const r of db.prepare(q.sql).iterate(...(q.params as never[])) as Iterable<Row>) {
       take(r);

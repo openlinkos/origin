@@ -77,6 +77,7 @@ describe.skipIf(!onPostgres)('opening a store in PostgreSQL', () => {
     expect(show('synchronous_commit')).toBe('on');
     expect(show('plan_cache_mode')).toBe('force_custom_plan');
     expect(show('jit')).toBe('off');
+    expect(show('work_mem')).toBe('64MB');
     expect(show('client_encoding')).toBe('UTF8');
     expect(show('application_name')).toMatch(/^origin serve .+:\d+$/);
   });

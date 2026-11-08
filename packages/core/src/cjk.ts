@@ -36,6 +36,27 @@ export function cjkIndexText(text: string, kind: string): string | null {
   return [...tokens].join(' ');
 }
 
+/**
+ * The CJK tokens of an event as PostgreSQL's event_cjk holds them, or null if it has no CJK
+ * letters: its CJK bigrams, every CJK letter, and the message token for a message. FTS5 finds a
+ * one-letter term as a prefix of a bigram or a run-final letter; every letter starts a bigram or
+ * ends a run, so holding every letter finds the same events by equality.
+ */
+export function cjkTokens(text: string, kind: string): string[] | null {
+  const runs = text.match(CJK_RUN);
+  if (!runs) return null;
+  const tokens = new Set<string>();
+  for (const run of runs) {
+    const letters = [...run];
+    for (let i = 0; i < letters.length; i++) {
+      tokens.add(letters[i] as string);
+      if (i + 1 < letters.length) tokens.add(`${letters[i]}${letters[i + 1]}`);
+    }
+  }
+  if (kind === 'message') tokens.add(CJK_MESSAGE_TOKEN);
+  return [...tokens];
+}
+
 /** The CJK index query for a term of one or two CJK letters: the bigram, or the letter as a prefix. */
 export function cjkTermQuery(term: string): string {
   return [...term].length === 1 ? `"${term}" *` : `"${term}"`;
