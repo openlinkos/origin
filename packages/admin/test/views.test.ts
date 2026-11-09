@@ -171,10 +171,14 @@ describe('a session by turns', () => {
     expect(page.turns.map((t) => t.number)).toEqual(Array.from({ length: 20 }, (_, i) => i + 11));
     expect(page.turns.reduce((n, t) => n + t.events, 0)).toBe(80);
     // The session's name and its prompts through their index, then whether something precedes the
-    // first, and the range.
+    // first, and the range. (A search reads events through its own index: FTS5 tables on SQLite,
+    // trigrams of the text on PostgreSQL.)
     expect(statements.some((s) => s.includes('INDEXED BY event_user_message'))).toBe(true);
     expect(
-      statements.filter((s) => /FROM event e\b/.test(s) && !s.includes('INDEXED BY')),
+      statements.filter(
+        (s) =>
+          /FROM event e\b/.test(s) && !s.includes('INDEXED BY') && !s.includes('origin_trigrams('),
+      ),
     ).toHaveLength(2);
   });
 

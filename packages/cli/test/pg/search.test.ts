@@ -219,7 +219,8 @@ const OPTIONS: SearchOptions[] = [
   { limit: 3_000 },
 ];
 
-describe.runIf(onPostgres)('search on PostgreSQL', { timeout: 120_000 }, () => {
+// Each takes up to half a minute alone, and several times that beside the rest of the suite.
+describe.runIf(onPostgres)('search on PostgreSQL', { timeout: 300_000 }, () => {
   it('finds what SQLite finds, in the same order', () => {
     seed(lite);
     seed(pg);

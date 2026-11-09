@@ -35,12 +35,16 @@ export function addPurge(
   db: Database,
   removed: Array<['event' | 'entry' | 'session' | 'recall' | 'file', string, string]>,
 ): void {
-  transaction(db, () => {
-    db.prepare(
-      `INSERT INTO purge (id, at, origin, author, channel, reason, selector, counts)
-       VALUES (?, 1000, 'laptop', 'user@laptop', 'cli', 'pasted a secret', '{}', '{}')`,
-    ).run(PURGE);
-    const add = db.prepare('INSERT INTO purged (kind, scope, id, purge_id) VALUES (?, ?, ?, ?)');
-    for (const [kind, scope, id] of removed) add.run(kind, scope, id, PURGE);
-  });
+  transaction(
+    db,
+    () => {
+      db.prepare(
+        `INSERT INTO purge (id, at, origin, author, channel, reason, selector, counts)
+         VALUES (?, 1000, 'laptop', 'user@laptop', 'cli', 'pasted a secret', '{}', '{}')`,
+      ).run(PURGE);
+      const add = db.prepare('INSERT INTO purged (kind, scope, id, purge_id) VALUES (?, ?, ?, ?)');
+      for (const [kind, scope, id] of removed) add.run(kind, scope, id, PURGE);
+    },
+    { immediate: true },
+  );
 }

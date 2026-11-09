@@ -1,15 +1,15 @@
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { Worker } from 'node:worker_threads';
-import { afterAll, afterEach, beforeAll } from 'vitest';
+import { type DatabaseFactory, setDatabaseFactory } from '@openlinkos/origin-core';
+import { afterAll, afterEach, beforeAll, inject } from 'vitest';
 import { PgDatabase, type PgOptions } from '../../src/pg/client.js';
 import { type PgTarget, parseDatabaseUrl } from '../../src/pg/url.js';
 
 /**
  * PostgreSQL for the client's tests: the server ORIGIN_TEST_DATABASE_URL names, as a superuser (or
- * a role that may create databases). Without it, these tests are skipped. Each test file gets a
- * database of its own, created with the locale a store needs and dropped afterwards, and each test
- * a schema of its own in it.
+ * a role that may create databases). Without it, these tests are skipped. They use the database of
+ * this run (see test/pg-global.ts), each test a schema of its own in it.
  */
 export const TEST_URL = process.env.ORIGIN_TEST_DATABASE_URL ?? '';
 export const onPostgres = TEST_URL !== '';
@@ -31,47 +31,28 @@ async function admin(url: string): Promise<Admin> {
   return c;
 }
 
-/** `url` with another database. */
-function withDatabase(url: string, database: string): string {
-  const u = new URL(url);
-  u.pathname = `/${database}`;
-  return u.href;
-}
-
-let database = '';
-let databaseUrl = '';
+const databaseUrl = inject('originTestDatabase');
 const opened: PgDatabase[] = [];
 
-/** Create this file's database; close what the tests opened after each, and drop it at the end. */
+/**
+ * Open stores as Origin does, and close what each test opened after it. These tests choose each
+ * store's engine themselves: in PostgreSQL through `open` or a URL, and in SQLite, as on a device,
+ * through openDatabase, which elsewhere in a run on PostgreSQL opens a schema (test/pg-setup.ts).
+ */
 export function usePostgres(): void {
-  beforeAll(async () => {
-    if (!onPostgres) return;
-    database = `origin_test_${randomBytes(6).toString('hex')}`;
-    const a = await admin(TEST_URL);
-    try {
-      await a.query(`CREATE DATABASE ${database} TEMPLATE template0 ENCODING 'UTF8' LOCALE 'C'`);
-      // Messages in English, whatever the server's language, where the role may say so.
-      await a.query(`ALTER DATABASE ${database} SET lc_messages = 'C'`).catch(() => {});
-    } finally {
-      await a.end();
-    }
-    databaseUrl = withDatabase(TEST_URL, database);
+  let before: DatabaseFactory | null = null;
+  beforeAll(() => {
+    before = setDatabaseFactory(null);
+  });
+  afterAll(() => {
+    setDatabaseFactory(before);
   });
   afterEach(() => {
     for (const db of opened.splice(0)) db.close();
   });
-  afterAll(async () => {
-    if (!database) return;
-    const a = await admin(TEST_URL);
-    try {
-      await a.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
-    } finally {
-      await a.end();
-    }
-  });
 }
 
-/** A target in this file's database, in a new schema unless `schema` names one. */
+/** A target in this run's database, in a new schema unless `schema` names one. */
 export function target(schema = `t_${randomBytes(6).toString('hex')}`): PgTarget {
   const u = new URL(databaseUrl);
   u.searchParams.set('schema', schema);
@@ -85,7 +66,7 @@ export function open(t: PgTarget, opts: PgOptions = {}): PgDatabase {
   return db;
 }
 
-/** Run SQL from outside the client, on this file's database (or another, by URL). */
+/** Run SQL from outside the client, on this run's database (or another, by URL). */
 export async function outside(
   sql: string,
   params: unknown[] = [],
@@ -100,7 +81,7 @@ export async function outside(
 }
 
 /**
- * A connection of `pg` itself to this file's database, with `schema` alone on its search_path, as
+ * A connection of `pg` itself to this run's database, with `schema` alone on its search_path, as
  * a program other than Origin would connect: the caller ends it.
  */
 export async function connect(schema: string): Promise<Admin> {
@@ -109,7 +90,7 @@ export async function connect(schema: string): Promise<Admin> {
   return a;
 }
 
-/** The URL of the server's own database, and of this file's. */
+/** The URL of the server's own database, and of this run's. */
 export const urls = () => ({ server: TEST_URL, database: databaseUrl });
 
 /**

@@ -355,12 +355,15 @@ describe.skipIf(!onPostgres)('iterate()', () => {
 
   it('closes an iterator left open when the event loop turns', async () => {
     const db = withTable(500);
+    // This client's connection only: other test files share the run's database.
+    const pid = backend(db);
     const it = db.prepare('SELECT id FROM t ORDER BY id').iterate();
     expect(it.next().value).toEqual({ id: 1 });
     await new Promise((resolve) => setImmediate(resolve));
     expect(() => it.next()).toThrow(/closed/);
     const [row] = await outside(
-      "SELECT count(*)::int AS n FROM pg_stat_activity WHERE state LIKE 'idle in transaction%' AND datname = current_database()",
+      "SELECT count(*)::int AS n FROM pg_stat_activity WHERE state LIKE 'idle in transaction%' AND pid = $1",
+      [pid],
     );
     expect(row?.n).toBe(0);
     // Read to its end, or closed, an iterator needs nothing more.

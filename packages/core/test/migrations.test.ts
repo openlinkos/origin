@@ -6,6 +6,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   backupStore,
   createToken,
@@ -117,7 +118,7 @@ function makeLegacyStore(logs: string): void {
   db.close();
 }
 
-describe('the format version', () => {
+describe.skipIf(onPostgres)('the format version', () => {
   it('is recorded in a new store, whose schema is that of 0.1.0 plus the migrations', () => {
     const fresh = openDatabase(file);
     expect(userVersion(fresh)).toBe(STORE_VERSION);
@@ -158,7 +159,7 @@ describe('the format version', () => {
   });
 });
 
-describe('a store of 0.1.0', () => {
+describe.skipIf(onPostgres)('a store of 0.1.0', () => {
   it('is upgraded in place and keeps everything it holds', async () => {
     const logs = path.join(tmp, 'logs');
     makeLegacyStore(logs);
@@ -266,7 +267,7 @@ describe('a store of 0.1.0', () => {
   });
 });
 
-describe('a store of 0.4.0 (version 4)', () => {
+describe.skipIf(onPostgres)('a store of 0.4.0 (version 4)', () => {
   /** Three sessions on a work branch and one on main, and a recall, as 0.4.0 stored them. */
   function makeStore040(): void {
     const db = store040(file);
@@ -345,7 +346,7 @@ describe('a store of 0.4.0 (version 4)', () => {
   });
 });
 
-describe('a store of version 5', () => {
+describe.skipIf(onPostgres)('a store of version 5', () => {
   it('gets the proposals of the tool results it already holds (version 6)', async () => {
     // A hub that received a device's lines before it was upgraded: the result of `propose` is
     // archived, but no proposal was derived from it.
@@ -398,7 +399,7 @@ describe('a store of version 5', () => {
   });
 });
 
-describe('a store of version 6', () => {
+describe.skipIf(onPostgres)('a store of version 6', () => {
   it('makes each token a device or an agent, readwrite, and audits the hub API (version 7)', () => {
     let db = openDatabase(file);
     for (const name of ['laptop', 'bot', 'ci', 'fresh', 'desk']) createToken(db, name, 1000);
@@ -455,7 +456,7 @@ describe('a store of version 6', () => {
   });
 });
 
-describe('a store of version 10', () => {
+describe.skipIf(onPostgres)('a store of version 10', () => {
   it('keeps its recall items, which can now be past messages with an excerpt (version 11)', () => {
     let db = openDatabase(file);
     db.prepare(
@@ -524,7 +525,7 @@ describe('a store of version 10', () => {
   });
 });
 
-describe('a store of version 11', () => {
+describe.skipIf(onPostgres)('a store of version 11', () => {
   it('gets the records of purges, and guards that only a purge lifts (version 12)', async () => {
     const logs = path.join(tmp, 'logs');
     fs.mkdirSync(logs);
@@ -645,7 +646,7 @@ describe('a store of version 11', () => {
   });
 });
 
-describe('a store of a newer Origin', () => {
+describe.skipIf(onPostgres)('a store of a newer Origin', () => {
   it('is refused, and left as it is', () => {
     const newer = new DatabaseSync(file);
     newer.exec(`PRAGMA user_version = ${STORE_VERSION + 1}`);
@@ -718,7 +719,7 @@ describe('the steps of an upgrade', () => {
   });
 });
 
-describe('several processes opening a store at once', () => {
+describe.skipIf(onPostgres)('several processes opening a store at once', () => {
   const script = fileURLToPath(new URL('./fixtures/migrate-elsewhere.mjs', import.meta.url));
   const migration2: Migration = {
     version: 2,

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import { loadEntry } from '../src/entries.js';
 import {
   appendRemote,
@@ -252,43 +253,46 @@ describe('native memories', () => {
     }
   });
 
-  it("is read by a hub upgraded after it mirrored a device's memory stream", () => {
-    const text = write({ id: 'm1', at: 1000, text: 'Mirrored before.' });
-    const current: SourceAdapter = { ...adapter, id: 'claude-code' };
-    const hubHome = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-hub-'));
-    const file = path.join(hubHome, 'origin.db');
-    let hub = openDatabase(file);
-    try {
-      setStoreName(hub, 'hub');
-      // A hub of an earlier version mirrors the stream, but reads nothing from it.
-      const older = { ...current, parseLine: () => null };
-      appendRemote({ db: hub, home: hubHome }, older, {
-        device: 'laptop',
-        source: 'claude-code',
-        path: stream(),
-        relPath: 'memory/demo.jsonl',
-        generation: 1,
-        offset: 0,
-        data: Buffer.from(text),
-      });
-      expect(getEvent(hub, 'claude-code:m1')).toBeNull();
-      hub.exec('PRAGMA user_version = 3');
-      hub.close();
+  it.skipIf(onPostgres)(
+    "is read by a hub upgraded after it mirrored a device's memory stream",
+    () => {
+      const text = write({ id: 'm1', at: 1000, text: 'Mirrored before.' });
+      const current: SourceAdapter = { ...adapter, id: 'claude-code' };
+      const hubHome = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-hub-'));
+      const file = path.join(hubHome, 'origin.db');
+      let hub = openDatabase(file);
+      try {
+        setStoreName(hub, 'hub');
+        // A hub of an earlier version mirrors the stream, but reads nothing from it.
+        const older = { ...current, parseLine: () => null };
+        appendRemote({ db: hub, home: hubHome }, older, {
+          device: 'laptop',
+          source: 'claude-code',
+          path: stream(),
+          relPath: 'memory/demo.jsonl',
+          generation: 1,
+          offset: 0,
+          data: Buffer.from(text),
+        });
+        expect(getEvent(hub, 'claude-code:m1')).toBeNull();
+        hub.exec('PRAGMA user_version = 3');
+        hub.close();
 
-      hub = openDatabase(file, { adapters: [current] });
-      expect(getEvent(hub, 'claude-code:m1')).toMatchObject({ kind: 'memory', rawLine: 1 });
-      expect(getEntry(hub, importedEntryId('claude-code:m1'))).toMatchObject({
-        text: 'Mirrored before.',
-        author: 'claude-code@laptop',
-        origin: 'laptop',
-      });
-    } finally {
-      hub.close();
-      fs.rmSync(hubHome, { recursive: true, force: true });
-    }
-  });
+        hub = openDatabase(file, { adapters: [current] });
+        expect(getEvent(hub, 'claude-code:m1')).toMatchObject({ kind: 'memory', rawLine: 1 });
+        expect(getEntry(hub, importedEntryId('claude-code:m1'))).toMatchObject({
+          text: 'Mirrored before.',
+          author: 'claude-code@laptop',
+          origin: 'laptop',
+        });
+      } finally {
+        hub.close();
+        fs.rmSync(hubHome, { recursive: true, force: true });
+      }
+    },
+  );
 
-  it.each([
+  it.skipIf(onPostgres).each([
     ['entry', importedEntryId('claude-code:m1')],
     ['event', 'claude-code:m1'],
   ])(

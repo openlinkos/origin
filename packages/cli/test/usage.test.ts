@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import { store040 } from '../../core/test/legacy.js';
 import { ARGS, checkArgs, isStoreCommand } from '../src/args.js';
 import { main } from '../src/main.js';
@@ -142,7 +143,7 @@ describe('usage never opens the store', () => {
     expect(snapshot()).toEqual(before);
   });
 
-  it('opens, and upgrades, the store once a command runs', async () => {
+  it.skipIf(onPostgres)('opens, and upgrades, the store once a command runs', async () => {
     expect(await main(['status'])).toBe(0);
     expect(snapshot().version).toBeGreaterThan(4);
   });

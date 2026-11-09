@@ -33,6 +33,7 @@ import {
   tombstoneFeed,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import type { HubConfig } from '../src/hub/config.js';
 import { createHubServer } from '../src/hub/server.js';
 import {
@@ -616,9 +617,10 @@ describe('agent versions', () => {
 });
 
 describe('concurrent pushes', () => {
-  // Six megabytes pushed in chunks against a racing hub: slow on Windows CI.
+  // Six megabytes pushed in chunks against a racing hub: slow on Windows CI, and on PostgreSQL, a
+  // round trip for each statement, slower still.
   it('goes on while another process pushes the same file, from where the hub stands', {
-    timeout: 60_000,
+    timeout: onPostgres ? 300_000 : 60_000,
   }, async () => {
     // A long session: several chunks. Another process (say, an agent's origin mcp) pushes each
     // chunk first, so every request of this sync meets a hub that has already moved on.

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import { openDatabase, reparsePlaces, STORE_VERSION, transaction } from '../src/index.js';
 
 const temps: string[] = [];
@@ -17,7 +18,7 @@ afterEach(() => {
   for (const dir of temps.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-describe('a store a newer Origin has upgraded', () => {
+describe.skipIf(onPostgres)('a store a newer Origin has upgraded', () => {
   it('refuses the next write and leaves the store unchanged', () => {
     const home = tempDir('origin-upgraded-');
     const db = openDatabase(path.join(home, 'origin.db'));

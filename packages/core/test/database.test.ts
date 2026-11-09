@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   type Database,
   openDatabase,
@@ -22,7 +23,7 @@ afterEach(() => {
 });
 
 describe('the database a store is opened through', () => {
-  it('is SQLite, and answers what the store needs to know of itself', () => {
+  it.skipIf(onPostgres)('is SQLite, and answers what the store needs to know of itself', () => {
     const file = path.join(tmp, 'origin.db');
     const db = openDatabase(file);
     try {
@@ -45,7 +46,8 @@ describe('the database a store is opened through', () => {
   it('knows whether a transaction is open', () => {
     const db = openMemoryDatabase();
     try {
-      expect(db.location()).toBe('');
+      // An in-memory database is nowhere; a store in PostgreSQL is in its schema.
+      if (!onPostgres) expect(db.location()).toBe('');
       expect(db.isTransaction).toBe(false);
       transaction(db, () => expect(db.isTransaction).toBe(true), { immediate: true });
       expect(db.isTransaction).toBe(false);
@@ -58,10 +60,14 @@ describe('the database a store is opened through', () => {
     const db = openMemoryDatabase();
     try {
       expect(() =>
-        transaction(db, () => {
-          db.setFormatVersion(STORE_VERSION - 1);
-          throw new Error('rolled back');
-        }),
+        transaction(
+          db,
+          () => {
+            db.setFormatVersion(STORE_VERSION - 1);
+            throw new Error('rolled back');
+          },
+          { immediate: true },
+        ),
       ).toThrow('rolled back');
       expect(db.formatVersion()).toBe(STORE_VERSION);
     } finally {
@@ -69,7 +75,7 @@ describe('the database a store is opened through', () => {
     }
   });
 
-  it('waits for the write lock as long as asked, then as before', () => {
+  it.skipIf(onPostgres)('waits for the write lock as long as asked, then as before', () => {
     const db = openDatabase(path.join(tmp, 'origin.db'));
     const timeout = () => (db.prepare('PRAGMA busy_timeout').get() as { timeout: number }).timeout;
     try {

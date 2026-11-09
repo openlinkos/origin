@@ -18,6 +18,7 @@ import {
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import { downgradeToV1, downgradeToV7, userVersion } from '../../core/test/legacy.js';
 import {
   createClaudeCodeAdapter,
@@ -334,75 +335,80 @@ describe('prompts the user queued while Claude Code was busy', () => {
     ).toBeNull();
   });
 
-  it('are recovered when a store of version 7 is upgraded, as a new store reads them', async () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-cc-queued-'));
-    try {
-      const projects = path.join(tmp, 'projects');
-      fs.mkdirSync(path.join(projects, 'D--demo-project'), { recursive: true });
-      const typed = (uuid: string, text: string, at: string) =>
-        JSON.stringify({
-          type: 'user',
-          uuid,
-          sessionId: SESSION,
-          timestamp: at,
-          cwd: 'D:\\demo\\project',
-          version: '2.1.303',
-          entrypoint: 'cli',
-          origin: { kind: 'human' },
-          promptSource: 'typed',
-          message: { role: 'user', content: text },
+  it.skipIf(onPostgres)(
+    'are recovered when a store of version 7 is upgraded, as a new store reads them',
+    async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-cc-queued-'));
+      try {
+        const projects = path.join(tmp, 'projects');
+        fs.mkdirSync(path.join(projects, 'D--demo-project'), { recursive: true });
+        const typed = (uuid: string, text: string, at: string) =>
+          JSON.stringify({
+            type: 'user',
+            uuid,
+            sessionId: SESSION,
+            timestamp: at,
+            cwd: 'D:\\demo\\project',
+            version: '2.1.303',
+            entrypoint: 'cli',
+            origin: { kind: 'human' },
+            promptSource: 'typed',
+            message: { role: 'user', content: text },
+          });
+        fs.writeFileSync(
+          path.join(projects, REL),
+          `${[
+            typed(
+              'a1000000-0000-4000-8000-000000000001',
+              'Fix the flaky upload test.',
+              '2026-10-20T09:00:00.000Z',
+            ),
+            queued({}, {}),
+            typed('a1000000-0000-4000-8000-000000000003', 'Then push.', '2026-10-20T09:09:00.000Z'),
+          ].join('\n')}\n`,
+        );
+        const adapter = () => createClaudeCodeAdapter({ projectsDir: projects });
+        const held = (db: Database) => ({
+          events: listEvents(db).map((e) => [e.id, e.ts, e.text, e.author, e.authorSignal]),
+          sessions: listSessions(db).map((s) => [s.sessionId, s.eventCount, s.endedAt]),
         });
-      fs.writeFileSync(
-        path.join(projects, REL),
-        `${[
-          typed(
-            'a1000000-0000-4000-8000-000000000001',
-            'Fix the flaky upload test.',
-            '2026-10-20T09:00:00.000Z',
-          ),
-          queued({}, {}),
-          typed('a1000000-0000-4000-8000-000000000003', 'Then push.', '2026-10-20T09:09:00.000Z'),
-        ].join('\n')}\n`,
-      );
-      const adapter = () => createClaudeCodeAdapter({ projectsDir: projects });
-      const held = (db: Database) => ({
-        events: listEvents(db).map((e) => [e.id, e.ts, e.text, e.author, e.authorSignal]),
-        sessions: listSessions(db).map((s) => [s.sessionId, s.eventCount, s.endedAt]),
-      });
 
-      const freshHome = path.join(tmp, 'fresh');
-      const fresh = openDatabase(path.join(freshHome, 'origin.db'));
-      await syncSource({ db: fresh, home: freshHome }, adapter());
-      const expected = held(fresh);
-      expect(expected.events.map((e) => e[2])).toEqual([
-        'Fix the flaky upload test.',
-        'Also run the linter.',
-        'Then push.',
-      ]);
+        const freshHome = path.join(tmp, 'fresh');
+        const fresh = openDatabase(path.join(freshHome, 'origin.db'));
+        await syncSource({ db: fresh, home: freshHome }, adapter());
+        const expected = held(fresh);
+        expect(expected.events.map((e) => e[2])).toEqual([
+          'Fix the flaky upload test.',
+          'Also run the linter.',
+          'Then push.',
+        ]);
 
-      // Version 7 skipped attachment lines: the queued prompt is only in the mirror.
-      const home = path.join(tmp, 'device');
-      const file = path.join(home, 'origin.db');
-      const before = openDatabase(file);
-      const v6 = adapter();
-      await syncSource(
-        { db: before, home },
-        { ...v6, parseLine: (l, c) => (l.includes('"attachment"') ? null : v6.parseLine(l, c)) },
-      );
-      expect(listEvents(before)).toHaveLength(2);
-      before.close();
-      downgradeToV7(file);
-      const upgraded = openDatabase(file, { adapters: [adapter()] });
-      expect(userVersion(upgraded)).toBe(STORE_VERSION);
-      expect(held(upgraded)).toEqual(expected);
-      // And it goes on as a new store does: nothing is read twice.
-      expect(await syncSource({ db: upgraded, home }, adapter())).toMatchObject({ eventsAdded: 0 });
-      upgraded.close();
-      fresh.close();
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
+        // Version 7 skipped attachment lines: the queued prompt is only in the mirror.
+        const home = path.join(tmp, 'device');
+        const file = path.join(home, 'origin.db');
+        const before = openDatabase(file);
+        const v6 = adapter();
+        await syncSource(
+          { db: before, home },
+          { ...v6, parseLine: (l, c) => (l.includes('"attachment"') ? null : v6.parseLine(l, c)) },
+        );
+        expect(listEvents(before)).toHaveLength(2);
+        before.close();
+        downgradeToV7(file);
+        const upgraded = openDatabase(file, { adapters: [adapter()] });
+        expect(userVersion(upgraded)).toBe(STORE_VERSION);
+        expect(held(upgraded)).toEqual(expected);
+        // And it goes on as a new store does: nothing is read twice.
+        expect(await syncSource({ db: upgraded, home }, adapter())).toMatchObject({
+          eventsAdded: 0,
+        });
+        upgraded.close();
+        fresh.close();
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 /** What a store holds of its sessions' files: each mirror with its cursor and content, and the events. */
@@ -620,72 +626,80 @@ describe('Claude Code session titles', () => {
     db.close();
   });
 
-  it('are set when a store of 0.1.0 is upgraded, from its mirrors alone', async () => {
-    const projects = path.join(tmp, 'projects');
-    writeTitledSessions(projects);
-    const home = path.join(tmp, 'device');
-    const file = path.join(home, 'origin.db');
-    const adapter = () => createClaudeCodeAdapter({ projectsDir: projects });
-    // Small frames, so that the title lines are in sealed frames as well as in the open tails.
-    const db = openDatabase(file);
-    await syncSource({ db, home, frameBytes: 400 }, adapter());
-    expect(db.prepare('SELECT COUNT(*) AS n FROM raw_chunk').get()).not.toEqual({ n: 0 });
-    db.close();
-    downgradeToV1(file);
-    // The agent has since deleted its logs (cleanupPeriodDays): the mirrors are all there is.
-    fs.rmSync(projects, { recursive: true, force: true });
+  it.skipIf(onPostgres)(
+    'are set when a store of 0.1.0 is upgraded, from its mirrors alone',
+    async () => {
+      const projects = path.join(tmp, 'projects');
+      writeTitledSessions(projects);
+      const home = path.join(tmp, 'device');
+      const file = path.join(home, 'origin.db');
+      const adapter = () => createClaudeCodeAdapter({ projectsDir: projects });
+      // Small frames, so that the title lines are in sealed frames as well as in the open tails.
+      const db = openDatabase(file);
+      await syncSource({ db, home, frameBytes: 400 }, adapter());
+      expect(db.prepare('SELECT COUNT(*) AS n FROM raw_chunk').get()).not.toEqual({ n: 0 });
+      db.close();
+      downgradeToV1(file);
+      // The agent has since deleted its logs (cleanupPeriodDays): the mirrors are all there is.
+      fs.rmSync(projects, { recursive: true, force: true });
 
-    // The migration needs the adapter; without it, the store stays at the version before.
-    expect(() => openDatabase(file)).toThrow(/needs the claude-code adapter/);
-    const upgraded = openDatabase(file, { adapters: [adapter()] });
-    expect(userVersion(upgraded)).toBe(STORE_VERSION);
-    expect(titles(upgraded)).toEqual(EXPECTED_TITLES);
-    // The user's title is known to be the user's: an AI title that arrives later does not replace it.
-    fs.mkdirSync(path.join(projects, 'D--work-alpha'), { recursive: true });
-    fs.writeFileSync(
-      path.join(projects, `D--work-alpha/${RENAMED}.jsonl`),
-      `${JSON.stringify({ type: 'ai-title', aiTitle: 'Later', sessionId: RENAMED })}\n`,
-    );
-    await syncSource({ db: upgraded, home }, adapter());
-    expect(titles(upgraded)).toEqual(EXPECTED_TITLES);
-    upgraded.close();
-  });
+      // The migration needs the adapter; without it, the store stays at the version before.
+      expect(() => openDatabase(file)).toThrow(/needs the claude-code adapter/);
+      const upgraded = openDatabase(file, { adapters: [adapter()] });
+      expect(userVersion(upgraded)).toBe(STORE_VERSION);
+      expect(titles(upgraded)).toEqual(EXPECTED_TITLES);
+      // The user's title is known to be the user's: an AI title that arrives later does not replace it.
+      fs.mkdirSync(path.join(projects, 'D--work-alpha'), { recursive: true });
+      fs.writeFileSync(
+        path.join(projects, `D--work-alpha/${RENAMED}.jsonl`),
+        `${JSON.stringify({ type: 'ai-title', aiTitle: 'Later', sessionId: RENAMED })}\n`,
+      );
+      await syncSource({ db: upgraded, home }, adapter());
+      expect(titles(upgraded)).toEqual(EXPECTED_TITLES);
+      upgraded.close();
+    },
+  );
 
-  it('are set when a hub of 0.1.0 is upgraded, from the mirrors its devices pushed', async () => {
-    const projects = path.join(tmp, 'projects');
-    writeTitledSessions(projects);
-    const deviceHome = path.join(tmp, 'device');
-    const device = openDatabase(path.join(deviceHome, 'origin.db'));
-    await syncSource(
-      { db: device, home: deviceHome },
-      createClaudeCodeAdapter({ projectsDir: projects }),
-    );
-    const hubHome = path.join(tmp, 'hub');
-    const hubFile = path.join(hubHome, 'origin.db');
-    const hub = openDatabase(hubFile);
-    const onHub = createClaudeCodeAdapter({ projectsDir: path.join(hubHome, 'unused') });
-    for (const f of localRawFiles(device)) {
-      expect(
-        appendRemote({ db: hub, home: hubHome, frameBytes: 400 }, onHub, {
-          device: 'laptop',
-          source: f.source,
-          path: f.path,
-          relPath: f.relPath,
-          generation: f.generation,
-          offset: 0,
-          data: readMirror(device, deviceHome, f.id, 0, f.bytes),
-        }),
-      ).toMatchObject({ ok: true });
-    }
-    expect(titles(hub)).toEqual(EXPECTED_TITLES);
-    device.close();
-    hub.close();
-    expect(fs.existsSync(path.join(hubHome, 'raw', 'devices', 'laptop', 'claude-code'))).toBe(true);
+  it.skipIf(onPostgres)(
+    'are set when a hub of 0.1.0 is upgraded, from the mirrors its devices pushed',
+    async () => {
+      const projects = path.join(tmp, 'projects');
+      writeTitledSessions(projects);
+      const deviceHome = path.join(tmp, 'device');
+      const device = openDatabase(path.join(deviceHome, 'origin.db'));
+      await syncSource(
+        { db: device, home: deviceHome },
+        createClaudeCodeAdapter({ projectsDir: projects }),
+      );
+      const hubHome = path.join(tmp, 'hub');
+      const hubFile = path.join(hubHome, 'origin.db');
+      const hub = openDatabase(hubFile);
+      const onHub = createClaudeCodeAdapter({ projectsDir: path.join(hubHome, 'unused') });
+      for (const f of localRawFiles(device)) {
+        expect(
+          appendRemote({ db: hub, home: hubHome, frameBytes: 400 }, onHub, {
+            device: 'laptop',
+            source: f.source,
+            path: f.path,
+            relPath: f.relPath,
+            generation: f.generation,
+            offset: 0,
+            data: readMirror(device, deviceHome, f.id, 0, f.bytes),
+          }),
+        ).toMatchObject({ ok: true });
+      }
+      expect(titles(hub)).toEqual(EXPECTED_TITLES);
+      device.close();
+      hub.close();
+      expect(fs.existsSync(path.join(hubHome, 'raw', 'devices', 'laptop', 'claude-code'))).toBe(
+        true,
+      );
 
-    downgradeToV1(hubFile);
-    const upgraded = openDatabase(hubFile, { adapters: [onHub] });
-    expect(userVersion(upgraded)).toBe(STORE_VERSION);
-    expect(titles(upgraded)).toEqual(EXPECTED_TITLES);
-    upgraded.close();
-  });
+      downgradeToV1(hubFile);
+      const upgraded = openDatabase(hubFile, { adapters: [onHub] });
+      expect(userVersion(upgraded)).toBe(STORE_VERSION);
+      expect(titles(upgraded)).toEqual(EXPECTED_TITLES);
+      upgraded.close();
+    },
+  );
 });

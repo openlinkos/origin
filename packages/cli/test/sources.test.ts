@@ -23,6 +23,7 @@ import {
   syncSource,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import { downgradeToV7 } from '../../core/test/legacy.js';
 import type { HubConfig } from '../src/hub/config.js';
 import { relayWithHub } from '../src/hub/relay.js';
@@ -254,6 +255,8 @@ describe('your own sources on a device', () => {
     expect(shown).toContain('Author   person, Dana  (by author)');
     expect((await run(['show', 'chat:o3'])).out).toContain('Author   person  (by default)');
     // A store of version 7 whose source's directory is gone since: its mirror is all there is.
+    // Stores of earlier versions are SQLite's alone.
+    if (onPostgres) return;
     downgradeToV7(dbPath(home));
     fs.rmSync(path.join(home, 'sources', 'chat'), { recursive: true });
     expect((await run(['status'])).code).toBe(0);
@@ -540,10 +543,15 @@ describe('your own sources on a hub', () => {
         ['notes:a1', 'owner', 'author'],
         ['notes:b1', 'owner', 'author'],
       ]);
-      hubDb.close();
-      downgradeToV7(path.join(hubHome, 'origin.db'));
-      hubDb = openDatabase(path.join(hubHome, 'origin.db'), { adapters: storeAdapters(hubHome) });
-      expect(authors()).toEqual(before);
+      // Stores of earlier versions are SQLite's alone.
+      if (!onPostgres) {
+        hubDb.close();
+        downgradeToV7(path.join(hubHome, 'origin.db'));
+        hubDb = openDatabase(path.join(hubHome, 'origin.db'), {
+          adapters: storeAdapters(hubHome),
+        });
+        expect(authors()).toEqual(before);
+      }
     } finally {
       deviceDb.close();
     }

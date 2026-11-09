@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   applyTombstone,
   correct,
@@ -322,9 +323,10 @@ describe('restore', () => {
 describe('restores across stores', () => {
   const record = (db: Database, id: string) => exportTombstone(db, id) as TombstoneRecord;
 
-  // Every order of four records, each applied twice: slow on Windows CI.
+  // Every order of four records, each applied twice, on a store of its own: slow on Windows CI,
+  // and on PostgreSQL, where each store is a schema made anew.
   it('converge whatever order forgets and restores arrive in, applied twice or not', {
-    timeout: 60_000,
+    timeout: onPostgres ? 300_000 : 60_000,
   }, async () => {
     const origin = await store('laptop');
     const a = note(origin, ['fake:e1', 'fake:e2'], 'a');

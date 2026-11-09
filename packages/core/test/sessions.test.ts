@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   type Database,
   forget,
@@ -121,7 +122,7 @@ describe('sessions without a title', () => {
     expect(stats(db)).toMatchObject([{ titled: 1 }]);
   });
 
-  it('are looked up through the index of user messages, in time order', () => {
+  it.skipIf(onPostgres)('are looked up through the index of user messages, in time order', () => {
     const plan = db
       .prepare(
         `EXPLAIN QUERY PLAN SELECT e.text FROM event e

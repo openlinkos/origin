@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
+import { inSqlite } from '../../../test/pg.js';
 import {
   activeProjects,
   changesSince,
@@ -373,7 +374,8 @@ describe("translating Origin's own SQL", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-home-'));
     const src = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-src-'));
     try {
-      const db = openDatabase(path.join(home, 'origin.db'));
+      // Through node:sqlite, whatever engine the run's stores are in.
+      const db = inSqlite(() => openDatabase(path.join(home, 'origin.db')));
       try {
         fs.writeFileSync(
           path.join(src, 'a.jsonl'),

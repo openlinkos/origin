@@ -516,11 +516,15 @@ describe('what a device sends', () => {
       ['session', 'fake', 's3'],
       ['recall', '', 'rcl_000000000003'],
     ]);
-    transaction(db, () => {
-      db.exec("INSERT INTO guard_lift (name) VALUES ('recall_item')");
-      db.exec("DELETE FROM recall_item WHERE ref IN ('ent_00000000000a', 'fake:9', 'fake:s2')");
-      db.exec('DELETE FROM guard_lift');
-    });
+    transaction(
+      db,
+      () => {
+        db.exec("INSERT INTO guard_lift (name) VALUES ('recall_item')");
+        db.exec("DELETE FROM recall_item WHERE ref IN ('ent_00000000000a', 'fake:9', 'fake:s2')");
+        db.exec('DELETE FROM guard_lift');
+      },
+      { immediate: true },
+    );
     // Sent again, as a device does until it hears back: not a conflict.
     expect(receiveRecall(db, recall())).toBe('exists');
     expect(() => receiveRecall(db, recall({ tokens: 61 }))).toThrow(ConflictError);

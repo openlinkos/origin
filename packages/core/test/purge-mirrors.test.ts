@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   backupStore,
   bucketFrameStore,
@@ -128,11 +129,19 @@ function traces(
   // A term of the search indexes may share its first bytes with the one before it: for a canary
   // of a letter nothing else uses, any block that holds the letter is a trace.
   const letter = Buffer.from([...needle][0] as string);
-  for (const t of letter.length > 1 ? ['event_fts', 'message_fts', 'event_cjk', 'entry_fts'] : []) {
-    const blocks = store.prepare(`SELECT block FROM ${t}_data`).all() as Array<{
-      block: Uint8Array | null;
-    }>;
-    if (blocks.some((b) => b.block && Buffer.from(b.block).includes(letter))) found.push(t);
+  if (letter.length > 1 && store.dialect === 'sqlite') {
+    for (const t of ['event_fts', 'message_fts', 'event_cjk', 'entry_fts']) {
+      const blocks = store.prepare(`SELECT block FROM ${t}_data`).all() as Array<{
+        block: Uint8Array | null;
+      }>;
+      if (blocks.some((b) => b.block && Buffer.from(b.block).includes(letter))) found.push(t);
+    }
+  }
+  // PostgreSQL's search keeps text of its own only in the CJK tokens; its database files are the
+  // server's, which a test does not read.
+  if (letter.length > 1 && store.dialect === 'postgres') {
+    const tokens = store.prepare('SELECT tokens FROM event_cjk').all();
+    if (JSON.stringify(tokens).includes(letter.toString())) found.push('event_cjk');
   }
   return found;
 }
@@ -170,9 +179,11 @@ describe('completing a purge', () => {
     expect(st.lines).toBe(23);
     const kept = ['fake:k3', 'fake:m25', 'fake:t0'].map((id) => [id, rawLine(id)] as const);
     const before = layout();
-    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    for (const canary of [SEALED, TAILED, HAN]) {
-      expect(traces(trace(canary))).toEqual(expect.arrayContaining(['origin.db']));
+    if (!onPostgres) {
+      db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+      for (const canary of [SEALED, TAILED, HAN]) {
+        expect(traces(trace(canary))).toEqual(expect.arrayContaining(['origin.db']));
+      }
     }
 
     const r = run({ kind: 'event', ids: ['fake:c1', 'fake:c2'] });
@@ -181,7 +192,7 @@ describe('completing a purge', () => {
     for (const canary of [SEALED, TAILED, HAN]) expect(traces(trace(canary))).toEqual([]);
     expect(searchEvents(db, SEALED)).toEqual([]);
     expect(searchEvents(db, '龘龘')).toEqual([]);
-    expect(fs.statSync(path.join(home, 'origin.db-wal')).size).toBe(0);
+    if (!onPostgres) expect(fs.statSync(path.join(home, 'origin.db-wal')).size).toBe(0);
 
     // Every offset stays: the mirrors, their frames, and the lines kept read back as they were.
     expect(layout()).toEqual(before);
@@ -205,7 +216,7 @@ describe('completing a purge', () => {
     expect(r.mirrors).toMatchObject({ done: 1, failed: [], pending: 0 });
     for (const canary of [SEALED, HAN]) expect(traces(trace(canary))).toEqual([]);
     expect(searchEvents(db, '数据').map((h) => h.id)).toEqual(['fake:han']);
-    for (const t of ['event_fts', 'message_fts', 'event_cjk', 'entry_fts']) {
+    for (const t of onPostgres ? [] : ['event_fts', 'message_fts', 'event_cjk', 'entry_fts']) {
       db.exec(`INSERT INTO ${t} (${t}) VALUES ('integrity-check')`);
       expect(db.prepare(`SELECT v FROM ${t}_config WHERE k = 'secure-delete'`).get()).toEqual({
         v: 0,
@@ -232,7 +243,7 @@ describe('completing a purge', () => {
     expect(hits).toContain('fake:k7');
     expect(hits.every((id) => id.startsWith('fake:k'))).toBe(true);
     expect(searchEvents(db, '数据').map((h) => h.id)).toEqual(['fake:han']);
-    for (const t of ['event_fts', 'message_fts', 'event_cjk', 'entry_fts']) {
+    for (const t of onPostgres ? [] : ['event_fts', 'message_fts', 'event_cjk', 'entry_fts']) {
       db.exec(`INSERT INTO ${t} (${t}) VALUES ('integrity-check')`);
       expect(db.prepare(`SELECT v FROM ${t}_config WHERE k = 'secure-delete'`).get()).toEqual({
         v: 0,
@@ -449,7 +460,7 @@ describe('fitting a frame into its slot', () => {
   });
 });
 
-describe('backing up a store with purges', () => {
+describe.skipIf(onPostgres)('backing up a store with purges', () => {
   it('copies a mirror whole again once its lines were blanked', async () => {
     write('a.jsonl', many('k', 's1', 6) + line('c1', 's1', 1500, 'user', 'zqbackupcanary'));
     write('a.jsonl', many('m', 's1', 6, 20) + line('c2', 's1', 2500, 'user', 'zqlatercanary'));

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   ACTIVITY_BUCKET_MS,
   activeProjects,
@@ -120,7 +121,7 @@ describe('session prompts', () => {
     expect(sessionPrompts(db, 'fake', 's').map((p) => p.id)).toEqual(['fake:p1', 'fake:p3']);
   });
 
-  it('are read through the index of user messages', () => {
+  it.skipIf(onPostgres)('are read through the index of user messages', () => {
     const plan = db
       .prepare(
         `EXPLAIN QUERY PLAN SELECT e.id FROM event e INDEXED BY event_user_message
@@ -284,6 +285,8 @@ describe('activity', () => {
     forget(db, 'fake:b1', { reason: 'test' });
     expect(rows()).toEqual(['fake/p/0:1', 'fake/p/96:1', 'other/p/96:1']);
     expect(activeProjects(db, { since })).toEqual([{ project: 'p', sessions: 2, lastAt: T + day }]);
+    // SQLite's plan; PostgreSQL plans by its statistics.
+    if (onPostgres) return;
     const plan = (
       db
         .prepare(

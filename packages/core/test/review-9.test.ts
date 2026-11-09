@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   appendRemote,
   changesSince,
@@ -71,72 +72,75 @@ function writeLog(dir: string, row: Record<string, unknown>, file = 's.jsonl'): 
 }
 
 describe('places that were mirrored before the tables existed', () => {
-  it('applies places.jsonl that were mirrored before the project tables', async () => {
-    const home = tempDir('origin-review-upgrade-');
-    const db = open(home);
-    const root = JSON.stringify({
-      v: 1,
-      type: 'root',
-      path: 'd:/demo-app',
-      project: 'demo-app',
-      root: 'd:/demo-app',
-      signal: 'git',
-    });
-    const place = JSON.stringify({
-      v: 1,
-      type: 'place',
-      session: 's1',
-      project: 'demo-app',
-      root: 'd:/demo-app',
-      signal: 'git',
-    });
-    const later = '{"v":2,"type":"place","session":"s1","project":"future-app"}';
-    try {
-      db.exec('DROP TABLE IF EXISTS place_head');
-      db.exec('DROP INDEX IF EXISTS session_place_project');
-      db.exec('DROP TABLE IF EXISTS session_place');
-      db.exec('DROP TABLE IF EXISTS project_root');
-      db.exec('PRAGMA user_version = 8');
-      let pending: string[] | null = [root, later, place];
-      const file = {
-        absPath: 'places.jsonl',
-        relPath: 'places.jsonl',
-        generated: {
-          token: 'pre-upgrade',
-          mtimeMs: 1,
-          next: () => {
-            const out = pending ?? [];
-            pending = null;
-            return out;
-          },
-        },
-      };
-      await ingestPlacesFile({ db, home }, 'fake', file);
-      expect(
-        db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'session_place'").get(),
-      ).toBeUndefined();
-      db.close();
-      const logged: string[] = [];
-      const upgraded = openDatabase(path.join(home, 'origin.db'), { log: (m) => logged.push(m) });
+  it.skipIf(onPostgres)(
+    'applies places.jsonl that were mirrored before the project tables',
+    async () => {
+      const home = tempDir('origin-review-upgrade-');
+      const db = open(home);
+      const root = JSON.stringify({
+        v: 1,
+        type: 'root',
+        path: 'd:/demo-app',
+        project: 'demo-app',
+        root: 'd:/demo-app',
+        signal: 'git',
+      });
+      const place = JSON.stringify({
+        v: 1,
+        type: 'place',
+        session: 's1',
+        project: 'demo-app',
+        root: 'd:/demo-app',
+        signal: 'git',
+      });
+      const later = '{"v":2,"type":"place","session":"s1","project":"future-app"}';
       try {
-        expect(upgraded.prepare('PRAGMA user_version').get()).toEqual({ user_version: 12 });
-        expect(logged.join('\n')).toMatch(/version 10/);
-        expect(placeOf(upgraded, 's1')).toMatchObject({ project: 'demo-app', signal: 'git' });
-        const roots = upgraded.prepare('SELECT project FROM project_root').all() as Array<{
-          project: string;
-        }>;
-        expect(roots.map((r) => r.project)).toEqual(['demo-app']);
-        const raw = upgraded.prepare('SELECT id FROM raw_file').get() as { id: number };
-        expect(mirrorText(upgraded, home, raw.id)).toContain(later);
-        expect(logged.join('\n')).toMatch(/version 2 is not read by this Origin/);
-        expect(logged.join('\n')).not.toMatch(/"v" must be 1/);
+        db.exec('DROP TABLE IF EXISTS place_head');
+        db.exec('DROP INDEX IF EXISTS session_place_project');
+        db.exec('DROP TABLE IF EXISTS session_place');
+        db.exec('DROP TABLE IF EXISTS project_root');
+        db.exec('PRAGMA user_version = 8');
+        let pending: string[] | null = [root, later, place];
+        const file = {
+          absPath: 'places.jsonl',
+          relPath: 'places.jsonl',
+          generated: {
+            token: 'pre-upgrade',
+            mtimeMs: 1,
+            next: () => {
+              const out = pending ?? [];
+              pending = null;
+              return out;
+            },
+          },
+        };
+        await ingestPlacesFile({ db, home }, 'fake', file);
+        expect(
+          db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'session_place'").get(),
+        ).toBeUndefined();
+        db.close();
+        const logged: string[] = [];
+        const upgraded = openDatabase(path.join(home, 'origin.db'), { log: (m) => logged.push(m) });
+        try {
+          expect(upgraded.prepare('PRAGMA user_version').get()).toEqual({ user_version: 12 });
+          expect(logged.join('\n')).toMatch(/version 10/);
+          expect(placeOf(upgraded, 's1')).toMatchObject({ project: 'demo-app', signal: 'git' });
+          const roots = upgraded.prepare('SELECT project FROM project_root').all() as Array<{
+            project: string;
+          }>;
+          expect(roots.map((r) => r.project)).toEqual(['demo-app']);
+          const raw = upgraded.prepare('SELECT id FROM raw_file').get() as { id: number };
+          expect(mirrorText(upgraded, home, raw.id)).toContain(later);
+          expect(logged.join('\n')).toMatch(/version 2 is not read by this Origin/);
+          expect(logged.join('\n')).not.toMatch(/"v" must be 1/);
+        } finally {
+          upgraded.close();
+        }
       } finally {
-        upgraded.close();
+        if (db.isOpen) db.close();
       }
-    } finally {
-      if (db.isOpen) db.close();
-    }
-  });
+    },
+  );
 });
 
 describe('the latest place line is the conclusion', () => {
@@ -504,6 +508,8 @@ describe('a sync resolves only what changed', () => {
     try {
       await syncSource({ db, home }, fakeAdapter(logs));
       expect(listEvents(db, { project: 'demo-app' }).map((e) => e.id)).toEqual(['fake:e1']);
+      // SQLite's plan; PostgreSQL plans by its statistics.
+      if (onPostgres) return;
       const plan = db
         .prepare(`EXPLAIN QUERY PLAN SELECT e.seq FROM event e WHERE ${projectEventSql('e')}`)
         .all('demo-app', 'demo-app') as Array<{ detail: string }>;

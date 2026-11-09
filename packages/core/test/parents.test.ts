@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   type Database,
   displayTitle,
@@ -186,47 +187,50 @@ describe('session_parent', () => {
     });
   });
 
-  it('restores parents from mirrored lines on upgrade, and does not invent a run group', async () => {
-    const logs = path.join(tmp, 'logs');
-    fs.mkdirSync(logs);
-    const child = JSON.stringify({
-      id: 'e1',
-      session: 'child',
-      ts: 1000,
-      role: 'user',
-      text: 'Step',
-      parent_id: 'root',
-      task_type: 'workflow_child',
-      parents: [{ session: 'child', parent: 'root', via: 'workflow', signal: 'parent_id' }],
-    });
-    fs.writeFileSync(path.join(logs, 'c.jsonl'), `${child}\n`);
-    const adapter = fakeAdapter(logs, 'zcode');
-    await syncSource({ db, home }, adapter);
-    expect(getSessionParent(db, 'zcode', 'child')).toMatchObject({
-      parentSessionId: 'root',
-      via: 'workflow',
-      signal: 'parent_id',
-      runGroup: null,
-      runName: null,
-    });
-    db.exec('DROP TABLE session_parent');
-    db.exec('PRAGMA user_version = 8');
-    db.close();
-    const logged: string[] = [];
-    db = openDatabase(path.join(home, 'origin.db'), {
-      adapters: [adapter],
-      log: (m) => logged.push(m),
-    });
-    expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: STORE_VERSION });
-    expect(logged.join('\n')).toMatch(/Upgrading the store to version 10/);
-    expect(getSessionParent(db, 'zcode', 'child')).toMatchObject({
-      parentSessionId: 'root',
-      runGroup: null,
-      signal: 'parent_id',
-    });
-    const raw = db.prepare('SELECT id FROM raw_file').get() as { id: number };
-    expect(mirrorText(db, home, raw.id)).toBe(`${child}\n`);
-    expect(listSessions(db, { topLevel: true }).map((s) => s.sessionId)).toEqual(['child']);
-    expect(listSessions(db).map((s) => s.sessionId)).toEqual(['child']);
-  });
+  it.skipIf(onPostgres)(
+    'restores parents from mirrored lines on upgrade, and does not invent a run group',
+    async () => {
+      const logs = path.join(tmp, 'logs');
+      fs.mkdirSync(logs);
+      const child = JSON.stringify({
+        id: 'e1',
+        session: 'child',
+        ts: 1000,
+        role: 'user',
+        text: 'Step',
+        parent_id: 'root',
+        task_type: 'workflow_child',
+        parents: [{ session: 'child', parent: 'root', via: 'workflow', signal: 'parent_id' }],
+      });
+      fs.writeFileSync(path.join(logs, 'c.jsonl'), `${child}\n`);
+      const adapter = fakeAdapter(logs, 'zcode');
+      await syncSource({ db, home }, adapter);
+      expect(getSessionParent(db, 'zcode', 'child')).toMatchObject({
+        parentSessionId: 'root',
+        via: 'workflow',
+        signal: 'parent_id',
+        runGroup: null,
+        runName: null,
+      });
+      db.exec('DROP TABLE session_parent');
+      db.exec('PRAGMA user_version = 8');
+      db.close();
+      const logged: string[] = [];
+      db = openDatabase(path.join(home, 'origin.db'), {
+        adapters: [adapter],
+        log: (m) => logged.push(m),
+      });
+      expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: STORE_VERSION });
+      expect(logged.join('\n')).toMatch(/Upgrading the store to version 10/);
+      expect(getSessionParent(db, 'zcode', 'child')).toMatchObject({
+        parentSessionId: 'root',
+        runGroup: null,
+        signal: 'parent_id',
+      });
+      const raw = db.prepare('SELECT id FROM raw_file').get() as { id: number };
+      expect(mirrorText(db, home, raw.id)).toBe(`${child}\n`);
+      expect(listSessions(db, { topLevel: true }).map((s) => s.sessionId)).toEqual(['child']);
+      expect(listSessions(db).map((s) => s.sessionId)).toEqual(['child']);
+    },
+  );
 });

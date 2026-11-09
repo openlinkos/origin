@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   appendRemote,
   ConflictError,
@@ -148,10 +149,15 @@ describe('a purge', () => {
     write('a.jsonl', line('1', 's1', 1000, 'user', 'one'));
     await sync();
     db.exec(
-      "CREATE TEMP TRIGGER purge_fails BEFORE INSERT ON purge BEGIN SELECT RAISE(ABORT, 'boom'); END",
+      onPostgres
+        ? `CREATE FUNCTION purge_fails() RETURNS trigger LANGUAGE plpgsql
+             AS $$ BEGIN RAISE EXCEPTION 'boom'; END $$;
+           CREATE TRIGGER purge_fails BEFORE INSERT ON purge
+             FOR EACH ROW EXECUTE FUNCTION purge_fails()`
+        : "CREATE TEMP TRIGGER purge_fails BEFORE INSERT ON purge BEGIN SELECT RAISE(ABORT, 'boom'); END",
     );
     expect(() => run({ kind: 'event', ids: ['fake:1'] })).toThrow(/boom/);
-    db.exec('DROP TRIGGER purge_fails');
+    db.exec(onPostgres ? 'DROP TRIGGER purge_fails ON purge' : 'DROP TRIGGER purge_fails');
     expect(getEvent(db, 'fake:1')).not.toBeNull();
     expect(count('SELECT COUNT(*) AS n FROM guard_lift')).toBe(0);
     expect(count('SELECT COUNT(*) AS n FROM purge')).toBe(0);

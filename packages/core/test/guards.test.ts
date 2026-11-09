@@ -2,11 +2,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   type Database,
   forget,
   openDatabase,
   remember,
+  searchEntries,
+  searchEvents,
   syncSource,
   transaction,
 } from '../src/index.js';
@@ -70,18 +73,19 @@ afterEach(() => {
 
 const count = (sql: string): number => (db.prepare(sql).get() as { n: number }).n;
 
-/** Run `fn` in a write transaction with guard_lift naming `names`, removed again before COMMIT. */
+/**
+ * Run `fn` in a write transaction with guard_lift naming `names`, removed again before COMMIT, as a
+ * purge does: if `fn` fails, the ROLLBACK removes them.
+ */
 function lifted<T>(names: string[], fn: () => T): T {
   return transaction(
     db,
     () => {
       const add = db.prepare('INSERT INTO guard_lift (name) VALUES (?)');
       for (const name of names) add.run(name);
-      try {
-        return fn();
-      } finally {
-        db.exec('DELETE FROM guard_lift');
-      }
+      const out = fn();
+      db.exec('DELETE FROM guard_lift');
+      return out;
     },
     { immediate: true },
   );
@@ -134,18 +138,23 @@ describe('append-only guards', () => {
     expect(count('SELECT COUNT(*) AS n FROM event')).toBe(1);
     expect(count('SELECT COUNT(*) AS n FROM entry')).toBe(0);
     // The search indexes lost what was deleted (entry_ad, event_ad).
-    expect(count(`SELECT COUNT(*) AS n FROM entry_fts WHERE entry_fts MATCH 'staging'`)).toBe(0);
-    expect(count(`SELECT COUNT(*) AS n FROM event_fts WHERE event_fts MATCH 'sta'`)).toBe(0);
-    expect(count(`SELECT COUNT(*) AS n FROM message_fts WHERE message_fts MATCH 'staging'`)).toBe(
-      0,
-    );
-    expect(count(`SELECT COUNT(*) AS n FROM message_fts WHERE message_fts MATCH 'cluster'`)).toBe(
-      1,
-    );
-    for (const index of ['entry_fts', 'event_fts', 'message_fts']) {
-      expect(() =>
-        db.exec(`INSERT INTO ${index} (${index}) VALUES ('integrity-check')`),
-      ).not.toThrow();
+    expect(searchEntries(db, 'staging')).toEqual([]);
+    expect(searchEvents(db, 'staging')).toEqual([]);
+    expect(searchEvents(db, 'cluster').map((h) => h.id)).toEqual(['fake:2']);
+    if (!onPostgres) {
+      expect(count(`SELECT COUNT(*) AS n FROM entry_fts WHERE entry_fts MATCH 'staging'`)).toBe(0);
+      expect(count(`SELECT COUNT(*) AS n FROM event_fts WHERE event_fts MATCH 'sta'`)).toBe(0);
+      expect(count(`SELECT COUNT(*) AS n FROM message_fts WHERE message_fts MATCH 'staging'`)).toBe(
+        0,
+      );
+      expect(count(`SELECT COUNT(*) AS n FROM message_fts WHERE message_fts MATCH 'cluster'`)).toBe(
+        1,
+      );
+      for (const index of ['entry_fts', 'event_fts', 'message_fts']) {
+        expect(() =>
+          db.exec(`INSERT INTO ${index} (${index}) VALUES ('integrity-check')`),
+        ).not.toThrow();
+      }
     }
     // The guards hold again once the transaction is over.
     expect(() => db.exec('DELETE FROM event')).toThrow(/append-only/);

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import { JOURNAL_SIZE_LIMIT } from '../src/db.js';
 import {
   type Database,
@@ -471,7 +472,7 @@ describe('write transactions', () => {
     expect(getEvent(db, 'fake:u3b')).not.toBeNull();
   });
 
-  it('limits the write-ahead log kept after a checkpoint', () => {
+  it.skipIf(onPostgres)('limits the write-ahead log kept after a checkpoint', () => {
     expect(db.prepare('PRAGMA journal_size_limit').get()).toEqual({
       journal_size_limit: JOURNAL_SIZE_LIMIT,
     });

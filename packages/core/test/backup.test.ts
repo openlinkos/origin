@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   backupStore,
   type Database,
@@ -53,7 +54,7 @@ const FRAME = 200;
 const sync = (store: Database, storeHome: string) =>
   syncSource({ db: store, home: storeHome, frameBytes: FRAME }, fakeAdapter(src));
 
-describe('backupStore', () => {
+describe.skipIf(onPostgres)('backupStore', () => {
   it('copies the database and the mirrors, then only what is new', async () => {
     const file = path.join(src, 'a.jsonl');
     fs.writeFileSync(file, line('1', 's', 1000, 'user', 'back up the sqlite store'));

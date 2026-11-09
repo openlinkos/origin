@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { inSqlite } from '../../../test/pg.js';
 import { BM25_MIN_IDF, bm25Idf, bm25Scorer } from '../src/bm25.js';
 import { type Database, type EventKind, openMemoryDatabase } from '../src/index.js';
 
@@ -152,7 +153,8 @@ const INDEXES: Index[] = [
 
 let db: Database;
 beforeAll(() => {
-  db = openMemoryDatabase();
+  // FTS5 is SQLite's: the scores are compared there whatever engine the run's stores are in.
+  db = inSqlite(openMemoryDatabase);
   db.prepare(
     `INSERT INTO raw_file (id, source, path, mirror, first_seen_at, updated_at)
      VALUES (1, 'fake', 'f.jsonl', 'f', 0, 0)`,

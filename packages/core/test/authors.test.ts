@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   appendRemote,
   type Database,
@@ -200,7 +201,7 @@ describe('who wrote each input', () => {
   });
 });
 
-describe('a store of an earlier version', () => {
+describe.skipIf(onPostgres)('a store of an earlier version', () => {
   /** Ingest the logs as an earlier version did, whose adapter skipped some lines (`learnt`). */
   async function makeEarlier(store: Database, storeHome: string, adapter: SourceAdapter) {
     await syncSource({ db: store, home: storeHome }, adapter);

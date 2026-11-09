@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   backupStore,
   bucketFrameStore,
@@ -490,54 +491,57 @@ describe('a store with a bucket', () => {
     });
   });
 
-  it('backs up the frames from the bucket into a backup that needs no bucket', async () => {
-    write(0, 6);
-    await syncSource(ctx(), fakeAdapter(src)); // some frames on disk
-    useObjectStore(db, home, objects);
-    write(6, 14);
-    await syncSource(ctx(), fakeAdapter(src)); // and some in the bucket
-    await uploadFrames(db, home, { remove: true }); // now all in the bucket
-    write(14, 16);
-    await syncSource(ctx(), fakeAdapter(src)); // and a tail
-    const target = path.join(freshHome(), 'backup');
-    const first = await backupStore(db, home, target);
-    const framesSize = chunks().reduce((n, c) => n + c.frame_length, 0);
-    const tail = fs.statSync(`${mirrorBase()}.tail`).size;
-    expect(first.mirrorBytesCopied).toBe(framesSize + tail);
-    const backedUp = path.join(target, 'raw', mirrorName());
-    // Laid out as on disk: the frames one after another, exactly the objects' bytes.
-    expect(fs.readFileSync(`${backedUp}.zst`)).toEqual(
-      Buffer.concat(
-        chunks().map((c) => objects.objects.get(frameKey(mirrorName(), c.frame_offset))!),
-      ),
-    );
-    expect((await backupStore(db, home, target)).mirrorBytesCopied).toBe(0);
-
-    // More frames: only they are copied.
-    write(16, 30);
-    await syncSource(ctx(), fakeAdapter(src));
-    const second = await backupStore(db, home, target);
-    const now = chunks().reduce((n, c) => n + c.frame_length, 0);
-    expect(second.mirrorBytesCopied).toBe(
-      now - framesSize + fs.statSync(`${mirrorBase()}.tail`).size,
-    );
-
-    // Restored without the bucket, every line reads from disk.
-    const restored = freshHome();
-    fs.cpSync(target, restored, { recursive: true });
-    const copy = openDatabase(path.join(restored, 'origin.db'));
-    try {
-      expect(frameBucket(copy)).toBeNull();
-      expect(frameStore(restored)).toBeInstanceOf(FileFrameStore);
-      expect(mirrorText(copy, restored, getEvent(copy, 'fake:z0')!.rawFileId)).toBe(
-        fs.readFileSync(file(), 'utf8'),
+  it.skipIf(onPostgres)(
+    'backs up the frames from the bucket into a backup that needs no bucket',
+    async () => {
+      write(0, 6);
+      await syncSource(ctx(), fakeAdapter(src)); // some frames on disk
+      useObjectStore(db, home, objects);
+      write(6, 14);
+      await syncSource(ctx(), fakeAdapter(src)); // and some in the bucket
+      await uploadFrames(db, home, { remove: true }); // now all in the bucket
+      write(14, 16);
+      await syncSource(ctx(), fakeAdapter(src)); // and a tail
+      const target = path.join(freshHome(), 'backup');
+      const first = await backupStore(db, home, target);
+      const framesSize = chunks().reduce((n, c) => n + c.frame_length, 0);
+      const tail = fs.statSync(`${mirrorBase()}.tail`).size;
+      expect(first.mirrorBytesCopied).toBe(framesSize + tail);
+      const backedUp = path.join(target, 'raw', mirrorName());
+      // Laid out as on disk: the frames one after another, exactly the objects' bytes.
+      expect(fs.readFileSync(`${backedUp}.zst`)).toEqual(
+        Buffer.concat(
+          chunks().map((c) => objects.objects.get(frameKey(mirrorName(), c.frame_offset))!),
+        ),
       );
-      for (const i of [0, 7, 20, 29]) {
-        const e = getEvent(copy, `fake:z${i}`)!;
-        expect(readRawLine(copy, restored, rawLocator(copy, restored, e)!)).toBe(lineN(i).trim());
+      expect((await backupStore(db, home, target)).mirrorBytesCopied).toBe(0);
+
+      // More frames: only they are copied.
+      write(16, 30);
+      await syncSource(ctx(), fakeAdapter(src));
+      const second = await backupStore(db, home, target);
+      const now = chunks().reduce((n, c) => n + c.frame_length, 0);
+      expect(second.mirrorBytesCopied).toBe(
+        now - framesSize + fs.statSync(`${mirrorBase()}.tail`).size,
+      );
+
+      // Restored without the bucket, every line reads from disk.
+      const restored = freshHome();
+      fs.cpSync(target, restored, { recursive: true });
+      const copy = openDatabase(path.join(restored, 'origin.db'));
+      try {
+        expect(frameBucket(copy)).toBeNull();
+        expect(frameStore(restored)).toBeInstanceOf(FileFrameStore);
+        expect(mirrorText(copy, restored, getEvent(copy, 'fake:z0')!.rawFileId)).toBe(
+          fs.readFileSync(file(), 'utf8'),
+        );
+        for (const i of [0, 7, 20, 29]) {
+          const e = getEvent(copy, `fake:z${i}`)!;
+          expect(readRawLine(copy, restored, rawLocator(copy, restored, e)!)).toBe(lineN(i).trim());
+        }
+      } finally {
+        copy.close();
       }
-    } finally {
-      copy.close();
-    }
-  });
+    },
+  );
 });

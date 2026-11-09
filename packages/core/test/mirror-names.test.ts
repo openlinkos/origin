@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { onPostgres } from '../../../test/pg.js';
 import {
   backupStore,
   type Database,
@@ -105,6 +106,8 @@ describe('mirror names', () => {
     expect(
       sealIdleMirrors(db, home, { before: Date.now() + IDLE, remote: false, frameBytes: 64 }),
     ).toBe(3);
+    // A backup copies a store in SQLite only.
+    if (onPostgres) return;
     const target = path.join(tmp, 'backup');
     await backupStore(db, home, target);
     const copy = openDatabase(path.join(target, 'origin.db'));

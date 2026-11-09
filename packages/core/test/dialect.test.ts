@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { inSqlite } from '../../../test/pg.js';
 import {
   idList,
   isPrompt,
@@ -75,7 +76,7 @@ describe('SQL that the engines spell differently', () => {
   });
 
   it('reads JSON and lists as the queries need, on SQLite', () => {
-    const db = openMemoryDatabase();
+    const db = inSqlite(openMemoryDatabase);
     try {
       const meta = JSON.stringify({ sidechain: true, toolName: 'Edit', n: 1 });
       const row = db
