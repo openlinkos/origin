@@ -179,13 +179,16 @@ export function listSessions(
     const rows = db
       .prepare(
         `SELECT ${SESSION_COLUMNS} FROM session ${where}
-         ORDER BY COALESCE(ended_at, 0) DESC LIMIT ? OFFSET ?`,
+         ORDER BY COALESCE(ended_at, 0) DESC, source, session_id LIMIT ? OFFSET ?`,
       )
       .all(...(params as never[])) as unknown as SessionRecord[];
     return rows.map((r) => toSessionRow(r, prompt));
   }
   const rows = db
-    .prepare(`SELECT ${SESSION_COLUMNS} FROM session ${where} ORDER BY COALESCE(ended_at, 0) DESC`)
+    .prepare(
+      `SELECT ${SESSION_COLUMNS} FROM session ${where}
+       ORDER BY COALESCE(ended_at, 0) DESC, source, session_id`,
+    )
     .all(...(params as never[])) as unknown as SessionRecord[];
   const out: SessionRow[] = [];
   let skipped = 0;
