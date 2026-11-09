@@ -216,17 +216,20 @@ export const MIGRATIONS: Migration[] = [
     // tables it deletes from. The guards of raw_chunk, recall, and recall_item are made again with
     // that condition; events, entries, what entries cite, and tombstones, append-only until now by
     // convention, get guards of their own, and entries a trigger that keeps their search index when
-    // one is deleted. Nothing is filled in. A table the store lacks yet gets its triggers from the
-    // schema after the migrations. The SQL is written here, not imported from schema.ts; the two
-    // must stay the same. Stores in PostgreSQL start at this version.
+    // one is deleted. A table the store lacks yet gets its triggers from the schema after the
+    // migrations. The SQL is written here, not imported from schema.ts; the two must stay the same.
+    // Then threads again: until now, once a session had a place, the branch rule took every
+    // session for that place's project, and joined sessions of different projects on one branch.
+    // Stores in PostgreSQL start at this version.
     version: 12,
-    name: 'purges, and append-only guards only a purge can lift',
+    name: 'purges, append-only guards only a purge can lift, and threads again',
     up: ({ db }) => {
       db.exec(GUARD_LIFT_V12);
       db.exec(PURGE_TABLES_V12);
       for (const [table, sql] of GUARDS_V12) {
         if (db.hasTable(table)) db.exec(sql);
       }
+      deriveThreads(db);
     },
   },
 ];

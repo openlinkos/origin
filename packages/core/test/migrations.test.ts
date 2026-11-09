@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   backupStore,
   createToken,
+  type Database,
   FIRST_VERSION,
   getEntry,
   listAudit,
@@ -586,6 +587,54 @@ describe('a store of version 11', () => {
     ]) {
       expect(() => db.prepare(sql).run(), sql).toThrow(/append-only/);
     }
+    db.close();
+  });
+
+  it("derives its threads again, each session by its own place's project (version 12)", async () => {
+    const DAY = 86_400_000;
+    const logs = path.join(tmp, 'logs');
+    fs.mkdirSync(logs);
+    const session = (id: string, start: number, project: string) =>
+      [
+        { id: `${id}a`, session: id, ts: start, role: 'user', text: `Work on ${id}` },
+        { id: `${id}b`, session: id, ts: start + DAY, role: 'assistant', text: `Done ${id}` },
+      ]
+        .map((l) => `${JSON.stringify({ ...l, project, branch: 'feat-x' })}\n`)
+        .join('');
+    fs.writeFileSync(path.join(logs, 's1.jsonl'), session('s1', 1000, 'demo'));
+    fs.writeFileSync(path.join(logs, 's2.jsonl'), session('s2', 1000 + 2 * DAY, 'demo'));
+    fs.writeFileSync(path.join(logs, 's6.jsonl'), session('s6', 1000 + DAY, 'other'));
+    let db = openDatabase(file);
+    await syncSource({ db, home }, fakeAdapter(logs));
+    db.prepare(
+      `INSERT INTO session_place (source, session_id, project, root, signal)
+       VALUES ('fake', 's6', 'other', NULL, 'test')`,
+    ).run();
+    // What a store of version 11 derived from that place: every session on the branch in its
+    // project, so the session of the other project joined the thread.
+    const thread = threadIdOf('fake', 's1');
+    db.prepare(
+      `INSERT INTO session_thread (source, session_id, thread_id) VALUES ('fake', 's6', ?)`,
+    ).run(thread);
+    const threads = (d: Database) =>
+      d
+        .prepare('SELECT session_id, thread_id FROM session_thread ORDER BY session_id')
+        .all()
+        .map((r) => ({ ...r }));
+    expect(threads(db)).toEqual([
+      { session_id: 's1', thread_id: thread },
+      { session_id: 's2', thread_id: thread },
+      { session_id: 's6', thread_id: thread },
+    ]);
+    db.close();
+    downgradeToV11(file);
+
+    db = openDatabase(file);
+    expect(userVersion(db)).toBe(STORE_VERSION);
+    expect(threads(db)).toEqual([
+      { session_id: 's1', thread_id: thread },
+      { session_id: 's2', thread_id: thread },
+    ]);
     db.close();
   });
 });

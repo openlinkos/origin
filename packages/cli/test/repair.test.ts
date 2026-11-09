@@ -9,8 +9,10 @@ import {
   openDatabase,
   readMirror,
   syncSource,
+  threadIdOf,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fakeAdapter } from '../../core/test/helpers.js';
 import { main } from '../src/main.js';
 
 const T0 = Date.parse('2026-10-20T01:00:00Z');
@@ -180,5 +182,51 @@ describe('origin sessions repair', () => {
     const again = openDatabase(dbPath(home));
     expect(again.prepare('SELECT COUNT(*) AS n FROM session_place').get()).toEqual({ n: 0 });
     again.close();
+  });
+
+  it('derives every thread again, mending one an older Origin derived wrongly', async () => {
+    const logs = path.join(tmp, 'logs');
+    fs.mkdirSync(logs);
+    const DAY = 86_400_000;
+    const session = (id: string, start: number, project: string) =>
+      [
+        { id: `${id}a`, session: id, ts: start, role: 'user', text: `Work on ${id}` },
+        { id: `${id}b`, session: id, ts: start + DAY, role: 'assistant', text: `Done ${id}` },
+      ]
+        .map((l) => `${JSON.stringify({ ...l, project, branch: 'feat-x' })}\n`)
+        .join('');
+    fs.writeFileSync(path.join(logs, 's1.jsonl'), session('s1', T0, 'demo'));
+    fs.writeFileSync(path.join(logs, 's2.jsonl'), session('s2', T0 + 2 * DAY, 'demo'));
+    fs.writeFileSync(path.join(logs, 's6.jsonl'), session('s6', T0 + DAY, 'other'));
+    const db = openDatabase(dbPath(home));
+    await syncSource({ db, home }, fakeAdapter(logs));
+    // A session of another project in the thread, as an Origin before format 12 could leave it.
+    const thread = threadIdOf('fake', 's1');
+    db.prepare(
+      "INSERT INTO session_thread (source, session_id, thread_id) VALUES ('fake', 's6', ?)",
+    ).run(thread);
+    db.close();
+    const inThread = () => {
+      const check = openDatabase(dbPath(home));
+      const rows = check
+        .prepare('SELECT session_id FROM session_thread WHERE thread_id = ? ORDER BY session_id')
+        .all(thread)
+        .map((r) => (r as { session_id: string }).session_id);
+      check.close();
+      return rows;
+    };
+
+    expect(await main(['sessions', 'repair', '--dry-run'])).toBe(0);
+    expect(out.join('\n')).toContain('sessions whose thread changed: 1');
+    expect(inThread()).toEqual(['s1', 's2', 's6']);
+
+    out.length = 0;
+    expect(await main(['sessions', 'repair'])).toBe(0);
+    expect(out.join('\n')).toContain('sessions whose thread changed: 1');
+    expect(inThread()).toEqual(['s1', 's2']);
+
+    out.length = 0;
+    expect(await main(['sessions', 'repair'])).toBe(0);
+    expect(out.join('\n')).toContain('sessions whose thread changed: 0');
   });
 });

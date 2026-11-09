@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-de35a002
+sourceHash: sha256-a2efd783
 ---
 
 # 命令参考
@@ -162,7 +162,7 @@ A session of it: origin show <session id>
 
 `origin sessions parents` 只读地读取 ZCode 的数据库和 Grok Build 的会话目录，并向每个来源的 `places.jsonl` 追加父会话行：工作流运行的分组和名称，以及只有 `summary.json` 写明的 Grok 父会话（`parent_session_id`），前提是归档还没有记录这个父会话。`--dry-run` 打印它会追加多少行，什么也不写。`--zcode-db` 和 `--grok-home` 指定这些路径；不给时使用 `~/.zcode` 和 `~/.grok`（设置了 `GROK_HOME` 时用它），不存在的路径会被跳过。这时命令以 0 退出。在不保存会话的中继上，它说明这一点并退出，不打开这些目录。
 
-`origin sessions repair` 为还没有项目位置的会话补上位置，并再次读取镜像里已有的父会话事实，补上缺失的父链接，包括旧进程没有记录的 Grok `subagent_spawned`。`--dry-run` 只报告。再跑一次则什么也不改。在中枢上，它重读镜像过来的父会话行，不会去解析另一台设备的会话。在不保存会话的中继上，它说明这一点并退出。
+`origin sessions repair` 为还没有项目位置的会话补上位置，并再次读取镜像里已有的父会话事实，补上缺失的父链接，包括旧进程没有记录的 Grok `subagent_spawned`。然后它像升级时那样从头重新推导每一条线索，并说明有多少个会话因此换了线索。`--dry-run` 只报告。再跑一次则什么也不改。在中枢上，它重读镜像过来的父会话行，不会去解析另一台设备的会话。在不保存会话的中继上，它说明这一点并退出。
 
 ## 一天的摘要 {#digest-of-a-day}
 

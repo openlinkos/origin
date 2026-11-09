@@ -157,7 +157,7 @@ A session of it: origin show <session id>
 
 `origin sessions parents` reads ZCode's database and Grok Build's session directory, read-only, and appends parent lines to each source's `places.jsonl`: a workflow run's group and name, and a Grok parent that only `summary.json` names (`parent_session_id`), when the archive does not already record that parent. `--dry-run` prints how many lines it would append and writes nothing. `--zcode-db` and `--grok-home` name those paths; without them, `~/.zcode` and `~/.grok` (`GROK_HOME` when it is set) are used, and a path that is not there is skipped. The command exits 0 in that case. On a relay, which keeps no sessions, it says so and exits without opening those homes.
 
-`origin sessions repair` fills a place for each session that has none, and reads parent facts already in the mirror again to fill parent links that are missing, including a Grok `subagent_spawned` an older process never recorded. `--dry-run` only reports. A second run changes nothing. On a hub it re-reads mirrored parent lines and does not resolve another device's sessions. On a relay, which keeps no sessions, it says so and exits.
+`origin sessions repair` fills a place for each session that has none, and reads parent facts already in the mirror again to fill parent links that are missing, including a Grok `subagent_spawned` an older process never recorded. Then it derives every thread again, from scratch, as an upgrade does, and says how many sessions that moved. `--dry-run` only reports. A second run changes nothing. On a hub it re-reads mirrored parent lines and does not resolve another device's sessions. On a relay, which keeps no sessions, it says so and exits.
 
 ## Digest of a day
 
