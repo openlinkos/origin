@@ -201,10 +201,8 @@ function entries(db: Database, q: EntryQuery): SqlRow[] {
  * and the blocks.
  */
 function rebuild(db: Database): void {
-  transaction(
-    db,
-    () => {
-      db.exec(`INSERT INTO event_fts (event_fts) VALUES ('rebuild');
+  const run = () => {
+    db.exec(`INSERT INTO event_fts (event_fts) VALUES ('rebuild');
         INSERT INTO message_fts (message_fts) VALUES ('rebuild');
         INSERT INTO event_cjk (event_cjk) VALUES ('delete-all');
         INSERT INTO event_cjk (rowid, text)
@@ -215,9 +213,9 @@ function rebuild(db: Database): void {
         INSERT INTO event_block (block, max_ts, latest_ts)
           SELECT block, max_ts, MAX(max_ts) OVER (ORDER BY block ROWS UNBOUNDED PRECEDING)
           FROM (SELECT seq >> ${BLOCK_BITS} AS block, MAX(ts) AS max_ts FROM event GROUP BY 1);`);
-    },
-    { immediate: true },
-  );
+  };
+  if (db.isTransaction) run();
+  else transaction(db, run, { immediate: true });
 }
 
 /** The search indexes of a store in SQLite. */

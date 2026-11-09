@@ -121,6 +121,7 @@ import {
 import { agentFacts } from './agent-facts.js';
 import { cmdAgents } from './agents.js';
 import { ARGS, checkArgs, isStoreCommand } from './args.js';
+import { cmdDb, DB_STATEMENT_TIMEOUT_MS, dbCommandProblem } from './db-move.js';
 import { cmdDigest } from './digest.js';
 import { cmdForget, cmdForgotten, cmdRestore, type ForgettingCtx } from './forgetting.js';
 import { count, oneLine, table } from './format.js';
@@ -210,6 +211,8 @@ Personal hub:
   origin hub       connect <url> [--token <token>] [--device <name>] [--relay] | status | disconnect
                                                          Without --token, approve the device in the hub's admin UI
   origin push                                            Same as origin sync (kept for existing schedules)
+  origin db        move --to <postgres-url | sqlite> [--yes]   Move the hub's store between SQLite and PostgreSQL (hub stopped)
+  origin db        rebuild-search                        Rebuild what search derives from the events
 
 Entry kinds: ${ENTRY_KINDS.join(' · ')}. Time values: 7d / 24h / 30m / 2w or YYYY-MM-DD.
 Data directory: $ORIGIN_HOME or ~/.origin
@@ -298,12 +301,20 @@ export async function main(argv: string[]): Promise<number> {
     return 2;
   }
   const home = originHome();
+  if (command === 'db') {
+    const problem = dbCommandProblem(home, process.env);
+    if (problem) {
+      console.error(problem);
+      return 1;
+    }
+  }
   // Opening the store upgrades an older one. A migration may parse mirrored lines again, with the
   // adapters, and read their sealed frames, which a hub may keep in a bucket.
   let db: Database;
   try {
     db = openStore(home, process.env, {
       command: 'sub' in ARGS[command] ? `${command} ${rest[0]}` : command,
+      statementTimeoutMs: command === 'db' ? DB_STATEMENT_TIMEOUT_MS : undefined,
       adapters: storeAdapters(home),
       beforeMigrate: (db) =>
         void setUpFrames(db, home, {
@@ -386,6 +397,8 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdHub(ctx, rest);
       case 'raw':
         return await cmdRaw(ctx, rest);
+      case 'db':
+        return await cmdDb(db, home, rest);
       case 'push':
         return await cmdSync(ctx, rest);
     }

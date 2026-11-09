@@ -91,7 +91,7 @@ export class SqliteDatabase implements Database {
   }
 
   close(): void {
-    this.handle.close();
+    if (this.handle.isOpen) this.handle.close();
   }
 
   /** `PRAGMA user_version`, kept in the database header (see migrations.ts). */

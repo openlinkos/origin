@@ -551,36 +551,34 @@ const REBUILD_BATCH = 1_000;
  * and event_block with its counters. The GIN indexes keep themselves.
  */
 function rebuild(db: Database): void {
-  transaction(
-    db,
-    () => {
-      db.exec('DELETE FROM event_cjk');
-      db.exec('DELETE FROM event_prompt');
-      const cjk = db.prepare(
-        `INSERT INTO event_cjk (seq, tokens)
+  const run = () => {
+    db.exec('DELETE FROM event_cjk');
+    db.exec('DELETE FROM event_prompt');
+    const cjk = db.prepare(
+      `INSERT INTO event_cjk (seq, tokens)
          SELECT (r ->> 0)::bigint, string_to_array(r ->> 1, ' ') FROM json_array_elements(?::json) AS r`,
-      );
-      const prompt = db.prepare(`INSERT INTO event_prompt (seq) ${idList('postgres', 'bigint')}`);
-      let tokens: Array<[number, string]> = [];
-      let prompts: number[] = [];
-      const flush = () => {
-        if (tokens.length > 0) cjk.run(JSON.stringify(tokens));
-        if (prompts.length > 0) prompt.run(JSON.stringify(prompts));
-        tokens = [];
-        prompts = [];
-      };
-      const events = db
-        .prepare('SELECT seq, role, kind, text FROM event ORDER BY seq')
-        .iterate() as Iterable<{ seq: number; role: string; kind: string; text: string }>;
-      for (const e of events) {
-        const t = cjkTokens(e.text, e.kind);
-        if (t) tokens.push([Number(e.seq), t.join(' ')]);
-        if (isPromptEvent(e.role, e.kind, e.text)) prompts.push(Number(e.seq));
-        if (tokens.length >= REBUILD_BATCH || prompts.length >= REBUILD_BATCH) flush();
-      }
-      flush();
-      db.exec('DELETE FROM event_block');
-      db.exec(`INSERT INTO event_block
+    );
+    const prompt = db.prepare(`INSERT INTO event_prompt (seq) ${idList('postgres', 'bigint')}`);
+    let tokens: Array<[number, string]> = [];
+    let prompts: number[] = [];
+    const flush = () => {
+      if (tokens.length > 0) cjk.run(JSON.stringify(tokens));
+      if (prompts.length > 0) prompt.run(JSON.stringify(prompts));
+      tokens = [];
+      prompts = [];
+    };
+    const events = db
+      .prepare('SELECT seq, role, kind, text FROM event ORDER BY seq')
+      .iterate() as Iterable<{ seq: number; role: string; kind: string; text: string }>;
+    for (const e of events) {
+      const t = cjkTokens(e.text, e.kind);
+      if (t) tokens.push([Number(e.seq), t.join(' ')]);
+      if (isPromptEvent(e.role, e.kind, e.text)) prompts.push(Number(e.seq));
+      if (tokens.length >= REBUILD_BATCH || prompts.length >= REBUILD_BATCH) flush();
+    }
+    flush();
+    db.exec('DELETE FROM event_block');
+    db.exec(`INSERT INTO event_block
           (block, max_ts, latest_ts, docs, tokens, message_docs, message_tokens)
         SELECT block, max_ts, max(max_ts) OVER (ORDER BY block ROWS UNBOUNDED PRECEDING),
                docs, tokens, message_docs, message_tokens
@@ -590,9 +588,9 @@ function rebuild(db: Database): void {
                      coalesce(sum(greatest(char_length(text) - 2, 0))
                        FILTER (WHERE kind = 'message'), 0) AS message_tokens
               FROM event GROUP BY 1) AS b`);
-    },
-    { immediate: true },
-  );
+  };
+  if (db.isTransaction) run();
+  else transaction(db, run, { immediate: true });
 }
 
 /** The search indexes of a store in PostgreSQL, with n_i exact up to `dfCap` events. */

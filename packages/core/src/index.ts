@@ -58,6 +58,7 @@ export {
   setDatabaseFactory,
 } from './database.js';
 export {
+  connectSqlite,
   type Database,
   type OpenOptions,
   openDatabase,
@@ -585,6 +586,18 @@ export {
   stats,
   type TurnStart,
 } from './store.js';
+export {
+  assertCopyTarget,
+  COPIED_TABLES,
+  CopyMismatchError,
+  type CopyOptions,
+  type CopyResult,
+  copyStore,
+  copyToSqliteFile,
+  digestStore,
+  type TableCopy,
+  verifyCopy,
+} from './store-copy.js';
 export {
   BRANCH_GAP_MS,
   DEFAULT_BRANCHES,

@@ -39,6 +39,8 @@ export const PG_SERVE_LOCK_TAG = 0x53455256;
 export interface OpenStoreOptions extends OpenOptions {
   /** The command, for the connection's application_name in PostgreSQL. */
   command: string;
+  /** How long one statement may run in PostgreSQL (see PgOptions). */
+  statementTimeoutMs?: number;
 }
 
 /** Whether ORIGIN_HOME holds raw mirrors (anything under raw/). */
@@ -122,7 +124,7 @@ function checkPairing(
 export function openStore(home: string, env: NodeJS.ProcessEnv, opts: OpenStoreOptions): Database {
   const target = databaseUrlFrom(env);
   if (target) return openPostgres(home, target, readPairing(home), opts);
-  const { command: _, ...rest } = opts;
+  const { command: _, statementTimeoutMs: __, ...rest } = opts;
   return openLocalStore(home, rest);
 }
 
@@ -132,8 +134,8 @@ function openPostgres(
   pairing: Pairing | null,
   opts: OpenStoreOptions,
 ): PgDatabase {
-  const { command, ...rest } = opts;
-  const db = new PgDatabase(target, { command });
+  const { command, statementTimeoutMs, ...rest } = opts;
+  const db = new PgDatabase(target, { command, statementTimeoutMs });
   try {
     const found = storeFormat(db);
     if (found?.movedTo) {

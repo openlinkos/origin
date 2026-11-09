@@ -13,6 +13,7 @@ import {
   tailPath,
 } from './mirror.js';
 import { dbPath, rawDir } from './paths.js';
+import { copyToSqliteFile } from './store-copy.js';
 
 export interface BackupResult {
   /** Size of the database copy. */
@@ -40,8 +41,9 @@ type BackupFn = (
 /**
  * Back up a store into `target` (see docs/guide/privacy.md#backing-up): first the database, with
  * SQLite's online backup in a single step, so that the copy is one consistent snapshot even while
- * other processes keep writing (copied in small steps, it would restart at every write); then the
- * mirrors, exactly as that snapshot records them (see mirror.ts). Sealed frames never change, so
+ * other processes keep writing (copied in small steps, it would restart at every write), or for a
+ * store in PostgreSQL, exported into a SQLite database from one snapshot (see store-copy.ts); then
+ * the mirrors, exactly as that snapshot records them (see mirror.ts). Sealed frames never change, so
  * the frames a previous backup into `target` holds are extended with those it lacks; an open tail
  * is extended as long as no frame was sealed from it since, and written again otherwise. Its
  * content is read from the live store, where it may have been sealed in the meantime: a mirror's
@@ -55,10 +57,6 @@ export async function backupStore(
   home: string,
   target: string,
 ): Promise<BackupResult> {
-  if (!(db instanceof SqliteDatabase)) {
-    throw new OriginError('Only a store kept in SQLite can be backed up this way.');
-  }
-  const backup = (sqlite as unknown as { backup: BackupFn }).backup;
   const dest = path.join(target, 'origin.db');
   const inside = path.relative(path.resolve(rawDir(home)), path.resolve(target));
   if (
@@ -75,7 +73,13 @@ export async function backupStore(
   const previous = new Map(snapshotMirrors(dest)?.map((m) => [m.state.rawFileId, m]));
   const purgedBefore = snapshotPurges(dest);
   for (const f of [dest, `${dest}-wal`, `${dest}-shm`]) fs.rmSync(f, { force: true });
-  await backup(db.handle, dest, { rate: 2 ** 31 - 1 });
+  if (db instanceof SqliteDatabase) {
+    const backup = (sqlite as unknown as { backup: BackupFn }).backup;
+    await backup(db.handle, dest, { rate: 2 ** 31 - 1 });
+  } else {
+    // A store in PostgreSQL: exported, from one snapshot, as a store in SQLite.
+    copyToSqliteFile(db, dest, { searches: 0 });
+  }
   const mirrors = snapshotMirrors(dest);
   const purged = snapshotPurges(dest);
   if (!mirrors || !purged) throw new OriginError(`Cannot read the backed-up database ${dest}.`);

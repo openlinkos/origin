@@ -84,6 +84,15 @@ function useWriteAheadLog(db: SqliteDatabase): void {
   db.exec(`PRAGMA journal_size_limit = ${JOURNAL_SIZE_LIMIT};`);
 }
 
+/**
+ * A SQLite connection to a database file with Origin's functions, in SQLite whatever factory a
+ * test set, and with nothing prepared in it: for a copy of a store (see store-copy.ts).
+ */
+export function connectSqlite(file: string): SqliteDatabase {
+  checkRuntime();
+  return openSqlite(file);
+}
+
 /** A connection to a store's database: SQLite, unless a test set another factory. */
 function connect(file: string): Database {
   return (databaseFactory() ?? openSqlite)(file);

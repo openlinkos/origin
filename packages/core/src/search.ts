@@ -503,7 +503,7 @@ export function snippetOf(text: string, terms: string[]): string {
 /**
  * Rebuild everything search derives from the events and entries: the external-content indexes from
  * their content, the contentless CJK index from scratch, and the blocks. Results do not change; this
- * only repairs.
+ * only repairs. In the caller's transaction if one is open (an immediate one), else in its own.
  */
 export function rebuildSearchIndexes(db: Database): void {
   searchDriver(db).rebuild();

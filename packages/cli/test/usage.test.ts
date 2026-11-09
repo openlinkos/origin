@@ -156,6 +156,7 @@ describe('the arguments table', () => {
         'admin',
         'backup',
         'correct',
+        'db',
         'digest',
         'entries',
         'forget',
@@ -193,6 +194,17 @@ describe('the arguments table', () => {
     expect(checkArgs('search', ['migration', 'lock', '--since', '7d'])).toEqual({ kind: 'run' });
     expect(checkArgs('forget', ['ent_1', '--reason', 'wrong', '--yes'])).toEqual({ kind: 'run' });
     expect(checkArgs('token', ['create', 'laptop'])).toEqual({ kind: 'run' });
+    expect(checkArgs('db', ['move', '--to', 'sqlite'])).toEqual({ kind: 'run' });
+    expect(
+      checkArgs('db', ['move', '--to', 'postgres://origin:pw@db:5432/origin', '--yes']),
+    ).toEqual({ kind: 'run' });
+    expect(checkArgs('db', ['rebuild-search'])).toEqual({ kind: 'run' });
+    const noTarget = checkArgs('db', ['move']);
+    expect(noTarget.kind === 'error' && noTarget.message).toMatch(/--to is required/);
+    // A URL that is not one is refused without quoting it, as it may hold a password.
+    const other = checkArgs('db', ['move', '--to', 'mysql://origin:s3cret@db/origin']);
+    expect(other.kind).toBe('error');
+    expect(other.kind === 'error' && other.message).not.toContain('s3cret');
     expect(checkArgs('hub', ['connect', 'https://hub.example.com', '--token', 'ogn_x'])).toEqual({
       kind: 'run',
     });

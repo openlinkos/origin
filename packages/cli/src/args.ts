@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util';
 import { DIGEST_LIMIT_MAX, digestDay, UPLOAD_CONCURRENCY } from '@openlinkos/origin-core';
 import { BUCKET_OPTIONS } from './hub/bucket.js';
+import { parseDatabaseUrl } from './pg/url.js';
 import { PURGE_OPTIONS, PURGE_USAGE, PURGED_USAGE, purgeArgsProblem } from './purge.js';
 import { UI_PORT } from './ui.js';
 
@@ -43,6 +44,17 @@ function digestValues(values: Readonly<Record<string, unknown>>): string | null 
     return `--limit must be a whole number from 1 to ${DIGEST_LIMIT_MAX}.`;
   }
   return null;
+}
+
+/** What is wrong with `origin db move --to`, or null. Never quotes the URL, which may hold a password. */
+function moveTargetProblem(to: unknown): string | null {
+  if (typeof to !== 'string' || to.trim() === '' || to.trim() === 'sqlite') return null;
+  try {
+    parseDatabaseUrl(to.trim(), '--to');
+    return null;
+  } catch (err) {
+    return (err as Error).message;
+  }
 }
 
 /** A command made of subcommands, such as `origin token create <name>`. */
@@ -280,6 +292,18 @@ export const ARGS = {
     },
     usage:
       'Usage: origin hub connect <url> [--token <token>] [--device <name>] [--relay] | status | disconnect',
+  },
+  db: {
+    sub: {
+      move: {
+        options: { to: { type: 'string' }, yes: { type: 'boolean', default: false } },
+        required: { to: '--to is required: a postgres:// URL, or sqlite.' },
+        check: (values) => moveTargetProblem(values.to),
+        usage: 'Usage: origin db move --to <postgres-url | sqlite> [--yes]',
+      },
+      'rebuild-search': { options: {}, usage: 'Usage: origin db rebuild-search' },
+    },
+    usage: 'Usage: origin db move --to <postgres-url | sqlite> [--yes] | rebuild-search',
   },
   raw: {
     sub: {
