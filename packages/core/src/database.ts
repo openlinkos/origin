@@ -56,7 +56,7 @@ export interface Database {
   hasColumn(table: string, column: string): boolean;
   /**
    * Run `fn` waiting up to `ms`, instead of the usual 10 s, for the write lock (`BEGIN
-   * IMMEDIATE`) when another process holds it.
+   * IMMEDIATE`) when another process holds it. If `fn` returns a promise, until it settles.
    */
   withWaitTimeout<T>(ms: number, fn: () => T): T;
   /** The size of the database, and of its write-ahead log where it has one of its own. */
@@ -126,11 +126,9 @@ export class SqliteDatabase implements Database {
     const before = (this.handle.prepare('PRAGMA busy_timeout').get() as { timeout: number })
       .timeout;
     this.handle.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(ms))}`);
-    try {
-      return fn();
-    } finally {
-      this.handle.exec(`PRAGMA busy_timeout = ${before}`);
-    }
+    return afterwards(fn, () => {
+      if (this.handle.isOpen) this.handle.exec(`PRAGMA busy_timeout = ${before}`);
+    });
   }
 
   /** Page count × page size, and the `-wal` file next to the database (0 if there is none). */
@@ -154,6 +152,23 @@ export class SqliteDatabase implements Database {
   location(): string {
     return this.handle.location() ?? '';
   }
+}
+
+/**
+ * Run `fn`, then `done`: once its promise settles if it returns one (see
+ * Database.withWaitTimeout), at once otherwise.
+ */
+function afterwards<T>(fn: () => T, done: () => void): T {
+  let out: T;
+  try {
+    out = fn();
+  } catch (err) {
+    done();
+    throw err;
+  }
+  if (out instanceof Promise) return out.finally(done) as T;
+  done();
+  return out;
 }
 
 /** Opens the database of a store: its file, or ':memory:'. */

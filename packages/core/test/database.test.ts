@@ -75,7 +75,7 @@ describe('the database a store is opened through', () => {
     }
   });
 
-  it.skipIf(onPostgres)('waits for the write lock as long as asked, then as before', () => {
+  it.skipIf(onPostgres)('waits for the write lock as long as asked, then as before', async () => {
     const db = openDatabase(path.join(tmp, 'origin.db'));
     const timeout = () => (db.prepare('PRAGMA busy_timeout').get() as { timeout: number }).timeout;
     try {
@@ -87,6 +87,21 @@ describe('the database a store is opened through', () => {
           throw new Error('failed');
         }),
       ).toThrow('failed');
+      expect(timeout()).toBe(10_000);
+      // Until the promise of an async `fn` settles.
+      const later = db.withWaitTimeout(250, async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        return timeout();
+      });
+      expect(timeout()).toBe(250);
+      await expect(later).resolves.toBe(250);
+      expect(timeout()).toBe(10_000);
+      await expect(
+        db.withWaitTimeout(250, async () => {
+          await new Promise((resolve) => setImmediate(resolve));
+          throw new Error('failed later');
+        }),
+      ).rejects.toThrow('failed later');
       expect(timeout()).toBe(10_000);
     } finally {
       db.close();
