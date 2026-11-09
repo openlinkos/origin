@@ -158,7 +158,7 @@ export function hiddenContent(
         `SELECT DISTINCT x.item AS id, en.created_at FROM tombstone_effect x
          JOIN forgotten_entry f ON f.entry_id = x.item JOIN entry en ON en.id = x.item
          WHERE x.tombstone_id = ? AND x.kind = 'entry'
-         ORDER BY en.created_at DESC, en.id DESC`,
+         ORDER BY en.created_at DESC, id DESC`,
       )
       .all(id) as unknown as Array<{ id: string }>
   ).map((r) => r.id);
