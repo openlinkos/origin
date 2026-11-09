@@ -327,6 +327,29 @@ describe('who wrote each message, from the copy OpenClaw persisted', () => {
     expect(by(sink.lines())).toEqual([['owner', 'Dana']]);
   });
 
+  it("never takes OpenClaw's internal runs for the owner's, though it persists their prompt so", async () => {
+    const { persist, end, sink, rec } = start();
+    // A one-shot model run, as OpenClaw 2026.10.6 runs it through its agent method: a `user` run in
+    // a hidden session, whose prompt it persists with the operator's sender facts.
+    const hidden =
+      'agent:main:internal-session-effects:0d9c8b7a-6f5e-4d3c-2b1a-09f8e7d6c5b4-1a2b3c4d5e6f7081';
+    const prompt = 'Reply with one word: does this synthetic diff look safe?';
+    persist(persisted(stored(prompt, T, owner), { sessionKey: hidden, sessionId: 'x' }));
+    persist(
+      persisted(stored(prompt, T, owner), {
+        sessionKey: GUILD,
+        sessionId: 'internal-session-effects-run-2-0123456789abcdef',
+      }),
+    );
+    expect(rec.senders.size()).toBe(0);
+    await end([user(prompt, T)], guildCtx({ sessionKey: hidden, sessionId: 'x' }));
+    await end(
+      [user(prompt, T)],
+      guildCtx({ sessionId: 'internal-session-effects-run-2-0123456789abcdef' }),
+    );
+    expect(sink.lines()).toEqual([]);
+  });
+
   it('listens only with conversation access, and stops listening when OpenClaw disposes of it', () => {
     const without = fakeApi({
       pluginConfig: { dir: state },

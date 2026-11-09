@@ -5,7 +5,12 @@ import { type Config, parseConfig } from '../src/config.js';
 import { agentDir, isSafeLinesPath, linesPath, sessionFileBase } from '../src/files.js';
 import { draftsFromMessages, lineId, speakerName, titleOf } from '../src/lines.js';
 import { pluginLog } from '../src/log.js';
-import { Recorder, type TurnSource, triggerOfSessionKey } from '../src/recorder.js';
+import {
+  isInternalSession,
+  Recorder,
+  type TurnSource,
+  triggerOfSessionKey,
+} from '../src/recorder.js';
 import {
   agentCtx,
   assistant,
@@ -624,6 +629,56 @@ describe('what is recorded', () => {
     rec.agentEnd({ messages: firstTurn(), success: true }, agentCtx({ sessionKey: undefined }));
     await rec.idle();
     expect(sink.lines()).toEqual([]);
+  });
+
+  it("never records OpenClaw's internal runs, whatever their trigger", async () => {
+    const { rec, sink } = recorder({ triggers: ['user', 'manual'] });
+    const run = (ctx: Record<string, unknown>) =>
+      rec.agentEnd({ messages: firstTurn(), success: true }, agentCtx(ctx));
+    // A one-shot model run or a backend's run with internal session effects, in its hidden session.
+    run({ sessionKey: 'agent:xiaohan:internal-session-effects:run-1-0123456789abcdef' });
+    run({ sessionKey: 'Agent:Xiaohan:Internal-Session-Effects:incognito-run-2-0123456789abcdef' });
+    // The same, when the hook names the session the run was asked for: its session id marks it.
+    run({ sessionId: 'internal-session-effects-run-3-0123456789abcdef' });
+    // The Control UI's side chat, and Active Memory's recall runs, under a turn's session or not.
+    run({
+      sessionKey: 'agent:xiaohan:internal-session-effects:session-companion-1',
+      trigger: 'manual',
+    });
+    run({ sessionKey: `${SESSION}:active-memory:0123456789ab`, trigger: 'manual' });
+    run({ sessionKey: 'agent:xiaohan:active-memory:0123456789ab', trigger: 'manual' });
+    rec.beforeCompaction(
+      { messages: firstTurn() },
+      agentCtx({ sessionKey: 'agent:xiaohan:internal-session-effects:run-1-0123456789abcdef' }),
+    );
+    await rec.idle();
+    expect(sink.lines()).toEqual([]);
+    // The session's own turns are recorded as ever.
+    run({});
+    await rec.idle();
+    expect(sink.lines()).toHaveLength(5);
+  });
+
+  it("tells OpenClaw's internal sessions by its own markers", () => {
+    for (const key of [
+      'agent:main:internal-session-effects:0d9c8b7a-1a2b3c4d5e6f7081',
+      'agent:main:internal-session-effects:incognito-run-0123456789abcdef',
+      'agent:main:discord:channel:1300000000000000001:active-memory:0123456789ab',
+      'agent:main:active-memory:0123456789ab',
+    ]) {
+      expect(isInternalSession(key)).toBe(true);
+    }
+    expect(isInternalSession('agent:main:main', 'internal-session-effects-run-1-0123')).toBe(true);
+    for (const key of [
+      'agent:main:main',
+      'agent:main:telegram:direct:42',
+      'agent:main:internal-ops',
+      'agent:main:hook:internal-session-effects',
+      'internal-session-effects:run-1',
+      'agent:main:active-memory',
+    ]) {
+      expect(isInternalSession(key, 'sess-1')).toBe(false);
+    }
   });
 
   it('guesses the trigger from the session key when the hook does not say', () => {

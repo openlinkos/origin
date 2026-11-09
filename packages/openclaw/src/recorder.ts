@@ -68,6 +68,38 @@ export function triggerOfSessionKey(sessionKey: string): string {
 const isIncognito = (sessionKey: string) =>
   sessionKey.split(':').some((p) => p.toLowerCase().startsWith('incognito'));
 
+/** OpenClaw's segment of the hidden sessions that hold a run's suppressed effects, and their ids. */
+const INTERNAL_EFFECTS = 'internal-session-effects';
+
+/**
+ * Whether a session is one OpenClaw keeps for its own internal runs, which nobody had with an agent,
+ * by OpenClaw's own markers (checked against 2026.10.6). They are never recorded, whatever their
+ * trigger: OpenClaw runs them as `user` runs through its `agent` method, and the prompt it hands such
+ * a run can be persisted as the owner's.
+ *
+ * - `agent:<agent>:internal-session-effects:<run>`, and the session id `internal-session-effects-…`:
+ *   the hidden session a run with internal session effects writes to instead of a visible one
+ *   (`isInternalSessionEffectsKey` and `resolveInternalSessionEffectsIdentity` in OpenClaw's
+ *   `src/config/sessions/internal-session-key.ts`): a one-shot model run (`modelRun`, as `openclaw
+ *   infer model run --gateway` makes), a backend's run with `sessionEffects: "internal"`, the
+ *   Control UI's side chat, and the auth probe. The session id marks it too when the hook names the
+ *   session the run was asked for.
+ * - `…:active-memory:<id>`: the Active Memory plugin's recall runs, a sub-agent it starts before a
+ *   turn to search memory (`runRecallSubagent`), keyed under the turn's session or the agent.
+ *
+ * OpenClaw leaves both out of what it treats as conversations, such as its session lists and its
+ * review of a session's experience for its skill workshop.
+ */
+export function isInternalSession(sessionKey: string, sessionId?: string | null): boolean {
+  const key = sessionKey.trim().toLowerCase();
+  const agentEnd = key.startsWith('agent:') ? key.indexOf(':', 6) : -1;
+  if (agentEnd > 6 && key.startsWith(`${INTERNAL_EFFECTS}:`, agentEnd + 1)) return true;
+  const parts = key.split(':');
+  const memory = parts.indexOf('active-memory');
+  if (memory > 0 && memory < parts.length - 1) return true;
+  return !!sessionId && sessionId.trim().toLowerCase().startsWith(`${INTERNAL_EFFECTS}-`);
+}
+
 export class Recorder {
   readonly config: Config;
   readonly turns: TurnSource;
@@ -97,6 +129,8 @@ export class Recorder {
     const e = asRecord(event) ?? {};
     const sessionKey = str(c.sessionKey) ?? str(e.sessionKey);
     if (!sessionKey || isIncognito(sessionKey)) return null;
+    const sessionId = str(c.sessionId) ?? str(e.sessionId);
+    if (isInternalSession(sessionKey, sessionId)) return null;
     const agentId = str(c.agentId) ?? agentOfSessionKey(sessionKey) ?? 'unknown';
     if (this.config.agents && !this.config.agents.includes(agentId)) return null;
     const channel = str(c.channel) ?? str(c.messageProvider) ?? str(c.channelId);
@@ -109,7 +143,7 @@ export class Recorder {
     add('accountId', str(c.accountId));
     meta.sessionKey = sessionKey;
     add('runId', str(c.runId) ?? str(e.runId));
-    add('sessionId', str(c.sessionId) ?? str(e.sessionId));
+    add('sessionId', sessionId);
     return {
       sessionKey,
       agentId,
@@ -173,6 +207,7 @@ export class Recorder {
     const target = asRecord(u.target);
     const sessionKey = str(u.sessionKey) ?? str(target?.sessionKey);
     if (!sessionKey || isIncognito(sessionKey)) return;
+    if (isInternalSession(sessionKey, str(u.sessionId) ?? str(target?.sessionId))) return;
     const agentId = str(u.agentId) ?? str(target?.agentId) ?? agentOfSessionKey(sessionKey);
     if (this.config.agents && !(agentId && this.config.agents.includes(agentId))) return;
     if (isRuntimeContext(m)) return;
