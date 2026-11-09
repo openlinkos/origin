@@ -33,6 +33,10 @@ import { createRequire } from 'node:module';
  * during a batch, the batch fails with ConnectionLostError, unless it may run again on a new
  * connection: a read (`retry: 'read'`), or a write whose COMMIT was not yet sent (`retry: 'write'`),
  * which is retried once. A batch marked `rollback` that fails otherwise is rolled back.
+ *
+ * A session lock (`lock`) is taken on the connection and again on every connection made after it:
+ * a connection that cannot take it again fails with SessionLockError, and so does every request
+ * until one can.
  */
 export const PG_WORKER_SOURCE = `(() => {
   'use strict';
@@ -41,6 +45,8 @@ export const PG_WORKER_SOURCE = `(() => {
   let types = null;
   let client = null;
   let conn = null;
+  // The session lock every connection takes, once one has: { sql, message }.
+  let held = null;
 
   // SQLSTATEs of a session that has ended: shutdown, crash, idle timeouts.
   const ENDED = new Set(['57P01', '57P02', '57P03', '57P05', '25P03']);
@@ -118,6 +124,7 @@ export const PG_WORKER_SOURCE = `(() => {
       await c.query(data.session);
       // Settings not every server has (one at a time: a failure would undo the others).
       for (const sql of data.sessionIfAny) await c.query(sql).catch(() => {});
+      if (held) await take(c, held);
     } catch (err) {
       c.end().catch(() => {});
       throw err;
@@ -125,6 +132,14 @@ export const PG_WORKER_SOURCE = `(() => {
     client = c;
     conn = randomUUID();
     return c;
+  }
+
+  // Take a session lock: its SQL answers whether it was taken.
+  async function take(c, lock) {
+    const r = await c.query({ text: lock.sql, rowMode: 'array' });
+    if (!r.rows[0] || r.rows[0][0] !== 1) {
+      throw Object.assign(new Error(lock.message), { name: 'SessionLockError' });
+    }
   }
 
   async function connect(data) {
@@ -274,6 +289,12 @@ export const PG_WORKER_SOURCE = `(() => {
     switch (req.op) {
       case 'batch':
         return batch(req, data);
+      case 'lock': {
+        const c = client || (await connect(data));
+        await take(c, req);
+        held = { sql: req.sql, message: req.message };
+        return null;
+      }
       case 'end': {
         const c = client;
         drop(c);

@@ -7,10 +7,15 @@ import { resolvedProjectSql } from './places.js';
 
 /** Disk usage of a store (see docs/architecture.md#storage). */
 export interface StoreUsage {
-  /** The SQLite database file: page count × page size. */
+  /**
+   * The database: in SQLite, its file (page count × page size); in PostgreSQL, the tables and
+   * indexes of the store's schema.
+   */
   databaseBytes: number;
-  /** The write-ahead log next to it. */
-  walBytes: number;
+  /** SQLite's write-ahead log next to the file; null in PostgreSQL, whose log is the server's. */
+  walBytes: number | null;
+  /** Where the database is: its file, or its URL without the password, and its schema. */
+  databaseLocation: string;
   /** Raw mirror bytes ingested (uncompressed): this store's own files, and files replicated from devices. */
   mirrorBytes: { local: number; remote: number };
   /** What those mirrors take on disk, compressed (see mirror.ts). */
@@ -85,7 +90,8 @@ export function storeUsage(db: Database, home: string): StoreUsage {
   );
   return {
     databaseBytes: database.bytes,
-    walBytes: database.walBytes ?? 0,
+    walBytes: database.walBytes,
+    databaseLocation: db.location(),
     mirrorBytes: { local: mirrors.local.bytes, remote: mirrors.remote.bytes },
     mirrorStoredBytes: { local: mirrors.local.storedBytes, remote: mirrors.remote.storedBytes },
     mirrorDiskBytes: placement.disk,

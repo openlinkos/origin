@@ -12,7 +12,6 @@ import {
   correct,
   createToken,
   type Database,
-  dbPath,
   defaultStoreName,
   describeThread,
   displayTitle,
@@ -59,7 +58,6 @@ import {
   messageExcerpt,
   NAME_RE,
   OriginError,
-  openDatabase,
   originHome,
   parseQuery,
   parseTime,
@@ -153,6 +151,7 @@ import {
 } from './proposals.js';
 import { cmdPurge, cmdPurged, type PurgeCtx } from './purge.js';
 import { sourceAdapters, storeAdapters } from './sources.js';
+import { holdServeLock, openStore, postgresConfigured, refusedOnPostgres } from './store.js';
 import { isHookCall, main as syncHook } from './sync-hook.js';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from './time.js';
 import { onEnter, openInBrowser, startLocalUi, writeSignInFile } from './ui.js';
@@ -266,7 +265,14 @@ export async function main(argv: string[]): Promise<number> {
     return 0;
   }
   // Agents' own configuration only: the store is not needed.
-  if (command === 'agents') return cmdAgents(rest);
+  if (command === 'agents') {
+    const refused = postgresConfigured(process.env) ? refusedOnPostgres(command, rest) : null;
+    if (refused && !rest.some((a) => a === '--help' || a === '-h')) {
+      console.error(refused);
+      return 2;
+    }
+    return cmdAgents(rest);
+  }
   // An agent's hook (bin.ts loads it on its own): it opens the store itself, and never fails.
   if (command === 'sync' && isHookCall(rest)) return syncHook(argv);
   // Every other command opens the store, which upgrades an older one: check its arguments first, so
@@ -285,19 +291,33 @@ export async function main(argv: string[]): Promise<number> {
     console.error(check.message);
     return 2;
   }
+  // A hub's store in PostgreSQL: the commands that work on this machine's agents do not run.
+  const refused = postgresConfigured(process.env) ? refusedOnPostgres(command, rest) : null;
+  if (refused) {
+    console.error(refused);
+    return 2;
+  }
   const home = originHome();
   // Opening the store upgrades an older one. A migration may parse mirrored lines again, with the
   // adapters, and read their sealed frames, which a hub may keep in a bucket.
-  const db = openDatabase(dbPath(home), {
-    adapters: storeAdapters(home),
-    beforeMigrate: (db) =>
-      void setUpFrames(db, home, {
-        command: 'other',
-        flags: bucketFlags(command, rest),
-        env: process.env,
-      }),
-    log: (m) => console.error(m),
-  });
+  let db: Database;
+  try {
+    db = openStore(home, process.env, {
+      command: 'sub' in ARGS[command] ? `${command} ${rest[0]}` : command,
+      adapters: storeAdapters(home),
+      beforeMigrate: (db) =>
+        void setUpFrames(db, home, {
+          command: 'other',
+          flags: bucketFlags(command, rest),
+          env: process.env,
+        }),
+      log: (m) => console.error(m),
+    });
+  } catch (err) {
+    if (!(err instanceof OriginError)) throw err;
+    console.error(err.message);
+    return 1;
+  }
   const ctx: Ctx = { db, home };
   try {
     nameStore(db, command);
@@ -575,7 +595,11 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
   const counts = entryCounts(ctx.db);
   const entries = `Entries: ${ENTRY_KINDS.map((k) => `${counts[k]} ${k}`).join(', ')}`;
   if (s.length === 0) {
-    console.log(`No data yet. Run: origin sync\n${entries}\nData directory: ${ctx.home}`);
+    console.log(
+      ctx.db.dialect === 'postgres'
+        ? `No data yet: devices send theirs with origin sync.\n${entries}\nData directory: ${ctx.home}\nDatabase: ${ctx.db.location()}`
+        : `No data yet. Run: origin sync\n${entries}\nData directory: ${ctx.home}`,
+    );
     return 0;
   }
   console.log(
@@ -594,6 +618,7 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
     ),
   );
   console.log(`\n${entries}\nData directory: ${ctx.home}`);
+  if (ctx.db.dialect === 'postgres') console.log(`Database: ${ctx.db.location()}`);
   printPendingPurges(ctx);
   const devices = listDevices(ctx.db);
   if (devices.length > 0) {
@@ -1868,6 +1893,8 @@ function adminOptions(values: {
 async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
   const { values } = parseArgs({ args, options: ARGS.serve.options });
   assertComplete(ctx.db, 'serve as a hub');
+  // One hub at a time on a store in PostgreSQL, wherever it runs.
+  holdServeLock(ctx.db);
   const port = Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new OriginError(`Invalid port: ${values.port}`);
@@ -1890,7 +1917,8 @@ async function cmdServe(ctx: Ctx, args: string[]): Promise<number> {
     admin,
     poweredBy,
   });
-  console.log(`Origin hub listening on ${hub.url} (data: ${ctx.home})`);
+  const database = ctx.db.dialect === 'postgres' ? `, database: ${ctx.db.location()}` : '';
+  console.log(`Origin hub listening on ${hub.url} (data: ${ctx.home}${database})`);
   if (bucket) {
     console.log(`Sealed frames go to ${bucket.location} at ${bucket.config.endpoint.origin}`);
   }

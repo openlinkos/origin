@@ -5,11 +5,9 @@ import { parseArgs } from 'node:util';
 import { adapterById } from '@openlinkos/origin-adapters';
 import {
   type Database,
-  dbPath,
   defaultStoreName,
   initStoreName,
   isRelay,
-  openDatabase,
   originHome,
   type SourceAdapter,
   type SourceFile,
@@ -21,6 +19,7 @@ import { setUpFrames } from './hub/bucket.js';
 import { type HubConfig, readHubConfig } from './hub/config.js';
 import { relayFileWithHub } from './hub/relay.js';
 import { pushFile } from './hub/sync.js';
+import { openLocalStore, postgresConfigured } from './pairing.js';
 import { storeAdapters } from './sources.js';
 
 /**
@@ -88,7 +87,7 @@ function locatedFiles(adapter: SourceAdapter, paths: string[]): SourceFile[] {
 }
 
 function openStore(home: string): Database {
-  const db = openDatabase(dbPath(home), {
+  const db = openLocalStore(home, {
     adapters: storeAdapters(home),
     log: (m) => console.error(m),
   });
@@ -151,6 +150,13 @@ async function runHook(agent: string, io: HookIO): Promise<number> {
     const files = locatedFiles(adapter, hookFiles(event));
     if (files.length === 0) return 0;
 
+    // A hub's store in PostgreSQL ingests nothing of this machine (see store.ts).
+    if (postgresConfigured(process.env)) {
+      console.error(
+        "origin sync: ORIGIN_DATABASE_URL names a hub's store, which ingests nothing of this machine; nothing was read.",
+      );
+      return 0;
+    }
     const home = originHome();
     db = openStore(home);
     db.exec(`PRAGMA busy_timeout = ${HOOK_BUSY_MS};`);

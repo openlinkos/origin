@@ -541,6 +541,22 @@ export class PgDatabase implements Database {
     return this.target.display;
   }
 
+  /**
+   * Hold a session-level advisory lock for as long as this client is open: the high 32 bits of its
+   * key are `tag`, the low 32 the oid of the store's schema, as for the store's write lock. Throws
+   * an OriginError saying `message` when another session holds it. The connection takes it again
+   * whenever it connects again; if another session took it meanwhile, every request fails with
+   * `message` until the lock is free.
+   */
+  holdLock(tag: number, message: string): void {
+    this.assertUsable(false);
+    this.call({
+      op: 'lock',
+      sql: `SELECT pg_catalog.pg_try_advisory_lock((${tag}::bigint << 32) | (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = current_schema())::bigint)`,
+      message: redact(message, this.target.secrets),
+    });
+  }
+
   /** Tests: the worker exits `afterMs` from now, during whatever request runs then. */
   exitWorkerForTests(afterMs: number): void {
     this.call({ op: 'exit', afterMs });
@@ -956,6 +972,7 @@ export class PgDatabase implements Database {
       );
     }
     if (e?.name === 'StoreUpgradedError') return new StoreUpgradedError();
+    if (e?.name === 'SessionLockError') return new OriginError(message);
     if (e?.name === 'StoreMovedError') {
       return new OriginError(
         `This store has been moved to ${redact(String(e.movedTo), this.target.secrets)}; it is no longer written here.`,

@@ -370,8 +370,16 @@ export function overviewPage(ctx: Ctx, o: Overview): void {
   const storage = box({
     title: t('overview.storageTitle'),
     body: html`<dl class="ol-dl">
-      <dt>${t('overview.database')}</dt><dd>${fmtBytes(o.usage.databaseBytes)}</dd>
-      <dt class="ol-dl-sub">${t('overview.wal')}</dt><dd>${fmtBytes(o.usage.walBytes)}</dd>
+      <dt>${t('overview.database')}</dt><dd>${fmtBytes(o.usage.databaseBytes)}${
+        o.usage.databaseLocation
+          ? html`<span class="admin-cell-sub ol-mono">${o.usage.databaseLocation}</span>`
+          : ''
+      }</dd>
+      ${
+        o.usage.walBytes === null
+          ? ''
+          : html`<dt class="ol-dl-sub">${t('overview.wal')}</dt><dd>${fmtBytes(o.usage.walBytes)}</dd>`
+      }
       <dt>${t('overview.mirrorsDisk')}</dt><dd>${fmtBytes(o.usage.mirrorDiskBytes)}</dd>
       ${
         o.usage.bucket

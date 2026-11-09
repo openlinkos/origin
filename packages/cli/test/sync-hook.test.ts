@@ -462,6 +462,7 @@ describe('the hook module', () => {
       'hub/sigv4.ts',
       'hub/sync-http.ts',
       'hub/sync.ts',
+      'pairing.ts',
       'sources.ts',
       'sync-hook.ts',
       'sync-worker.ts',

@@ -3,13 +3,11 @@ import { parseArgs } from 'node:util';
 import { isLinesSourceId, KNOWN_SOURCE_IDS } from '@openlinkos/origin-adapters';
 import {
   type Database,
-  dbPath,
   defaultStoreName,
   hasRecalled,
   initStoreName,
   isRelay,
   OriginError,
-  openDatabase,
   originHome,
   planRecall,
   promptTitle,
@@ -21,6 +19,7 @@ import {
 } from '@openlinkos/origin-core';
 import { type HookIO, runByAnother } from './hook-caller.js';
 import { setUpFrames } from './hub/bucket.js';
+import { openLocalStore, postgresConfigured } from './pairing.js';
 import { storeAdapters } from './sources.js';
 
 /**
@@ -150,11 +149,16 @@ export function hookOutput(agent: HookAgent, eventName: string, text: string): s
   });
 }
 
-function openStore(home: string): Database {
-  const db = openDatabase(dbPath(home), {
-    adapters: storeAdapters(home),
-    log: (m) => console.error(m),
-  });
+/**
+ * Open the store for a hook, which runs only on a device: in SQLite (see pairing.ts). The preview
+ * opens it as other commands do, in PostgreSQL on a hub that keeps it there (see store.ts), whose
+ * client it loads only then.
+ */
+async function openStore(home: string, hook: boolean): Promise<Database> {
+  const opts = { adapters: storeAdapters(home), log: (m: string) => console.error(m) };
+  const db = hook
+    ? openLocalStore(home, opts)
+    : (await import('./store.js')).openStore(home, process.env, { ...opts, command: 'recall' });
   setUpFrames(db, home, { command: 'other', env: process.env });
   return db;
 }
@@ -173,7 +177,14 @@ async function runHook(agent: HookAgent, io: HookIO): Promise<number> {
     if (runByAnother(agent, event, io.env)) return 0;
     const call = hookCall(agent, event);
     if (!call?.cwd || !call.event) return 0;
-    db = openStore(originHome());
+    // A hub's store in PostgreSQL keeps no agent's session of this machine (see store.ts).
+    if (postgresConfigured(process.env)) {
+      console.error(
+        "origin recall: ORIGIN_DATABASE_URL names a hub's store, which recalls nothing for this machine's agents; nothing was handed over.",
+      );
+      return 0;
+    }
+    db = await openStore(originHome(), true);
     // A relay keeps no entries; the hub's are not recalled from here yet.
     if (isRelay(db)) return 0;
     const input = hookInput(db, agent, event);
@@ -270,7 +281,7 @@ export async function main(argv: string[], io: HookIO = STDIN): Promise<number> 
     );
     return 2;
   }
-  const db = openStore(originHome());
+  const db = await openStore(originHome(), false);
   try {
     const prompt = values.prompt?.trim() || null;
     // A project named alone is not this directory's: the directory is the default only without one.

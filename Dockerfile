@@ -10,6 +10,11 @@
 #   ORIGIN_RAW_S3_BUCKET, ORIGIN_RAW_S3_PREFIX, and the keys (ORIGIN_RAW_S3_ACCESS_KEY_ID[_FILE],
 #   ORIGIN_RAW_S3_SECRET_ACCESS_KEY[_FILE]); see https://origin.openlinkos.com/guide/hub
 #   (keep raw mirrors in a bucket).
+# The store in PostgreSQL 17 or later instead of SQLite (off by default): set ORIGIN_DATABASE_URL, or
+#   ORIGIN_DATABASE_URL_FILE for a mounted secret, to postgres://user:password@host:5432/database
+#   (a UTF8 database with locale C). /data still holds the raw mirrors and store.json, which pairs
+#   them with the database. Move an existing store with origin db move, with the hub stopped; see
+#   https://origin.openlinkos.com/guide/hub (run the hub on PostgreSQL).
 FROM node:24-alpine AS build
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /src
