@@ -188,6 +188,7 @@ export async function startLocalUi(o: StartUiOptions): Promise<RunningUi> {
     version: o.version,
     port,
     hub: hubLink,
+    adapters: storeAdapters(o.home),
     afterWrite: () => {
       if (o.hub()) background.request();
     },

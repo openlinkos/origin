@@ -170,6 +170,7 @@ export async function startHub(o: StartHubOptions): Promise<RunningHub> {
       clientIpHeader: o.admin.clientIpHeader ?? null,
       credential: prepared.credential,
       oauth: resolveClient ? { resolveClient } : null,
+      adapters: hubAdapters(o.adapters, o.home),
       log: o.log,
     });
     if (resolveClient) {
