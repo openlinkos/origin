@@ -15,12 +15,8 @@ permissions:
 
 jobs:
   check:
-    name: Lint, build, test & docs (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+    name: Lint, build & docs
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
@@ -40,8 +36,61 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Build the docs site
+        run: pnpm docs:build
+
+  test:
+    name: Test (${{ matrix.os }}, ${{ matrix.engine }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        engine: [sqlite, postgres]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The packaging tests read what the build writes.
+      - name: Build
+        run: pnpm build
+
+      - name: Start PostgreSQL
+        if: matrix.engine == 'postgres'
+        uses: ./.github/actions/postgres
+
       - name: Test
         run: pnpm test
 
-      - name: Build the docs site
-        run: pnpm docs:build
+  floor:
+    name: Test PostgreSQL on Node 22.16
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.16
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Start PostgreSQL
+        uses: ./.github/actions/postgres
+
+      # The PostgreSQL client's worker and blocking calls, and search, on the oldest Node.js Origin
+      # supports.
+      - name: Test
+        run: pnpm vitest run packages/cli/test/pg packages/core/test/search.test.ts packages/core/test/bm25.test.ts
