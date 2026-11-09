@@ -1138,7 +1138,8 @@ export function recordRecall(
 /** Insert a recall and its items. Must run inside a write transaction. */
 export function insertRecall(db: Database, r: RecallRecord): void {
   // After a purge deleted the newest recalls, their numbers are not given out again.
-  const floor = db.dialect === 'sqlite' ? getSetting(db, RECALL_SEQ_FLOOR) : null;
+  const setting = getSetting(db, RECALL_SEQ_FLOOR);
+  const floor = setting === null ? null : Number(setting) || 0;
   db.prepare(
     floor === null
       ? `INSERT INTO recall (id, at, origin, source, session_id, occasion, project, cwd,
@@ -1146,7 +1147,8 @@ export function insertRecall(db: Database, r: RecallRecord): void {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       : `INSERT INTO recall (seq, id, at, origin, source, session_id, occasion, project, cwd,
                              prompt_hash, budget, tokens)
-         VALUES (MAX(COALESCE((SELECT MAX(seq) FROM recall), 0), ${Number(floor) || 0}) + 1,
+         VALUES ((SELECT CASE WHEN m > ${floor} THEN m ELSE ${floor} END
+                    FROM (SELECT COALESCE(MAX(seq), 0) AS m FROM recall) AS r) + 1,
                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     r.id,

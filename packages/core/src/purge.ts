@@ -1642,7 +1642,7 @@ function applyPlan(db: Database, plan: PurgePlan, state: PlanState, made: PurgeM
         ) as { seq: number };
       recordPurged(db, id, plan);
       const pending = queueMirrors(db, id, Number(seq), plan);
-      if (d === 'sqlite' && recallFloor !== null) {
+      if (recallFloor !== null) {
         const known = Number(getSetting(db, RECALL_SEQ_FLOOR) ?? 0);
         if (recallFloor > known) setSetting(db, RECALL_SEQ_FLOOR, String(recallFloor));
       }
