@@ -90,6 +90,24 @@ node -e "const c=require('fs').readFileSync(process.argv[1],'utf8').replace(/\r\
 - Tests live in `packages/<name>/test/*.test.ts` and run with Vitest.
 - Adapter parsing and the invariants (provenance, recorded forgetting, append-only, idempotent sync) must be covered by tests. MCP tools are tested end to end with in-memory and HTTP MCP clients (`packages/mcp/test`, including a connected device against an in-process hub), replication with real device-to-hub round trips (`packages/cli/test`), and the admin UI through HTTP with its security checks (`packages/admin/test`, and end to end in `packages/cli/test/admin.test.ts`). The OpenClaw plugin is tested with fake hook payloads and a fake OpenClaw `api`, against a loopback stand-in for the hub (`packages/openclaw/test`); every line it builds must parse as an event line. Its read tools copy the parameters of the MCP tools they forward to, and `packages/cli/test/openclaw-tools.test.ts` checks the copy against what the MCP server publishes: change both together. Always use temporary `ORIGIN_HOME` directories in tests.
 - **Fixtures must be synthetic.** Never commit real session logs, even partial ones. Build fixtures by hand or scrub them thoroughly: replace names, paths, repository URLs, prompts, outputs, tokens, and any other identifying or secret content.
+- **Both database engines.** A hub's store may be in PostgreSQL, so the suite runs on both engines; CI runs it on each, on Linux and Windows. `pnpm test` runs it on SQLite. With `ORIGIN_TEST_DATABASE_URL` set to a PostgreSQL 17 or later server, as a role that may create databases, every store a test opens through `openDatabase` or `openMemoryDatabase` is in PostgreSQL instead: the run creates a database `origin_test_<run>` (UTF8, C collation) and drops it at the end, and each store is a schema in it, which the store's file names (see `test/pg-setup.ts`), so that a test reopening a file reaches the same store. The tests of `packages/cli/test/pg` (the PostgreSQL client, the schema and search against SQLite's, the hub, and `origin db move`) run only then, and choose each store's engine themselves: PostgreSQL through their helpers or a URL, SQLite through `openDatabase`. A test of what only SQLite has (its files and pragmas, FTS5, stores of earlier versions, backups) is skipped on PostgreSQL with `describe.skipIf(onPostgres)` or `it.skipIf(onPostgres)`, and one that compares the engines opens its SQLite store with `inSqlite()` (both from `test/pg.ts`). To run a server for this on your machine:
+
+  ```bash
+  # With Docker
+  docker run -d --name origin-pg -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=postgres \
+    -e POSTGRES_INITDB_ARGS='--locale=C --encoding=UTF8' postgres:17 \
+    -c max_connections=300 -c fsync=off
+  ORIGIN_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55432/postgres pnpm test
+  ```
+
+  ```powershell
+  # On Windows, with PostgreSQL's binaries (EDB's zip archive of them, unpacked to $pg)
+  $data = "$env:LOCALAPPDATA\origin-pg"
+  & "$pg\bin\initdb.exe" -D $data -U postgres -A trust -E UTF8 --locale=C
+  & "$pg\bin\pg_ctl.exe" -D $data -l "$data.log" start `
+    -o '-p 55432 -c listen_addresses=127.0.0.1 -c max_connections=300 -c fsync=off'
+  $env:ORIGIN_TEST_DATABASE_URL = 'postgres://postgres@127.0.0.1:55432/postgres'; pnpm test
+  ```
 
 ## Adding a source adapter
 
