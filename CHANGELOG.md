@@ -2,6 +2,17 @@
 
 All notable changes to Origin are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the store format or a public interface, and its notes say what to do. The six packages (`@openlinkos/origin` and `@openlinkos/origin-core`, `-adapters`, `-mcp`, `-admin`, and `-openclaw`, the plugin for OpenClaw) are released together under one version.
 
+## [0.6.1] - 2026-11-09
+
+Gives OpenClaw's agents Origin's read tools in every turn you start, in channels and threads as well as in direct messages.
+
+**Upgrading.** Nothing changes in the store, and only the OpenClaw plugin changes. On OpenClaw, update the plugin (`openclaw plugins update "@openlinkos/origin-openclaw@0.6.1"`) and restart the Gateway. Make sure your account is in `commands.ownerAllowFrom`, and that the plugin's settings do not turn its tools off.
+
+### Read tools in OpenClaw
+
+- The plugin offered its read tools only in turns OpenClaw resolved as the owner's own (`owner-private`). OpenClaw resolves that only when its memory slot holds a plugin with a provider runtime, never with memory-core, and never in a Discord guild channel or thread, so the tools were missing where most conversations happen. They are now offered in every turn the owner starts: when OpenClaw says the turn's sender is the owner (`commands.ownerAllowFrom`) and names that sender. A turn someone else starts, a cron or heartbeat run, an `openclaw agent` run, and a turn that batches messages of several senders still get none.
+- In a shared channel, an answer is posted where the channel's members can read it, and other people's messages in its history can steer a turn you start. The new `tools` setting narrows the tools or turns them off: `"owner-turns"` (the default), `"owner-private"`, or `"off"`. The `true` and `false` of 0.6.0 still mean `"owner-turns"` and `"off"`.
+
 ## [0.6.0] - 2026-11-06
 
 Hands agents your past messages with each prompt, not only entries; brings recall to ZCode, Cursor, and OpenClaw's agents; recaps a day with `digest`; tells a writer of event lines why a line was refused; and ends a search that could run forever.
@@ -250,6 +261,7 @@ The first release.
 - `origin backup <dir>` copies a store consistently while agents keep writing.
 - Requires Node.js 22.16 or later.
 
+[0.6.1]: https://github.com/openlinkos/origin/releases/tag/v0.6.1
 [0.6.0]: https://github.com/openlinkos/origin/releases/tag/v0.6.0
 [0.5.0]: https://github.com/openlinkos/origin/releases/tag/v0.5.0
 [0.4.0]: https://github.com/openlinkos/origin/releases/tag/v0.4.0

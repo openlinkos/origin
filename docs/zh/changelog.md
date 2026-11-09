@@ -6,6 +6,17 @@ sourceHash: sha256-893580dc
 
 Origin 所有值得注意的改动都列在这里。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)；1.0 之前，次版本可能改变存储格式或公开接口，它的说明会写明需要怎么做。六个包（`@openlinkos/origin` 以及 `@openlinkos/origin-core`、`-adapters`、`-mcp`、`-admin` 和 OpenClaw 插件 `-openclaw`）以同一个版本号一起发布。英文版更新日志（`CHANGELOG.md`）是 GitHub 发布说明的来源。
 
+## [0.6.1] - 2026-11-09 {#_0-6-1-2026-11-09}
+
+让 OpenClaw 的 Agent 在你发起的每一轮里都拿到 Origin 的读取工具，频道和 Thread 里也一样，不再只限私聊。
+
+**升级。** 库没有任何变化，只有 OpenClaw 插件有改动。在 OpenClaw 上更新插件（`openclaw plugins update "@openlinkos/origin-openclaw@0.6.1"`）并重启 Gateway。确认你的账号在 `commands.ownerAllowFrom` 里，并且插件的设置没有关掉工具。
+
+### OpenClaw 里的读取工具 {#read-tools-in-openclaw}
+
+- 插件原来只在 OpenClaw 判定为本人私有受众（`owner-private`）的回合里提供读取工具。OpenClaw 只有在记忆槽里是带 provider runtime 的插件时才会这样判定：用 memory-core 时从不，在 Discord 服务器的频道和 Thread 里也从不，所以大多数对话发生的地方都没有这些工具。现在，本人发起的每一轮都会提供：OpenClaw 说明这一轮的发送者是本人（`commands.ownerAllowFrom`），并给出这个发送者。别人发起的回合、cron 和 heartbeat 运行、`openclaw agent` 运行，以及把几个发送者的消息合在一起处理的回合，仍然没有。
+- 在多人共用的频道里，回答会发在频道成员都能看到的地方，频道历史里别人的消息也可能引导你发起的这一轮。新的 `tools` 设置可以收窄或关闭这些工具：`"owner-turns"`（默认）、`"owner-private"` 或 `"off"`。0.6.0 的 `true` 和 `false` 仍然分别表示 `"owner-turns"` 和 `"off"`。
+
 ## [0.6.0] - 2026-11-06 {#_0-6-0-2026-11-06}
 
 随每个提示交给 Agent 的不只是条目，还有你过往的消息；让 ZCode、Cursor 和 OpenClaw 的 Agent 也获得召回；用 `digest` 回顾一天；告诉事件行的写入方某一行为什么被拒；并让一个可能永远不结束的检索能够结束。
