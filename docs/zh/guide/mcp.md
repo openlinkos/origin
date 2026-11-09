@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-ff31bf7e
+sourceHash: sha256-c512d480
 ---
 
 # MCP 工具
@@ -447,9 +447,9 @@ Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话�
 |---|---|---|
 | `id` | 字符串 | 条目 id（`ent_…`）、事件 id（`<来源>:…`）、会话 id（单独的 id，或 `<来源>:<会话 id>`）、线索 id（`thr_…`）、召回 id（`rcl_…`）或提议 id（`prp_…`） |
 | `source` | 来源 id | 两个来源的会话共用同一个会话 id 时：指明是哪一个。不给时，这样的 id 会报错，并列出这些来源 |
-| `offset` | 整数，0 或更大 | 对事件：正文从哪里开始，以 UTF-16 码元计（默认 0），用来分页读取很长的正文 |
+| `offset` | 整数，0 或更大 | 对事件或条目：正文从哪里开始，以 UTF-16 码元计（默认 0），用来分页读取很长的正文 |
 
-- **条目**：`{ entry, sources, history, related }`。`sources` 是它引用的事件，每个带有它从中引用的 `quote`（没有则为 null）、截到 500 个字符的文本，以及 `session_title`；`history` 列出条目的每个版本，从早到晚，包括分叉，每个版本有 `id`、`supersedes`、`author`、`created` 和 `status`；`related` 以存根列出最多 10 个其他的当前条目，它们引用了这个条目所引用的某个事件，或它所引用会话中的另一个事件，从新到旧；对从记忆文件导入的条目，只列出引用了文件同一个版本的条目。已被取代或有效期已结束的条目，按 id 仍然可以取到。
+- **条目**：`{ entry, offset, total_chars, next_offset, sources, history, related }`。和事件一样，`entry` 带有从 `offset` 开始、最多 20,000 个字符的正文，并给出 `total_chars`（正文全长）和 `next_offset`（下一页的起点，读到末尾时为 null）；每一页都带有卡片的其余部分。`sources` 是它引用的事件，每个带有它从中引用的 `quote`（没有则为 null）、截到 500 个字符的文本，以及 `session_title`；`history` 列出条目的每个版本，从早到晚，包括分叉，每个版本有 `id`、`supersedes`、`author`、`created` 和 `status`；`related` 以存根列出最多 10 个其他的当前条目，它们引用了这个条目所引用的某个事件，或它所引用会话中的另一个事件，从新到旧；对从记忆文件导入的条目，只列出引用了文件同一个版本的条目。已被取代或有效期已结束的条目，按 id 仍然可以取到。
 - **事件**：事件本身，带有它的 `cwd`、`git_branch`、`agent_version` 和 `session_title`，以及从 `offset` 开始、最多 20,000 个字符的正文，并给出 `total_chars`（正文全长）和 `next_offset`（下一页的起点，读到末尾时为 null）。它的第一页（`offset` 为 0）还带有它近旁的内容：`turn`，即 `{ number, prompt }`，它所在的轮次和开启这一轮的提示的存根，在第一条提示之前则为 null；`replies_to`，它的 Agent 记录的、它所接续的事件的存根（Claude Code 的 `parentUuid`），没有则为 null；`around`，即 `{ before, after }`，同一会话中它前后各两个可见事件的存根，除非它本身是工具调用或工具结果，否则只取消息；以及 `cited_by`，以存根列出最多 10 个引用它的当前条目。
 - **会话**：一张卡片，带有会话的各字段、它的 `cwd`，以及 `turns`（轮数）；`prompts`，它前 20 轮的起点，每个为 `{ turn, id, time, text }`，以及 `more_prompts`，即这些之后还有多少轮；`thread`，即 `{ id, sessions }`，它所在的线索及其会话数，没有则为 null；`entries`，以存根列出最多 10 个从中写下的当前条目（引用了它的事件的条目），从新到旧；`recalls`，最多 10 次它拿到的召回，从新到旧，每次为 `{ id, occasion, time, items }`，`items` 是它交出的内容中仍然可见的数量；`before` 和 `after`，同一项目中按开始时间紧挨在它前后的会话，不限 Agent，没有则为 null；`parent`，即 `{ source, session, title }`，当这个会话是子会话时；以及 `children`，有子会话时每个子会话一行 `{ source, session, title, via, group }`，按工作流运行分组。这里的 `children` 是这个列表，不是时间线一行上的计数；没有父会话或子会话时，`parent` 和 `children` 都省略。要读某一轮，用 [`timeline`](#timeline)。
 - **线索**：`{ thread, project, title, started, ended, sessions, more_sessions, agents, branches, entries, last_prompt }`：它的 id，它的项目和名称（取自它的第一个会话），开始和结束的时间，它的前 20 个会话 `sessions`（从旧到新）以及之后还有多少个，它的会话所属的 `agents` 和所在的工作分支 `branches`，`entries`，以存根列出最多 10 个从其中任一会话写下的当前条目（从新到旧），以及 `last_prompt`，即有提示的会话中最近那一个的最新提示的存根，带有它的 `session`，没有则为 null。

@@ -252,7 +252,16 @@ export interface SourceOfEntry extends EventView {
 }
 
 export interface EntryResult {
+  /** The entry, with one page of its text (see TEXT_PAGE). */
   entry: EntryView;
+  /**
+   * Where `entry.text` starts in the entry's text, in UTF-16 code units, the length of all of it,
+   * and the offset of the next page, or null when this page reaches its end (absent from older
+   * hubs, which give the whole text). Every page carries the sources, history, and related entries.
+   */
+  offset?: number;
+  total_chars?: number;
+  next_offset?: number | null;
   sources: SourceOfEntry[];
   /** Every version of the entry, oldest first, forks included. */
   history: VersionView[];
@@ -800,13 +809,27 @@ export function timelineOf(db: Database, args: ToolArgs<'timeline'>): TimelineRe
   return { sessions: sessions.map((s) => shownSession(db, s, true)) };
 }
 
-/** An event's text is read in pages of this many UTF-16 code units. */
-export const EVENT_PAGE = 20_000;
+/** A long text, an event's or an entry's, is read in pages of this many UTF-16 code units. */
+export const TEXT_PAGE = 20_000;
+
+/** The page of a text that starts at `offset`, and where the next page starts. */
+function pageOf(text: string, offset: number) {
+  const total = text.length;
+  const start = Math.min(Math.max(0, offset), total);
+  const end = Math.min(start + TEXT_PAGE, total);
+  return {
+    text: clip(text.slice(start), TEXT_PAGE),
+    offset: start,
+    total_chars: total,
+    next_offset: end < total ? end : null,
+  };
+}
 
 /**
  * Open any id (see docs/architecture.md, "Reading along references"): an entry, a recall, an
  * event, a session, or a thread, each with what is next to it. `source` picks the session when two sources
- * have one of that id; `offset` is where an event's text starts, to read a long one in pages.
+ * have one of that id; `offset` is where an event's or an entry's text starts, to read a long one
+ * in pages.
  */
 export function getById(
   db: Database,
@@ -816,7 +839,7 @@ export function getById(
   if (!opened) missing(db, args.id);
   switch (opened.kind) {
     case 'entry':
-      return entryResult(db, opened.id);
+      return entryResult(db, opened.id, args.offset ?? 0);
     case 'recall':
       return recallResult(db, opened.id);
     case 'proposal':
@@ -1016,7 +1039,7 @@ export function followHere(
   return result;
 }
 
-function entryResult(db: Database, id: string): EntryResult {
+function entryResult(db: Database, id: string, offset: number): EntryResult {
   const entry = getEntry(db, id);
   if (!entry) missing(db, id);
   const sources = entrySources(db, entry.id);
@@ -1024,8 +1047,12 @@ function entryResult(db: Database, id: string): EntryResult {
     db,
     sources.map((s) => s.event),
   );
+  // A long entry is read in pages, as an event is; the rest of the card is small, and comes with
+  // every page, so that each says what the entry is and where it comes from.
+  const { text, ...page } = pageOf(entry.text, offset);
   return {
-    entry: entryView(entry),
+    entry: { ...entryView(entry), text },
+    ...page,
     sources: sources.map((s) => ({
       quote: s.quote,
       ...eventView(s.event, 500),
@@ -1045,22 +1072,20 @@ function entryResult(db: Database, id: string): EntryResult {
 function eventResult(db: Database, id: string, offset: number): EventResult {
   const event = getEvent(db, id);
   if (!event) missing(db, id);
-  const total = event.text.length;
-  const start = Math.min(Math.max(0, offset), total);
-  const end = Math.min(start + EVENT_PAGE, total);
+  const page = pageOf(event.text, offset);
   const result: EventResult = {
-    ...eventView(event, EVENT_PAGE),
-    text: clip(event.text.slice(start), EVENT_PAGE),
+    ...eventView(event, TEXT_PAGE),
+    text: page.text,
     cwd: event.cwd,
     git_branch: event.gitBranch,
     agent_version: event.agentVersion,
     session_title: null,
-    offset: start,
-    total_chars: total,
-    next_offset: end < total ? end : null,
+    offset: page.offset,
+    total_chars: page.total_chars,
+    next_offset: page.next_offset,
   };
   // Later pages of a long text carry only the text: its neighbours came with the first.
-  if (start > 0) {
+  if (page.offset > 0) {
     result.session_title = nameOf(getSession(db, event.source, event.sessionId));
     return result;
   }

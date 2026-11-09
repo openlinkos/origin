@@ -180,7 +180,9 @@ export const TOOL_SPECS = {
         .int()
         .min(0)
         .optional()
-        .describe("For an event: where to start reading its text (a page's next_offset)"),
+        .describe(
+          "For an event or an entry: where to start reading its text (a page's next_offset)",
+        ),
     },
     annotations: readOnly,
   },

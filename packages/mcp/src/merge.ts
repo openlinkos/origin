@@ -348,8 +348,14 @@ export function mergeGet(
     .filter((s) => !facts.forgotten(s.id))
     .map((s) => labelled(s, facts, s.id));
   const related = mine ? mine.related : theirs?.related?.filter((e) => shownHere(e.id, facts));
+  // The page of the text is the one `base.entry` holds.
+  const page =
+    base.offset === undefined
+      ? {}
+      : { offset: base.offset, total_chars: base.total_chars, next_offset: base.next_offset };
   return {
     ...resolveVersions(base.entry, history),
+    ...page,
     sources,
     ...(related === undefined ? {} : { related }),
     origin: mine ? 'local' : 'hub',

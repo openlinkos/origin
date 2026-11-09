@@ -95,7 +95,8 @@ export const ORIGIN_TOOLS: readonly OriginTool[] = [
         offset: {
           type: 'integer',
           minimum: 0,
-          description: "For an event: where to start reading its text (a page's next_offset)",
+          description:
+            "For an event or an entry: where to start reading its text (a page's next_offset)",
         },
       },
       required: ['id'],

@@ -700,6 +700,29 @@ describe('reading along references', () => {
     expect(rest.turn).toBeUndefined();
   });
 
+  it('pages a long entry as it pages an event, each page with its sources and history', async () => {
+    const id = await note(`${'y'.repeat(20_000)}${'z'.repeat(5000)}`, 'every minute');
+    const first = (await call('get', { id })).json;
+    expect(first).toMatchObject({ offset: 0, total_chars: 25_000, next_offset: 20_000 });
+    expect(first.entry.text).toBe(`${'y'.repeat(20_000)}…[+5000 chars]`);
+    expect(first.sources).toHaveLength(1);
+    const rest = (await call('get', { id, offset: first.next_offset })).json;
+    expect(rest).toMatchObject({ offset: 20_000, total_chars: 25_000, next_offset: null });
+    expect(rest.entry).toMatchObject({ id, status: 'active', text: 'z'.repeat(5000) });
+    expect(rest.sources.map((s: { id: string }) => s.id)).toEqual(
+      first.sources.map((s: { id: string }) => s.id),
+    );
+    expect(rest.history.map((v: { id: string }) => v.id)).toEqual([id]);
+    // Past the end, the page is empty.
+    const past = (await call('get', { id, offset: 30_000 })).json;
+    expect(past).toMatchObject({ offset: 25_000, total_chars: 25_000, next_offset: null });
+    expect(past.entry.text).toBe('');
+    // A short entry is one page.
+    const short = (await call('get', { id: await note('Short.', 'every minute') })).json;
+    expect(short).toMatchObject({ offset: 0, total_chars: 6, next_offset: null });
+    expect(short.entry.text).toBe('Short.');
+  });
+
   it('pages a session by turns and after an event, saying how many follow', async () => {
     await call('search', {}); // ingest
     const page = async (args: Record<string, unknown>) => {

@@ -282,6 +282,44 @@ describe('origin mcp on a connected device', () => {
     ]);
   });
 
+  it('pages a long entry from the store that has it', async () => {
+    await connect();
+    const text = `${'y'.repeat(20_000)}${'z'.repeat(10)}`;
+    const mine = (
+      await call('remember', {
+        kind: 'memory',
+        text,
+        confidence: 0.9,
+        sources: [{ event_id: 'fake:e1' }],
+      })
+    ).json.entry;
+    const first = await call('get', { id: mine.id });
+    expect(first.json).toMatchObject({ origin: 'local', offset: 0, next_offset: 20_000 });
+    const rest = await call('get', { id: mine.id, offset: 20_000 });
+    expect(rest.json).toMatchObject({
+      origin: 'local',
+      offset: 20_000,
+      total_chars: 20_010,
+      next_offset: null,
+      entry: { text: 'z'.repeat(10) },
+    });
+
+    const theirs = remember(hub.db, {
+      kind: 'memory',
+      text,
+      confidence: 0.9,
+      author: 'other@desktop',
+      sources: [{ eventId: 'fake:h1' }],
+    });
+    const hubs = await call('get', { id: theirs.id, offset: 20_000 });
+    expect(hubs.json).toMatchObject({
+      origin: 'hub',
+      offset: 20_000,
+      next_offset: null,
+      entry: { text: 'z'.repeat(10) },
+    });
+  });
+
   it('answers from the device alone, with a note, when the hub is slow or down', async () => {
     await connect({ hubTimeoutMs: 150 });
     await call('search', { query: 'Keep' }); // connect while the hub is fast
