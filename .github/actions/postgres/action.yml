@@ -1,7 +1,9 @@
 name: Start PostgreSQL
 description: >-
   Start a PostgreSQL 17 server for the tests, its cluster in UTF8 with the C locale and without
-  fsync, and set ORIGIN_TEST_DATABASE_URL to it, so that `pnpm test` runs on PostgreSQL.
+  fsync, and set ORIGIN_TEST_DATABASE_URL to it, so that `pnpm test` runs on PostgreSQL. Both servers
+  ask for a password that no other part of the URL holds, so that the tests can check that a
+  location never shows it and that a wrong one is refused.
 
 runs:
   using: composite
@@ -12,7 +14,7 @@ runs:
       shell: bash
       run: |
         docker run -d --name origin-pg -p 127.0.0.1:5432:5432 \
-          -e POSTGRES_PASSWORD=postgres \
+          -e POSTGRES_PASSWORD=origin-ci-secret \
           -e POSTGRES_INITDB_ARGS='--locale=C --encoding=UTF8' \
           postgres:17 \
           -c max_connections=500 -c fsync=off -c full_page_writes=off
@@ -22,7 +24,7 @@ runs:
           sleep 1
         done
         docker exec origin-pg pg_isready -h 127.0.0.1 -U postgres || { docker logs origin-pg; exit 1; }
-        echo 'ORIGIN_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres' >> "$GITHUB_ENV"
+        echo 'ORIGIN_TEST_DATABASE_URL=postgres://postgres:origin-ci-secret@127.0.0.1:5432/postgres' >> "$GITHUB_ENV"
 
     # The image's own PostgreSQL 17 (PGBIN), in a cluster of its own: its service is disabled, and
     # its cluster's locale is the machine's.
@@ -32,9 +34,11 @@ runs:
       run: |
         $data = Join-Path $env:RUNNER_TEMP 'pg'
         $log = Join-Path $env:RUNNER_TEMP 'pg.log'
-        & "$env:PGBIN\initdb.exe" -D $data -U postgres -A trust -E UTF8 --locale=C --no-instructions
+        $pw = Join-Path $env:RUNNER_TEMP 'pg.pw'
+        Set-Content -Path $pw -Value 'origin-ci-secret' -NoNewline
+        & "$env:PGBIN\initdb.exe" -D $data -U postgres -A scram-sha-256 "--pwfile=$pw" -E UTF8 --locale=C --no-instructions
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & "$env:PGBIN\pg_ctl.exe" -D $data -l $log -w -t 60 start `
           -o '-p 55432 -c listen_addresses=127.0.0.1 -c max_connections=500 -c fsync=off -c full_page_writes=off'
         if ($LASTEXITCODE -ne 0) { Get-Content $log; exit $LASTEXITCODE }
-        Add-Content -Path $env:GITHUB_ENV -Value 'ORIGIN_TEST_DATABASE_URL=postgres://postgres@127.0.0.1:55432/postgres'
+        Add-Content -Path $env:GITHUB_ENV -Value 'ORIGIN_TEST_DATABASE_URL=postgres://postgres:origin-ci-secret@127.0.0.1:55432/postgres'
