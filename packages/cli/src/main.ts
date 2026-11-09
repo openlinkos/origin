@@ -61,6 +61,7 @@ import {
   OriginError,
   openDatabase,
   originHome,
+  parseQuery,
   parseTime,
   pendingPurgeMirrors,
   type RecallItemRecord,
@@ -87,6 +88,7 @@ import {
   setAdminPassword,
   setAdminUsername,
   setStoreName,
+  snippetOf,
   sourcesDir,
   stats,
   storeName,
@@ -906,7 +908,8 @@ async function cmdTimeline(ctx: Ctx, args: string[]): Promise<number> {
 /** Whether an entry's validity has ended: its `valid_to` has passed. */
 const hasEnded = (e: Pick<Entry, 'validTo'>) => e.validTo !== null && e.validTo <= Date.now();
 
-function printEntryLine(e: ShownEntry): void {
+/** An entry as one line of a list: its tags, then its text, or a search's snippet of it. */
+function printEntryLine(e: ShownEntry, snippet?: string): void {
   const tags = [
     e.kind,
     `conf ${e.confidence}`,
@@ -917,7 +920,9 @@ function printEntryLine(e: ShownEntry): void {
   ]
     .filter(Boolean)
     .join(', ');
-  console.log(`[${fmtDateTime(e.createdAt)}] ${tags}\n    ${oneLine(e.text, 200)}\n    ↳ ${e.id}`);
+  console.log(
+    `[${fmtDateTime(e.createdAt)}] ${tags}\n    ${oneLine(snippet ?? e.text, 200)}\n    ↳ ${e.id}`,
+  );
 }
 
 async function cmdSearch(ctx: Ctx, args: string[]): Promise<number> {
@@ -932,8 +937,11 @@ async function cmdSearch(ctx: Ctx, args: string[]): Promise<number> {
     return 2;
   }
   const limit = values.limit ? Number(values.limit) : 20;
-  let entries: ShownEntry[];
+  const terms = parseQuery(query).map((t) => t.text);
+  let entries: Array<ShownEntry & { snippet: string }>;
   let hits: Array<ShownEvent & { snippet: string; parent?: string; parentTitle?: string | null }>;
+  // Whether more entries, or more events, match than the limit lets through.
+  let more: { entries: boolean; events: boolean };
   if (isRelay(ctx.db)) {
     if (values.recent) {
       console.error('On a relay, the hub ranks the matches by relevance; --recent does not apply.');
@@ -947,23 +955,34 @@ async function cmdSearch(ctx: Ctx, args: string[]): Promise<number> {
       include_tools: values.all,
       limit: hubLimit(limit, 100),
     })) as SearchResult;
-    entries = r.entries.map(fromEntryView);
+    entries = r.entries.map((v) => ({
+      ...fromEntryView(v),
+      // An older hub gives an entry's whole text and no snippet.
+      snippet: v.snippet ?? snippetOf(v.text, terms),
+    }));
     hits = r.events.map((h) => ({
       ...fromEventView(h),
       snippet: h.snippet,
       ...(h.parent ? { parent: h.parent, parentTitle: h.parent_title ?? null } : {}),
     }));
+    more = r.more ?? { entries: false, events: false };
   } else {
-    entries = searchEntries(ctx.db, query, { project: values.project, limit });
-    hits = searchEvents(ctx.db, query, {
+    // One more than the limit of each, to tell whether there are more.
+    const found = searchEntries(ctx.db, query, { project: values.project, limit: limit + 1 });
+    const matched = searchEvents(ctx.db, query, {
       since: parseTime(values.since),
       until: parseTime(values.until),
       source: values.source,
       project: values.project,
       kinds: values.all ? undefined : ['message'],
       order: values.recent ? 'recent' : 'relevance',
-      limit,
-    }).map((h) => ({ ...h, ...parentOfSession(ctx.db, h.source, h.sessionId) }));
+      limit: limit + 1,
+    });
+    more = { entries: found.length > limit, events: matched.length > limit };
+    entries = found.slice(0, limit).map((e) => ({ ...e, snippet: snippetOf(e.text, terms) }));
+    hits = matched
+      .slice(0, limit)
+      .map((h) => ({ ...h, ...parentOfSession(ctx.db, h.source, h.sessionId) }));
   }
   if (entries.length === 0 && hits.length === 0) {
     console.log('No hits.');
@@ -971,7 +990,7 @@ async function cmdSearch(ctx: Ctx, args: string[]): Promise<number> {
   }
   if (entries.length > 0) {
     console.log('Entries:');
-    for (const e of entries) printEntryLine(e);
+    for (const e of entries) printEntryLine(e, e.snippet);
     if (hits.length > 0) console.log('\nEvents:');
   }
   for (const h of hits) {
@@ -982,9 +1001,11 @@ async function cmdSearch(ctx: Ctx, args: string[]): Promise<number> {
       `[${fmtDateTime(h.ts)}] ${h.source} ${h.project ?? '—'} ${h.role}/${h.kind}${writtenBy(h)}\n    ${oneLine(h.snippet, 200)}${parent}\n    ↳ ${h.id}`,
     );
   }
+  const andMore = (yes: boolean) => (yes ? ' (more match)' : '');
   console.log(
-    `\n${count(entries.length, 'entry', 'entries')}, ${count(hits.length, 'event')}. Details: origin show <id>`,
+    `\n${count(entries.length, 'entry', 'entries')}${andMore(more.entries)}, ${count(hits.length, 'event')}${andMore(more.events)}. Details: origin show <id>`,
   );
+  if (more.entries || more.events) console.log('To see more, narrow the search or raise --limit.');
   return 0;
 }
 

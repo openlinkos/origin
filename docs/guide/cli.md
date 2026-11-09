@@ -60,13 +60,13 @@ origin push                                            Same as origin sync (kept
 
 ## Searching
 
-`search` looks in entries and in session messages. Every word of the query must occur, as a case-insensitive substring; CJK text works too, including one- and two-character words such as `部署`. Results are ranked by relevance among the newest 2,000 matches; `--recent` sorts by time instead, newest first, and `--all` also searches tool calls and their output. Other words shorter than three characters, such as `AI`, are checked against the newest 25,000 events that match the rest of the query, so add a longer word or a time range to reach older ones. A hit in a child session also names its parent (`source:id`) and that parent's title. The details are in [Search and timeline](../architecture.md#search-and-timeline).
+`search` looks in entries and in session messages. Every word of the query must occur, as a case-insensitive substring; CJK text works too, including one- and two-character words such as `部署`. Results are ranked by relevance among the newest 2,000 matches; `--recent` sorts by time instead, newest first, and `--all` also searches tool calls and their output. Other words shorter than three characters, such as `AI`, are checked against the newest 25,000 events that match the rest of the query, so add a longer word or a time range to reach older ones. A hit in a child session also names its parent (`source:id`) and that parent's title. Entries and events alike are shown by the words around their first match, with every match in brackets. At most `--limit` entries and as many events are shown (20 by default); when more match, the last lines say so. The details are in [Search and timeline](../architecture.md#search-and-timeline).
 
 ```console
 $ origin search "schema migrations"
 Entries:
 [2026-10-20 10:42] memory, conf 0.9, origin
-    No schema versioning or migrations before the first release; test against a fresh ORIGIN_HOME.
+    No [schema] versioning or [migrations] before the first release; test against a fresh ORIGIN_HOME.
     ↳ ent_5f0c2a9e41b7
 
 Events:

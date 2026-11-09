@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-14ebfec6
+sourceHash: sha256-de35a002
 ---
 
 # 命令参考
@@ -65,13 +65,13 @@ origin push                                            与 origin sync 相同（
 
 ## 检索 {#searching}
 
-`search` 同时检索条目和会话消息。查询中的每个词都必须作为子串出现（不区分大小写）；中文同样支持，包括 `部署` 这样一到两个字的词。结果在最新的 2,000 个匹配中按相关度排序；加 `--recent` 改为按时间从新到旧排序，加 `--all` 会把工具调用及其输出也纳入检索。其他短于三个字符的词，例如 `AI`，只在匹配查询其余部分的最新 25,000 个事件中核对，所以要找更早的事件，请加上一个更长的词或限定时间范围。落在子会话中的命中还会给出它的父会话（`source:id`）和父会话的标题。详见[检索与时间线](../architecture.md#search-and-timeline)。
+`search` 同时检索条目和会话消息。查询中的每个词都必须作为子串出现（不区分大小写）；中文同样支持，包括 `部署` 这样一到两个字的词。结果在最新的 2,000 个匹配中按相关度排序；加 `--recent` 改为按时间从新到旧排序，加 `--all` 会把工具调用及其输出也纳入检索。其他短于三个字符的词，例如 `AI`，只在匹配查询其余部分的最新 25,000 个事件中核对，所以要找更早的事件，请加上一个更长的词或限定时间范围。落在子会话中的命中还会给出它的父会话（`source:id`）和父会话的标题。条目和事件一样，都显示第一处匹配附近的文字，每处匹配都用方括号标出。条目和事件各自最多显示 `--limit` 条（默认 20）；匹配的更多时，最后几行会说明。详见[检索与时间线](../architecture.md#search-and-timeline)。
 
 ```console
 $ origin search "schema migrations"
 Entries:
 [2026-10-20 10:42] memory, conf 0.9, origin
-    No schema versioning or migrations before the first release; test against a fresh ORIGIN_HOME.
+    No [schema] versioning or [migrations] before the first release; test against a fresh ORIGIN_HOME.
     ↳ ent_5f0c2a9e41b7
 
 Events:

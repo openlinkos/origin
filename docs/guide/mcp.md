@@ -110,7 +110,7 @@ Full-text search over entries and session events, best match first. Without a qu
 | `include_tools` | boolean | `false` | Also search tool calls and tool results, not only messages |
 | `limit` | integer, 1 to 100 | 20 | At most this many entries, and this many events |
 
-It returns `{ entries, events }`: current entries, without those whose validity has ended, and events, each with its text cut to 400 characters, a `snippet` of up to 200 characters around the first match, with every match in brackets, and `session_title`, the title of the event's session or, without one, its first prompt. A hit whose session has a parent also has `parent` (`<source>:<session id>`) and `parent_title`, that parent's title as it is shown; both are omitted when there is no parent.
+It returns `{ entries, events, more }`: current entries, without those whose validity has ended, and events. Every hit is bounded, however long the entry or event it found: its text is cut to 400 characters, ending in `…[+N chars]` when cut, `total_chars` is the length of its whole text, which [`get`](#get) reads, and, with a query, `snippet` holds up to 200 characters around the first match, with every match in brackets. An event also has `session_title`, the title of its session or, without one, its first prompt. A hit whose session has a parent also has `parent` (`<source>:<session id>`) and `parent_title`, that parent's title as it is shown; both are omitted when there is no parent. `more` says, for `entries` and for `events`, whether more match than `limit` let through; to see them, narrow the search or raise the limit.
 
 ```json
 { "query": "release workflow", "limit": 5 }
@@ -122,7 +122,7 @@ It returns `{ entries, events }`: current entries, without those whose validity 
     {
       "id": "ent_3f9a1c2b7d4e",
       "kind": "memory",
-      "text": "Releases are tagged from master once CI passes on Ubuntu and Windows.",
+      "text": "The release workflow tags from master once CI passes on Ubuntu and Windows.",
       "confidence": 0.9,
       "status": "active",
       "concurrent": false,
@@ -134,7 +134,9 @@ It returns `{ entries, events }`: current entries, without those whose validity 
       "supersedes": null,
       "superseded_by": null,
       "root": "ent_3f9a1c2b7d4e",
-      "imported": false
+      "imported": false,
+      "snippet": "The [release] [workflow] tags from master once CI passes on Ubuntu and Windows.",
+      "total_chars": 75
     }
   ],
   "events": [
@@ -148,9 +150,11 @@ It returns `{ entries, events }`: current entries, without those whose validity 
       "kind": "message",
       "text": "Set up the release workflow: tag from master, publish with provenance.",
       "snippet": "Set up the [release] [workflow]: tag from master, publish with provenance.",
+      "total_chars": 70,
       "session_title": "Release workflow"
     }
-  ]
+  ],
+  "more": { "entries": false, "events": true }
 }
 ```
 

@@ -549,6 +549,7 @@ export {
   rebuildSearchIndexes,
   SCAN_LIMIT,
   searchEvents,
+  snippetOf,
   type TermKind,
 } from './search.js';
 export { getSetting, PULL_TOMBSTONES_AGAIN, setSetting } from './settings.js';

@@ -50,7 +50,7 @@ export const ORIGIN_TOOLS: readonly OriginTool[] = [
     name: 'origin_search',
     mcp: 'search',
     label: 'Origin search',
-    description: `Full-text search over the entries and archived session events of the user's memory in Origin, best match first. A hit on a child session includes \`parent\` (\`source:id\`) and \`parent_title\`. Without a query, lists the most recent entries. ${OPEN}`,
+    description: `Full-text search over the entries and archived session events of the user's memory in Origin, best match first. Each hit has its text cut to 400 characters, a \`snippet\` around the match, and \`total_chars\`; \`origin_get\` reads the whole. \`more\` says whether the limit left entries or events out. A hit on a child session includes \`parent\` (\`source:id\`) and \`parent_title\`. Without a query, lists the most recent entries. ${OPEN}`,
     parameters: {
       type: 'object',
       properties: {

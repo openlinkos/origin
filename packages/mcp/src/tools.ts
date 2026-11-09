@@ -65,7 +65,7 @@ export const TOOL_SPECS = {
   search: {
     title: 'Search memory',
     description:
-      'Full-text search over entries and archived session events, best match first. A hit on a child session includes `parent` (`source:id`) and `parent_title`. Without a query, lists the most recent entries.',
+      'Full-text search over entries and archived session events, best match first. Each hit has its text cut to 400 characters, a `snippet` around the match, and `total_chars`; `get` reads the whole. `more` says whether the limit left entries or events out. A hit on a child session includes `parent` (`source:id`) and `parent_title`. Without a query, lists the most recent entries.',
     inputSchema: {
       query: z.string().optional().describe('Words or phrases to find (any language)'),
       scope: z.enum(['all', 'entries', 'events']).default('all'),

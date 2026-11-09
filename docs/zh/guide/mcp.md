@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-4aa71a0d
+sourceHash: sha256-ff31bf7e
 ---
 
 # MCP 工具
@@ -114,7 +114,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 | `include_tools` | 布尔值 | `false` | 除了消息，也检索工具调用和工具结果 |
 | `limit` | 整数，1 到 100 | 20 | 条目和事件各自最多返回这么多 |
 
-返回 `{ entries, events }`：当前的条目（不含有效期已结束的），以及事件；每个事件的文本截到 400 个字符，并带有一个 `snippet`，即第一处匹配附近最多 200 个字符，每处匹配都用方括号标出，还带有 `session_title`，即事件所在会话的标题，没有标题时为它的第一条提示。所在会话有父会话的命中还有 `parent`（`<来源>:<会话 id>`）和 `parent_title`，即该父会话显示出来的标题；没有父会话时这两项都省略。
+返回 `{ entries, events, more }`：当前的条目（不含有效期已结束的），以及事件。无论找到的条目或事件有多长，每个命中都有上限：文本截到 400 个字符，截断时以 `…[+N chars]` 结尾；`total_chars` 是全文的长度，全文用 [`get`](#get) 读；有查询时，`snippet` 是第一处匹配附近最多 200 个字符，每处匹配都用方括号标出。事件还带有 `session_title`，即所在会话的标题，没有标题时为它的第一条提示。所在会话有父会话的命中还有 `parent`（`<来源>:<会话 id>`）和 `parent_title`，即该父会话显示出来的标题；没有父会话时这两项都省略。`more` 分别对 `entries` 和 `events` 说明匹配的是否比 `limit` 放进来的更多；要看到其余的，就缩小检索范围或调高上限。
 
 ```json
 { "query": "release workflow", "limit": 5 }
@@ -126,7 +126,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
     {
       "id": "ent_3f9a1c2b7d4e",
       "kind": "memory",
-      "text": "Releases are tagged from master once CI passes on Ubuntu and Windows.",
+      "text": "The release workflow tags from master once CI passes on Ubuntu and Windows.",
       "confidence": 0.9,
       "status": "active",
       "concurrent": false,
@@ -138,7 +138,9 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
       "supersedes": null,
       "superseded_by": null,
       "root": "ent_3f9a1c2b7d4e",
-      "imported": false
+      "imported": false,
+      "snippet": "The [release] [workflow] tags from master once CI passes on Ubuntu and Windows.",
+      "total_chars": 75
     }
   ],
   "events": [
@@ -152,9 +154,11 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
       "kind": "message",
       "text": "Set up the release workflow: tag from master, publish with provenance.",
       "snippet": "Set up the [release] [workflow]: tag from master, publish with provenance.",
+      "total_chars": 70,
       "session_title": "Release workflow"
     }
-  ]
+  ],
+  "more": { "entries": false, "events": true }
 }
 ```
 

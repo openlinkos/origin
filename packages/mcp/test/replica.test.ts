@@ -700,6 +700,38 @@ describe('reading along references on a connected device', () => {
     const empty = { session: 's', title: null, prompt: null, events: [], more: 0 };
     expect(mergeTimeline(empty, hub, facts, 5)).toMatchObject({ prompt: 'theirs', more: 7 });
   });
+
+  it('says there are more hits when either store does, or together they hold more', () => {
+    const facts = factsOf(['ent_00000000000a']);
+    const hit = (id: string) => ({ ...entry(id), root: id, status: 'active' }) as never;
+    const none = { entries: false, events: false };
+    const mine = { entries: [hit('ent_00000000000a')], events: [], more: none };
+    const merge = (hub: Parameters<typeof mergeSearch>[1], limit: number) =>
+      mergeSearch(mine, hub, facts, { ranked: true, limit }).more;
+    expect(merge({ entries: [hit('ent_00000000000b')], events: [], more: none }, 5)).toEqual(none);
+    // Two entries, one shown.
+    expect(merge({ entries: [hit('ent_00000000000b')], events: [], more: none }, 1)).toEqual({
+      entries: true,
+      events: false,
+    });
+    expect(merge({ entries: [], events: [], more: { entries: false, events: true } }, 5)).toEqual({
+      entries: false,
+      events: true,
+    });
+    expect(
+      mergeSearch({ ...mine, more: { entries: true, events: false } }, null, facts, {
+        ranked: true,
+        limit: 5,
+      }).more,
+    ).toEqual({ entries: true, events: false });
+    // A hub too old to say may have more whenever it filled its page.
+    const old = { entries: [hit('ent_00000000000b')], events: [] };
+    const alone = (limit: number) =>
+      mergeSearch({ entries: [], events: [], more: none }, old, facts, { ranked: true, limit }).more
+        ?.entries;
+    expect(alone(1)).toBe(true);
+    expect(alone(5)).toBe(false);
+  });
 });
 
 describe('refreshGate', () => {

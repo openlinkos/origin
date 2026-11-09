@@ -248,3 +248,28 @@ describe('origin show <thread id>', () => {
     expect(out.at(-1)).toBe('Not found: thr_000000000000');
   });
 });
+
+describe('origin search', () => {
+  it('shows an entry by the snippet around its match, and says when the limit left hits out', async () => {
+    const db = openDatabase(dbPath(home));
+    remember(db, {
+      kind: 'memory',
+      text: `${'Background on the client. '.repeat(20)}The zebrastore keeps a minute. ${'More. '.repeat(40)}`,
+      confidence: 0.9,
+      author: 'test',
+      sources: [{ eventId: 'fake:b4' }],
+    });
+    db.close();
+    expect(await main(['search', 'zebrastore'])).toBe(0);
+    const text = out.join('\n');
+    // The line starts near the match, not at the start of the text.
+    expect(text).toMatch(/\n {4}…[^\n]*client\. The \[zebrastore\] keeps a minute\./);
+    expect(text).toContain('1 entry, 0 events. Details: origin show <id>');
+    expect(text).not.toContain('more match');
+
+    out = [];
+    expect(await main(['search', 'cache', '--limit', '1'])).toBe(0);
+    expect(out.join('\n')).toMatch(/1 entry, 1 event \(more match\)\. Details/);
+    expect(out.at(-1)).toBe('To see more, narrow the search or raise --limit.');
+  });
+});

@@ -39,6 +39,7 @@ import {
   type Proposal,
   type ProposalJson,
   parseFeedCursor,
+  parseQuery,
   parseTime,
   planRecall,
   prepareProposal,
@@ -63,6 +64,7 @@ import {
   sessionFold,
   sessionKey,
   sessionNames,
+  snippetOf,
   stubText,
   type TurnStart,
   usedRefs,
@@ -127,6 +129,8 @@ export interface EventView extends WrittenBy {
 
 export interface SearchHitView extends EventView {
   snippet: string;
+  /** The length of the event's whole text, which `get` reads in pages (absent from older hubs). */
+  total_chars?: number;
   /** The title of the event's session, or its first prompt (absent from older hubs). */
   session_title?: string | null;
   /** `<source>:<session id>` of the session's parent, when it has one. */
@@ -135,9 +139,24 @@ export interface SearchHitView extends EventView {
   parent_title?: string | null;
 }
 
+/**
+ * An entry as search finds it, bounded as an event hit is: `text` cut to SEARCH_TEXT_MAX
+ * characters, with a `snippet` around the first match when there is a query, and the length of the
+ * whole text, which `get` reads in pages. Older hubs give the whole text and neither field.
+ */
+export interface EntryHitView extends EntryView {
+  snippet?: string;
+  total_chars?: number;
+}
+
 export interface SearchResult {
-  entries: EntryView[];
+  entries: EntryHitView[];
   events: SearchHitView[];
+  /**
+   * Whether more entries, or more events, match than the result holds: the `limit` left them out
+   * (absent from older hubs).
+   */
+  more?: { entries: boolean; events: boolean };
 }
 
 export interface SessionView {
@@ -687,11 +706,21 @@ function missing(db: Database, id: string): never {
   );
 }
 
+/** A hit's text in a search result is cut to this many characters; `get` reads the rest. */
+export const SEARCH_TEXT_MAX = 400;
+
+/**
+ * Search entries and events (see docs/architecture.md#search-and-timeline). Every hit is bounded,
+ * whatever the length of what it found: its text cut to SEARCH_TEXT_MAX characters, a snippet
+ * around the first match, and its whole length; and `more` says whether the limit left hits out.
+ */
 export function searchStore(db: Database, args: ToolArgs<'search'>): SearchResult {
   const since = optionalTime(args.since);
   const until = optionalTime(args.until);
   const query = args.query?.trim() ?? '';
-  const entryFilter = { kind: args.kind, project: args.project, since, until, limit: args.limit };
+  // One more than the limit of each, to tell whether there are more.
+  const ask = args.limit + 1;
+  const entryFilter = { kind: args.kind, project: args.project, since, until, limit: ask };
   const entries =
     args.scope === 'events'
       ? []
@@ -707,17 +736,26 @@ export function searchStore(db: Database, args: ToolArgs<'search'>): SearchResul
           source: args.source,
           project: args.project,
           kinds: args.include_tools ? undefined : ['message'],
-          limit: args.limit,
+          limit: ask,
         });
+  const more = { entries: entries.length > args.limit, events: events.length > args.limit };
+  const terms = parseQuery(query).map((t) => t.text);
+  const shownEvents = events.slice(0, args.limit);
   // Each hit names its session; the names of the page's sessions are looked up together.
-  const names = sessionNames(db, events);
+  const names = sessionNames(db, shownEvents);
   return {
-    entries: entries.map(entryView),
-    events: events.map((h) => {
+    entries: entries.slice(0, args.limit).map((e) => ({
+      ...entryView(e),
+      text: clip(e.text, SEARCH_TEXT_MAX),
+      ...(query ? { snippet: snippetOf(e.text, terms) } : {}),
+      total_chars: e.text.length,
+    })),
+    events: shownEvents.map((h) => {
       const parent = getSessionParent(db, h.source, h.sessionId);
       return {
-        ...eventView(h, 400),
+        ...eventView(h, SEARCH_TEXT_MAX),
         snippet: h.snippet,
+        total_chars: h.text.length,
         session_title: names.get(sessionKey(h.source, h.sessionId)) ?? null,
         ...(parent
           ? {
@@ -727,6 +765,7 @@ export function searchStore(db: Database, args: ToolArgs<'search'>): SearchResul
           : {}),
       };
     }),
+    more,
   };
 }
 

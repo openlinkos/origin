@@ -2,6 +2,7 @@ import {
   type ChangesResult,
   type DigestResult,
   type DigestSessionView,
+  type EntryHitView,
   type EntryResult,
   type EntryStub,
   type EntryView,
@@ -115,17 +116,17 @@ export function mergeSearch(
     ? interleave(local.entries, fromHub)
     : [...local.entries, ...fromHub].sort((a, b) => (isNewer(a, b) ? -1 : 1));
   // One result per entry: its current version, at the best rank any of its versions had.
-  const winners = new Map<string, EntryView>();
+  const winners = new Map<string, EntryHitView>();
   for (const e of candidates) {
     const best = winners.get(e.root);
     if (!best || isNewer(e, best)) winners.set(e.root, e);
   }
-  const entries: EntryView[] = [];
+  const entries: EntryHitView[] = [];
   const emitted = new Set<string>();
   for (const e of candidates) {
     if (emitted.has(e.root)) continue;
     emitted.add(e.root);
-    const w = winners.get(e.root) as EntryView;
+    const w = winners.get(e.root) as EntryHitView;
     entries.push(labelled(w, facts, w.id));
   }
 
@@ -136,7 +137,19 @@ export function mergeSearch(
   )
     .filter((e) => !facts.forgotten(e.id) && !removedHere(facts, e.source, e.session))
     .map((e) => labelled(e, facts, e.id));
-  return { entries: entries.slice(0, opts.limit), events: events.slice(0, opts.limit) };
+  // More match when either side says so, or when together they hold more than the limit. A hub too
+  // old to say may have more whenever it filled its page.
+  const moreOf = (side: SearchResult | null, list: 'entries' | 'events') =>
+    side !== null &&
+    (side.more ? side.more[list] : side === hub && side[list].length >= opts.limit);
+  return {
+    entries: entries.slice(0, opts.limit),
+    events: events.slice(0, opts.limit),
+    more: {
+      entries: moreOf(local, 'entries') || moreOf(hub, 'entries') || entries.length > opts.limit,
+      events: moreOf(local, 'events') || moreOf(hub, 'events') || events.length > opts.limit,
+    },
+  };
 }
 
 function dedupe<T>(items: T[], id: (x: T) => string): T[] {

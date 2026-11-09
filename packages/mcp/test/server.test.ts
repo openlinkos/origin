@@ -357,9 +357,44 @@ describe('origin MCP server', () => {
 
     const forgotten = await call('forget', { id: v2.id, reason: 'test' });
     expect(forgotten.json.forgotten_entries.sort()).toEqual([entry.id, v2.id].sort());
-    expect((await call('search', { query: 'SQLite' })).json).toEqual({ entries: [], events: [] });
+    expect((await call('search', { query: 'SQLite' })).json).toEqual({
+      entries: [],
+      events: [],
+      more: { entries: false, events: false },
+    });
     const gone = await call('get', { id: 'fake:e1' });
     expect(gone).toMatchObject({ isError: true, text: 'fake:e1 has been forgotten.' });
+  });
+
+  it('bounds every hit, entries as events, and says when the limit left hits out', async () => {
+    const tail = 'Then the retries back off for a minute. '.repeat(40);
+    const long = `${'Background on the queue. '.repeat(40)}Chose zebrafence for the queue. ${tail}`;
+    const from = { confidence: 0.9, sources: [{ event_id: 'fake:e1' }] };
+    const written = (await call('remember', { kind: 'memory', text: long, ...from })).json.entry;
+    await call('remember', { kind: 'memory', text: 'Short note: zebrafence stays.', ...from });
+
+    const r = await call('search', { query: 'zebrafence', scope: 'entries', limit: 1 });
+    expect(r.json.more).toEqual({ entries: true, events: false });
+    const all = await call('search', { query: 'zebrafence', scope: 'entries' });
+    expect(all.json.more).toEqual({ entries: false, events: false });
+    const hit = all.json.entries.find((e: { id: string }) => e.id === written.id);
+    // The text is cut as an event's is, the snippet sits around the match, and the length says
+    // how much `get` has.
+    expect(hit.total_chars).toBe(long.trim().length);
+    expect(hit.text.length).toBeLessThan(500);
+    expect(hit.text).toMatch(/…\[\+\d+ chars\]$/);
+    expect(hit.snippet).toContain('[zebrafence]');
+    expect(hit.snippet.length).toBeLessThan(220);
+
+    // A list without a query has no snippet, and is bounded all the same.
+    const listed = await call('search', { scope: 'entries', limit: 1 });
+    expect(listed.json.more.entries).toBe(true);
+    expect(listed.json.entries[0]).not.toHaveProperty('snippet');
+    expect(listed.json.entries[0].total_chars).toBeGreaterThan(0);
+
+    const events = await call('search', { query: 'SQLite', scope: 'events', limit: 1 });
+    expect(events.json.more).toEqual({ entries: false, events: true });
+    expect(events.json.events[0].total_chars).toBe(events.json.events[0].text.length);
   });
 
   it('forgets only with a reason, records who asked, and has no way to restore', async () => {
