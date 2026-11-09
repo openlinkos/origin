@@ -1530,155 +1530,151 @@ interface PurgeMaker {
 function applyPlan(db: Database, plan: PurgePlan, state: PlanState, made: PurgeMaker): PurgeResult {
   const d = db.dialect;
   const id = made.id;
+  // The guards are lifted, and the work tables filled, in the purge's own transaction only, and
+  // emptied again before it commits. A failure rolls them back with the rest, and runs nothing more
+  // here: PostgreSQL refuses every statement in a transaction after an error.
   db.exec(
     `INSERT INTO guard_lift (name) VALUES ${LIFTED.map((n) => `('${n}')`).join(', ')}
        ON CONFLICT DO NOTHING`,
   );
-  try {
-    if (d === 'sqlite') db.exec('PRAGMA defer_foreign_keys = ON');
-    workTables(db);
-    try {
-      db.prepare(`INSERT INTO doomed_session (source, session_id) ${pairList(d)}`).run(
-        JSON.stringify(plan.sessions.map((s) => [s.source, s.sessionId])),
-      );
-      // Events of a purged session are not listed one by one, except on a hub those a device
-      // sent: an entry citing one may arrive from elsewhere, and should find it purged.
-      db.prepare(
-        `INSERT INTO doomed_event (id, seq, listed)
-         SELECT e.id, e.seq, CASE WHEN EXISTS (SELECT 1 FROM doomed_session s
-                                     WHERE s.source = e.source AND s.session_id = e.session_id)
-                               AND NOT EXISTS (SELECT 1 FROM raw_file f
-                                     WHERE f.id = e.raw_file_id AND f.path LIKE '@%')
-                             THEN 0 ELSE 1 END
-           FROM event e WHERE e.id IN (${idList(d, 'text')})`,
-      ).run(JSON.stringify(plan.events));
-      db.prepare(
-        `INSERT INTO doomed_entry (id) SELECT id FROM entry WHERE id IN (${idList(d, 'text')})`,
-      ).run(JSON.stringify(plan.entries));
-      db.prepare(
-        `INSERT INTO doomed_recall (id, seq)
-         SELECT id, seq FROM recall WHERE id IN (${idList(d, 'text')})`,
-      ).run(JSON.stringify(plan.recalls));
+  if (d === 'sqlite') db.exec('PRAGMA defer_foreign_keys = ON');
+  workTables(db);
+  db.prepare(`INSERT INTO doomed_session (source, session_id) ${pairList(d)}`).run(
+    JSON.stringify(plan.sessions.map((s) => [s.source, s.sessionId])),
+  );
+  // Events of a purged session are not listed one by one, except on a hub those a device
+  // sent: an entry citing one may arrive from elsewhere, and should find it purged.
+  db.prepare(
+    `INSERT INTO doomed_event (id, seq, listed)
+     SELECT e.id, e.seq, CASE WHEN EXISTS (SELECT 1 FROM doomed_session s
+                                 WHERE s.source = e.source AND s.session_id = e.session_id)
+                           AND NOT EXISTS (SELECT 1 FROM raw_file f
+                                 WHERE f.id = e.raw_file_id AND f.path LIKE '@%')
+                         THEN 0 ELSE 1 END
+       FROM event e WHERE e.id IN (${idList(d, 'text')})`,
+  ).run(JSON.stringify(plan.events));
+  db.prepare(
+    `INSERT INTO doomed_entry (id) SELECT id FROM entry WHERE id IN (${idList(d, 'text')})`,
+  ).run(JSON.stringify(plan.entries));
+  db.prepare(
+    `INSERT INTO doomed_recall (id, seq)
+     SELECT id, seq FROM recall WHERE id IN (${idList(d, 'text')})`,
+  ).run(JSON.stringify(plan.recalls));
 
-      const doomed = new Set(plan.sessions.map((s) => key(s.source, s.sessionId)));
-      const affected = affectedSessions(db, plan, state, doomed);
-      const threadOf = db.prepare(
-        'SELECT thread_id FROM session_thread WHERE source = ? AND session_id = ?',
-      );
-      const threads = new Set<string>();
-      for (const k of [...doomed, ...affected.keys()]) {
-        const { source, sessionId } = unkey(k);
-        const row = threadOf.get(source, sessionId) as { thread_id: string } | undefined;
-        if (row) threads.add(row.thread_id);
-      }
-      const floor = (
-        db.prepare('SELECT MAX(seq) AS n FROM doomed_event').get() as { n: number | null }
-      ).n;
-      const recallFloor = (
-        db.prepare('SELECT MAX(seq) AS n FROM doomed_recall').get() as { n: number | null }
-      ).n;
-
-      const search = d === 'sqlite' ? prepareSearchDeletes(db, plan.events.length) : null;
-      deleteRows(db, plan);
-      if (search) finishSearchDeletes(db, search);
-      for (const f of plan.files) {
-        if (!state.planner.files.get(f.rawFileId)?.places) continue;
-        db.prepare('DELETE FROM place_head WHERE source = ? AND device = ?').run(
-          f.source,
-          parseRawPath(f.path).device ?? '',
-        );
-      }
-      refreshAffected(db, plan, state, affected);
-      refreshThreads(db, [...doomed, ...affected.keys()].map(unkey));
-      db.exec(`DELETE FROM session_thread WHERE (source, session_id) IN (${DOOMED_SESSION})`);
-      // Items naming a thread that is gone with its sessions.
-      const touched = new Set(plan.recallItems.map((i) => i.recall));
-      let threadItems = 0;
-      const gone = [...threads].filter(
-        (t) => !db.prepare('SELECT 1 AS one FROM session_thread WHERE thread_id = ?').get(t),
-      );
-      if (gone.length > 0) {
-        const items = db
-          .prepare(
-            `SELECT recall_id, rank FROM recall_item
-              WHERE kind = 'thread' AND ref IN (${idList(d, 'text')})`,
-          )
-          .all(JSON.stringify(gone)) as Array<{ recall_id: string; rank: number }>;
-        const remove = db.prepare('DELETE FROM recall_item WHERE recall_id = ? AND rank = ?');
-        for (const i of items) {
-          if (remove.run(i.recall_id, i.rank).changes === 0) continue;
-          touched.add(i.recall_id);
-          threadItems++;
-        }
-      }
-
-      const counts: PurgeCounts = {
-        ...plan.counts,
-        recallItems: plan.counts.recallItems + threadItems,
-      };
-      const touchedOut: PurgeTouched = {
-        tombstones: plan.tombstones,
-        recalls: [...touched].filter((r) => !plan.recalls.includes(r)).sort(),
-      };
-      const { seq } = db
-        .prepare(
-          `INSERT INTO purge (id, at, origin, author, channel, reason, selector, counts, touched,
-                              seq_floor, received_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           RETURNING seq`,
-        )
-        .get(
-          id,
-          made.at,
-          made.origin,
-          made.author,
-          made.channel,
-          made.reason,
-          JSON.stringify(plan.selector),
-          JSON.stringify(counts),
-          JSON.stringify(touchedOut),
-          floor,
-          made.receivedAt,
-        ) as { seq: number };
-      recordPurged(db, id, plan);
-      const pending = queueMirrors(db, id, Number(seq), plan);
-      if (recallFloor !== null) {
-        const known = Number(getSetting(db, RECALL_SEQ_FLOOR) ?? 0);
-        if (recallFloor > known) setSetting(db, RECALL_SEQ_FLOOR, String(recallFloor));
-      }
-      recordAudit(
-        db,
-        {
-          actor: made.actor,
-          // A hub's purge came through its replication API.
-          channel: made.channel === 'hub' ? 'api' : made.channel,
-          action: 'purge',
-          target: id,
-          detail: { ...counts },
-        },
-        made.receivedAt ?? made.at,
-      );
-      const record: PurgeRecord = {
-        seq: Number(seq),
-        id,
-        at: made.at,
-        origin: made.origin,
-        author: made.author,
-        channel: made.channel,
-        reason: made.reason,
-        selector: plan.selector,
-        counts,
-        touched: touchedOut,
-        seqFloor: floor === null ? null : Number(floor),
-        receivedAt: made.receivedAt,
-      };
-      return { id, record, plan, mirrors: null, pending };
-    } finally {
-      clearWorkTables(db);
-    }
-  } finally {
-    db.exec('DELETE FROM guard_lift');
+  const doomed = new Set(plan.sessions.map((s) => key(s.source, s.sessionId)));
+  const affected = affectedSessions(db, plan, state, doomed);
+  const threadOf = db.prepare(
+    'SELECT thread_id FROM session_thread WHERE source = ? AND session_id = ?',
+  );
+  const threads = new Set<string>();
+  for (const k of [...doomed, ...affected.keys()]) {
+    const { source, sessionId } = unkey(k);
+    const row = threadOf.get(source, sessionId) as { thread_id: string } | undefined;
+    if (row) threads.add(row.thread_id);
   }
+  const floor = (db.prepare('SELECT MAX(seq) AS n FROM doomed_event').get() as { n: number | null })
+    .n;
+  const recallFloor = (
+    db.prepare('SELECT MAX(seq) AS n FROM doomed_recall').get() as { n: number | null }
+  ).n;
+
+  const search = d === 'sqlite' ? prepareSearchDeletes(db, plan.events.length) : null;
+  deleteRows(db, plan);
+  if (search) finishSearchDeletes(db, search);
+  for (const f of plan.files) {
+    if (!state.planner.files.get(f.rawFileId)?.places) continue;
+    db.prepare('DELETE FROM place_head WHERE source = ? AND device = ?').run(
+      f.source,
+      parseRawPath(f.path).device ?? '',
+    );
+  }
+  refreshAffected(db, plan, state, affected);
+  refreshThreads(db, [...doomed, ...affected.keys()].map(unkey));
+  db.exec(`DELETE FROM session_thread WHERE (source, session_id) IN (${DOOMED_SESSION})`);
+  // Items naming a thread that is gone with its sessions.
+  const touched = new Set(plan.recallItems.map((i) => i.recall));
+  let threadItems = 0;
+  const gone = [...threads].filter(
+    (t) => !db.prepare('SELECT 1 AS one FROM session_thread WHERE thread_id = ?').get(t),
+  );
+  if (gone.length > 0) {
+    const items = db
+      .prepare(
+        `SELECT recall_id, rank FROM recall_item
+          WHERE kind = 'thread' AND ref IN (${idList(d, 'text')})`,
+      )
+      .all(JSON.stringify(gone)) as Array<{ recall_id: string; rank: number }>;
+    const remove = db.prepare('DELETE FROM recall_item WHERE recall_id = ? AND rank = ?');
+    for (const i of items) {
+      if (remove.run(i.recall_id, i.rank).changes === 0) continue;
+      touched.add(i.recall_id);
+      threadItems++;
+    }
+  }
+
+  const counts: PurgeCounts = {
+    ...plan.counts,
+    recallItems: plan.counts.recallItems + threadItems,
+  };
+  const touchedOut: PurgeTouched = {
+    tombstones: plan.tombstones,
+    recalls: [...touched].filter((r) => !plan.recalls.includes(r)).sort(),
+  };
+  const { seq } = db
+    .prepare(
+      `INSERT INTO purge (id, at, origin, author, channel, reason, selector, counts, touched,
+                          seq_floor, received_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       RETURNING seq`,
+    )
+    .get(
+      id,
+      made.at,
+      made.origin,
+      made.author,
+      made.channel,
+      made.reason,
+      JSON.stringify(plan.selector),
+      JSON.stringify(counts),
+      JSON.stringify(touchedOut),
+      floor,
+      made.receivedAt,
+    ) as { seq: number };
+  recordPurged(db, id, plan);
+  const pending = queueMirrors(db, id, Number(seq), plan);
+  if (recallFloor !== null) {
+    const known = Number(getSetting(db, RECALL_SEQ_FLOOR) ?? 0);
+    if (recallFloor > known) setSetting(db, RECALL_SEQ_FLOOR, String(recallFloor));
+  }
+  recordAudit(
+    db,
+    {
+      actor: made.actor,
+      // A hub's purge came through its replication API.
+      channel: made.channel === 'hub' ? 'api' : made.channel,
+      action: 'purge',
+      target: id,
+      detail: { ...counts },
+    },
+    made.receivedAt ?? made.at,
+  );
+  const record: PurgeRecord = {
+    seq: Number(seq),
+    id,
+    at: made.at,
+    origin: made.origin,
+    author: made.author,
+    channel: made.channel,
+    reason: made.reason,
+    selector: plan.selector,
+    counts,
+    touched: touchedOut,
+    seqFloor: floor === null ? null : Number(floor),
+    receivedAt: made.receivedAt,
+  };
+  clearWorkTables(db);
+  db.exec('DELETE FROM guard_lift');
+  return { id, record, plan, mirrors: null, pending };
 }
 
 /**
