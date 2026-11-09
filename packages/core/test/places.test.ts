@@ -514,6 +514,29 @@ describe('places.jsonl', () => {
     }
   });
 
+  it('keeps the latest line of each key under a plain-text key', async () => {
+    const home = path.join(tempDir('origin-place-keys-'), 'home');
+    const db = open(home);
+    try {
+      const rootLine =
+        '{"v":1,"type":"root","path":"d:/demo-app","project":"demo-app","root":"d:/demo-app","signal":"git"}';
+      const pending = [rootLine, placeJson('s1', 'demo-app')];
+      const file = {
+        absPath: 'places.jsonl',
+        relPath: 'places.jsonl',
+        generated: { token: 'keys', mtimeMs: 1, next: () => pending.splice(0) },
+      };
+      await ingestPlacesFile({ db, home }, 'fake', file);
+      const keys = (
+        db.prepare('SELECT key FROM place_head ORDER BY key').all() as Array<{ key: string }>
+      ).map((r) => r.key);
+      // PostgreSQL's text cannot hold U+0000, so a key must not need it to be found again.
+      expect(keys).toEqual(['place:s1', 'root:d:/demo-app', 'tip']);
+    } finally {
+      db.close();
+    }
+  });
+
   it('is store format 12 and starts empty', () => {
     expect(STORE_VERSION).toBe(12);
     const db = open(tempDir('origin-place-ver-'));

@@ -220,7 +220,9 @@ export const MIGRATIONS: Migration[] = [
     // migrations. The SQL is written here, not imported from schema.ts; the two must stay the same.
     // Then threads again: until now, once a session had a place, the branch rule took every
     // session for that place's project, and joined sessions of different projects on one branch.
-    // Stores in PostgreSQL start at this version.
+    // And place_head, the latest places line of each key, is emptied: its keys were separated by
+    // U+0000, which PostgreSQL's text cannot hold, and are plain text now. The next sync of each
+    // places file reads its mirror again. Stores in PostgreSQL start at this version.
     version: 12,
     name: 'purges, append-only guards only a purge can lift, and threads again',
     up: ({ db }) => {
@@ -230,6 +232,7 @@ export const MIGRATIONS: Migration[] = [
         if (db.hasTable(table)) db.exec(sql);
       }
       deriveThreads(db);
+      if (db.hasTable('place_head')) db.exec('DELETE FROM place_head');
     },
   },
 ];

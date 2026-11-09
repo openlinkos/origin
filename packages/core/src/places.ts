@@ -696,8 +696,12 @@ function mirrorPlaceLines(db: Database, home: string, source: string, device = '
     .filter((line) => line.length > 0);
 }
 
-/** The key under which the latest line of a session or path is kept. The tip is `\\0`. */
-const PLACE_TIP = '\0';
+/**
+ * The key under which the latest line of a session or path is kept: `root:<path>`,
+ * `place:<session>`, or `parent:<session>`; the tip is `tip`. Plain text, which both engines store
+ * as it is (PostgreSQL's text cannot hold U+0000).
+ */
+const PLACE_TIP = 'tip';
 
 function placeLineKey(line: string): string | null {
   let value: unknown;
@@ -709,13 +713,13 @@ function placeLineKey(line: string): string | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const obj = value as Record<string, unknown>;
   if (obj.type === 'root' && typeof obj.path === 'string' && obj.path.length > 0) {
-    return `root\0${obj.path}`;
+    return `root:${obj.path}`;
   }
   if (obj.type === 'place' && typeof obj.session === 'string' && obj.session.length > 0) {
-    return `place\0${obj.session}`;
+    return `place:${obj.session}`;
   }
   if (obj.type === 'parent' && typeof obj.session === 'string' && obj.session.length > 0) {
-    return `parent\0${obj.session}`;
+    return `parent:${obj.session}`;
   }
   return null;
 }

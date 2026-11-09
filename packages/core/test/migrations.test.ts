@@ -560,12 +560,18 @@ describe('a store of version 11', () => {
         )
         .all(),
     ).toEqual([]);
+    // The latest places line of a key, as version 11 kept it: under a key separated by U+0000.
+    v11
+      .prepare(`INSERT INTO place_head (source, device, key, line) VALUES ('fake', '', ?, '{}')`)
+      .run('place\0s1');
     v11.close();
 
     const logged: string[] = [];
     db = openDatabase(file, { log: (m) => logged.push(m) });
     expect(userVersion(db)).toBe(STORE_VERSION);
     expect(logged.join('\n')).toMatch(/Upgrading the store to version 12/);
+    // Emptied, for the next sync of the places file to fill under plain-text keys.
+    expect(db.prepare('SELECT COUNT(*) AS n FROM place_head').get()).toEqual({ n: 0 });
     const fresh = openDatabase(path.join(tmp, 'fresh.db'));
     expect(schemaOf(db)).toEqual(schemaOf(fresh));
     fresh.close();

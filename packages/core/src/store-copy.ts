@@ -216,7 +216,7 @@ const MASK = (1n << 256n) - 1n;
  * The digest of a table's rows, whatever the order they are read in: the SHA-256 of the number of
  * rows and of the sum, modulo 2^256, of each row's SHA-256 (its columns by name, each value written
  * with its type). The same rows give the same digest in either engine, although PostgreSQL may
- * order them otherwise: a key's U+0000 is U+FFFD there (place_head's keys hold one).
+ * order them otherwise: a text's U+0000 is U+FFFD there.
  */
 class TableDigest {
   private readonly order: Column[];
