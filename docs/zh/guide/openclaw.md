@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-d63e0bda
+sourceHash: sha256-b9a07aa8
 ---
 
 # 接入 OpenClaw
@@ -12,6 +12,7 @@ sourceHash: sha256-d63e0bda
 
 - **每一轮，在它结束时。** 有会话访问权限时（见[下文](#with-or-without-conversation-access)），插件在一次运行结束时（`agent_end`），以及在 OpenClaw 把消息压缩掉之前（`before_compaction`），读取这次运行的消息。没有这个权限时，它用到达的消息（`message_received`）、工具调用（`after_tool_call`）和每条发出的回复（`message_sent`）拼出每一轮。
 - **消息与工具。** 用户的消息、Agent 的回复、它的工具调用（`tool_use`）及其结果（`tool_result`），像 Origin 的适配器那样分别截断到 2,000 和 4,000 个字符。OpenClaw 为一轮对话附加的上下文，以及它压缩会话时写下的摘要，记为 `meta`。思考过程不发送。
+- **附件。** 带着文件（例如一张照片）的消息会说明这一点：每个文件的类型（`image`、`audio`、`video`、`sticker` 或 `file`），以及 OpenClaw 给出时的文件名和大小，最多十个，记在这一行的 `meta.attachments` 中；消息文本之后还会为每个文件加一个标记，例如 `[image: IMG_0001.jpg]`，让搜索能找到它，也让只有文件的消息同样被记录下来。文件的内容和它存放的位置从不发送：没有内容、路径或链接。
 - **每条消息是谁写的。** 每条用户消息都按 OpenClaw 的记录说明它是谁写的：OpenClaw 的所有者、另一个人、另一个 Agent，还是 OpenClaw 自己，以及用的是什么名字（见[下文](#who-wrote-each-message)）。
 - **会话。** 每个 OpenClaw 会话键对应一个会话，例如 `agent:main:telegram:direct:42`；它的标题只设一次，取自第一条用户消息，截断到 80 个字符，并去掉渠道加的信封。`/new` 和 `/reset` 保留会话键，所以对话在 Origin 中延续在同一个会话里；每一行的 `meta.sessionId` 能区分 OpenClaw 的各个会话。
 - **项目。** 每个会话的项目是它的 Agent 的 id，例如 `main`，除非你按渠道命名它，或者给所有会话同一个名字（`projectBy`、`project`）。

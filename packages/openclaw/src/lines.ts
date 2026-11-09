@@ -60,7 +60,29 @@ export interface Draft {
   ms: number;
   /** A user message's line: how it pairs with the persisted copy of its message. */
   pair?: Pairing;
+  /**
+   * A user message's text without the markers of its attachments, and whether OpenClaw's facts
+   * about them (name, size) were known when the line was built, rather than only image blocks.
+   */
+  body?: string;
+  attachmentFacts?: boolean;
 }
+
+/**
+ * What a line records of a file that came with a message: its kind, and its name and size when
+ * OpenClaw gives them. Never its content, nor a path or URL that would fetch it.
+ */
+export interface Attachment {
+  kind: AttachmentKind;
+  name?: string;
+  size?: number;
+}
+
+export type AttachmentKind = 'image' | 'audio' | 'video' | 'sticker' | 'file';
+
+/** At most this many attachments of a message are recorded, and their names this long. */
+export const ATTACHMENTS_MAX = 10;
+export const ATTACHMENT_NAME_MAX = 120;
 
 /** Longest tool call and tool result text, as Origin's adapters keep them. */
 export const TOOL_USE_MAX = 2000;
@@ -138,8 +160,11 @@ export function timeMs(v: unknown): number | null {
   return null;
 }
 
-/** The text of a message's content: a string, or text blocks joined, images as `[image]`. */
-export function textOf(content: unknown): string {
+/**
+ * The text of a message's content: a string, or text blocks joined, images as `[image]` unless
+ * `images` is false.
+ */
+export function textOf(content: unknown, images = true): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
@@ -147,15 +172,130 @@ export function textOf(content: unknown): string {
         const b = asRecord(block);
         if (!b) return typeof block === 'string' ? block : '';
         if (b.type === 'text' && typeof b.text === 'string') return b.text;
-        if (b.type === 'image') return '[image]';
+        if (b.type === 'image' && images) return '[image]';
         return '';
       })
       .filter((s) => s.length > 0)
       .join('\n');
   }
   const obj = asRecord(content);
-  if (obj && 'content' in obj) return textOf(obj.content);
+  if (obj && 'content' in obj) return textOf(obj.content, images);
   return '';
+}
+
+/**
+ * Where OpenClaw 2026.10.6 puts the facts of the files a user message came with: `__openclaw.media`
+ * on the copy of the message it persists (`{ kind, contentType, fileName, sizeBytes, path, url, … }`
+ * each), and the same facts on the copy the run holds, under this symbol of its own, which keeps
+ * them out of what the model sees. Neither is declared to plugins, like `__openclaw` itself.
+ */
+const RUNTIME_MEDIA = Symbol.for('openclaw.runtimePromptMediaFacts');
+
+/**
+ * The attachments OpenClaw's facts say a user message came with, or null when the message carries
+ * no facts. Only the kind, name, and size are read: never a path, a URL, or content.
+ */
+export function mediaFactsOf(m: Record<string, unknown>): Attachment[] | null {
+  const persisted = asRecord(m.__openclaw)?.media;
+  const runtime = (m as Record<symbol, unknown>)[RUNTIME_MEDIA];
+  const facts = Array.isArray(persisted) ? persisted : Array.isArray(runtime) ? runtime : null;
+  if (!facts) return null;
+  return facts.map(attachmentOf).filter((a): a is Attachment => a !== null);
+}
+
+/** The attachments of the media a message hook names (`media`, or `metadata.mediaTypes`). */
+export function hookMediaOf(e: Record<string, unknown>): Attachment[] {
+  if (Array.isArray(e.media)) {
+    return e.media.map(attachmentOf).filter((a): a is Attachment => a !== null);
+  }
+  const metadata = asRecord(e.metadata) ?? {};
+  const types = Array.isArray(metadata.mediaTypes)
+    ? metadata.mediaTypes
+    : metadata.mediaType !== undefined
+      ? [metadata.mediaType]
+      : [];
+  return types.map((t) => ({ kind: attachmentKind(null, t) }));
+}
+
+/** An image block of a message's content is an image attachment, without a name. */
+const imageBlocksOf = (content: unknown): Attachment[] =>
+  Array.isArray(content)
+    ? content.filter((b) => asRecord(b)?.type === 'image').map(() => ({ kind: 'image' as const }))
+    : [];
+
+/** One of OpenClaw's media facts as an attachment, or null when it says nothing about a file. */
+function attachmentOf(fact: unknown): Attachment | null {
+  const f = asRecord(fact);
+  if (!f || !['path', 'url', 'kind', 'contentType', 'fileName'].some((k) => str(f[k]))) {
+    return null;
+  }
+  const name = attachmentName(f.fileName);
+  const size =
+    typeof f.sizeBytes === 'number' && Number.isFinite(f.sizeBytes) && f.sizeBytes >= 0
+      ? Math.round(f.sizeBytes)
+      : null;
+  return {
+    kind: attachmentKind(f.kind, f.contentType),
+    ...(name ? { name } : {}),
+    ...(size !== null ? { size } : {}),
+  };
+}
+
+/** OpenClaw's kind of a file (image, audio, video, sticker), else its MIME type's, else `file`. */
+function attachmentKind(kind: unknown, contentType: unknown): AttachmentKind {
+  const k = str(kind)?.toLowerCase() ?? '';
+  if (k === 'image' || k === 'audio' || k === 'video' || k === 'sticker') return k;
+  // An older OpenClaw gave a MIME type as the kind.
+  const mime = k.includes('/') ? k : (str(contentType)?.toLowerCase() ?? '');
+  const top = mime.split('/')[0];
+  return top === 'image' || top === 'audio' || top === 'video' ? top : 'file';
+}
+
+/**
+ * A file's name as its sender gave it, on one line and without brackets, at most
+ * ATTACHMENT_NAME_MAX characters: the last part of a path, and nothing for a URL.
+ */
+function attachmentName(value: unknown): string | null {
+  const s = str(value);
+  if (!s || /^[a-z][a-z0-9+.-]*:\/\//i.test(s) || /^data:/i.test(s)) return null;
+  const base = s.split(/[\\/]/).pop() ?? '';
+  const name = base.replace(/[[\]]/g, ' ').replace(SPACES_RE, ' ').trim();
+  if (!name) return null;
+  const chars = [...name];
+  return chars.length > ATTACHMENT_NAME_MAX
+    ? `${chars
+        .slice(0, ATTACHMENT_NAME_MAX - 1)
+        .join('')
+        .trimEnd()}…`
+    : name;
+}
+
+/**
+ * A user line's text and meta with its attachments: a marker for each on a line of its own after
+ * the text, `[image]` or `[file: report.pdf]`, as Origin's adapters mark a file a message holds,
+ * so that a search finds it and a message that is only a file is recorded at all; and `attachments`
+ * in meta, with each one's kind, name, and size, at most ATTACHMENTS_MAX, with how many more.
+ */
+export function withAttachments(
+  body: string,
+  meta: Record<string, unknown> | undefined,
+  attachments: readonly Attachment[],
+): { text: string; meta: Record<string, unknown> | undefined } {
+  const rest: Record<string, unknown> = { ...meta };
+  delete rest.attachments;
+  delete rest.attachmentsMore;
+  const shown = attachments.slice(0, ATTACHMENTS_MAX);
+  const more = attachments.length - shown.length;
+  const markers = shown.map((a) => (a.name ? `[${a.kind}: ${a.name}]` : `[${a.kind}]`));
+  if (more > 0) markers.push(`[+${more} more]`);
+  if (shown.length > 0) {
+    rest.attachments = shown.map((a) => ({ ...a }));
+    if (more > 0) rest.attachmentsMore = more;
+  }
+  return {
+    text: [body.trim(), ...markers].filter((s) => s.length > 0).join('\n'),
+    meta: Object.keys(rest).length > 0 ? rest : undefined,
+  };
 }
 
 function json(value: unknown): string {
@@ -326,9 +466,9 @@ export function pairingKey(content: unknown): string | null {
  * tool calls and their results, and compaction summaries. Thinking, and messages of kinds it does
  * not know, are left out. A message has no id of its own, so a line's id is a hash of the session,
  * the message's time, its role and kind, and its place in the message (or its tool call's id).
- * A user message's line also says who wrote it (`author`, `speaker`), which is not in its id, as
- * far as the message itself tells, and how it pairs with the persisted copy of its message, which
- * tells it when the message does not (`pair`).
+ * A user message's line also says who wrote it (`author`, `speaker`), and which files it came with
+ * (withAttachments), neither of which is in its id, as far as the message itself tells, and how it
+ * pairs with the persisted copy of its message, which tells them when the message does not (`pair`).
  */
 export function draftsFromMessages(
   messages: readonly unknown[],
@@ -354,23 +494,36 @@ export function draftsFromMessages(
         .slice(0, 16)}`;
     const key = info.sessionKey;
     if (role === 'user') {
-      const text = textOf(m.content);
-      const runtime = isRuntimeContext(m, text);
+      const runtime = isRuntimeContext(m);
       const kind: Kind = runtime ? 'meta' : 'message';
       // The runtime context is no one's input: a meta line, which event lines take as the system's.
       const facts = runtime ? null : senderFactsOf(m);
+      // A message's files are its attachments, by OpenClaw's facts or else its image blocks.
+      const media = runtime ? null : mediaFactsOf(m);
+      const body = runtime ? textOf(m.content) : textOf(m.content, false);
+      const by = facts ? authorshipOf(facts, opts.agentNames) : null;
+      const attached = withAttachments(
+        body,
+        by?.meta,
+        runtime ? [] : (media ?? imageBlocksOf(m.content)),
+      );
       const d = draft(info, {
-        // Who wrote a message is not part of what identifies it.
+        // Who wrote a message is not part of what identifies it, nor are its attachments.
         id: lineId([key, at, 'user', kind, 0]),
         ms,
         role: 'user',
-        ...(facts ? authorshipOf(facts, opts.agentNames) : {}),
+        ...(by ? { author: by.author, speaker: by.speaker } : {}),
         kind,
-        text,
+        text: attached.text,
+        meta: attached.meta,
       });
       const pairing = facts ? pairingKey(m.content) : null;
       if (d && facts && pairing) {
         d.pair = { key: pairing, idempotencyKey: str(m.idempotencyKey), known: saysWho(facts) };
+      }
+      if (d && !runtime) {
+        d.body = body;
+        d.attachmentFacts = media !== null;
       }
       push(d);
     } else if (role === 'assistant') {
@@ -453,7 +606,8 @@ export function draftsFromMessages(
  * (`message_sent`), and a tool call with its result (`after_tool_call`). Their ids come from the
  * channel's message id or the tool call's id when there is one. A message that arrived is a
  * person's, by the name the channel gives: these hooks do not say whether its sender is OpenClaw's
- * owner, so nothing they see is recorded as the owner's.
+ * owner, so nothing they see is recorded as the owner's. Its files are marked by their kind, which
+ * is all `message_received` gives of them.
  */
 export function draftFromInbound(
   event: unknown,
@@ -467,6 +621,11 @@ export function draftFromInbound(
   const messageId = str(e.messageId) ?? str(c.messageId);
   const metadata = asRecord(e.metadata) ?? {};
   const ids = [e.senderId, metadata.senderId];
+  const attached = withAttachments(
+    typeof e.content === 'string' ? e.content : '',
+    messageId ? { messageId } : undefined,
+    hookMediaOf(e),
+  );
   return draft(info, {
     id: messageId
       ? lineId([info.sessionKey, 'in', messageId])
@@ -476,8 +635,8 @@ export function draftFromInbound(
     author: 'person',
     speaker: speakerName(metadata.senderName, ids) ?? speakerName(metadata.senderUsername, ids),
     kind: 'message',
-    text: typeof e.content === 'string' ? e.content : '',
-    meta: messageId ? { messageId } : undefined,
+    text: attached.text,
+    meta: attached.meta,
   });
 }
 

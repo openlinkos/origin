@@ -547,6 +547,172 @@ describe('what happened, as it was', () => {
   });
 });
 
+describe('attachments', () => {
+  /** Media facts as OpenClaw 2026.10.6 persists them on a user message (`__openclaw.media`). */
+  const photo = {
+    path: '/srv/openclaw/media/inbound/0f1e2d3c.jpg',
+    url: 'https://cdn.example.test/attachments/0f1e2d3c.jpg?sig=abc',
+    contentType: 'image/jpeg',
+    kind: 'image',
+    fileName: 'IMG_0001.jpg',
+    sizeBytes: 48213,
+    width: 1024,
+    height: 768,
+  };
+  const report = {
+    path: 'media://inbound/a1b2c3d4.pdf',
+    contentType: 'application/pdf',
+    fileName: 'Q3 [draft]\nreport.pdf',
+    sizeBytes: 1200000,
+  };
+  const withMedia = (content: unknown, at: number, media: unknown[]) =>
+    user(content as string, at, { __openclaw: { media } });
+  const turn = (first: unknown) => [first, assistant([{ type: 'text', text: 'Seen.' }], T + 1000)];
+
+  it('records each file a message came with: its kind, name, and size, never where it is', async () => {
+    const { rec, sink } = recorder();
+    rec.agentEnd(
+      { messages: turn(withMedia("'.", T, [photo, report])), success: true },
+      agentCtx(),
+    );
+    await rec.idle();
+    const [line] = sink.lines();
+    expect(line!.text).toBe("'.\n[image: IMG_0001.jpg]\n[file: Q3 draft report.pdf]");
+    expect(line!.meta).toMatchObject({
+      attachments: [
+        { kind: 'image', name: 'IMG_0001.jpg', size: 48213 },
+        { kind: 'file', name: 'Q3 draft report.pdf', size: 1200000 },
+      ],
+    });
+    // Named by its words, not by its files.
+    expect(line!.title).toBe("'.");
+    const all = JSON.stringify(sink.lines());
+    for (const where of ['/srv/openclaw', 'cdn.example.test', 'media://', '0f1e2d3c', 'a1b2c3d4']) {
+      expect(all).not.toContain(where);
+    }
+    expect(parsed(sink.lines())[0]!.event.meta).toMatchObject({ attachments: expect.any(Array) });
+  });
+
+  it('records a message that is only a file, which has no text of its own', async () => {
+    const { rec, sink } = recorder();
+    rec.agentEnd({ messages: turn(withMedia('', T, [photo])), success: true }, agentCtx());
+    await rec.idle();
+    expect(sink.lines()[0]).toMatchObject({
+      role: 'user',
+      text: '[image: IMG_0001.jpg]',
+      title: '[image: IMG_0001.jpg]',
+      meta: { attachments: [{ kind: 'image', name: 'IMG_0001.jpg', size: 48213 }] },
+    });
+    parsed(sink.lines());
+  });
+
+  it('takes the kind from the MIME type, and leaves out names that are URLs', () => {
+    const lines = draftsFromMessages(
+      [
+        withMedia('Files.', T, [
+          { path: '/x/a.ogg', contentType: 'audio/ogg', transcribed: true },
+          { url: 'https://example.test/v.mp4', kind: 'video/mp4' },
+          { path: '/x/s.webp', kind: 'sticker', fileName: 'https://example.test/s.webp' },
+          { path: '/x/b.bin', kind: 'unknown', fileName: 'C:\\Users\\dana\\notes.txt' },
+          { path: '/x/c', fileName: `${'n'.repeat(200)}.txt`, sizeBytes: -1 },
+          {},
+        ]),
+      ],
+      { sessionKey: SESSION, agentId: 'xiaohan', project: 'xiaohan', meta: {} },
+      { includeTools: true, now: T },
+    ).map((d) => d.line);
+    const attachments = lines[0]!.meta!.attachments as Array<Record<string, unknown>>;
+    expect(attachments.map((a) => a.kind)).toEqual(['audio', 'video', 'sticker', 'file', 'file']);
+    expect(attachments[2]).toEqual({ kind: 'sticker' });
+    expect(attachments[3]).toEqual({ kind: 'file', name: 'notes.txt' });
+    expect([...(attachments[4]!.name as string)]).toHaveLength(120);
+    expect(attachments[4]).not.toHaveProperty('size');
+    expect(JSON.stringify(lines)).not.toContain('example.test');
+  });
+
+  it('marks image blocks when OpenClaw gives no facts, and keeps at most ten', async () => {
+    const { rec, sink } = recorder();
+    const image = { type: 'image', data: 'aGk=', mimeType: 'image/png' };
+    const many = Array.from({ length: 12 }, (_, i) => ({ ...photo, fileName: `p${i}.jpg` }));
+    rec.agentEnd(
+      {
+        messages: [
+          user([{ type: 'text', text: 'What is this?' }, image] as unknown as string, T),
+          withMedia('Album.', T + 2000, many),
+        ],
+        success: true,
+      },
+      agentCtx(),
+    );
+    await rec.idle();
+    const [blocks, album] = sink.lines();
+    expect(blocks).toMatchObject({
+      text: 'What is this?\n[image]',
+      meta: { attachments: [{ kind: 'image' }] },
+    });
+    expect(JSON.stringify(blocks)).not.toContain('aGk=');
+    expect((album!.meta!.attachments as unknown[]).length).toBe(10);
+    expect(album!.meta!.attachmentsMore).toBe(2);
+    expect((album!.text as string).split('\n').at(-1)).toBe('[+2 more]');
+    parsed(sink.lines());
+  });
+
+  it("reads the facts OpenClaw keeps on the run's copy of a message", async () => {
+    const { rec, sink } = recorder();
+    const message = user("'.", T);
+    Object.defineProperty(message, Symbol.for('openclaw.runtimePromptMediaFacts'), {
+      value: [photo],
+    });
+    rec.agentEnd({ messages: turn(message), success: true }, agentCtx());
+    await rec.idle();
+    expect(sink.lines()[0]).toMatchObject({
+      text: "'.\n[image: IMG_0001.jpg]",
+      meta: { attachments: [{ kind: 'image', name: 'IMG_0001.jpg', size: 48213 }] },
+    });
+  });
+
+  it('keeps attachments out of the id, so a message seen again adds nothing', () => {
+    const info = { sessionKey: SESSION, agentId: 'xiaohan', project: 'xiaohan', meta: {} };
+    const opts = { includeTools: false, now: T };
+    const [bare] = draftsFromMessages([user("'.", T)], info, opts);
+    const [attached] = draftsFromMessages([withMedia("'.", T, [photo])], info, opts);
+    expect(attached!.line.id).toBe(bare!.line.id);
+  });
+
+  it('marks the files of a message that arrived, without conversation access', async () => {
+    const { rec, sink } = recorder({}, 'messages');
+    const msgCtx = { channelId: 'telegram', accountId: 'bot-a', sessionKey: SESSION };
+    rec.messageReceived(
+      {
+        content: 'Look.',
+        timestamp: T,
+        messageId: '2001',
+        sessionKey: SESSION,
+        media: [{ path: '/srv/openclaw/media/inbound/0f1e2d3c.jpg', contentType: 'image/jpeg' }],
+        metadata: { mediaPath: '/srv/openclaw/media/inbound/0f1e2d3c.jpg' },
+      },
+      msgCtx,
+    );
+    rec.messageReceived(
+      {
+        content: '',
+        timestamp: T + 1000,
+        messageId: '2002',
+        sessionKey: SESSION,
+        metadata: { mediaTypes: ['audio/ogg'] },
+      },
+      msgCtx,
+    );
+    rec.messageSent({ to: '42', content: 'Got it.', success: true, sessionKey: SESSION }, msgCtx);
+    await rec.idle();
+    const lines = sink.lines();
+    expect(lines.map((l) => l.text)).toEqual(['Look.\n[image]', '[audio]', 'Got it.']);
+    expect(lines[0]!.meta).toMatchObject({ messageId: '2001', attachments: [{ kind: 'image' }] });
+    expect(JSON.stringify(lines)).not.toContain('/srv/openclaw');
+    parsed(lines);
+  });
+});
+
 describe('projects', () => {
   it('names the project after the agent by default, the channel, or one name', async () => {
     const byAgent = recorder();

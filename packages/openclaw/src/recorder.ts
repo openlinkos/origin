@@ -2,6 +2,7 @@ import { type Config, projectOf } from './config.js';
 import { type Batch, Deliverer, type Sink, Spool } from './delivery.js';
 import { linesPath } from './files.js';
 import {
+  type Attachment,
   type Authorship,
   agentOfSessionKey,
   asRecord,
@@ -13,6 +14,7 @@ import {
   draftsFromToolCall,
   type EventLine,
   isRuntimeContext,
+  mediaFactsOf,
   pairingKey,
   type SessionInfo,
   saysWho,
@@ -20,6 +22,7 @@ import {
   str,
   timeMs,
   titleOf,
+  withAttachments,
 } from './lines.js';
 import type { Log } from './log.js';
 import { SenderMemory } from './senders.js';
@@ -212,11 +215,13 @@ export class Recorder {
     if (this.config.agents && !(agentId && this.config.agents.includes(agentId))) return;
     if (isRuntimeContext(m)) return;
     const facts = senderFactsOf(m);
-    if (!saysWho(facts)) return;
+    const attachments = mediaFactsOf(m);
+    if (!saysWho(facts) && !attachments?.length) return;
     const key = pairingKey(m.content);
     if (!key) return;
     this.senders.note(sessionKey, key, {
       facts,
+      attachments: attachments?.length ? attachments : null,
       sessionId: str(u.sessionId) ?? str(target?.sessionId),
       idempotencyKey: str(m.idempotencyKey),
       messageId: str(u.messageId),
@@ -334,14 +339,22 @@ export class Recorder {
   }
 
   /**
-   * Who wrote a user line's message, as the persisted copy of the message says, when the run's own
-   * copy does not say; null otherwise. Takes the persisted copy's facts either way, in the order the
-   * lines are sent, so that messages with the same text pair in order.
+   * What the persisted copy of a user line's message says that the run's own copy does not: who
+   * wrote it, and the files it came with. Takes the persisted copy's facts either way, in the order
+   * the lines are sent, so that messages with the same text pair in order.
    */
-  private paired(info: SessionInfo, d: Draft): Authorship | null {
-    if (!d.pair) return null;
-    const facts = this.senders.take(info.sessionKey, d.pair.key, d.pair.idempotencyKey);
-    return facts && !d.pair.known ? authorshipOf(facts, this.agentNames) : null;
+  private paired(
+    info: SessionInfo,
+    d: Draft,
+  ): { by: Authorship | null; attachments: Attachment[] | null } {
+    const none = { by: null, attachments: null };
+    if (!d.pair) return none;
+    const noted = this.senders.take(info.sessionKey, d.pair.key, d.pair.idempotencyKey);
+    if (!noted) return none;
+    return {
+      by: !d.pair.known && saysWho(noted.facts) ? authorshipOf(noted.facts, this.agentNames) : null,
+      attachments: d.attachmentFacts ? null : (noted.attachments ?? null),
+    };
   }
 
   /**
@@ -360,11 +373,15 @@ export class Recorder {
     let titled = false;
     let parent: string | undefined;
     const placed = fresh.map((d) => {
-      const { id, session, time, role, kind, text, project } = d.line;
-      const by = this.paired(info, d);
+      const { id, session, time, role, kind, project } = d.line;
+      const { by, attachments } = this.paired(info, d);
       const author = by ? by.author : d.line.author;
       const speaker = by ? by.speaker : d.line.speaker;
-      const meta = by?.meta ? { ...d.line.meta, ...by.meta } : d.line.meta;
+      let text = d.line.text;
+      let meta = by?.meta ? { ...d.line.meta, ...by.meta } : d.line.meta;
+      if (attachments?.length && d.body !== undefined) {
+        ({ text, meta } = withAttachments(d.body, meta, attachments));
+      }
       const line: EventLine = {
         id,
         session,
@@ -378,7 +395,8 @@ export class Recorder {
       };
       if (parent) line.parent = parent;
       if (!record.titled && !titled && role === 'user' && kind === 'message') {
-        const title = titleOf(text);
+        // Named by its words; by its attachments' markers only when it has none.
+        const title = titleOf(d.body ?? '') || titleOf(text);
         if (title) {
           line.title = title;
           line.title_by = 'agent';

@@ -327,6 +327,55 @@ describe('who wrote each message, from the copy OpenClaw persisted', () => {
     expect(by(sink.lines())).toEqual([['owner', 'Dana']]);
   });
 
+  it('gives a message the files its persisted copy came with, and nothing of where they are', async () => {
+    const { persist, end, sink, rec } = start();
+    const photo = {
+      path: '/srv/openclaw/media/inbound/0f1e2d3c.jpg',
+      contentType: 'image/jpeg',
+      kind: 'image',
+      fileName: 'IMG_0001.jpg',
+      sizeBytes: 48213,
+    };
+    // OpenClaw persists the caption with the files' facts; the run's copy holds the caption alone,
+    // or the caption and an image block.
+    persist(
+      persisted(stored("'.", T, { __openclaw: { ...owner.__openclaw, media: [photo] } }), {
+        sessionKey: GUILD,
+      }),
+    );
+    // A persisted copy that does not say who wrote it is noted for its files all the same.
+    persist(
+      persisted(stored('And this.', T + 1000, { __openclaw: { media: [photo] } }), {
+        sessionKey: GUILD,
+      }),
+    );
+    expect(rec.senders.size()).toBe(2);
+    await end([
+      user("'.", T),
+      user(
+        [
+          { type: 'text', text: 'And this.' },
+          { type: 'image', data: 'aGk=', mimeType: 'image/jpeg' },
+        ] as unknown as string,
+        T + 1000,
+      ),
+      assistant([{ type: 'text', text: 'A photo of a rack.' }], T + 2000),
+    ]);
+    const lines = sink.lines();
+    expect(lines.map((l) => [l.author ?? null, l.text])).toEqual([
+      ['owner', "'.\n[image: IMG_0001.jpg]"],
+      ['person', 'And this.\n[image: IMG_0001.jpg]'],
+      [null, 'A photo of a rack.'],
+    ]);
+    expect(lines[0]!.meta).toMatchObject({
+      attachments: [{ kind: 'image', name: 'IMG_0001.jpg', size: 48213 }],
+    });
+    expect((lines[1]!.meta!.attachments as unknown[]).length).toBe(1);
+    expect(lines[0]!.title).toBe("'.");
+    expect(JSON.stringify(lines)).not.toContain('/srv/openclaw');
+    for (const l of lines) expect(parseEventLine(JSON.stringify(l)).events).toHaveLength(1);
+  });
+
   it("never takes OpenClaw's internal runs for the owner's, though it persists their prompt so", async () => {
     const { persist, end, sink, rec } = start();
     // A one-shot model run, as OpenClaw 2026.10.6 runs it through its agent method: a `user` run in
@@ -466,9 +515,9 @@ describe('the memory of who wrote what', () => {
     }
     expect(m.size()).toBe(SESSION_ENTRIES);
     // The five oldest went: n0..n4, of keys k0, k1, k2, k0, k1.
-    expect(m.take('s', 'k0', null)?.senderName).toBe('n6');
-    expect(m.take('s', 'k1', null)?.senderName).toBe('n7');
-    expect(m.take('s', 'k2', null)?.senderName).toBe('n5');
+    expect(m.take('s', 'k0', null)?.facts.senderName).toBe('n6');
+    expect(m.take('s', 'k1', null)?.facts.senderName).toBe('n7');
+    expect(m.take('s', 'k2', null)?.facts.senderName).toBe('n5');
   });
 
   it('keeps at most SESSIONS sessions, dropping the one noted least recently', () => {
@@ -482,10 +531,10 @@ describe('the memory of who wrote what', () => {
     expect(m.size()).toBe(SESSIONS + 1);
     expect(m.take('s1', 'k', null)).toBeNull();
     expect(m.take('s2', 'k', null)).toBeNull();
-    expect(m.take('s3', 'k', null)?.senderName).toBe('n3');
-    expect(m.take('s0', 'k', null)?.senderName).toBe('n0');
-    expect(m.take('s0', 'k', null)?.senderName).toBe('again');
-    expect(m.take('two-more', 'k', null)?.senderName).toBe('later');
+    expect(m.take('s3', 'k', null)?.facts.senderName).toBe('n3');
+    expect(m.take('s0', 'k', null)?.facts.senderName).toBe('n0');
+    expect(m.take('s0', 'k', null)?.facts.senderName).toBe('again');
+    expect(m.take('two-more', 'k', null)?.facts.senderName).toBe('later');
   });
 
   it('drops what is older than MAX_AGE_MS', () => {
@@ -495,7 +544,7 @@ describe('the memory of who wrote what', () => {
     now += MAX_AGE_MS / 2;
     note(m, 's', 'k', 'newer', 2);
     now += MAX_AGE_MS / 2 + 1;
-    expect(m.take('s', 'k', null)?.senderName).toBe('newer');
+    expect(m.take('s', 'k', null)?.facts.senderName).toBe('newer');
     expect(m.size()).toBe(0);
   });
 
@@ -522,9 +571,9 @@ describe('the memory of who wrote what', () => {
       messageId: null,
       ts: 3,
     });
-    expect(m.take('s', 'k', 'run-2:user')?.senderName).toBe('b');
-    expect(m.take('s', 'k', 'run-9:user')?.senderName).toBe('a');
-    expect(m.take('s', 'k', null)?.senderName).toBe('c');
+    expect(m.take('s', 'k', 'run-2:user')?.facts.senderName).toBe('b');
+    expect(m.take('s', 'k', 'run-9:user')?.facts.senderName).toBe('a');
+    expect(m.take('s', 'k', null)?.facts.senderName).toBe('c');
     expect(m.take('s', 'k', null)).toBeNull();
   });
 });

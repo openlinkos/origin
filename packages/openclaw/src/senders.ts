@@ -1,11 +1,13 @@
-import type { SenderFacts } from './lines.js';
+import type { Attachment, SenderFacts } from './lines.js';
 
 /**
- * Who wrote the user messages OpenClaw persisted, as it recorded them, kept in memory until the
- * lines of their run are sent: OpenClaw 2026.10.6 keeps a message's sender facts on the copy it
- * persists, not on the copy a run holds, which `agent_end` gives (see Recorder.transcriptUpdate).
+ * Who wrote the user messages OpenClaw persisted, as it recorded them, and the files they came with,
+ * kept in memory until the lines of their run are sent: OpenClaw 2026.10.6 keeps a message's sender
+ * and media facts on the copy it persists, not on the copy a run holds, which `agent_end` gives (see
+ * Recorder.transcriptUpdate).
  * In each session, the facts of a text wait in the order its messages were persisted, so that two
- * messages with the same text pair in order. No text is kept, only a hash of it, and no sender id.
+ * messages with the same text pair in order. No text is kept, only a hash of it, and no sender id;
+ * of a file, only its kind, name, and size.
  * Bounded: at most SESSION_ENTRIES a session (the oldest dropped first), at most SESSIONS sessions
  * (the one noted least recently dropped first), and nothing older than MAX_AGE_MS.
  */
@@ -17,6 +19,8 @@ export const MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
 export interface Persisted {
   facts: SenderFacts;
+  /** The files the message came with, as OpenClaw's facts give them, or null when it gives none. */
+  attachments?: Attachment[] | null;
   /** The OpenClaw session (`sessionId`) the message was persisted in. */
   sessionId: string | null;
   idempotencyKey: string | null;
@@ -65,6 +69,7 @@ export class SenderMemory {
     const again = identity === null ? undefined : queue.find((e) => e.identity === identity);
     if (again) {
       again.facts = persisted.facts;
+      if (persisted.attachments) again.attachments = persisted.attachments;
       return;
     }
     queue.push({ ...persisted, identity, at: this.now() });
@@ -77,10 +82,10 @@ export class SenderMemory {
   }
 
   /**
-   * Take the facts of the oldest message of `sessionKey` noted with `key`, or of the one with
+   * Take what was noted of the oldest message of `sessionKey` noted with `key`, or of the one with
    * `idempotencyKey` if there is one; null when there are none.
    */
-  take(sessionKey: string, key: string, idempotencyKey: string | null): SenderFacts | null {
+  take(sessionKey: string, key: string, idempotencyKey: string | null): Persisted | null {
     const session = this.sessions.get(sessionKey);
     if (!session) return null;
     this.expire(session);
@@ -90,7 +95,7 @@ export class SenderMemory {
     const [entry] = queue.splice(Math.max(byKey, 0), 1);
     if (!entry) return null;
     this.removed(session, key, queue, sessionKey);
-    return entry.facts;
+    return entry;
   }
 
   /** Forget a session's messages: those persisted in `sessionId`, and those of no known one; all without it. */
