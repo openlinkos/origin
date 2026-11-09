@@ -502,7 +502,7 @@ describe.skipIf(!onPostgres)('transactions', () => {
 });
 
 describe.skipIf(!onPostgres)('the write lock', () => {
-  it('makes a second writer wait, then fail with a message of its own', () => {
+  it('makes a second writer wait, then fail with a message of its own', async () => {
     const a = withTable();
     const b = open(a.target);
     a.exec('BEGIN IMMEDIATE');
@@ -525,6 +525,14 @@ describe.skipIf(!onPostgres)('the write lock', () => {
       thrown(() => b.prepare('INSERT INTO t (id) VALUES (2)').run()),
     );
     expect(solo.code).toBe('55P03');
+    // For an async `fn`, until its promise settles.
+    const later = await b.withWaitTimeout(300, async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      const t0 = performance.now();
+      return { err: thrown(() => b.exec('BEGIN IMMEDIATE')), waited: performance.now() - t0 };
+    });
+    expect(later.err.code).toBe('55P03');
+    expect(later.waited).toBeLessThan(5_000);
     a.exec('COMMIT');
     b.exec('BEGIN IMMEDIATE');
     b.prepare('INSERT INTO t (id) VALUES (2)').run();

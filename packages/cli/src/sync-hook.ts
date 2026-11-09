@@ -158,47 +158,10 @@ async function runHook(agent: string, io: HookIO): Promise<number> {
       return 0;
     }
     const home = originHome();
-    db = openStore(home);
-    db.exec(`PRAGMA busy_timeout = ${HOOK_BUSY_MS};`);
-    initStoreName(db, process.env.ORIGIN_DEVICE || defaultStoreName());
-    const saved = readHubConfig(home);
-    const hub: HubConfig | null = saved ? { ...saved, device: storeName(db) } : null;
-
-    if (isRelay(db)) {
-      // A relay keeps nothing to ingest into: it sends the lines to its hub, straight from the
-      // file. Without a hub, they wait in the agent's log for the next sync.
-      if (!hub) return 0;
-      const store = db;
-      await toHub(async (doFetch) => {
-        for (const file of files) {
-          const r = await relayFileWithHub(
-            { db: store, home, hub, adapter, fetch: doFetch },
-            file.absPath,
-          );
-          for (const f of r.failed) console.error(`origin sync: not sent: ${f.path}: ${f.reason}`);
-        }
-      });
-      return 0;
-    }
-
-    const changed: SourceFile[] = [];
-    for (const file of files) {
-      const r = await syncFile({ db, home }, adapter, file.absPath);
-      if (r.filesChanged > 0) changed.push(file);
-    }
-    if (!hub || changed.length === 0) return 0;
-    const store = db;
-    await toHub(async (doFetch) => {
-      for (const file of changed) {
-        const r = await pushFile(
-          { db: store, home, hub, fetch: doFetch },
-          { source: adapter.id, path: file.absPath },
-        );
-        for (const f of r.refused) {
-          console.error(`origin sync: not sent: ${f.path}: the hub refused it: ${f.reason}`);
-        }
-      }
-    });
+    const store = openStore(home);
+    db = store;
+    // A hook waits for the write lock less long than a command does.
+    await store.withWaitTimeout(HOOK_BUSY_MS, () => ingest(store, home, adapter, files));
     return 0;
   } catch (err) {
     console.error(`origin sync: ${(err as Error).message}`);
@@ -206,6 +169,49 @@ async function runHook(agent: string, io: HookIO): Promise<number> {
   } finally {
     db?.close();
   }
+}
+
+/** Ingest the files a hook names, and send their new lines to the hub if there is one. */
+async function ingest(
+  db: Database,
+  home: string,
+  adapter: SourceAdapter,
+  files: SourceFile[],
+): Promise<void> {
+  initStoreName(db, process.env.ORIGIN_DEVICE || defaultStoreName());
+  const saved = readHubConfig(home);
+  const hub: HubConfig | null = saved ? { ...saved, device: storeName(db) } : null;
+
+  if (isRelay(db)) {
+    // A relay keeps nothing to ingest into: it sends the lines to its hub, straight from the
+    // file. Without a hub, they wait in the agent's log for the next sync.
+    if (!hub) return;
+    await toHub(async (doFetch) => {
+      for (const file of files) {
+        const r = await relayFileWithHub({ db, home, hub, adapter, fetch: doFetch }, file.absPath);
+        for (const f of r.failed) console.error(`origin sync: not sent: ${f.path}: ${f.reason}`);
+      }
+    });
+    return;
+  }
+
+  const changed: SourceFile[] = [];
+  for (const file of files) {
+    const r = await syncFile({ db, home }, adapter, file.absPath);
+    if (r.filesChanged > 0) changed.push(file);
+  }
+  if (!hub || changed.length === 0) return;
+  await toHub(async (doFetch) => {
+    for (const file of changed) {
+      const r = await pushFile(
+        { db, home, hub, fetch: doFetch },
+        { source: adapter.id, path: file.absPath },
+      );
+      for (const f of r.refused) {
+        console.error(`origin sync: not sent: ${f.path}: the hub refused it: ${f.reason}`);
+      }
+    }
+  });
 }
 
 /** Whether `origin sync` arguments ask for the hook (see bin.ts). */

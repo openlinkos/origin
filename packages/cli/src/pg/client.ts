@@ -514,15 +514,27 @@ export class PgDatabase implements Database {
     );
   }
 
-  /** Through the lock_timeout of BEGIN IMMEDIATE (0 waits the least PostgreSQL can, 1 ms). */
+  /**
+   * Through the lock_timeout of BEGIN IMMEDIATE (0 waits the least PostgreSQL can, 1 ms); until the
+   * promise settles if `fn` returns one.
+   */
   withWaitTimeout<T>(ms: number, fn: () => T): T {
     const before = this.waitMs;
     this.waitMs = Math.max(1, Math.floor(ms));
+    let out: T;
     try {
-      return fn();
-    } finally {
+      out = fn();
+    } catch (err) {
       this.waitMs = before;
+      throw err;
     }
+    if (out instanceof Promise) {
+      return out.finally(() => {
+        this.waitMs = before;
+      }) as T;
+    }
+    this.waitMs = before;
+    return out;
   }
 
   /** The tables, indexes, and TOAST of the store's schema; PostgreSQL's WAL is the server's own. */
