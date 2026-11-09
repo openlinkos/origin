@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-f8554268
+sourceHash: sha256-ff6cc337
 ---
 
 # 召回
@@ -122,7 +122,7 @@ origin recall --project main                         # as an agent that works in
 
 ## 查看交出了什么 {#see-what-was-handed-over}
 
-`origin recalls` 按从新到旧列出 Agent 拿到的内容；加 `--all` 还会列出什么都没交出的召回，例如什么都没匹配到的提示。`origin show` 显示一次召回：它回应的提示（会话归档之后才能找到），以及每一项本会话之后有没有用上，也就是 Agent 之后的工具调用或回复中是否提到了它的 id。
+`origin recalls` 按从新到旧列出 Agent 拿到的内容；加 `--all` 还会列出什么都没交出的召回，例如什么都没匹配到的提示。`origin show` 显示一次召回：它回应的提示（会话归档之后才能找到），以及每一项本会话之后有没有用上。如果 Agent 在这个会话里之后的某次工具调用或回复提到了这一项自己的 id，它就算用上了：条目的 `ent_…`、线索的 `thr_…`、会话的 id，或者过往消息的事件 id。用 `get rcl_…` 打开召回本身不算，只用了某一项的内容而没有提到它的 id 也不算。有没有用上是从归档中读出来的，所以要等会话之后的轮次归档以后才会显示。
 
 ```console
 $ origin show rcl_7d2e9a0b1c3f

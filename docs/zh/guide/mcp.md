@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-c512d480
+sourceHash: sha256-f96e5c67
 ---
 
 # MCP 工具
@@ -357,7 +357,7 @@ claude mcp add --scope user --transport http origin https://hub.example.com/mcp 
 它返回 `{ day, time_zone, from, until, totals, projects, agents, sessions, more_sessions, children_included_in, entries, more_entries, proposals, more_proposals, forgets, more_forgets }`。其中每个时间都按这一天的时区给出，而不是服务器的时区；`from` 和 `until` 是这一天的第一个时刻和下一天的第一个时刻：
 
 - `totals`：过滤条件保留下来的会话、它们的事件、其中用户的提示、有名称的项目、Agent，以及并入的子会话；`projects` 和 `agents` 按解析后项目（没有项目的会话为 `null`）和按 Agent 给出同样的计数，事件最多的在前。它们统计所有会话，而不只是列出的那些；
-- `sessions`：这一天里有事件的顶层会话，最近有活动的在前，每个带有它的 `id`（`<来源>:<会话 id>`，可以用 [`get`](#get) 打开）、`project`、`thread`、`title` 或第一条提示 `prompt`、它这一天的第一个和最后一个事件 `first` 和 `last`、`events`、用户这一天的提示 `prompts`（前五条，每条截到 200 个字符，以及 `more_prompts`）、`tools`（按工具名称统计的调用，调用最多的 20 个）和 `tool_calls`（所有工具的调用总数）、`files`（它的编辑调用改动过的文件，编辑最多的 20 个，以及 `more_files`），以及 `children` 和 `workflows`（这一天里活跃的子会话，以及它们的运行名称）。子会话的活动计入它的顶层会话，即使那个会话这一天里没有动静，计入的字段由 `children_included_in` 列出；提示只算用户自己的，从不算子会话的。哪些工具算作编辑文件，按 Agent 分别见[编辑过的文件](../sources.md#files-edited)；
+- `sessions`：这一天里有事件的顶层会话，最近有活动的在前，每个带有它的 `id`（`<来源>:<会话 id>`，可以用 [`get`](#get) 打开）、`project`、`thread`、`title`，没有标题时为 `prompt`，即开启这个会话的那条用户提示，可能写于更早的某一天（它像在时间线上那样为会话命名）、它这一天的第一个和最后一个事件 `first` 和 `last`、`events`、`prompts`，即用户这一天写下的提示，也就是这个会话这一天做了什么（前五条，每条截到 200 个字符，以及 `more_prompts`）、`tools`（按工具名称统计的调用，调用最多的 20 个）和 `tool_calls`（所有工具的调用总数）、`files`（它的编辑调用改动过的文件，编辑最多的 20 个，以及 `more_files`），以及 `children` 和 `workflows`（这一天里活跃的子会话，以及它们的运行名称）。子会话的活动计入它的顶层会话，即使那个会话这一天里没有动静，计入的字段由 `children_included_in` 列出；提示只算用户自己的，从不算子会话的。哪些工具算作编辑文件，按 Agent 分别见[编辑过的文件](../sources.md#files-edited)；
 - `entries`：这一天里写下的条目版本，最新的在前，以存根给出，带有 `project`、`author`、`supersedes`（修正所取代的版本，或 `null`）和 `imported`；
 - `proposals`：这一天里提议的条目，待审或已接受，以存根给出，与 [`changes`](#changes) 列出的样子相同；
 - `forgets`：这一天里做出的遗忘和恢复，`{ id, kind, target, target_kind, at }`，其中 `target_kind` 为 `entry`、`event`、`proposal`（一次拒绝）或 `forget`（恢复所撤销的那次遗忘）：从不给出原因或被隐藏的内容。无论 `project` 和 `source` 是什么，它们都会列出；
@@ -453,7 +453,7 @@ Origin 交出的任意 id，连同它近旁的内容：条目、事件、会话�
 - **事件**：事件本身，带有它的 `cwd`、`git_branch`、`agent_version` 和 `session_title`，以及从 `offset` 开始、最多 20,000 个字符的正文，并给出 `total_chars`（正文全长）和 `next_offset`（下一页的起点，读到末尾时为 null）。它的第一页（`offset` 为 0）还带有它近旁的内容：`turn`，即 `{ number, prompt }`，它所在的轮次和开启这一轮的提示的存根，在第一条提示之前则为 null；`replies_to`，它的 Agent 记录的、它所接续的事件的存根（Claude Code 的 `parentUuid`），没有则为 null；`around`，即 `{ before, after }`，同一会话中它前后各两个可见事件的存根，除非它本身是工具调用或工具结果，否则只取消息；以及 `cited_by`，以存根列出最多 10 个引用它的当前条目。
 - **会话**：一张卡片，带有会话的各字段、它的 `cwd`，以及 `turns`（轮数）；`prompts`，它前 20 轮的起点，每个为 `{ turn, id, time, text }`，以及 `more_prompts`，即这些之后还有多少轮；`thread`，即 `{ id, sessions }`，它所在的线索及其会话数，没有则为 null；`entries`，以存根列出最多 10 个从中写下的当前条目（引用了它的事件的条目），从新到旧；`recalls`，最多 10 次它拿到的召回，从新到旧，每次为 `{ id, occasion, time, items }`，`items` 是它交出的内容中仍然可见的数量；`before` 和 `after`，同一项目中按开始时间紧挨在它前后的会话，不限 Agent，没有则为 null；`parent`，即 `{ source, session, title }`，当这个会话是子会话时；以及 `children`，有子会话时每个子会话一行 `{ source, session, title, via, group }`，按工作流运行分组。这里的 `children` 是这个列表，不是时间线一行上的计数；没有父会话或子会话时，`parent` 和 `children` 都省略。要读某一轮，用 [`timeline`](#timeline)。
 - **线索**：`{ thread, project, title, started, ended, sessions, more_sessions, agents, branches, entries, last_prompt }`：它的 id，它的项目和名称（取自它的第一个会话），开始和结束的时间，它的前 20 个会话 `sessions`（从旧到新）以及之后还有多少个，它的会话所属的 `agents` 和所在的工作分支 `branches`，`entries`，以存根列出最多 10 个从其中任一会话写下的当前条目（从新到旧），以及 `last_prompt`，即有提示的会话中最近那一个的最新提示的存根，带有它的 `session`，没有则为 null。
-- **召回**：`{ id, time, occasion, agent, session, device, project, directory, budget, tokens, items, text }`：它在何时、为哪个 Agent、哪个会话和哪台设备、在哪里而做，它的预算和用掉的 token，它的各项，每项为 `{ rank, layer, kind, id, score, used }`（`kind` 为 `entry`、`session`、`thread` 或 `event`（过往消息），会话还有 `source`；`used` 表示会话后来是否用到了这一项，会话还不知道时为 null），以及 `text`，即 Agent 拿到的内容，按库现在的样子重建。此后被遗忘的内容在两者中都会略去。
+- **召回**：`{ id, time, occasion, agent, session, device, project, directory, budget, tokens, items, text }`：它在何时、为哪个 Agent、哪个会话和哪台设备、在哪里而做，它的预算和用掉的 token，它的各项，每项为 `{ rank, layer, kind, id, score, used }`（`kind` 为 `entry`、`session`、`thread` 或 `event`（过往消息），会话还有 `source`；`used` 表示会话后来是否用到了这一项，即 Agent 之后的工具调用或回复是否提到了它的 id（见[查看交出了什么](./recall.md#see-what-was-handed-over)），会话还不知道时为 null），以及 `text`，即 Agent 拿到的内容，按库现在的样子重建。此后被遗忘的内容在两者中都会略去。
 - **提议**：`{ id, status, kind, text, confidence, project, valid_from, valid_to, note, time, agent, session, event, sources, missing_sources, accepted_as }`：它提议的内容；`status`，`pending` 或 `accepted`；它在何时、由哪个 `agent`、在哪个 `session`（按 `timeline` 列出的样子）中提出，以及读出它的 `event`；`sources`，它引用的事件，以存根给出，带有各自的 `quote` 和 `session`，`missing_sources` 是其中本库尚未持有的数目；`accepted_as`，它成为的条目（当前版本）的存根，或 null。被拒绝的提议会返回错误（``Proposal <id> was rejected (tmb_…); restoring that forget makes it pending again.``），引用了被遗忘事件的提议也一样（`Proposal <id> has been forgotten.`）。
 
 当前条目就是列表中会显示的条目：没有被取代、没有被遗忘、也没有到期。被遗忘的内容从不出现在存根中，也不被计数。在连接了中枢的设备上，事件、会话、线索、召回或提议来自其中一个库，带的是那个库的存根：设备有这个 id 时用设备的，否则用中枢的，并去掉设备已遗忘的内容。

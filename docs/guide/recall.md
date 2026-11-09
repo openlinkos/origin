@@ -118,7 +118,7 @@ origin recall --project main                         # as an agent that works in
 
 ## See what was handed over
 
-`origin recalls` lists what agents were handed, newest first; `--all` also lists the recalls that handed nothing over, such as prompts that matched nothing. `origin show` shows one recall: the prompt it answered, once the session is archived, and each item with whether the session went on to use it, that is, whether the agent mentioned its id in a later tool call or reply.
+`origin recalls` lists what agents were handed, newest first; `--all` also lists the recalls that handed nothing over, such as prompts that matched nothing. `origin show` shows one recall: the prompt it answered, once the session is archived, and each item with whether the session went on to use it. An item counts as used when a later tool call or reply of the agent in that session mentions the item's own id: an entry's `ent_…`, a thread's `thr_…`, a session's id, or a past message's event id. Opening the recall itself, with `get rcl_…`, does not count, nor does using what an item says without naming its id. Whether an item was used is read from the archive, so it shows only once the session's later turns have been archived.
 
 ```console
 $ origin show rcl_7d2e9a0b1c3f
