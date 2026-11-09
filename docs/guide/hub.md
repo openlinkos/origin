@@ -267,6 +267,73 @@ volumes:
 
 The design is in [Architecture](../architecture.md#frame-stores).
 
+## Run the hub on PostgreSQL
+
+A hub keeps its database in SQLite, `/data/origin.db`, unless you give it a PostgreSQL database. Use PostgreSQL when the hub's database outgrows its disk, or when you already run PostgreSQL and back it up. Devices always keep their stores in SQLite, and nothing changes for them or for your agents: they connect to the hub as before, and search finds the same things.
+
+**The database.** PostgreSQL 17 or later, and a database whose encoding is UTF8 and whose locale is C, so that text is compared and case-folded the same way everywhere. As a superuser:
+
+```sql
+CREATE ROLE origin LOGIN PASSWORD 'change-me';
+CREATE DATABASE origin OWNER origin TEMPLATE template0 ENCODING 'UTF8' LOCALE 'C';
+```
+
+The hub refuses any other database, and says how to create one. On its first start it creates its schema, `origin`, and its tables in it; the role needs to be allowed to create a schema in the database, which its owner is.
+
+**The URL.** Set `ORIGIN_DATABASE_URL` to `postgres://user:password@host:5432/database`, or `ORIGIN_DATABASE_URL_FILE` to a file that holds it, such as a mounted Secret. The `schema` parameter names the schema the store is in, `origin` by default, so that one database can hold several stores; Origin reads it and gives the rest of the URL to the driver as it is. For TLS, add `sslmode=verify-full` and `sslrootcert=/path/to/ca.pem`, a CA certificate the hub can read. The password never appears in Origin's messages: `origin status` and the admin UI's overview show the URL without it.
+
+**Connections.** Each Origin process holds one connection of its own: the hub, and each command you run on the hub's host. Connect directly, or through a pooler in session mode; transaction pooling, such as PgBouncer's `pool_mode = transaction`, does not work, because Origin keeps settings and locks on its connection.
+
+**What stays in `/data`.** The raw mirrors, `raw/` (unless their sealed frames are in a [bucket](#keep-raw-mirrors-in-a-bucket)), and `store.json`, which pairs the mirrors with the database: it holds the id of the store whose mirrors these are, and that the store is in PostgreSQL. The hub refuses to start on a database that holds another store, or a new one when `/data` already holds mirrors; and without the URL, it does not create an empty SQLite store in `/data`, but says to set it. Keep the `/data` volume, and back up both.
+
+**One hub per store.** While `origin serve` runs, it holds a lock on the store, so a second hub on the same store, from this machine or another, refuses to start. Other commands on the hub's host, such as `origin token`, `origin admin`, `origin forget`, or `origin backup`, run beside it, as with SQLite.
+
+**Commands that do not run.** A store in PostgreSQL is a hub's, so the commands that work with a machine's own agents refuse to run there, with exit code 2, and say why: `origin sync` and `origin push`, `origin hub`, `origin mcp` (agents use the hub's `/mcp`), `origin ui` (use `origin serve --admin`), `origin agents`, `origin sessions reproject`, and `origin sessions parents`. Agents' hooks, `origin sync --hook` and `origin recall --hook`, do nothing and exit 0, with one line on standard error.
+
+With Docker, the URL in a file:
+
+```bash
+docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data \
+  -v /etc/origin/database-url:/run/secrets/database-url:ro \
+  -e ORIGIN_DATABASE_URL_FILE=/run/secrets/database-url \
+  ghcr.io/openlinkos/origin
+```
+
+On Kubernetes, keep the URL in a Secret, and mount it as a file:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: origin-database
+stringData:
+  url: postgres://origin:change-me@postgres.db.svc.cluster.local:5432/origin?sslmode=verify-full&sslrootcert=/run/secrets/origin-database/ca.pem
+  ca.pem: |
+    -----BEGIN CERTIFICATE-----
+    …
+---
+# In the hub's StatefulSet or Deployment, under spec.template.spec:
+containers:
+  - name: origin
+    image: ghcr.io/openlinkos/origin
+    env:
+      - name: ORIGIN_DATABASE_URL_FILE
+        value: /run/secrets/origin-database/url
+    volumeMounts:
+      - name: origin-database
+        mountPath: /run/secrets/origin-database
+        readOnly: true
+volumes:
+  - name: origin-database
+    secret:
+      secretName: origin-database
+```
+
+- **Moving a hub.** `origin db move` moves a hub's store from SQLite into PostgreSQL, and back, with the hub stopped (see [Move a hub to PostgreSQL](./upgrading.md#move-a-hub-to-postgresql)).
+- **Backups.** `origin backup <dir>` exports the store, from one snapshot, into `<dir>/origin.db`, a SQLite database, with the mirrors as before (see [Backing up](./privacy.md#backing-up)). Restore it into an empty `/data` and start a hub on it as it is, or move it into PostgreSQL again with `origin db move`. A dump of the database (`pg_dump`) with a copy of `/data` is consistent only if the hub is stopped while both are made, since the hub keeps changing the newest lines of the mirrors as it runs.
+
+The design is in [Architecture](../architecture.md#database-engines).
+
 ## Limitations
 
 - CLI curation commands (`entries`, `show`, `correct`, `forget`, …) act on the device's own store, then sync. To see and curate the entries of every device, use your agents or the hub's [admin UI](./admin.md).

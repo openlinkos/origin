@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-8bc67358
+sourceHash: sha256-e916c39e
 ---
 
 # 个人中枢
@@ -270,6 +270,73 @@ volumes:
 - **备份。** 在中枢上运行 `origin backup` 会把存储桶中的帧复制进备份，所以恢复备份不需要存储桶（见[备份](./privacy.md#backing-up)）。
 
 设计细节见[架构](../architecture.md#frame-stores)。
+
+## 在 PostgreSQL 上运行中枢 {#run-the-hub-on-postgresql}
+
+中枢默认把数据库放在 SQLite 中，即 `/data/origin.db`；给它一个 PostgreSQL 数据库，它就改用 PostgreSQL。当中枢的数据库超出它的磁盘，或者你本来就在运行并备份 PostgreSQL 时，可以用它。设备总是把库放在 SQLite 中，对设备和你的 Agent 来说一切照旧：它们照常连接中枢，检索也找得到同样的内容。
+
+**数据库。** PostgreSQL 17 或更高版本，数据库的编码为 UTF8、locale 为 C，这样各处比较文本、折叠大小写的方式都一样。以超级用户身份执行：
+
+```sql
+CREATE ROLE origin LOGIN PASSWORD 'change-me';
+CREATE DATABASE origin OWNER origin TEMPLATE template0 ENCODING 'UTF8' LOCALE 'C';
+```
+
+其他数据库中枢一概拒绝，并说明如何创建合适的数据库。第一次启动时，它会创建自己的 schema `origin`，并在其中建表；这个角色需要有权在数据库中创建 schema，数据库的所有者就有这个权限。
+
+**URL。** 把 `ORIGIN_DATABASE_URL` 设为 `postgres://user:password@host:5432/database`，或者把 `ORIGIN_DATABASE_URL_FILE` 设为保存它的文件，例如挂载进来的 Secret。参数 `schema` 指定库所在的 schema，默认为 `origin`，这样一个数据库可以容纳多个库；Origin 读取这个参数，URL 的其余部分原样交给驱动。要使用 TLS，加上 `sslmode=verify-full` 和 `sslrootcert=/path/to/ca.pem`，即中枢能读取的 CA 证书。密码从不出现在 Origin 的消息中：`origin status` 和管理界面的概览显示的 URL 都不含密码。
+
+**连接。** 每个 Origin 进程各自持有一个连接：中枢一个，你在中枢所在主机上运行的每个命令各一个。可以直连，也可以经过会话模式的连接池；事务模式的连接池（例如 PgBouncer 的 `pool_mode = transaction`）不能用，因为 Origin 会在自己的连接上保留设置和锁。
+
+**留在 `/data` 中的内容。** 原始镜像 `raw/`（除非它们已封存的帧放在[存储桶](#keep-raw-mirrors-in-a-bucket)中），以及 `store.json`：它把镜像和数据库配成一对，记录这些镜像属于哪个库，以及这个库在 PostgreSQL 中。中枢拒绝在存有另一个库的数据库上启动，也拒绝在 `/data` 已有镜像时新建库；没有 URL 时，它不会在 `/data` 中新建一个空的 SQLite 库，而是提示你设置 URL。请保留 `/data` 卷，并且两者都要备份。
+
+**一个库只由一个中枢服务。** `origin serve` 运行期间持有库上的一把锁，所以同一个库上的第二个中枢，无论在这台机器还是别的机器上，都会拒绝启动。中枢所在主机上的其他命令，例如 `origin token`、`origin admin`、`origin forget` 或 `origin backup`，可以和它同时运行，与 SQLite 时一样。
+
+**不能运行的命令。** PostgreSQL 中的库属于中枢，所以那些处理本机 Agent 的命令在这里拒绝运行，退出码为 2，并说明原因：`origin sync` 和 `origin push`、`origin hub`、`origin mcp`（Agent 使用中枢的 `/mcp`）、`origin ui`（请用 `origin serve --admin`）、`origin agents`、`origin sessions reproject` 和 `origin sessions parents`。Agent 的钩子 `origin sync --hook` 和 `origin recall --hook` 什么也不做并以 0 退出，在标准错误输出上留一行说明。
+
+使用 Docker，把 URL 放在文件中：
+
+```bash
+docker run -d --name origin-hub -p 7077:7077 -v origin-data:/data \
+  -v /etc/origin/database-url:/run/secrets/database-url:ro \
+  -e ORIGIN_DATABASE_URL_FILE=/run/secrets/database-url \
+  ghcr.io/openlinkos/origin
+```
+
+在 Kubernetes 上，把 URL 放在 Secret 中，并以文件形式挂载：
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: origin-database
+stringData:
+  url: postgres://origin:change-me@postgres.db.svc.cluster.local:5432/origin?sslmode=verify-full&sslrootcert=/run/secrets/origin-database/ca.pem
+  ca.pem: |
+    -----BEGIN CERTIFICATE-----
+    …
+---
+# In the hub's StatefulSet or Deployment, under spec.template.spec:
+containers:
+  - name: origin
+    image: ghcr.io/openlinkos/origin
+    env:
+      - name: ORIGIN_DATABASE_URL_FILE
+        value: /run/secrets/origin-database/url
+    volumeMounts:
+      - name: origin-database
+        mountPath: /run/secrets/origin-database
+        readOnly: true
+volumes:
+  - name: origin-database
+    secret:
+      secretName: origin-database
+```
+
+- **迁移中枢。** `origin db move` 在中枢停止时把它的库从 SQLite 移到 PostgreSQL，也可以移回来（见[把中枢移到 PostgreSQL](./upgrading.md#move-a-hub-to-postgresql)）。
+- **备份。** `origin backup <dir>` 从同一个快照把库导出到 SQLite 数据库 `<dir>/origin.db`，镜像照旧复制（见[备份](./privacy.md#backing-up)）。把它恢复到一个空的 `/data` 中，可以直接在上面启动中枢，也可以用 `origin db move` 再移回 PostgreSQL。数据库的转储（`pg_dump`）加上 `/data` 的副本，只有在两者都是中枢停止期间做的才是一致的，因为中枢运行时会不断改动镜像中最新的几行。
+
+设计细节见[架构](../architecture.md#database-engines)。
 
 ## 限制 {#limitations}
 

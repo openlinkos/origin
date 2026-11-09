@@ -94,6 +94,31 @@ A hub token works only for the device it is named after, and a device is known b
 
 A [relay](./hub.md#run-a-device-as-a-relay) keeps no copy of the sessions it has not sent, so they are lost if the agent deletes its logs first. Make the hub reachable and run `origin sync`; `origin status` shows, per source, what is still to send. For Claude Code you can also keep logs longer with `cleanupPeriodDays` in its `settings.json`.
 
+### The PostgreSQL database is refused {#the-postgresql-database-is-refused}
+
+The hub does not start: `The database origin has encoding UTF8 and locale en_US.UTF-8 (libc); a store needs a UTF8 database whose locale is C. Create one with: …`, or `Origin needs PostgreSQL 17 or later; this server runs 16.4.`
+
+A store in PostgreSQL compares and case-folds text as SQLite does only in a UTF8 database whose locale is C, so Origin checks before it creates anything. The locale of a database cannot be changed: create a new one as the message says, `CREATE DATABASE origin TEMPLATE template0 ENCODING 'UTF8' LOCALE 'C';`, and point `ORIGIN_DATABASE_URL` at it (see [Run the hub on PostgreSQL](./hub.md#run-the-hub-on-postgresql)). If the hub already ran on the old database, move its store with `origin db move --to <new-url>` before you drop the old one.
+
+### A command waits for the store, then fails {#a-command-waits-for-the-store-then-fails}
+
+A command on the hub's host fails with `database is locked: another Origin process holds the store's write lock`, or `statement timed out`; or `origin serve` refuses to start: `Another origin serve is running on the store at …: a store is served by one hub at a time.`
+
+- Every write takes the store's write lock and waits up to 10 seconds for it, as with SQLite. A command that fails this way met a long write, such as a large push being parsed, a purge, or `origin db move`: run it again.
+- One statement may run for at most 5 minutes, and a transaction may wait idle for at most 5 minutes; `origin db move` and `origin db rebuild-search`, whose index builds take longer on a large store, allow a day. A statement that times out fails its command, which changes nothing: check the server's load, then run it again.
+- Only one hub serves a store. Another `origin serve` holds the store, on this machine or another one pointed at the same database and schema: stop it. A hub that lost its connection takes its lock again when it reconnects; one that was killed lets go of it when PostgreSQL notices, at once or within a few minutes, depending on the server's TCP keepalive settings.
+
+### The database and the data directory do not belong together {#the-database-and-the-data-directory-do-not-belong-together}
+
+A command or the hub refuses to open the store: `The database at … holds store …, but ORIGIN_HOME … belongs to store …`, `The store at … is not paired with ORIGIN_HOME …`, `The store of ORIGIN_HOME … is in PostgreSQL …: set ORIGIN_DATABASE_URL …`, or `The store at … has been moved to …`.
+
+A store in PostgreSQL keeps its raw mirrors in `ORIGIN_HOME` (`/data` on a hub), and `store.json` there names the store they belong to (see [Run the hub on PostgreSQL](./hub.md#run-the-hub-on-postgresql)). Origin refuses a database and a directory that do not belong together, rather than serve one store's events with another's mirrors, or create a new, empty store:
+
+- Check `ORIGIN_DATABASE_URL`, its database and its `schema` parameter, and `ORIGIN_HOME`, or the volume mounted at `/data`.
+- `is in PostgreSQL … set ORIGIN_DATABASE_URL`: the store was moved into PostgreSQL, and the command ran without the URL; set it.
+- `has been moved to …`: `origin db move` moved the store away from this database; point the URL at where it is now, or leave it out if it is in SQLite.
+- Do not edit or delete `store.json` to get past this.
+
 ## Archive and data {#archive-and-data}
 
 ### Parse errors {#parse-errors}

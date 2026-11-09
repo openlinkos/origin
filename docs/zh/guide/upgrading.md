@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-762f31cd
+sourceHash: sha256-18478a10
 ---
 
 # 升级
@@ -78,6 +78,40 @@ docker logs origin-hub     # shows the upgrade of the store, if any
 - **先备份。** 升级是谨慎的，而备份只需一条命令：`origin backup <dir>`（见[备份](./privacy.md#backing-up)）。在中枢上，请在替换容器之前在容器内运行，比如 `docker exec origin-hub origin backup /data/backup-0.2`。
 - **不能降级。** Origin 发现库的格式比自己新时，会拒绝打开并提示升级，不做任何改动。要回到旧版本，请恢复升级前做的备份；在那之后写入的内容会丢失。
 - **多个进程。** 如果有多个进程同时打开库，比如 CLI 和多个 Agent 的 MCP 服务器，由其中一个执行升级，其他进程等待它完成，最多等五分钟。此后的 Origin 如果发现库已被更新的版本升级，会拒绝写入，并告诉你重启这个进程。`origin mcp` 会退出，以便客户端再启动它。在 0.4.0 上启动的进程不知道要停下来。
+
+## 把中枢移到 PostgreSQL {#move-a-hub-to-postgresql}
+
+中枢的库可以用 `origin db move` 从 SQLite 移到 PostgreSQL，也可以移回来（见[在 PostgreSQL 上运行中枢](./hub.md#run-the-hub-on-postgresql)）。它把整个库复制到一个空数据库中，逐表校验副本，然后才让旧库退役；原始镜像仍留在 `/data` 中。除了中枢停机的这段时间，设备和 Agent 察觉不到任何变化。
+
+1. **先升级中枢**，升级到带有 `origin db move` 的版本，并让它启动一次：移动只复制最新格式的库。
+2. **创建数据库**：PostgreSQL 17 或更高版本，UTF8 编码，locale 为 C（见[在 PostgreSQL 上运行中枢](./hub.md#run-the-hub-on-postgresql)）。
+3. **备份**中枢（`origin backup <dir>`，见[备份](./privacy.md#backing-up)）。
+4. **停止中枢。** 有其他进程打开着这个库时，移动会拒绝运行。
+5. **移动库**：使用同一个 `ORIGIN_HOME`（`/data`），不设置 `ORIGIN_DATABASE_URL`。不加 `--yes` 时，它说明将要做什么：
+
+   ```bash
+   origin db move --to 'postgres://origin:…@db.example.com:5432/origin?sslmode=verify-full&sslrootcert=/etc/origin/ca.pem'
+   origin db move --to 'postgres://…' --yes
+   ```
+
+   使用 Docker 时，在同一镜像的容器中、在中枢的卷上运行它：
+
+   ```bash
+   docker run --rm -v origin-data:/data ghcr.io/openlinkos/origin db move --to 'postgres://…' --yes
+   ```
+
+   它会报告每一步，最后说明复制了多少行、每一步用了多长时间。对一个有 25 万个事件、在 SQLite 中约 450 MB 的库，移到同一台机器上的 PostgreSQL 大约需要一分半钟，大部分时间用于建立检索索引。只要有任何地方对不上，PostgreSQL 中什么也不会留下，库仍留在原处。
+6. **启动中枢**：用 `ORIGIN_DATABASE_URL`（或 `ORIGIN_DATABASE_URL_FILE`）指向新数据库，`/data` 不变。`origin status` 和管理界面的概览会显示数据库在哪里。
+
+之后，`/data/origin.db` 保留为 `origin.db.moved-<date>`，`/data/store.json` 记录库在 PostgreSQL 中；中枢运行正常后，删除这个旧文件即可。命令运行期间，这台机器上的其他用户能看到 URL；在共用的机器上，请在单独的容器或 Pod 中运行它，从文件中读取 URL：
+
+```bash
+origin db move --to "$(cat /run/secrets/origin-database/url)" --yes
+```
+
+**移回 SQLite。** 停止中枢，然后在仍设置着 `ORIGIN_DATABASE_URL` 的情况下运行 `origin db move --to sqlite --yes`：它写出 `/data/origin.db`，PostgreSQL 中的库会记下它已经移走，所以误在它上面启动的中枢会拒绝运行。然后不带 URL 启动中枢。`--to` 加上另一个 PostgreSQL URL，可以用同样的方式把库移到另一个数据库或 schema。
+
+**升级 PostgreSQL。** PostgreSQL 的新大版本（无论用 `pg_upgrade`，还是先转储再恢复）可能会改变服务器为检索折叠大小写所用的 Unicode 表。升级之后，在中枢停止时运行 `origin db rebuild-search`：它会重建三元组索引，以及检索从事件派生的内容。
 
 ## 验证发布 {#verify-a-release}
 

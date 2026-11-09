@@ -49,6 +49,8 @@ origin admin     sessions [--revoke-all] | audit [--limit 50]       Admin UI ses
 origin hub       connect <url> [--token <token>] [--device <name>] [--relay] | status | disconnect
                                                        Without --token, approve the device in the hub's admin UI
 origin push                                            Same as origin sync (kept for existing schedules)
+origin db        move --to <postgres-url | sqlite> [--yes]   Move the hub's store between SQLite and PostgreSQL (hub stopped)
+origin db        rebuild-search                        Rebuild what search derives from the events
 ```
 
 - **Time values** are relative durations (`30m`, `24h`, `7d`, `2w`) or dates (`YYYY-MM-DD`, ISO 8601).
@@ -315,11 +317,21 @@ These commands run a [personal hub](./hub.md) and connect devices to it.
 - `origin admin username <name>` changes the username you sign in to the admin UI with, and without a name shows it; you choose it at your first sign-in, with the admin password.
 - `origin admin password` sets the admin UI's password: it asks twice on a terminal, without showing what you type, and otherwise reads one line from standard input; `--generate` picks a random one and prints it once. The password needs at least 10 characters, and setting it signs out every admin session. On its first start with the admin UI enabled, the hub generates a password and prints it to its log once. `origin admin sessions --revoke-all` signs out every session, and `origin admin audit` prints the audit log. Token, username, and password changes made with the CLI are recorded there too.
 
+## Database engines
+
+A store's database is in SQLite, `origin.db` in `ORIGIN_HOME`, unless `ORIGIN_DATABASE_URL` (or `ORIGIN_DATABASE_URL_FILE`) names a PostgreSQL database, which only a hub may use (see [Run the hub on PostgreSQL](./hub.md#run-the-hub-on-postgresql)). There, the commands that work with this machine's agents refuse to run: `sync`, `push`, `hub`, `mcp`, `ui`, `agents`, `sessions reproject`, and `sessions parents`.
+
+- `origin db move --to <postgres-url>` moves the store of `ORIGIN_HOME` from SQLite into the PostgreSQL database the URL names, which must be empty (its `schema` parameter names the schema, `origin` by default); with `ORIGIN_DATABASE_URL` set, `--to sqlite` moves it back into `origin.db`, and `--to` with another URL into another database or schema. Without `--yes`, it says what it would copy, from where to where, and changes nothing. With `--yes`, it refuses while the hub or another process uses the store, copies every table with its keys, builds the search indexes, checks the copy (row counts and a digest of every table, the blocks of events, a few searches, and in SQLite its integrity), and only then retires the old store: `origin.db` is kept as `origin.db.moved-<date>`, or the store in PostgreSQL records where it went, and `store.json` names the new place. The raw mirrors stay where they are. See [Move a hub to PostgreSQL](./upgrading.md#move-a-hub-to-postgresql).
+- `origin db rebuild-search` rebuilds what search derives from the events: in SQLite the full-text indexes, in PostgreSQL the trigram indexes and the tables search keeps beside them. Run it after a major upgrade of PostgreSQL, with the hub stopped.
+- `origin backup <dir>` of a store in PostgreSQL exports it into `<dir>/origin.db`, a store in SQLite (see [Backing up](./privacy.md#backing-up)).
+
 ## Environment variables
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `ORIGIN_HOME` | `~/.origin` | Where Origin stores its database and raw mirrors |
+| `ORIGIN_DATABASE_URL` | — | On a hub: the PostgreSQL database of its store, `postgres://user:password@host:5432/database`, with `schema=<name>` for a schema other than `origin` (see [Run the hub on PostgreSQL](./hub.md#run-the-hub-on-postgresql)) |
+| `ORIGIN_DATABASE_URL_FILE` | — | A file that holds that URL, such as a mounted secret |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's config directory (sessions are read from `<dir>/projects`) |
 | `ORIGIN_CLAUDE_PROJECTS` | — | Override the Claude Code projects directory directly |
 | `CODEX_HOME` | `~/.codex` | Codex's home directory (rollouts are read from `sessions/` and `archived_sessions/`) |

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-fa1f8d32
+sourceHash: sha256-cf0bfcf0
 ---
 
 # 架构
@@ -138,7 +138,7 @@ agents on C ──▶ origin mcp ──── every tool call (MCP over HTTP) �
 
 ## 包 {#packages}
 
-pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.16（需要 `node:zlib` 的 zstd 和 `node:sqlite` 的在线备份）。`core`、`adapters`、`admin` 和 `openclaw` 只使用 Node 内置模块；`mcp` 依赖官方的 [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) 和 zod。中枢及其管理界面使用 Node 内置的 `node:http`。
+pnpm workspace，TypeScript（strict、ESM、NodeNext），Node.js ≥ 22.16（需要 `node:zlib` 的 zstd 和 `node:sqlite` 的在线备份）。`core`、`adapters`、`admin` 和 `openclaw` 只使用 Node 内置模块；`mcp` 依赖官方的 [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) 和 zod。中枢及其管理界面使用 Node 内置的 `node:http`。CLI 还依赖 PostgreSQL 驱动 `pg`，只有库在 PostgreSQL 中的中枢才会在一个工作线程中加载它（见[数据库引擎](#database-engines)）。
 
 | 包 | 路径 | 职责 | 依赖 |
 |---|---|---|---|
@@ -180,7 +180,8 @@ interface SourceAdapter {
 
 ```
 ~/.origin/                 # or $ORIGIN_HOME
-├── origin.db              # SQLite (WAL)
+├── origin.db              # SQLite (WAL), unless a hub's store is in PostgreSQL
+├── store.json             # on a hub whose store is in PostgreSQL: the store's id and engine
 ├── raw/<source>/...       # append-only mirrors of the original log files:
 │                          #   <mirror>.zst (sealed zstd frames) and <mirror>.tail (open tail)
 ├── purge/                 # while a purge rewrites sealed frames on disk: their journals
@@ -222,11 +223,11 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 | `admin_session` | 中枢管理界面的会话：会话 id 的哈希、它的 CSRF 令牌和各个时间戳（`origin ui` 把会话保存在内存中） |
 | `audit_log` | 管理操作的只追加记录，记有操作者、渠道（`ui`、`cli` 或 `api`）、id 和数量，从不包含内容；触发器拒绝任何更新和删除 |
 
-- 存储使用 Node 内置的 `node:sqlite`，因此没有需要编译的原生模块。多个进程可以共享同一个数据库（CLI，以及每个 Agent 会话各一个 MCP server）；WAL 模式和 busy timeout 负责处理这种情况。
+- 存储使用 Node 内置的 `node:sqlite`，因此没有需要编译的原生模块；中枢的库也可以改放在 PostgreSQL 中（见[数据库引擎](#database-engines)）。多个进程可以共享同一个数据库（CLI，以及每个 Agent 会话各一个 MCP server）；WAL 模式和 busy timeout 负责处理这种情况。
 - `session` 是派生数据，可以从 `event` 重建；按来源的汇总（`origin status`、管理界面的概览）从它读取。`session_follow` 和 `session_thread` 也是派生数据，来自事件和会话，`rebuildThreads()` 会从头重新推导它们；`proposal` 和 `proposal_source` 同样是派生数据，`rebuildProposals()` 会从事件重新推导它们。检索索引也是派生数据，由触发器保持同步：`message_fts` 和 `event_fts` 是外部内容（external-content）表（`message_fts` 的内容是消息事件的视图 `event_message`），`event_cjk` 没有内容表，通过核心在每个连接上注册的函数填写。`rebuildSearchIndexes()` 从事件和条目重建所有这些索引以及 `event_block`。`event_author` 和 `session_kind` 派生自原始行，原始行里有事件没有保留的内容，所以 `rebuildAuthorship()` 会像采集时那样重新解析原始镜像来推导它们，并随之重新推导线索；事件从不改动。`session_parent` 也以同样的方式派生，来自镜像行已经写明的父会话，这次重建会再次记录这些链接；它不会丢掉 `places.jsonl` 的一行所添加的父会话，也从不改写事件或已存的标题。`project_root`、`session_place` 和 `place_head` 是解析后的项目（见[项目](#projects)）。建立它们的迁移不写入任何行，也不读取文件。版本 10 会读取在这些表出现之前就已经镜像的 `places.jsonl` 行。本 Origin 不认识的版本原样留在镜像里，解析时跳过并记一条警告；以后认识它的格式会再调用一次 `reparsePlaces`。读取使用 `session_place`，不改写 `event.project`。
 - **到达次序。** 事件以及随之的检索索引都以 `seq` 为键，即事件到达本库的次序：FTS5 保存相邻键之间的差值，所以连续的键能让索引保持很小。同步时按修改时间从旧到新采集找到的文件，设备也按最后更新的先后把文件推送给中枢，所以到达次序尽可能地跟随时间；但它并不是时间次序，例如中枢可能在收到较新的会话很久之后，才收到某台设备的旧会话。因此，一个触发器为每一块 4,096 个连续到达的事件记录其中最晚的时间戳，以及到这一块为止最晚的时间戳（`event_block`）。按从新到旧的查询从最后到达的事件开始读取索引，分成几条由连续的块组成的链（某一块比它之前的链新一天以上时，就开始一条新链），总是从未读部分可能含有最新事件的那条链读取，一旦没有链可能含有比所需事件更新的事件，就立即停止。一个窄的 `(seq, ts)` 索引无需读取事件就能给出它的时间戳。
 - **大小。** 在一个有两百万个事件、平均每个事件约 800 个字符文本的库上，数据库每个事件约占 2,550 字节：事件本身 1,360，它的索引 205，`event_fts` 500，`message_fts` 460，`event_cjk` 20。而所有事件的完整 trigram 索引单独就要每个事件约 2,350 字节。
-- **备份。** `origin backup <dir>` 先用 SQLite 的在线备份一次性复制数据库，即使其他进程正在写入，也能得到一致的快照；然后按这个快照记录的状态复制原始镜像：该目录中还没有的已封存帧，以及每个开放尾部（续写；如果此后已有帧从它封存，则重新写入）。尾部从正在使用的库中读取，那里它可能已经被封存，但镜像的内容只会增长，所以读到的内容相同（见[备份](guide/privacy.md#backing-up)）。如果中枢把已封存的帧保存在存储桶中，这些帧会被复制进备份，并按磁盘上的布局排列，所以备份从不依赖存储桶；备份中的数据库随后不再记录这个存储桶。清除会就地涂白镜像中的行（见[清除](#purging)），所以备份到某个目录时，自上次备份到这里以来被清除改动过的镜像，以及上次复制时被清除的行还没涂白的镜像，都会被整个重新复制。清除之前做的备份，以及备份到其他目录的备份，仍保留着它删除的内容。
+- **备份。** `origin backup <dir>` 先用 SQLite 的在线备份一次性复制数据库，即使其他进程正在写入，也能得到一致的快照；然后按这个快照记录的状态复制原始镜像：该目录中还没有的已封存帧，以及每个开放尾部（续写；如果此后已有帧从它封存，则重新写入）。尾部从正在使用的库中读取，那里它可能已经被封存，但镜像的内容只会增长，所以读到的内容相同（见[备份](guide/privacy.md#backing-up)）。如果中枢把已封存的帧保存在存储桶中，这些帧会被复制进备份，并按磁盘上的布局排列，所以备份从不依赖存储桶；备份中的数据库随后不再记录这个存储桶。清除会就地涂白镜像中的行（见[清除](#purging)），所以备份到某个目录时，自上次备份到这里以来被清除改动过的镜像，以及上次复制时被清除的行还没涂白的镜像，都会被整个重新复制。清除之前做的备份，以及备份到其他目录的备份，仍保留着它删除的内容。PostgreSQL 中的库则改为导出：从一个 `REPEATABLE READ` 快照导出到目录中一个新的 SQLite 数据库，并像移动库时校验副本那样校验它（见[数据库引擎](#database-engines)）；然后像上面那样，按这个快照的记录复制镜像。这样的备份就是 SQLite 中的库，中枢可以直接在它上面运行，也可以再把它移回 PostgreSQL。
 - **中继的库**没有 `raw/` 目录，它的数据库中也没有事件、镜像文件、条目或遗忘记录：只有 `setting`（它的名称、模式和游标）和它的同步日志（见[中继](#relays)）。
 - **库的名称。** 每个库都有一个名称，保存在 `setting` 中：在设备上就是设备名，中枢则把自己的库叫作 `hub`。条目和遗忘记录把写入它们的库的名称记为 `origin`，设备也以自己库的名称为中枢所知。库在第一次需要名称时被命名：`origin serve` 把它命名为 `hub`；其他命令使用 `ORIGIN_DEVICE` 或主机名。库一旦写入过条目或遗忘记录，就保持这个名称不变；它从原生记忆派生出的条目不算在内，因为它从不发送这些条目。
 - **格式版本。** 数据库记录库的格式版本，打开一个较旧的库时会就地把它升级到最新版本；较新的 Origin 写过的库会被拒绝（见[迁移](#migrations)）。由已有表推导出的表，只要缺少相应的行，就会在打开数据库时据已有的表补全：遗忘记录如果在写入时没有 `tombstone_effect` 和 `tombstone_meta`（由 Origin 0.1 写下，或由仍在运行的旧版本进程写下），就依据 `forgotten_entry`、`excluded_event` 和规则补上。数据库、`raw/` 下的镜像，以及中枢存储桶中已封存的帧是一个整体：不要只删除或替换其中之一。
@@ -264,6 +265,20 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 - **库使用的存储桶。** 库第一次使用某个存储桶和前缀时，会把它们记录在 `setting` 中（`raw.bucket`）。此后它拒绝任何其他存储桶，`origin serve` 没有它就拒绝启动，其他命令则从环境变量中读取它；如果它们需要存储桶中的帧而存储桶没有配置，就会失败，并给出需要设置什么的提示。端点不会被记录，所以可以改变。请为每个库使用各自的前缀：两个库如果写入同样的键，就会相互替换对方的帧。
 - **把帧移入存储桶。** 中枢使用存储桶之前封存的帧仍留在 `<mirror>.zst` 中，并从那里读取。`origin raw upload` 把它们按上述的键上传，所以再次运行、或在中断之后运行，都不会重复上传任何东西：每一帧在上传前都会被检查（它必须能带着校验和解压成 `raw_chunk` 记录的大小），上传后再从存储桶读回校验；存储桶中已有相同字节的帧则保持不变。它在事务之外运行，所以不像中枢那样每次传输都阻塞等待：它从调用线程发出请求，默认一次传 8 帧，可用 `--concurrency` 调整。某一帧校验失败时，会报告该帧并保留存放它的文件，其他镜像照常继续；出现会让每一帧都失败的错误（例如存储桶无法访问）之后，不再开始新的帧。它列出每一帧都已在存储桶中校验过的 `<mirror>.zst` 文件，`--remove` 会在一个文件的所有帧都校验过后立即删除它。这只是移动帧而不改变它们，所以每个镜像的内容保持不变（不变量 3）。它可以在中枢运行时执行。
 
+### 数据库引擎 {#database-engines}
+
+每台设备上，库的数据库都在 SQLite 中；中枢也是如此，除非给它一个 PostgreSQL 数据库（见[在 PostgreSQL 上运行中枢](guide/hub.md#run-the-hub-on-postgresql)）。数据库之上的一切，从采集、条目、遗忘、清除，到检索、复制、MCP server 和管理界面，在两种引擎上都是同一套代码：它们使用同一个同步接口 `Database`（`core` 中的 `database.ts`），SQLite 由 `node:sqlite` 实现，PostgreSQL 由 CLI 中的客户端实现，因为 `core` 不发起网络调用。
+
+- **客户端。** 这个接口是同步的，和 `node:sqlite` 一样，所以 PostgreSQL 客户端也是同步的：一个工作线程用 `pg` 驱动持有连接，调用线程在 `Atomics.wait` 上阻塞，直到它回应，和 S3 客户端的做法一样（见[帧存储](#frame-stores)）。SQL 只写一遍，用两种引擎都接受的写法，两者写法不同之处用几个辅助函数处理（`dialect.ts`）；其余的由客户端翻译，例如占位符和 `LIKE`。值的绑定和读取方式与 `node:sqlite` 相同，只有 U+0000 例外：PostgreSQL 的文本无法保存它，所以存为 U+FFFD。
+- **事务和锁**的行为与 SQLite 相同，所以它们之上的代码无需改动。`BEGIN IMMEDIATE` 获取库的写锁，即以库的 schema 为键的事务级 advisory lock，最多等待 10 秒；如果库已被更新的 Origin 升级，或者已经移走，它就拒绝写入。每次写入都先拿这把锁，所以写入方之间不会死锁；SQLite 会作为 rowid 分配的键，在这里由锁内的“最大值加一”分配，并按分配的顺序变得可见，复制游标依赖这一点。`BEGIN` 是只读的 `REPEATABLE READ` 快照，和 SQLite 的读事务一样。一条语句最多运行 5 分钟，一个事务最多空闲 5 分钟。连接断开时，读取会在新连接上重试一次，写入只在提交从未发出时才会重试。
+- **schema**（`core` 中的 `pg/schema.ts`）拥有 SQLite 的表、列、约束和索引，名称相同，区别如下：整数是 64 位，实数是双精度；`entry` 和 `tombstone` 有一个 `rowid` 列，查询像读取 SQLite 的隐式 rowid 一样读取它；`store_format` 保存格式版本、库的 id，以及库移走之后它去了哪里；只追加的保护是同样的触发器，通过同一个函数实现，并且拒绝 `TRUNCATE`；检索有自己的索引和表（见[检索与时间线](#search-and-timeline)）。有一个测试比较两边的目录。
+- **数据库**必须是 PostgreSQL 17 或更高版本，UTF8 编码，locale 为 C。SQLite 按码点比较文本，`lower()` 和 `LIKE` 只折叠 ASCII，Origin 依赖这一点，例如中枢比较镜像名称时；locale 为 C 的数据库也是如此。检索用 PostgreSQL 内置的 `pg_c_utf8` 排序规则折叠大小写，即 Unicode 的简单大小写映射。一个库就是一个 schema，除非 URL 指定了别的，否则是 `origin`，所以一个数据库可以容纳多个库。
+- **配对。** 原始镜像留在 `ORIGIN_HOME` 中，那里的 `store.json` 以 id 记录这些镜像属于哪个库，以及它的引擎。打开库时，以下情况会被拒绝：数据库中存着另一个库；目录中已有镜像却要新建库；以及没有 URL、而目录的库在 PostgreSQL 中，这样漏设的变量永远不会在 SQLite 中新建一个空库。如果创建库时在写出 `store.json` 之前中断了，只要数据库和目录中都还没有镜像，就会接着使用这个库。
+- **一个中枢。** `origin serve` 运行期间持有库上的一把会话级 advisory lock，每次恢复连接时都会重新获取，所以两个中枢永远不会服务同一个库。其他命令可以和它同时运行，与 SQLite 时一样。
+- **只用于中枢的库。** 在 PostgreSQL 上，处理本机 Agent 的命令（`sync`、`push`、`hub`、`mcp`、`ui`、`agents`、`sessions reproject`、`sessions parents`）拒绝运行，Agent 的钩子什么也不做；Agent 通过这样的中枢的 `/mcp` 访问它。
+- **移动库。** `origin db move`（`core` 中的 `store-copy.ts`，CLI 中的 `db-move.ts`）在中枢停止时，把整个库复制到另一种引擎的空数据库中，或者另一个 PostgreSQL 数据库或 schema 中：在 PostgreSQL 上，它持有服务锁；在 SQLite 中，它退出预写日志模式，而只有数据库唯一的连接才能这样做。它在一个事务中、持有写锁读取库。对 SQLite 中的库，先检查是否有值的类型与所在列声明的不同（SQLite 会保留这样的值，PostgreSQL 则不会），以及是否有断开的引用；如有，移动会拒绝并列出它们。然后每张表的每一行都原样复制，键也一样（事件的 `seq`、`change_log` 和 `recall` 的序号、审计 id，以及 `entry` 和 `tombstone` 的 rowid），所以它们上面的每个游标都照常继续：表按照每一行都插在它所引用的行之后的顺序复制，每张表内按键的顺序，复制到 PostgreSQL 时用多行插入。索引和触发器在行之后创建，所以没有触发器会因复制的行而触发；检索从事件派生的内容在目标中计算。接着校验副本：每张表的行相同，按行数和摘要比较（每一行的值按列名、连同类型计算 SHA-256，再把所有行的结果按模 2^256 相加，这样摘要与读取行的顺序无关，因为键中的 U+FFFD 在 PostgreSQL 中的排序位置与 SQLite 中的 U+0000 不同）；`event_block` 与事件给出的相同；从库中抽取的几次检索，最新的结果相同；在 SQLite 中还要通过完整性检查和外键检查。复制到 PostgreSQL 时，这一切都在一个事务中，任何不一致都会回滚；复制到 SQLite 时，副本先写成 `origin.db.partial`，校验通过后再改名。之后才让源库退役：`origin.db` 改名为 `origin.db.moved-<date>`，或者 PostgreSQL 中的库在 `store_format` 中记下它去了哪里，从此拒绝打开；`store.json` 记录新的引擎，库的 id 不变。对一个有 25 万个事件、在 SQLite 中 446 MB 的库，移到同一台机器上的 PostgreSQL 18 用了 83 秒，其中约 60 秒用于建立三元组索引和检索派生的内容；移回用了 17 秒。
+- **重建检索。** `origin db rebuild-search` 重建检索从事件派生的内容，即 `rebuildSearchIndexes()`；在 PostgreSQL 上还会重建三元组索引，它们的大小写折叠来自服务器的 Unicode 表，而大版本可能改变这些表。
+
 ### 迁移 {#migrations}
 
 库把它的格式版本记录在数据库文件头中，即 `PRAGMA user_version`：SQLite 为应用程序保留了这个整数，在任何表存在之前就能读取它，它与它所描述的改动在同一个事务中写入，备份也会随数据库一起复制它。Origin 0.1.0 没有记录版本，所以没有版本的库如果有 0.1.0 的那些表，就是版本 1，即 0.1.0 的 schema，否则就是一个新库。打开一个库时（`core` 中的 `migrations.ts`），会把它升级到最新版本：
@@ -274,6 +289,8 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 - **只为执行命令而打开。** CLI 只在一个命令的参数有效之后才打开库：打印它的用法，或者拒绝它不接受的参数，都不会改动库。
 
 迁移完成之后，schema 中的幂等语句会照常在每次打开时执行，所以新的表、索引、视图或触发器，只要已有数据不需要从中得到什么，就无需迁移即可出现。
+
+**在 PostgreSQL 上。** 库把版本记录在 `store_format` 中，并且像读 SQLite 的文件头那样，先于其他一切读取它。PostgreSQL 中的库从版本 12（`PG_BASE_VERSION`）开始：新库在一个事务中得到最新的 schema 和版本，12 及以前的迁移从不在那里运行。之后的每个迁移都在两种引擎上运行，持有同一把写锁、以同样的方式，用两者都接受的 SQL，或者用它自己的 PostgreSQL 步骤（`postgres`）。在 PostgreSQL 上，schema 的幂等语句就是库中缺少的 `pg/schema.ts` 对象，每个只创建一次，从不替换。格式的改动要同时修改 `schema.ts` 和 `pg/schema.ts`，它的迁移要在两种引擎上测试。
 
 | 版本 | 改动 |
 |---|---|
@@ -483,6 +500,8 @@ Agent 推断出本人没有说过的内容，或者代本人整理记忆时，�
 **摘要**显示第一个匹配周围最多 200 个字符的文本，每个匹配都用方括号标出。
 
 **条目**按同样的词检索：三个或更多字符的词通过 `entry_fts` 查找并按 BM25 排序，更短的词通过核对文本查找（条目很少）。没有三个或更多字符的词时，条目从新到旧排列。
+
+**在 PostgreSQL 上**（见[数据库引擎](#database-engines)），同样的查询计划读取另一些索引（`core` 中的 `pg/search.ts`）。每个事件文本、以及每条消息文本中不重复的三元组上的 GIN 索引（`origin_trigrams()`，用 `pg_c_utf8` 折叠）代替 `event_fts` 和 `message_fts`：事件必须包含各个词的三元组，然后再核对这些词是否是它折叠后文本的子串。`event_cjk` 是一张保存每个事件 CJK 词元的表，带 GIN 索引，代替 CJK 索引；条目上的同类索引代替 `entry_fts`；`event_prompt` 列出读起来像提示的用户消息。Origin 在插入事件时填充这两张表，在 SQLite 中这由调用 JavaScript 的触发器完成。GIN 索引给出的匹配没有顺序，所以查询按到达的窗口读取它们，从新到旧：先一个 4,096 的块，之后每次加倍。BM25 在 TypeScript 中计算，所用的量与 FTS5 相同，由 `event_block` 按块统计事件和消息的数量，以及它们以三元组计的长度。结果与 SQLite 中相同，同一套测试在两种引擎上检查这一点，只有两处不同：少数小写形式更长或取决于上下文的字符，例如 `İ` 和词尾的 `Σ`，大小写折叠不同；一个词匹配的事件数在 20,000 以内精确计数，超过则估算，所以对这么常见的词，排序可能略有不同。
 
 **结果**有上限，无论找到的内容有多长。MCP `search` 的每个命中，无论是条目还是事件，都带有截到 400 个字符的文本、全文的长度（`total_chars`，全文用 `get` 读），有查询时还带有摘要；`origin search` 用摘要显示每个命中。两者对条目和事件都各多取一条，以便说明匹配的是否更多（`more`）。
 
@@ -783,7 +802,7 @@ Origin 交给 Agent 的每个 id 都可以用 `get` 打开：条目（`ent_…`�
 - **用过时的版本恢复。** 设备按它持有的条目版本判断规则 3。当另一个库在中枢上纠正了设备的某个条目时，一次恢复可能让设备继续隐藏这个条目，而中枢显示它，直到之后又有遗忘或恢复涉及它。把条目下发给设备，或者把中枢的判断与遗忘覆盖的内容分开发送，可以解决这个问题；两者都尚未设计。
 - **清除，更进一步。** 清除触及不到备份、存储桶中的旧版本、PostgreSQL 的预写日志和死行，也触及不到 Agent 自己的文件（见[清除](#purging)）。尚未设计的有：由设备向它的中枢请求一次清除，再由主人在中枢上确认；一个设置，让设备先扣下中枢的清除，等主人在设备上应用；以及收回被涂白的行所占的空间，这些行在帧中保持原有大小，直到镜像被压实。
 - **通行密钥。** 主人用用户名和密码登录；改用通行密钥（WebAuthn）登录，并以此批准 Agent 和设备，尚未设计。
-- **中枢的存储后端。** 中枢可以把原始镜像中已封存的帧——它的大部分数据——保存在兼容 S3 的存储桶中，其余部分留在自己的磁盘上：开放尾部和 SQLite 数据库。尚未设计的有：把帧从存储桶移回磁盘或移到另一个存储桶，不阻塞中枢的帧传输方式，以及为一块磁盘装不下的中枢改用 PostgreSQL 保存库。
+- **中枢的存储后端。** 中枢可以把原始镜像中已封存的帧——它的大部分数据——保存在兼容 S3 的存储桶中，把数据库放在 PostgreSQL 中（见[数据库引擎](#database-engines)）；开放尾部和 `store.json` 留在它自己的磁盘上。尚未设计的有：把帧从存储桶移回磁盘或移到另一个存储桶，不阻塞中枢的帧传输方式，把开放尾部也移出中枢的磁盘、让中枢不再需要自己的卷，以及在中枢运行时移动库。
 
 ## 相关工作 {#prior-art}
 

@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-12c36207
+sourceHash: sha256-58af5409
 ---
 
 # 常见问题
@@ -97,6 +97,31 @@ Agent 得到的结果末尾带有 `Note: the Origin hub was not consulted (the h
 `origin status` 或 Agent 显示 `Warning: Claude Code sessions not sent to the hub yet were last written 24 days ago, and Claude Code deletes them after 30 days (…); …`
 
 [中继](./hub.md#run-a-device-as-a-relay)不为还没发送的会话保留副本，所以如果 Agent 先删除了日志，这些会话就丢失了。请让中枢可以访问，并运行 `origin sync`；`origin status` 按来源显示还有多少待发送。对 Claude Code，你也可以在它的 `settings.json` 里用 `cleanupPeriodDays` 让日志保留更久。
+
+### PostgreSQL 数据库被拒绝 {#the-postgresql-database-is-refused}
+
+中枢无法启动：`The database origin has encoding UTF8 and locale en_US.UTF-8 (libc); a store needs a UTF8 database whose locale is C. Create one with: …`，或者 `Origin needs PostgreSQL 17 or later; this server runs 16.4.`
+
+只有在编码为 UTF8、locale 为 C 的数据库中，PostgreSQL 里的库比较文本、折叠大小写的方式才和 SQLite 一样，所以 Origin 在创建任何东西之前都会检查。数据库的 locale 无法更改：按消息所说新建一个数据库，`CREATE DATABASE origin TEMPLATE template0 ENCODING 'UTF8' LOCALE 'C';`，再让 `ORIGIN_DATABASE_URL` 指向它（见[在 PostgreSQL 上运行中枢](./hub.md#run-the-hub-on-postgresql)）。如果中枢已经在旧数据库上运行过，请先用 `origin db move --to <new-url>` 移走它的库，再删除旧数据库。
+
+### 命令等待库之后失败 {#a-command-waits-for-the-store-then-fails}
+
+中枢所在主机上的某个命令失败，提示 `database is locked: another Origin process holds the store's write lock` 或 `statement timed out`；或者 `origin serve` 拒绝启动：`Another origin serve is running on the store at …: a store is served by one hub at a time.`
+
+- 每次写入都要先拿到库的写锁，最多等 10 秒，与 SQLite 时一样。这样失败的命令遇到了一次较长的写入，例如正在解析的大批推送、一次清除或 `origin db move`：再运行一次即可。
+- 一条语句最多运行 5 分钟，一个事务最多空闲等待 5 分钟；`origin db move` 和 `origin db rebuild-search` 在大库上建索引需要更久，允许运行一天。语句超时会让它所在的命令失败，什么也不会改变：检查数据库服务器的负载，然后再运行一次。
+- 一个库只由一个中枢服务。另一个 `origin serve` 占着这个库，可能在这台机器上，也可能在另一台指向同一数据库和 schema 的机器上：停掉它。中枢断线后重新连接时会再次拿到这把锁；被强行终止的中枢，在 PostgreSQL 察觉后就会释放它，可能立即，也可能在几分钟之内，取决于服务器的 TCP keepalive 设置。
+
+### 数据库和数据目录不配对 {#the-database-and-the-data-directory-do-not-belong-together}
+
+某个命令或中枢拒绝打开库：`The database at … holds store …, but ORIGIN_HOME … belongs to store …`、`The store at … is not paired with ORIGIN_HOME …`、`The store of ORIGIN_HOME … is in PostgreSQL …: set ORIGIN_DATABASE_URL …`，或者 `The store at … has been moved to …`。
+
+PostgreSQL 中的库把原始镜像放在 `ORIGIN_HOME`（中枢上是 `/data`）中，那里的 `store.json` 记录这些镜像属于哪个库（见[在 PostgreSQL 上运行中枢](./hub.md#run-the-hub-on-postgresql)）。数据库和目录不配对时，Origin 会拒绝，而不是用一个库的事件搭配另一个库的镜像，或者新建一个空库：
+
+- 检查 `ORIGIN_DATABASE_URL`（它的数据库和 `schema` 参数）以及 `ORIGIN_HOME`，或者挂载在 `/data` 的卷。
+- `is in PostgreSQL … set ORIGIN_DATABASE_URL`：库已经移到 PostgreSQL，而命令运行时没有 URL；设置它即可。
+- `has been moved to …`：`origin db move` 已经把库从这个数据库移走；让 URL 指向它现在所在的位置，如果它在 SQLite 中，就去掉 URL。
+- 不要为了绕过这个检查而编辑或删除 `store.json`。
 
 ## 归档与数据 {#archive-and-data}
 

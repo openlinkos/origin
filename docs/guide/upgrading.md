@@ -75,6 +75,40 @@ Formats 2 and 3 were both introduced by 0.2.0, formats 5 to 10 by 0.5.0, and for
 - **There is no downgrade.** An Origin that finds a store of a newer format refuses to open it and says to upgrade, without changing anything. To go back to an older version, restore the backup you made before upgrading; what was written since is lost.
 - **Several processes.** If several processes open the store at once, such as the CLI and the MCP servers of several agents, one of them runs the upgrade and the others wait for it, up to five minutes. A later Origin refuses to write a store a newer version has already upgraded, and tells you to restart this process. `origin mcp` exits so the client starts it again. A process that started on 0.4.0 does not know to stop.
 
+## Move a hub to PostgreSQL
+
+A hub's store can move from SQLite into PostgreSQL, and back, with `origin db move` (see [Run the hub on PostgreSQL](./hub.md#run-the-hub-on-postgresql)). It copies the store whole into an empty database, checks the copy table by table, and only then retires the old one; the raw mirrors stay in `/data`. Devices and agents notice nothing but the hub's downtime.
+
+1. **Upgrade the hub first**, to a version that has `origin db move`, and let it start once: a move copies a store of the latest format only.
+2. **Create the database**, UTF8 with the C locale, on PostgreSQL 17 or later (see [Run the hub on PostgreSQL](./hub.md#run-the-hub-on-postgresql)).
+3. **Back up** the hub (`origin backup <dir>`, see [Backing up](./privacy.md#backing-up)).
+4. **Stop the hub.** The move refuses to run while another process has the store open.
+5. **Move the store**, with the same `ORIGIN_HOME` (`/data`) and without `ORIGIN_DATABASE_URL`. Without `--yes`, it says what it would do:
+
+   ```bash
+   origin db move --to 'postgres://origin:…@db.example.com:5432/origin?sslmode=verify-full&sslrootcert=/etc/origin/ca.pem'
+   origin db move --to 'postgres://…' --yes
+   ```
+
+   With Docker, run it in a container of the same image, on the hub's volume:
+
+   ```bash
+   docker run --rm -v origin-data:/data ghcr.io/openlinkos/origin db move --to 'postgres://…' --yes
+   ```
+
+   It reports each step, and at the end how many rows it copied and how long each step took. On a store of 250,000 events, about 450 MB in SQLite, a move into PostgreSQL on the same machine takes about a minute and a half, most of it building the search indexes. If anything does not match, nothing is kept in PostgreSQL and the store stays where it was.
+6. **Start the hub** with `ORIGIN_DATABASE_URL` (or `ORIGIN_DATABASE_URL_FILE`) naming the new database, and the same `/data`. `origin status` and the admin UI's overview show where the database is.
+
+Afterwards, `/data/origin.db` is kept as `origin.db.moved-<date>`, and `/data/store.json` names the store in PostgreSQL; delete the old file once the hub runs well. The URL is visible to other users of the machine while the command runs; on a shared machine, run it in a container or a pod of its own, which reads it from a file:
+
+```bash
+origin db move --to "$(cat /run/secrets/origin-database/url)" --yes
+```
+
+**Back to SQLite.** Stop the hub, then, with `ORIGIN_DATABASE_URL` still set, run `origin db move --to sqlite --yes`: it writes `/data/origin.db`, and the store in PostgreSQL records that it moved, so that a hub started on it by mistake refuses to run. Start the hub without the URL. `--to` with another PostgreSQL URL moves the store into another database or schema the same way.
+
+**Upgrading PostgreSQL.** A new major version of PostgreSQL (with `pg_upgrade`, or a dump and restore) may change the Unicode tables by which the server folds case for search. After one, with the hub stopped, run `origin db rebuild-search`: it rebuilds the trigram indexes and what search derives from the events.
+
 ## Verify a release
 
 The npm packages carry provenance that ties each one to the GitHub Actions run that built it:

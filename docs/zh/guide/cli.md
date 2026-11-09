@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-a2efd783
+sourceHash: sha256-d58ed701
 ---
 
 # 命令参考
@@ -53,6 +53,8 @@ origin admin     sessions [--revoke-all] | audit [--limit 50]       管理界面
 origin hub       connect <url> [--token <token>] [--device <name>] [--relay] | status | disconnect
                                                        不带 --token 时，在中枢的管理界面中批准这台设备
 origin push                                            与 origin sync 相同（为已有的定时任务保留）
+origin db        move --to <postgres-url | sqlite> [--yes]   在 SQLite 和 PostgreSQL 之间移动中枢的库（中枢需停止）
+origin db        rebuild-search                        重建检索从事件派生的内容
 ```
 
 - **时间参数**：相对时长（`30m`、`24h`、`7d`、`2w`）或日期（`YYYY-MM-DD`、ISO 8601）。
@@ -320,11 +322,21 @@ To bring it back: origin restore tmb_2d8f0c1a9e35 --reason <text>
 - `origin admin username <name>` 修改你登录管理界面所用的用户名，不带名称时显示它；用户名在你第一次登录时连同管理密码一起选定。
 - `origin admin password` 设置管理界面的密码：在终端中询问两次，不显示你输入的内容；没有终端时从标准输入读取一行。`--generate` 随机生成一个密码，只打印一次。密码至少需要 10 个字符，设置后所有管理会话都会退出登录。中枢第一次在启用管理界面的情况下启动时，会生成一个密码，并在日志中打印一次。`origin admin sessions --revoke-all` 让所有会话退出登录，`origin admin audit` 打印审计日志。用 CLI 进行的令牌、用户名和密码变更也会记录在其中。
 
+## 数据库引擎 {#database-engines}
+
+库的数据库在 SQLite 中，即 `ORIGIN_HOME` 中的 `origin.db`，除非 `ORIGIN_DATABASE_URL`（或 `ORIGIN_DATABASE_URL_FILE`）指定了一个 PostgreSQL 数据库，而这只有中枢可以使用（见[在 PostgreSQL 上运行中枢](./hub.md#run-the-hub-on-postgresql)）。在那里，处理本机 Agent 的命令拒绝运行：`sync`、`push`、`hub`、`mcp`、`ui`、`agents`、`sessions reproject` 和 `sessions parents`。
+
+- `origin db move --to <postgres-url>` 把 `ORIGIN_HOME` 的库从 SQLite 移到 URL 指定的 PostgreSQL 数据库中，这个数据库必须是空的（URL 的 `schema` 参数指定 schema，默认为 `origin`）；设置了 `ORIGIN_DATABASE_URL` 时，`--to sqlite` 把库移回 `origin.db`，`--to` 加上另一个 URL 则移到另一个数据库或 schema。不加 `--yes` 时，它说明要从哪里复制什么到哪里，不做任何改变。加上 `--yes` 后，如果中枢或其他进程正在使用这个库，它会拒绝；否则复制每张表及其键，建立检索索引，校验副本（每张表的行数和摘要、事件的分块、几次检索，在 SQLite 中还有完整性检查），然后才让旧库退役：`origin.db` 保留为 `origin.db.moved-<date>`，或者 PostgreSQL 中的库记下它去了哪里，`store.json` 记录库的新位置。原始镜像原地不动。见[把中枢移到 PostgreSQL](./upgrading.md#move-a-hub-to-postgresql)。
+- `origin db rebuild-search` 重建检索从事件派生的内容：在 SQLite 中是全文索引，在 PostgreSQL 中是三元组索引和检索在旁边维护的表。PostgreSQL 升级大版本之后，在中枢停止时运行它。
+- 对 PostgreSQL 中的库运行 `origin backup <dir>`，会把它导出为 `<dir>/origin.db`，即 SQLite 中的库（见[备份](./privacy.md#backing-up)）。
+
 ## 环境变量 {#environment-variables}
 
 | 变量 | 默认值 | 作用 |
 |---|---|---|
 | `ORIGIN_HOME` | `~/.origin` | Origin 的数据库与原始镜像目录 |
+| `ORIGIN_DATABASE_URL` | — | 在中枢上：它的库所在的 PostgreSQL 数据库，`postgres://user:password@host:5432/database`；schema 不是 `origin` 时加上 `schema=<name>`（见[在 PostgreSQL 上运行中枢](./hub.md#run-the-hub-on-postgresql)） |
+| `ORIGIN_DATABASE_URL_FILE` | — | 保存这个 URL 的文件，例如挂载进来的 Secret |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code 配置目录（会话从 `<dir>/projects` 读取） |
 | `ORIGIN_CLAUDE_PROJECTS` | — | 直接指定 Claude Code 的 projects 目录 |
 | `CODEX_HOME` | `~/.codex` | Codex 的主目录（从 `sessions/` 与 `archived_sessions/` 读取会话） |
