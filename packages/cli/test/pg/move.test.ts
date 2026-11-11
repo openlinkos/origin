@@ -3,18 +3,20 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   connectSqlite,
+  copyStore,
   type Database,
   dbPath,
   digestStore,
   openDatabase,
   searchEvents,
+  verifyCopy,
 } from '@openlinkos/origin-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildRichStore } from '../../../core/test/rich-store.js';
 import { main } from '../../src/main.js';
 import { readPairing } from '../../src/pairing.js';
 import { holdServeLock, openStore } from '../../src/store.js';
-import { onPostgres, outside, urls, usePostgres } from './helpers.js';
+import { onPostgres, open, outside, target, urls, usePostgres } from './helpers.js';
 
 /**
  * `origin db move` (see packages/cli/src/db-move.ts): a store with a little of everything moved
@@ -178,6 +180,25 @@ describe.skipIf(!onPostgres)('origin db move', () => {
     // Into PostgreSQL again: the store keeps the id store.json gave it.
     await ok(['db', 'move', '--to', storeUrl('moved_c'), '--yes']);
     expect(readPairing(home)).toEqual(pairing);
+  });
+
+  it('checks searches past a word that follows U+0000, which only PostgreSQL finds', async () => {
+    await richStore();
+    const source = openDatabase(dbPath(home));
+    try {
+      // The rich store's message "A line with a NUL\u0000in it, which PostgreSQL text cannot hold."
+      const nul = searchEvents(source, 'cannot hold', { order: 'recent', limit: 20 });
+      const copy = open(target());
+      const copied = copyStore(source, copy, { searches: 0 });
+      const there = searchEvents(copy, 'cannot hold', { order: 'recent', limit: 20 });
+      // SQLite's LIKE reads a text only up to its first U+0000; PostgreSQL keeps it as U+FFFD.
+      expect(there.length).toBe(nul.length + 1);
+      expect(
+        verifyCopy(copy, { ...copied, searches: ['cannot hold', 'pipeline'] }, source),
+      ).toEqual([]);
+    } finally {
+      source.close();
+    }
   });
 
   it('refuses a target that is not empty, and leaves the store as it was', async () => {

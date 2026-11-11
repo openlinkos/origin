@@ -464,6 +464,32 @@ function searchAll(db: Database, terms: string[]): string[][] {
 }
 
 /**
+ * The events whose text holds U+0000, in SQLite: its LIKE reads a text only up to the first one,
+ * so a search there misses a word after it, which PostgreSQL, keeping the character as U+FFFD,
+ * finds. Only a store in SQLite holds the character; a copy from PostgreSQL holds U+FFFD instead.
+ */
+function nulTexts(db: Database): Set<string> {
+  if (db.dialect !== 'sqlite') return new Set();
+  const rows = db.prepare('SELECT id FROM event WHERE instr(text, char(0)) > 0').all() as Array<{
+    id: string;
+  }>;
+  return new Set(rows.map((r) => r.id));
+}
+
+/**
+ * Whether two lists of the newest matches agree, leaving out `skipped` events: where one engine
+ * finds such an event and the other does not, it takes a place in one list only, so the shorter
+ * list must be the start of the longer.
+ */
+function sameMatches(a: string[], b: string[], skipped: Set<string>): boolean {
+  const x = a.filter((id) => !skipped.has(id));
+  const y = b.filter((id) => !skipped.has(id));
+  const n = Math.min(x.length, y.length);
+  if (skipped.size === 0 && x.length !== y.length) return false;
+  return x.slice(0, n).every((id, i) => id === y[i]);
+}
+
+/**
  * Check `target` against what was copied into it (see CopyResult): the rows of every table, the
  * blocks, and on SQLite its integrity and foreign keys; and, given the store, the same results of
  * `copied.searches` in both. Returns the problems found, none if the copy matches.
@@ -512,8 +538,9 @@ export function verifyCopy(
   if (source && copied.searches.length > 0) {
     const want = searchAll(source, copied.searches);
     const got = searchAll(target, copied.searches);
+    const skipped = new Set([...nulTexts(source), ...nulTexts(target)]);
     copied.searches.forEach((term, i) => {
-      if (JSON.stringify(want[i]) !== JSON.stringify(got[i])) {
+      if (!sameMatches(want[i] ?? [], got[i] ?? [], skipped)) {
         problems.push(`a search for "${term}" finds other events in the copy`);
       }
     });
