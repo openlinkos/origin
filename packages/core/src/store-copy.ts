@@ -291,8 +291,42 @@ function blockDigest(db: Database, from: 'stored' | 'events'): string {
  * declared (SQLite keeps what it is given), and rows whose references are broken. A real number
  * with no fraction in an INTEGER column is carried as the integer it is.
  */
-function preflight(db: Database, specs: TableSpec[]): string[] {
+/**
+ * Whether this Node.js reads a text holding U+0000 from SQLite whole. Node.js 22.16's node:sqlite
+ * stores such a text whole but reads it only up to that character, so a copy would keep the rest
+ * of it nowhere, and its digests, read the same way, would not tell.
+ */
+export function sqliteReadsNul(db: Database): boolean {
+  const row = db.prepare("SELECT 'a' || char(0) || 'b' AS x").get() as { x: string };
+  return row.x.length === 3;
+}
+
+/** The text columns holding U+0000, which this Node.js cannot read whole (see sqliteReadsNul). */
+function unreadableTexts(db: Database, specs: TableSpec[]): string[] {
+  if (sqliteReadsNul(db)) return [];
   const problems: string[] = [];
+  for (const spec of specs) {
+    const columns = spec.columns.filter((c) => c.category === 'text');
+    if (columns.length === 0) continue;
+    const counts = db
+      .prepare(
+        `SELECT ${columns.map((c, i) => `SUM(CASE WHEN instr(${quote(c.name)}, char(0)) > 0 THEN 1 ELSE 0 END) AS n${i}`).join(', ')} FROM ${quote(spec.table)}`,
+      )
+      .get() as Record<string, number | null>;
+    columns.forEach((c, i) => {
+      const n = Number(counts[`n${i}`] ?? 0);
+      if (n > 0) {
+        problems.push(
+          `${spec.table}.${c.name} holds U+0000 in ${n} row${n === 1 ? '' : 's'}, which Node.js ${process.versions.node} reads only up to that character: copy the store with a newer Node.js, such as 24`,
+        );
+      }
+    });
+  }
+  return problems;
+}
+
+function preflight(db: Database, specs: TableSpec[]): string[] {
+  const problems: string[] = unreadableTexts(db, specs);
   const bad = (c: Column) => {
     const v = quote(c.name);
     switch (c.category) {

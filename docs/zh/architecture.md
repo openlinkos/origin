@@ -1,5 +1,5 @@
 ---
-sourceHash: sha256-091abaa9
+sourceHash: sha256-90b7c494
 ---
 
 # 架构
@@ -276,7 +276,7 @@ s3://<bucket>/<prefix>/    # optionally, on a hub: its sealed frames, one object
 - **配对。** 原始镜像留在 `ORIGIN_HOME` 中，那里的 `store.json` 以 id 记录这些镜像属于哪个库，以及它的引擎。打开库时，以下情况会被拒绝：数据库中存着另一个库；目录中已有镜像却要新建库；以及没有 URL、而目录的库在 PostgreSQL 中，这样漏设的变量永远不会在 SQLite 中新建一个空库。如果创建库时在写出 `store.json` 之前中断了，只要数据库和目录中都还没有镜像，就会接着使用这个库。
 - **一个中枢。** `origin serve` 运行期间持有库上的一把会话级 advisory lock，每次恢复连接时都会重新获取，所以两个中枢永远不会服务同一个库。其他命令可以和它同时运行，与 SQLite 时一样。
 - **只用于中枢的库。** 在 PostgreSQL 上，处理本机 Agent 的命令（`sync`、`push`、`hub`、`mcp`、`ui`、`agents`、`sessions reproject`、`sessions parents`）拒绝运行，Agent 的钩子什么也不做；Agent 通过这样的中枢的 `/mcp` 访问它。
-- **移动库。** `origin db move`（`core` 中的 `store-copy.ts`，CLI 中的 `db-move.ts`）在中枢停止时，把整个库复制到另一种引擎的空数据库中，或者另一个 PostgreSQL 数据库或 schema 中：在 PostgreSQL 上，它持有服务锁；在 SQLite 中，它退出预写日志模式，而只有数据库唯一的连接才能这样做。它在一个事务中、持有写锁读取库。对 SQLite 中的库，先检查是否有值的类型与所在列声明的不同（SQLite 会保留这样的值，PostgreSQL 则不会），以及是否有断开的引用；如有，移动会拒绝并列出它们。然后每张表的每一行都原样复制，键也一样（事件的 `seq`、`change_log` 和 `recall` 的序号、审计 id，以及 `entry` 和 `tombstone` 的 rowid），所以它们上面的每个游标都照常继续：表按照每一行都插在它所引用的行之后的顺序复制，每张表内按键的顺序，复制到 PostgreSQL 时用多行插入。索引和触发器在行之后创建，所以没有触发器会因复制的行而触发；检索从事件派生的内容在目标中计算。接着校验副本：每张表的行相同，按行数和摘要比较（每一行的值按列名、连同类型计算 SHA-256，再把所有行的结果按模 2^256 相加，这样摘要与读取行的顺序无关，因为键中的 U+FFFD 在 PostgreSQL 中的排序位置与 SQLite 中的 U+0000 不同）；`event_block` 与事件给出的相同；从库中抽取的几次检索，最新的结果相同；在 SQLite 中还要通过完整性检查和外键检查。复制到 PostgreSQL 时，这一切都在一个事务中，任何不一致都会回滚；复制到 SQLite 时，副本先写成 `origin.db.partial`，校验通过后再改名。之后才让源库退役：`origin.db` 改名为 `origin.db.moved-<date>`，或者 PostgreSQL 中的库在 `store_format` 中记下它去了哪里，从此拒绝打开；`store.json` 记录新的引擎，库的 id 不变。对一个有 25 万个事件、在 SQLite 中 446 MB 的库，移到同一台机器上的 PostgreSQL 18 用了 83 秒，其中约 60 秒用于建立三元组索引和检索派生的内容；移回用了 17 秒。
+- **移动库。** `origin db move`（`core` 中的 `store-copy.ts`，CLI 中的 `db-move.ts`）在中枢停止时，把整个库复制到另一种引擎的空数据库中，或者另一个 PostgreSQL 数据库或 schema 中：在 PostgreSQL 上，它持有服务锁；在 SQLite 中，它退出预写日志模式，而只有数据库唯一的连接才能这样做。它在一个事务中、持有写锁读取库。对 SQLite 中的库，先检查是否有值的类型与所在列声明的不同（SQLite 会保留这样的值，PostgreSQL 则不会），以及是否有断开的引用；如有，移动会拒绝并列出它们。如果 Node.js 从 SQLite 读取含 U+0000 的文本时只读到这个字符为止（22.16 就是这样），移动也会拒绝含这个字符的文本：否则后面的部分会丢失，而校验用同样的方式读库，发现不了。然后每张表的每一行都原样复制，键也一样（事件的 `seq`、`change_log` 和 `recall` 的序号、审计 id，以及 `entry` 和 `tombstone` 的 rowid），所以它们上面的每个游标都照常继续：表按照每一行都插在它所引用的行之后的顺序复制，每张表内按键的顺序，复制到 PostgreSQL 时用多行插入。索引和触发器在行之后创建，所以没有触发器会因复制的行而触发；检索从事件派生的内容在目标中计算。接着校验副本：每张表的行相同，按行数和摘要比较（每一行的值按列名、连同类型计算 SHA-256，再把所有行的结果按模 2^256 相加，这样摘要与读取行的顺序无关，因为键中的 U+FFFD 在 PostgreSQL 中的排序位置与 SQLite 中的 U+0000 不同）；`event_block` 与事件给出的相同；从库中抽取的几次检索，最新的结果相同；在 SQLite 中还要通过完整性检查和外键检查。复制到 PostgreSQL 时，这一切都在一个事务中，任何不一致都会回滚；复制到 SQLite 时，副本先写成 `origin.db.partial`，校验通过后再改名。之后才让源库退役：`origin.db` 改名为 `origin.db.moved-<date>`，或者 PostgreSQL 中的库在 `store_format` 中记下它去了哪里，从此拒绝打开；`store.json` 记录新的引擎，库的 id 不变。对一个有 25 万个事件、在 SQLite 中 446 MB 的库，移到同一台机器上的 PostgreSQL 18 用了 83 秒，其中约 60 秒用于建立三元组索引和检索派生的内容；移回用了 17 秒。
 - **重建检索。** `origin db rebuild-search` 重建检索从事件派生的内容，即 `rebuildSearchIndexes()`；在 PostgreSQL 上还会重建三元组索引，它们的大小写折叠来自服务器的 Unicode 表，而大版本可能改变这些表。
 
 ### 迁移 {#migrations}

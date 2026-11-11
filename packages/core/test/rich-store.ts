@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import {
   correct,
   createToken,
@@ -27,6 +28,20 @@ import { fakeAdapter } from './helpers.js';
  * forgotten and brought back; recalls; a session and an event purged; an audit row; a token.
  */
 export const RICH_T0 = Date.UTC(2026, 9, 1, 9);
+
+/**
+ * Whether this Node.js reads a text holding U+0000 from SQLite whole (see sqliteReadsNul): Node.js
+ * 22.16 does not, and a copy then refuses a store that holds one, so the rich store has a space
+ * there instead.
+ */
+export const NUL_READABLE = (() => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    return (db.prepare("SELECT 'a' || char(0) || 'b' AS x").get() as { x: string }).x.length === 3;
+  } finally {
+    db.close();
+  }
+})();
 
 /** Tables the rich store fills, each with a row or more. */
 export const RICH_TABLES = [
@@ -108,7 +123,7 @@ export async function buildRichStore(db: Database, home: string, logs: string): 
       session: 's1',
       ts: t(4),
       role: 'assistant',
-      text: 'A line with a NUL\u0000in it, which PostgreSQL text cannot hold.',
+      text: `A line with a NUL${NUL_READABLE ? '\u0000' : ' '}in it, which PostgreSQL text cannot hold.`,
       ...at,
     },
   ]);

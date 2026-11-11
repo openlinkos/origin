@@ -595,6 +595,7 @@ export {
   copyStore,
   copyToSqliteFile,
   digestStore,
+  sqliteReadsNul,
   type TableCopy,
   verifyCopy,
 } from './store-copy.js';
