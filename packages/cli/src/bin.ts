@@ -4,6 +4,8 @@
  * after every turn, so these load only what they need (core, the adapters, and for the latter the
  * hub client); every other command loads the whole CLI (main.ts).
  */
+import { exitWhenWritten } from './exit.js';
+
 const args = process.argv.slice(2);
 // As isHookCall in sync-hook.ts, which this must not load for other commands.
 const hook = args[0] === 'sync' && args.some((a) => a === '--hook' || a.startsWith('--hook='));
@@ -14,9 +16,9 @@ const { main } =
       ? await import('./sync-hook.js')
       : await import('./main.js');
 main(args).then(
-  (code) => process.exit(code),
+  (code) => exitWhenWritten(code),
   (err) => {
     console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
+    exitWhenWritten(1);
   },
 );
