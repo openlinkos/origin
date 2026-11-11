@@ -1,6 +1,6 @@
 {
   "name": "@openlinkos/origin-openclaw",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "OpenClaw plugin for Origin: writes an OpenClaw agent's sessions to Origin as event lines, into a directory or to your hub, and gives the agents Origin's read tools through the hub.",
   "keywords": [
     "origin",

@@ -2,6 +2,18 @@
 
 All notable changes to Origin are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, a minor version may change the store format or a public interface, and its notes say what to do. The six packages (`@openlinkos/origin` and `@openlinkos/origin-core`, `-adapters`, `-mcp`, `-admin`, and `-openclaw`, the plugin for OpenClaw) are released together under one version.
 
+## [0.7.1] - 2026-11-11
+
+Fixes `origin db move` for a store that holds U+0000, and the output of a command read through a pipe.
+
+**Upgrading.** Nothing changes in the store. Upgrade the hub and its devices when you like; the OpenClaw plugin has not changed, and needs no update.
+
+### Fixes
+
+- `origin db move` into PostgreSQL could fail its check, and keep nothing, when a word it searched for followed a U+0000 in some event: SQLite's `LIKE` reads a text only up to its first U+0000, so the copy, where PostgreSQL holds it as U+FFFD, found an event the original did not. The check now compares searches without the events that hold U+0000.
+- Node.js 22.16 stores a text that holds U+0000 in SQLite whole, but reads it back only up to that character, so a move out of SQLite run there would have cut such texts short. `origin db move` now refuses, and says which columns and how many rows: run it with a newer Node.js, such as 24, which the hub's image has.
+- A command's output read through a pipe, such as `origin purged <id> --json | jq`, could stop after its first 64 KiB, as it did on Linux: the command exited before the pipe had taken the rest. It now exits once all of its output is written.
+
 ## [0.7.0] - 2026-11-11
 
 Lets you delete for good what must not be kept, from the command line or the admin UI, and carries a hub's purges down to its devices; lets a self-hosted hub keep its store in PostgreSQL; bounds every hit `search` hands an agent, and pages long entries in `get`; keeps OpenClaw's internal runs, and what attachments hold, out of your memory; and puts each session in the thread of its own project.
